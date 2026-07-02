@@ -1,0 +1,70 @@
+# ingest-api (Go)
+
+Paste-ingest entrypoint for the novel engine (see `instructions.md` §7.1). Accepts a
+pasted chapter, stores the body in the object store, records a `chapter` row in Postgres,
+and signals the offline pipeline via Redis. It is a **writer** service — no auth or
+spoiler gate here (that lives in `reader-api`, §8).
+
+## What it does per paste
+
+1. `sha256(raw_text)` → `raw_hash` (dedup / cache key, §3.1).
+2. Upload the body to the object store at `novels/{id}/chapters/{index}/raw.txt`.
+3. Insert a `chapter` row (`ON CONFLICT DO NOTHING` → idempotent re-paste).
+4. `LPUSH` a `{novel_id, chapter_index}` pointer onto the Redis `jobs:pending` list.
+
+The pipeline (a later milestone) drains `jobs:pending` and loads the body from
+`chapter.raw_uri`. This service deliberately does **not** manage the `job` table or
+stage orchestration.
+
+## Run it
+
+```bash
+# from repo root — bring up backing services
+docker compose -f deploy/docker-compose.yml up -d postgres redis minio
+# migrations must be applied (db/migrations) — see repo root
+
+cd services/ingest-api
+go run .          # listens on :8080, auto-creates the object-store bucket
+```
+
+Config is read from the environment with localhost defaults matching the compose stack
+(`config.go`): `DATABASE_URL`, `REDIS_URL`, `OBJECT_STORE_ENDPOINT`,
+`OBJECT_STORE_ACCESS_KEY/SECRET_KEY/BUCKET`, `LISTEN_ADDR`.
+
+## Endpoints
+
+```bash
+# register a novel (genre selects a preset ontology, §4.1; unknown/empty → generic)
+curl -sX POST localhost:8080/novels \
+  -d '{"title":"Test Novel","source_lang":"en","target_lang":"en","genre":"xianxia"}'
+# → {"id":"<uuid>"}
+
+# paste a chapter
+curl -sX POST localhost:8080/novels/<uuid>/chapters \
+  -d '{"chapter_index":1,"raw_text":"Once upon a time..."}'
+# → 202 {"novel_id":...,"chapter_index":1,"raw_hash":"sha256:...","status":"ingested"}
+
+curl -s localhost:8080/healthz    # → {"status":"ok"} (pings pg + redis)
+```
+
+## Verify the three landing zones
+
+```bash
+docker exec -i deploy-postgres-1 psql -U engine -d novel_engine \
+  -c "SELECT novel_id, chapter_index, status, raw_uri FROM chapter;"
+docker exec deploy-redis-1 redis-cli LRANGE jobs:pending 0 -1
+docker exec deploy-minio-1 sh -c \
+  "mc alias set local http://localhost:9000 minio minio12345 >/dev/null; \
+   mc ls --recursive local/raw-chapters"
+```
+
+## Files
+
+| File | Role |
+|---|---|
+| `main.go` | wire config + clients, ensure bucket, register routes, serve |
+| `config.go` | env → `Config` with compose defaults |
+| `envelope.go` | `ChapterEnvelope` (§3.1) + Redis `QueueMessage` |
+| `ontology.go` | genre → preset ontology (§4.1) + generic fallback |
+| `store.go` | pg / redis / minio data-access helpers |
+| `handlers.go` | HTTP handlers + validation |
