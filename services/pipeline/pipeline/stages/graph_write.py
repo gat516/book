@@ -1,10 +1,21 @@
-"""Final stage: GRAPH-WRITE (instructions.md §5; PLAN.md 1.4) — the sink.
+"""Final stage: GRAPH-WRITE (instructions.md §5 step 7; PLAN.md 1.4, 1.5) — the sink.
 
-This phase, only chunks flow through here: state/resolve (1.5/1.6) are still stubs, so
-``state.extractions``/``state.resolutions`` are always empty and the entity/fact/edge/
-event paths on ``GraphWriter`` go unused until those stages exist. Embeds
-``state.chunks`` in one batched call (§5.4 — the embed backend takes the whole array,
-not one call per chunk) and writes them inside a single per-chapter transaction.
+Two kinds of output land here, under the two write disciplines graph.py describes:
+chunks + embeddings (derived data, delete-and-reinsert), and the state stage's extraction
+(knowledge, append-only). Everything happens inside one per-chapter transaction, so a
+crash mid-chapter leaves nothing partial — including the ``job`` row that says the
+extraction was written, which is flipped to ``done`` in that same transaction. Marking it
+outside would open a window where the facts exist and the job doesn't know it, and the
+retry would insert them all again.
+
+Surfaces become entity ids via ``GraphWriter.bind_surfaces``, which is a placeholder for
+RESOLVE (1.6) — see its docstring. When 1.6 lands it supplies ``state.resolutions`` and
+this stage stops guessing.
+
+``state.extraction is None`` means the state stage skipped itself (its work was already
+written); that is deliberately distinct from an empty ``Extraction``, which means the
+model looked and found nothing worth recording. The first must write nothing; the second
+may legitimately write nothing but still marks its job done.
 """
 
 from __future__ import annotations
@@ -12,9 +23,35 @@ from __future__ import annotations
 import logging
 
 from pipeline.context import PipelineState, StageContext
-from pipeline.graph import GraphWriter
+from pipeline.extraction import Extraction
+from pipeline.graph import EdgeRow, EventRow, FactRow, GraphWriter
+from pipeline.jobs import mark_job_done
 
 log = logging.getLogger(__name__)
+
+
+def _story_time(declared: int | None, source_chapter: int, *, what: str) -> int:
+    """Resolve a fact/edge's ``valid_from_chapter`` (story-time) against its
+    ``source_chapter`` (knowledge-time).
+
+    Unset means "it happened now" → the source chapter. A value in the future is the
+    extractor hallucinating, and it gets clamped: story-time never drives the spoiler
+    gate (§0.3 gates on ``source_chapter``), so this cannot leak anything — but an event
+    that becomes true after the chapter that reports it is nonsense on the timeline and
+    would render as such. Clamping keeps one bad integer from being the reason a whole
+    chapter's extraction is thrown away.
+    """
+    if declared is None:
+        return source_chapter
+    if declared > source_chapter:
+        log.warning(
+            "%s claims story-time chapter %d after knowledge-time %d; clamping",
+            what,
+            declared,
+            source_chapter,
+        )
+        return source_chapter
+    return declared
 
 
 class GraphWriteStage:
@@ -24,17 +61,98 @@ class GraphWriteStage:
         writer = GraphWriter(ctx.db)
         await writer.ready()
 
+        chapter_index = state.envelope.chapter_index
         texts = [c.text for c in state.chunks]
         embeddings = await ctx.embed_provider.embed(texts) if texts else []
 
         async with ctx.db.transaction():
-            await writer.replace_chunks(
-                ctx.novel.id, state.envelope.chapter_index, state.chunks, embeddings
-            )
+            await writer.replace_chunks(ctx.novel.id, chapter_index, state.chunks, embeddings)
 
-        log.debug(
-            "stage %s chapter=%d chunks_written=%d",
+            written = (0, 0, 0)
+            if state.extraction is not None:
+                written = await self._write_extraction(ctx, writer, state.extraction, chapter_index)
+                if state.state_job_key is not None:
+                    await mark_job_done(ctx.db, state.state_job_key)
+
+        log.info(
+            "stage %s chapter=%d chunks=%d facts=%d edges=%d events=%d",
             self.name,
-            state.envelope.chapter_index,
+            chapter_index,
             len(state.chunks),
+            *written,
         )
+
+    async def _write_extraction(
+        self,
+        ctx: StageContext,
+        writer: GraphWriter,
+        extraction: Extraction,
+        chapter_index: int,
+    ) -> tuple[int, int, int]:
+        # The extractor is instructed to declare every surface it references in
+        # ``entities``; anything referencing an undeclared one is dropped rather than
+        # bound to an invented entity. A silently-invented entity is worse than a missing
+        # fact — it pollutes the resolver's candidate set for every later chapter.
+        kinds = {e.surface: e.kind for e in extraction.entities}
+
+        def declared(*surfaces: str) -> bool:
+            missing = [s for s in surfaces if s not in kinds]
+            if missing:
+                log.warning("dropping extraction row referencing undeclared %s", missing)
+            return not missing
+
+        facts = [f for f in extraction.facts if declared(f.entity)]
+        edges = [e for e in extraction.edges if declared(e.src, e.dst)]
+        events = [(ev, [s for s in ev.entities if s in kinds]) for ev in extraction.events]
+
+        bound = await writer.bind_surfaces(
+            ctx.novel.id,
+            chapter_index,
+            list(kinds.items()),
+            lang=ctx.novel.source_lang,
+        )
+
+        fact_rows = [
+            FactRow(
+                novel_id=ctx.novel.id,
+                entity_id=bound[f.entity],
+                attribute=f.attribute,
+                value=f.value,
+                # source_chapter is knowledge-time and is set HERE from the chapter being
+                # processed — never taken from the model, which has no way to know it and
+                # every opportunity to get it wrong (§0.2, §0.3).
+                source_chapter=chapter_index,
+                valid_from_chapter=_story_time(
+                    f.valid_from_chapter, chapter_index, what=f"fact {f.entity}.{f.attribute}"
+                ),
+                confidence=f.confidence,
+            )
+            for f in facts
+        ]
+        edge_rows = [
+            EdgeRow(
+                novel_id=ctx.novel.id,
+                src_id=bound[e.src],
+                dst_id=bound[e.dst],
+                rel_type=e.rel_type,
+                source_chapter=chapter_index,
+                valid_from_chapter=_story_time(
+                    e.valid_from_chapter, chapter_index, what=f"edge {e.src}->{e.dst}"
+                ),
+            )
+            for e in edges
+        ]
+        event_rows = [
+            EventRow(
+                novel_id=ctx.novel.id,
+                chapter_index=chapter_index,
+                summary=ev.summary,
+                entity_ids=[bound[s] for s in surfaces],
+            )
+            for ev, surfaces in events
+        ]
+
+        await writer.insert_facts(fact_rows)
+        await writer.insert_edges(edge_rows)
+        await writer.insert_events(event_rows)
+        return len(fact_rows), len(edge_rows), len(event_rows)

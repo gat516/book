@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from psycopg import AsyncConnection
     from minio import Minio
 
+    from pipeline.cache import LLMCache
+    from pipeline.extraction import Extraction
     from pipeline.llm.provider import LLMProvider
 
 
@@ -90,6 +92,7 @@ class StageContext:
     db: "AsyncConnection"
     objects: "Minio"
     cfg: Config
+    cache: "LLMCache"  # the §6.1 LLM-result cache, shared by every LLM-bearing stage
 
 
 @dataclass
@@ -101,4 +104,11 @@ class PipelineState:
     mentions: list[Any] = field(default_factory=list)  # scan stage
     resolutions: list[Any] = field(default_factory=list)  # resolve stage
     translation: str | None = None  # translate stage
-    extractions: list[Any] = field(default_factory=list)  # state stage
+
+    # state stage (1.5). ``extraction`` is None when the stage was skipped entirely
+    # because its job row is already ``done`` — which is NOT the same as an empty
+    # Extraction (a chapter that legitimately yielded nothing). graph-write must write
+    # nothing in the first case and may write nothing in the second; conflating them
+    # would re-insert an already-written chapter's facts (§0.2 is append-only).
+    extraction: "Extraction | None" = None
+    state_job_key: str | None = None

@@ -27,6 +27,7 @@ import psycopg
 import redis.asyncio as aredis
 from minio import Minio
 
+from pipeline.cache import LLMCache
 from pipeline.config import Config
 from pipeline.context import NovelMeta, PipelineState, StageContext, language_profile_for
 from pipeline.envelope import ChapterEnvelope, QueueMessage, SourceMeta
@@ -52,6 +53,10 @@ class Worker:
         )
         self.provider = provider_from_env(cfg)
         self.embed_provider = embed_provider_from_env(cfg)
+        # Same Redis connection as the job queue: both are this service's own state.
+        # A future gateway keeps its quota state in a SEPARATE logical database (§15.5)
+        # — a backfill filling this one must not evict the limiter's accounting.
+        self.cache = LLMCache(self.redis)
         self.db: psycopg.AsyncConnection | None = None
 
     async def _assert_embed_dim(self) -> None:
@@ -180,6 +185,7 @@ class Worker:
             db=self.db,
             objects=self.minio,
             cfg=self.cfg,
+            cache=self.cache,
         )
         state = PipelineState(envelope=envelope)
 

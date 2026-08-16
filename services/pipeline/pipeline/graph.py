@@ -20,6 +20,7 @@ Every method runs inside the caller's transaction — callers open one per chapt
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -199,6 +200,77 @@ class GraphWriter:
                 """,
                 [(r.novel_id, r.chapter_index, r.summary, r.entity_ids) for r in rows],
             )
+
+    async def bind_surfaces(
+        self, novel_id: str, chapter_index: int, surfaces: list[tuple[str, str]], *, lang: str
+    ) -> dict[str, str]:
+        """PROVISIONAL surface -> entity_id binding. Replaced by RESOLVE in 1.6.
+
+        The state extractor names entities by the string the chapter used; facts need a
+        real ``entity.id``. Deciding which existing entity a surface refers to is exactly
+        the retrieve-then-resolve problem §5 warns silently fails at scale — vector
+        candidates plus an LLM that confirms rather than free-generates. None of that
+        exists yet, so this does the honest minimum: **exact match on an existing alias
+        or canonical name within the novel, otherwise a new entity.**
+
+        That is a deliberately weak resolver and it drifts in the documented way — two
+        spellings of one character become two entities. It is not a design, it is a
+        placeholder that lets 1.5's writes be real; when 1.6 lands, ``state.resolutions``
+        supplies the mapping and graph-write stops calling this.
+
+        No chapter gate here on purpose: ingestion is not a read path. The spoiler gate
+        (§0.3) applies to what a *reader* may see, and is enforced on the way out; an
+        ingest worker resolving chapter 500 legitimately sees every entity in the novel.
+
+        Runs inside the caller's transaction, like every other method here.
+        """
+        bound: dict[str, str] = {}
+        new_entities: list[EntityRow] = []
+        new_aliases: list[AliasRow] = []
+
+        async with self.db.cursor() as cur:
+            for surface, kind in surfaces:
+                if surface in bound:
+                    continue
+                await cur.execute(
+                    """
+                    SELECT e.id FROM entity e
+                    LEFT JOIN alias a ON a.entity_id = e.id
+                    WHERE e.novel_id = %s AND (a.surface = %s OR e.canonical = %s)
+                    LIMIT 1
+                    """,
+                    (novel_id, surface, surface),
+                )
+                row = await cur.fetchone()
+                if row is not None:
+                    bound[surface] = str(row[0])
+                    continue
+                entity_id = str(uuid.uuid4())
+                bound[surface] = entity_id
+                new_entities.append(
+                    EntityRow(
+                        id=entity_id,
+                        novel_id=novel_id,
+                        kind=kind,
+                        canonical=surface,
+                        first_seen_chapter=chapter_index,
+                        # embedding stays NULL: it is resolve's input (1.6), and a wrong
+                        # vector here would poison the very lookup that replaces this.
+                        embedding=None,
+                    )
+                )
+                new_aliases.append(
+                    AliasRow(
+                        entity_id=entity_id,
+                        surface=surface,
+                        lang=lang,
+                        first_seen_chapter=chapter_index,
+                    )
+                )
+
+        await self.upsert_entities(new_entities)
+        await self.upsert_aliases(new_aliases)
+        return bound
 
     async def replace_chunks(
         self, novel_id: str, chapter_index: int, chunks: list[Chunk], embeddings: list[list[float]]

@@ -14,10 +14,10 @@ Ollama→Anthropic would serve the previous backend's cached output under a stil
 changes the key.
 
 ``stage_config_version`` resolves PER STAGE (§3.5), not to one global value: translate
-uses ``glossary_version``, state uses ``ontology_version``. Neither exists yet (both are
-introduced when their stages go from stub to real, PLAN.md §1.6/§1.7/§1.5), so
-``stage_config_version`` currently falls back to ``cfg.config_version`` for every stage —
-this function is the single place that changes when they land, not every call site.
+uses ``glossary_version``, state uses ``ontology_version``. As of 1.5 the **state** case
+is real — see ``ontology_version`` below. Translate still falls back to
+``cfg.config_version`` until 1.7 introduces the glossary; this function stays the single
+place that changes when it lands, not every call site.
 
 Note (§4, PLAN.md §1.2): the ``resolve`` stage is deliberately NOT content-cached — its
 output depends on the live alias index (DB state), not just chapter text. Only
@@ -29,6 +29,7 @@ stages for *tracking*; the cache-skip logic (step 1.5) applies only to translate
 from __future__ import annotations
 
 import hashlib
+import json
 
 from pipeline.config import Config
 
@@ -55,13 +56,43 @@ def model_for_stage(stage: str, cfg: Config) -> str:
     return cfg.llm_model_translate if stage == "translate" else cfg.llm_model_extract
 
 
-def stage_config_version(stage: str, cfg: Config) -> str:
+def ontology_version(ontology: dict) -> str:
+    """The state stage's ``stage_config_version`` (§3.5): a content hash of the ontology.
+
+    Why a hash instead of an ``ontology_version`` column on ``novel``: the state prompt is
+    *templated on the ontology* (§4.1, extraction.py), so the ontology is a genuine input
+    to the stage's output and must be in the cache key. A column would be a second thing
+    to remember to bump — and the failure mode of forgetting is silent, since a stale key
+    serves extractions shaped by the *previous* ontology while the prompt asks for the new
+    one. Hashing the value that actually reaches the prompt makes them impossible to
+    disagree, at the cost of one sha256 per chapter and a key that changes on cosmetic
+    edits (reordering a kinds list re-extracts the novel). That trade is right at this
+    scale and is the sort of thing to revisit only if ontology edits become routine.
+
+    Serialization is canonical (sorted keys, no incidental whitespace) so that two
+    equal-but-differently-serialized ontologies hash the same — otherwise a round trip
+    through Postgres JSONB could silently invalidate every key.
+    """
+    canonical = json.dumps(ontology, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def stage_config_version(stage: str, cfg: Config, *, ontology: dict | None = None) -> str:
     """Per-stage config version input to the idempotency key (§3.5).
 
-    Resolves to ``cfg.config_version`` today because ``glossary_version`` (translate)
-    and ``ontology_version`` (state) don't exist until their stages are real. When they
-    land, branch here — not at every call site.
+    ``state`` resolves to the ontology hash and REQUIRES ``ontology`` — passing none
+    raises rather than quietly falling back to ``cfg.config_version``, because that
+    fallback is indistinguishable from a correct key until the day someone edits an
+    ontology and every chapter serves a stale extraction. Translate still falls back
+    (``glossary_version`` arrives in 1.7).
     """
+    if stage == "state":
+        if ontology is None:
+            raise ValueError(
+                "the state stage's config version is the ontology hash (§3.5); "
+                "pass ontology= so an ontology edit invalidates the cache"
+            )
+        return ontology_version(ontology)
     return cfg.config_version
 
 
@@ -71,14 +102,18 @@ def model_id_for_stage(stage: str, cfg: Config) -> str:
     return f"{cfg.llm_provider}:{model_for_stage(stage, cfg)}"
 
 
-def idempotency_key(stage: str, raw_hash: str, cfg: Config) -> str:
+def idempotency_key(stage: str, raw_hash: str, cfg: Config, *, ontology: dict | None = None) -> str:
     """sha256 over everything the stage output depends on (§3.5, §6.1). Stable for
-    identical inputs; changes when the model, prompt_version, or stage config changes."""
+    identical inputs; changes when the model, prompt_version, or stage config changes.
+
+    ``ontology`` is required for the ``state`` stage and ignored by the others — see
+    ``stage_config_version``.
+    """
     parts = [
         stage,
         raw_hash,
         cfg.prompt_version,
-        stage_config_version(stage, cfg),
+        stage_config_version(stage, cfg, ontology=ontology),
         model_id_for_stage(stage, cfg),
     ]
     return hashlib.sha256(_UNIT_SEPARATOR.join(parts).encode("utf-8")).hexdigest()
@@ -114,4 +149,30 @@ async def insert_job(
         ON CONFLICT (idempotency_key) DO NOTHING
         """,
         (novel_id, chapter_index, stage, key),
+    )
+
+
+async def job_is_done(conn, key: str) -> bool:
+    """Has this exact work already been written to the graph?
+
+    The durable half of the §6.1 cache, and the one that protects correctness rather
+    than cost. ``fact``/``edge``/``event`` are append-only (§0.2) — INSERT, never upsert
+    — so a chapter re-run whose extraction was already written would duplicate every row
+    it produced. The Redis result cache cannot answer this: it says "we know what the
+    model said", not "we already stored it". See cache.py.
+    """
+    row = await (
+        await conn.execute("SELECT state FROM job WHERE idempotency_key = %s", (key,))
+    ).fetchone()
+    return row is not None and row[0] == "done"
+
+
+async def mark_job_done(conn, key: str) -> None:
+    """Flip a job to ``done``. Call this INSIDE the transaction that writes the graph
+    rows, never after it — a crash in the gap would leave the rows written and the job
+    still ``pending``, and the retry would duplicate them (the exact failure ``job_is_done``
+    exists to prevent)."""
+    await conn.execute(
+        "UPDATE job SET state = 'done', updated_at = now() WHERE idempotency_key = %s",
+        (key,),
     )
