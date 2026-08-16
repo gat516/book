@@ -10,9 +10,10 @@ Resolution happens in two asks, and they are deliberately different in kind:
   entities. This is *discovery*, and it exists because Aho-Corasick can only find aliases
   the graph already knows: a character introduced in chapter 41 has no alias, so the
   scanner is blind to them.
-- **Disambiguation** is emphatically NOT generative. Given one surface and a retrieved
-  candidate list, the model may only confirm one of those candidates or declare the
-  surface new. It never invents or rewrites a canonical name.
+- **Disambiguation** is not generative about identity. Given one surface and a retrieved
+  candidate list, the model may only confirm one candidate or declare the surface new.
+  For a genuinely new entity in a translated novel it also proposes the target-language
+  glossary term; same-language identity remains the exact source surface.
 
 That second constraint is the fix for the highest-impact silent failure in the system
 (§12 risk #2). A model free-generating a canonical name per chapter drifts — "Azure Cloud
@@ -121,7 +122,7 @@ Return a single JSON object, and nothing else:
 
 {{"decision": "confirm", "entity_id": "<an entity_id from the candidate list>"}}
   or
-{{"decision": "new", "target_term": "<locked name in the target language>"}}
+{{"decision": "new"}}
 
 Rules:
 - "entity_id" MUST be copied exactly from the candidate list. Never invent an id, and
@@ -130,9 +131,15 @@ Rules:
   candidates. An alternate name, epithet, title or abbreviation for a candidate is a
   "confirm" of that candidate, not a new entity.
 - If the candidate list is empty, the answer is "new".
-- For a new entity in a translated novel, include a concise target-language
-  ``target_term``. It becomes a locked glossary term; do not leave it blank.
 - No prose, no markdown fence.
+"""
+
+_TRANSLATED_TERM_RULE = """
+
+This novel is translated from {source_lang} to {target_lang}. When the decision is
+"new", also return "target_term": a concise canonical name in {target_lang}. It becomes
+a locked glossary term, so do not leave it blank and do not return the source-language
+surface unless that spelling is intentionally unchanged in {target_lang}.
 """
 
 
@@ -146,15 +153,19 @@ def build_proposal_user_prompt(raw_text: str) -> str:
     return f"<chapter>\n{raw_text}\n</chapter>"
 
 
-def build_disambiguation_system_prompt() -> str:
-    """Stable prefix for disambiguation.
+def build_disambiguation_system_prompt(*, source_lang: str, target_lang: str) -> str:
+    """Stable prefix for disambiguation, specialized only by the language pair.
 
     Note it is NOT templated on the ontology: this ask is "which of these", and the
     candidates carry their own kinds. Keeping the ontology out means one identical prefix
-    for every mention in the novel, which is what makes provider prefix caching worth
-    anything on a pass that runs once per surface rather than once per chapter (§6.2).
+    for every mention in a novel/language pair, which is what makes provider prefix
+    caching useful on a pass that runs once per surface (§6.2).
     """
-    return _DISAMBIGUATION_SYSTEM
+    if source_lang == target_lang:
+        return _DISAMBIGUATION_SYSTEM
+    return _DISAMBIGUATION_SYSTEM + _TRANSLATED_TERM_RULE.format(
+        source_lang=source_lang, target_lang=target_lang
+    )
 
 
 def build_disambiguation_user_prompt(

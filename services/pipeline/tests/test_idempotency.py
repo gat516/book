@@ -57,6 +57,19 @@ def test_model_switch_changes_key():
     assert a != b
 
 
+def test_served_model_override_changes_translation_key():
+    cfg = _cfg(llm_model_translate="floating-alias")
+    requested = idempotency_key("translate", RAW_HASH, cfg, glossary_version=3)
+    served = idempotency_key(
+        "translate",
+        RAW_HASH,
+        cfg,
+        glossary_version=3,
+        model_id="anthropic:concrete-snapshot",
+    )
+    assert requested != served
+
+
 def test_prompt_version_bump_changes_key():
     a = _key("state", _cfg(prompt_version="1"))
     b = _key("state", _cfg(prompt_version="2"))

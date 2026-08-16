@@ -115,12 +115,14 @@ def idempotency_key(
     *,
     ontology: dict | None = None,
     glossary_version: int | None = None,
+    model_id: str | None = None,
 ) -> str:
     """sha256 over everything the stage output depends on (§3.5, §6.1). Stable for
     identical inputs; changes when the model, prompt_version, or stage config changes.
 
-    ``ontology`` is required for the ``state`` stage and ignored by the others — see
-    ``stage_config_version``.
+    ``ontology`` is required for the ``state`` stage and ignored by the others.
+    ``model_id`` overrides configuration when a translation novel is pinned to the
+    concrete provider snapshot that actually served its first chapter.
     """
     parts = [
         stage,
@@ -129,7 +131,7 @@ def idempotency_key(
         stage_config_version(
             stage, cfg, ontology=ontology, glossary_version=glossary_version
         ),
-        model_id_for_stage(stage, cfg),
+        model_id or model_id_for_stage(stage, cfg),
     ]
     return hashlib.sha256(_UNIT_SEPARATOR.join(parts).encode("utf-8")).hexdigest()
 

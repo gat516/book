@@ -33,10 +33,10 @@ tracking; ``jobs.LLM_STAGES`` already lists it.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import uuid
-import json
-import hashlib
 
 from pipeline.context import PipelineState, StageContext
 from pipeline.graph import AliasRow, CandidateRow, EntityRow, GraphWriter
@@ -85,14 +85,35 @@ async def _lock_glossary(
         )
     ).fetchone()
     version = (row[0] if row else 0) + 1
-    await db.execute(
-        """
-        INSERT INTO glossary (novel_id, source_term, target_term, entity_id, version, locked_at_chapter)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        ON CONFLICT (novel_id, source_term) DO NOTHING
-        """,
-        (novel_id, source_term, target_term, entity_id, version, chapter),
-    )
+    inserted = await (
+        await db.execute(
+            """
+            INSERT INTO glossary
+              (novel_id, source_term, target_term, entity_id, version, locked_at_chapter)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (novel_id, source_term) DO NOTHING
+            RETURNING version
+            """,
+            (novel_id, source_term, target_term, entity_id, version, chapter),
+        )
+    ).fetchone()
+    if inserted is None:
+        existing = await (
+            await db.execute(
+                "SELECT target_term, entity_id, version FROM glossary "
+                "WHERE novel_id = %s AND source_term = %s",
+                (novel_id, source_term),
+            )
+        ).fetchone()
+        if existing is None:
+            raise RuntimeError("glossary conflict reported but the existing row disappeared")
+        existing_target, existing_entity, existing_version = existing
+        if existing_target != target_term or str(existing_entity) != entity_id:
+            raise ValueError(
+                f"glossary term {source_term!r} is already locked to "
+                f"{existing_target!r}/{existing_entity}, not {target_term!r}/{entity_id}"
+            )
+        return existing_version
     previous = await (
         await db.execute(
             "SELECT seq, row_hash FROM glossary_changelog WHERE novel_id = %s ORDER BY seq DESC LIMIT 1",
@@ -252,7 +273,10 @@ class ResolveStage:
             build_disambiguation_user_prompt(
                 surface, candidates, context=_context_around(text, surface)
             ),
-            system=build_disambiguation_system_prompt(),
+            system=build_disambiguation_system_prompt(
+                source_lang=ctx.novel.source_lang,
+                target_lang=ctx.novel.target_lang,
+            ),
             json_mode=True,
             cls=Class.BATCH,
             model=model_for_stage(STAGE, ctx.cfg),
@@ -268,6 +292,26 @@ class ResolveStage:
             return None, None
 
         if decision.decision != NEW_ENTITY:
+            confirmed = next(c for c in candidates if c.entity_id == decision.entity_id)
+            alias = AliasRow(
+                entity_id=confirmed.entity_id,
+                surface=surface,
+                lang=ctx.novel.source_lang,
+                first_seen_chapter=chapter,
+            )
+            if ctx.novel.source_lang != ctx.novel.target_lang:
+                async with ctx.db.transaction():
+                    await writer.upsert_aliases([alias])
+                    await _lock_glossary(
+                        ctx.db,
+                        novel_id=ctx.novel.id,
+                        source_term=surface,
+                        target_term=confirmed.canonical,
+                        entity_id=confirmed.entity_id,
+                        chapter=chapter,
+                    )
+            else:
+                await writer.upsert_aliases([alias])
             return decision.entity_id, None
 
         if ctx.novel.source_lang != ctx.novel.target_lang and not decision.target_term:
@@ -279,7 +323,11 @@ class ResolveStage:
             id=entity_id,
             novel_id=ctx.novel.id,
             kind=kind,
-            canonical=decision.target_term or surface,
+            canonical=(
+                decision.target_term
+                if ctx.novel.source_lang != ctx.novel.target_lang
+                else surface
+            ),
             first_seen_chapter=chapter,
             embedding=vector,
         )

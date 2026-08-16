@@ -145,7 +145,19 @@ async def make_novel(
 async def delete_novel(conn, novel_id: str) -> None:
     """Manual cascade — 0001 declares FKs without ON DELETE CASCADE. ``job`` has no FK
     at all (0001), so it is cleaned by novel_id like the rest rather than by cascade."""
-    for table in ("fact", "edge", "event", "chunk", "alias", "glossary", "entity", "job", "chapter", "novel"):
+    for table in (
+        "fact",
+        "edge",
+        "event",
+        "chunk",
+        "alias",
+        "glossary_changelog",
+        "glossary",
+        "entity",
+        "job",
+        "chapter",
+        "novel",
+    ):
         if table == "alias":
             await conn.execute(
                 "DELETE FROM alias WHERE entity_id IN (SELECT id FROM entity WHERE novel_id = %s)",

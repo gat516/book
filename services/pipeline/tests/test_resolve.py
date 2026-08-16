@@ -26,7 +26,7 @@ from fixtures import FakeProvider, FakeRedis, delete_novel, make_config, make_no
 from pipeline.cache import LLMCache
 from pipeline.context import NovelMeta, PipelineState, StageContext, language_profile_for
 from pipeline.envelope import ChapterEnvelope, SourceMeta
-from pipeline.stages.resolve import ResolveStage
+from pipeline.stages.resolve import ResolveStage, _lock_glossary
 from pipeline.stages.scan import ScanStage
 
 pytestmark = pytest.mark.db
@@ -58,10 +58,17 @@ def _responder(*, propose: dict[str, str], decide: dict[str, dict]):
     return respond
 
 
-def _ctx(db, novel_id, provider) -> StageContext:
+def _ctx(
+    db, novel_id, provider, *, source_lang: str = "en", target_lang: str = "en"
+) -> StageContext:
     return StageContext(
-        novel=NovelMeta(id=novel_id, source_lang="en", target_lang="en", ontology=ONTOLOGY),
-        language_profile=language_profile_for("en"),
+        novel=NovelMeta(
+            id=novel_id,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            ontology=ONTOLOGY,
+        ),
+        language_profile=language_profile_for(source_lang),
         provider=provider,
         embed_provider=provider,
         db=db,
@@ -77,7 +84,7 @@ async def _run(ctx, text: str) -> PipelineState:
             novel_id=ctx.novel.id,
             chapter_index=CHAPTER,
             raw_text=text,
-            source_lang="en",
+            source_lang=ctx.novel.source_lang,
             source_meta=SourceMeta(raw_hash="sha256:cafe"),
         )
     )
@@ -131,6 +138,14 @@ async def test_variant_spelling_resolves_to_the_existing_entity(db_conn, novel):
 
     assert state.resolutions["Azure Sect"] == existing_id
     assert len(await _entities(db_conn, novel)) == 1, "a variant spelling must not fork the entity"
+    alias = await (
+        await db_conn.execute(
+            "SELECT first_seen_chapter FROM alias "
+            "WHERE entity_id = %s AND surface = %s AND lang = %s",
+            (existing_id, "Azure Sect", "en"),
+        )
+    ).fetchone()
+    assert alias == (CHAPTER,)
 
 
 async def test_disambiguator_is_offered_the_existing_entity(db_conn, novel):
@@ -150,6 +165,55 @@ async def test_disambiguator_is_offered_the_existing_entity(db_conn, novel):
     disambiguation = [c for c in provider.calls if "Candidates:" in c["prompt"]]
     assert len(disambiguation) == 1
     assert known["Azure Cloud Sect"] in disambiguation[0]["prompt"]
+
+
+async def test_translated_confirmed_variant_becomes_alias_and_glossary_term(db_conn):
+    novel_id = await make_novel(
+        db_conn, source_lang="zh", target_lang="en", ontology=json.dumps(ONTOLOGY)
+    )
+    try:
+        known = await seed_entities(
+            db_conn, novel_id, {"Azure Cloud Sect": "sect"}, lang="en"
+        )
+        entity_id = known["Azure Cloud Sect"]
+        [vector] = await FakeProvider().embed(["Azure Cloud Sect"])
+        await db_conn.execute(
+            "UPDATE entity SET embedding = %s WHERE id = %s", (str(vector), entity_id)
+        )
+        provider = FakeProvider(
+            _responder(
+                propose={"青云门": "sect"},
+                decide={
+                    "青云门": {"decision": "confirm", "entity_id": entity_id}
+                },
+            )
+        )
+
+        state = await _run(
+            _ctx(db_conn, novel_id, provider, source_lang="zh", target_lang="en"),
+            "他回到了青云门。",
+        )
+
+        alias = await (
+            await db_conn.execute(
+                "SELECT first_seen_chapter FROM alias "
+                "WHERE entity_id = %s AND surface = %s AND lang = %s",
+                (entity_id, "青云门", "zh"),
+            )
+        ).fetchone()
+        glossary = await (
+            await db_conn.execute(
+                "SELECT target_term, entity_id FROM glossary "
+                "WHERE novel_id = %s AND source_term = %s",
+                (novel_id, "青云门"),
+            )
+        ).fetchone()
+
+        assert state.resolutions["青云门"] == entity_id
+        assert alias == (CHAPTER,)
+        assert (glossary[0], str(glossary[1])) == ("Azure Cloud Sect", entity_id)
+    finally:
+        await delete_novel(db_conn, novel_id)
 
 
 # --- free generation is a parse error, not a style guideline ----------------
@@ -184,7 +248,16 @@ async def test_unknown_surface_creates_one_entity_with_an_embedding(db_conn, nov
     invisible to vector retrieval and the NEXT chapter's variant spelling has no
     candidate to confirm — drift returns one chapter later."""
     provider = FakeProvider(
-        _responder(propose={"Li Xiaoyao": "character"}, decide={"Li Xiaoyao": {"decision": "new"}})
+        _responder(
+            propose={"Li Xiaoyao": "character"},
+            decide={
+                "Li Xiaoyao": {
+                    "decision": "new",
+                    # Same-language resolution must ignore an unsolicited generated name.
+                    "target_term": "Wanderer Li",
+                }
+            },
+        )
     )
     state = await _run(_ctx(db_conn, novel, provider), "Li Xiaoyao drew his sword.")
 
@@ -200,6 +273,78 @@ async def test_unknown_surface_creates_one_entity_with_an_embedding(db_conn, nov
         )
     ).fetchone()
     assert alias == ("Li Xiaoyao", CHAPTER)
+
+
+async def test_translated_new_entity_locks_target_term_and_audit(db_conn):
+    novel_id = await make_novel(
+        db_conn, source_lang="zh", target_lang="en", ontology=json.dumps(ONTOLOGY)
+    )
+    try:
+        provider = FakeProvider(
+            _responder(
+                propose={"青云宗": "sect"},
+                decide={
+                    "青云宗": {
+                        "decision": "new",
+                        "target_term": "Azure Cloud Sect",
+                    }
+                },
+            )
+        )
+        state = await _run(
+            _ctx(db_conn, novel_id, provider, source_lang="zh", target_lang="en"),
+            "他回到了青云宗。",
+        )
+
+        entity_id = state.resolutions["青云宗"]
+        entity = await (
+            await db_conn.execute(
+                "SELECT canonical FROM entity WHERE id = %s", (entity_id,)
+            )
+        ).fetchone()
+        glossary = await (
+            await db_conn.execute(
+                "SELECT target_term, entity_id, version FROM glossary "
+                "WHERE novel_id = %s AND source_term = %s",
+                (novel_id, "青云宗"),
+            )
+        ).fetchone()
+        audit = await (
+            await db_conn.execute(
+                "SELECT new_target, seq FROM glossary_changelog "
+                "WHERE novel_id = %s AND source_term = %s",
+                (novel_id, "青云宗"),
+            )
+        ).fetchone()
+
+        assert entity == ("Azure Cloud Sect",)
+        assert (glossary[0], str(glossary[1]), glossary[2]) == (
+            "Azure Cloud Sect",
+            entity_id,
+            1,
+        )
+        assert audit == ("Azure Cloud Sect", 1)
+
+        # An idempotent lock must not fabricate another audit entry.
+        async with db_conn.transaction():
+            await _lock_glossary(
+                db_conn,
+                novel_id=novel_id,
+                source_term="青云宗",
+                target_term="Azure Cloud Sect",
+                entity_id=entity_id,
+                chapter=CHAPTER,
+            )
+        audit_count = await (
+            await db_conn.execute(
+                "SELECT count(*) FROM glossary_changelog "
+                "WHERE novel_id = %s AND source_term = %s",
+                (novel_id, "青云宗"),
+            )
+        ).fetchone()
+        assert audit_count == (1,)
+    finally:
+        await delete_novel(db_conn, novel_id)
 
 
 async def test_entity_created_earlier_in_a_chapter_is_visible_later_in_it(db_conn, novel):

@@ -5,6 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 
+class GlossaryViolation(ValueError):
+    """A translation failed one or more locked terminology constraints."""
+
+
 _SYSTEM = """\
 Translate a serialized novel chapter from {source_lang} to {target_lang}.
 
@@ -38,3 +42,34 @@ def build_system_prompt(
 def build_user_prompt(raw_text: str) -> str:
     return f"<chapter>\n{raw_text}\n</chapter>"
 
+
+def validate_glossary_constraints(
+    source_text: str,
+    translated_text: str,
+    glossary: list[tuple[str, str]],
+) -> None:
+    """Reject a completion that silently ignores a locked term used by this chapter."""
+    if not translated_text.strip():
+        raise GlossaryViolation("translation is empty")
+
+    missing: list[str] = []
+    untranslated: list[str] = []
+    for source, target in glossary:
+        required_count = source_text.count(source)
+        if required_count == 0:
+            continue
+        actual_count = translated_text.count(target)
+        if actual_count < required_count:
+            missing.append(
+                f"{source!r} => {target!r} ({actual_count}/{required_count})"
+            )
+        if source not in target and source in translated_text:
+            untranslated.append(source)
+
+    if missing or untranslated:
+        details = []
+        if missing:
+            details.append("missing targets: " + ", ".join(missing))
+        if untranslated:
+            details.append("untranslated sources: " + ", ".join(repr(s) for s in untranslated))
+        raise GlossaryViolation("; ".join(details))
