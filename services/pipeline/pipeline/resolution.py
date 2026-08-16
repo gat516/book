@@ -70,6 +70,7 @@ class Decision(BaseModel):
 
     decision: str  # "confirm" | "new"
     entity_id: str | None = None
+    target_term: str | None = None
 
 
 class FreeGeneratedEntity(ValueError):
@@ -120,7 +121,7 @@ Return a single JSON object, and nothing else:
 
 {{"decision": "confirm", "entity_id": "<an entity_id from the candidate list>"}}
   or
-{{"decision": "new"}}
+{{"decision": "new", "target_term": "<locked name in the target language>"}}
 
 Rules:
 - "entity_id" MUST be copied exactly from the candidate list. Never invent an id, and
@@ -129,7 +130,8 @@ Rules:
   candidates. An alternate name, epithet, title or abbreviation for a candidate is a
   "confirm" of that candidate, not a new entity.
 - If the candidate list is empty, the answer is "new".
-- Do not suggest a canonical name. You are choosing, not naming.
+- For a new entity in a translated novel, include a concise target-language
+  ``target_term``. It becomes a locked glossary term; do not leave it blank.
 - No prose, no markdown fence.
 """
 
@@ -204,7 +206,9 @@ def parse_decision(text: str, offered: list[Candidate]) -> Decision:
     decision = Decision.model_validate(json.loads(_strip_fence(text)))
 
     if decision.decision == NEW_ENTITY:
-        return Decision(decision=NEW_ENTITY, entity_id=None)
+        return Decision(
+            decision=NEW_ENTITY, entity_id=None, target_term=decision.target_term
+        )
 
     if decision.decision != "confirm":
         raise ValueError(f"decision must be 'confirm' or 'new', got {decision.decision!r}")

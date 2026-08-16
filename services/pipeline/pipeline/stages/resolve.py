@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import logging
 import uuid
+import json
+import hashlib
 
 from pipeline.context import PipelineState, StageContext
 from pipeline.graph import AliasRow, CandidateRow, EntityRow, GraphWriter
@@ -59,6 +61,62 @@ STAGE = "resolve"
 CANDIDATE_K = 5  # nearest neighbours offered alongside the exact matches
 CONTEXT_WINDOW = 120  # characters either side of the first occurrence, for disambiguation
 UNKNOWN_KIND = "unknown"
+
+
+async def _lock_glossary(
+    db,
+    *,
+    novel_id: str,
+    source_term: str,
+    target_term: str,
+    entity_id: str,
+    chapter: int,
+) -> int:
+    """Insert one locked term and its tamper-evident audit row.
+
+    The advisory lock makes ``MAX(version)`` and the changelog hash chain a
+    per-novel serialized operation. Existing terms are immutable in this stage.
+    """
+    await db.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (novel_id,))
+    row = await (
+        await db.execute(
+            "SELECT version FROM glossary WHERE novel_id = %s ORDER BY version DESC LIMIT 1",
+            (novel_id,),
+        )
+    ).fetchone()
+    version = (row[0] if row else 0) + 1
+    await db.execute(
+        """
+        INSERT INTO glossary (novel_id, source_term, target_term, entity_id, version, locked_at_chapter)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (novel_id, source_term) DO NOTHING
+        """,
+        (novel_id, source_term, target_term, entity_id, version, chapter),
+    )
+    previous = await (
+        await db.execute(
+            "SELECT seq, row_hash FROM glossary_changelog WHERE novel_id = %s ORDER BY seq DESC LIMIT 1",
+            (novel_id,),
+        )
+    ).fetchone()
+    seq = (previous[0] if previous else 0) + 1
+    prev_hash = previous[1] if previous else ""
+    payload = json.dumps(
+        [novel_id, seq, source_term, "", target_term, chapter, prev_hash],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    row_hash = hashlib.sha256((prev_hash + payload).encode("utf-8")).hexdigest()
+    await db.execute(
+        """
+        INSERT INTO glossary_changelog
+          (novel_id, seq, source_term, old_target, new_target, changed_at_chapter,
+           prev_hash, row_hash)
+        VALUES (%s, %s, %s, NULL, %s, %s, %s, %s)
+        """,
+        (novel_id, seq, source_term, target_term, chapter, prev_hash or None, row_hash),
+    )
+    return version
 
 
 def _context_around(text: str, surface: str, *, window: int = CONTEXT_WINDOW) -> str:
@@ -135,7 +193,7 @@ class ResolveStage:
         created = 0
         for surface, vector in zip(unresolved, vectors):
             candidates = await self._candidates(writer, ctx.novel.id, surface, vector)
-            entity_id = await self._decide(
+            entity_id, _target_term = await self._decide(
                 ctx, writer, surface, candidates, vector, text=text, chapter=envelope.chapter_index,
                 kind=kinds.get(surface) or self._kind_of(candidates) or UNKNOWN_KIND,
             )
@@ -188,7 +246,7 @@ class ResolveStage:
         text: str,
         chapter: int,
         kind: str,
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
         """Confirm a candidate or create a new entity. ``None`` means unresolved."""
         completion = await ctx.provider.complete(
             build_disambiguation_user_prompt(
@@ -207,31 +265,43 @@ class ResolveStage:
             # fabricated bind corrupts the graph permanently and silently, whereas an
             # unresolved mention is a number the eval set reports.
             log.warning("resolve: free-generated entity id for %r; leaving unresolved", surface)
-            return None
+            return None, None
 
         if decision.decision != NEW_ENTITY:
-            return decision.entity_id
+            return decision.entity_id, None
+
+        if ctx.novel.source_lang != ctx.novel.target_lang and not decision.target_term:
+            log.warning("resolve: missing target term for translated entity %r", surface)
+            return None, None
 
         entity_id = str(uuid.uuid4())
-        await writer.insert_entity(
-            EntityRow(
-                id=entity_id,
-                novel_id=ctx.novel.id,
-                kind=kind,
-                canonical=surface,
-                first_seen_chapter=chapter,
-                embedding=vector,
-            ),
-            [
-                AliasRow(
-                    entity_id=entity_id,
-                    surface=surface,
-                    lang=ctx.novel.source_lang,
-                    first_seen_chapter=chapter,
-                )
-            ],
+        entity = EntityRow(
+            id=entity_id,
+            novel_id=ctx.novel.id,
+            kind=kind,
+            canonical=decision.target_term or surface,
+            first_seen_chapter=chapter,
+            embedding=vector,
         )
-        # 1.7 slots in here: when source_lang != target_lang, a new entity also locks its
-        # canonical target_term in `glossary` and appends to `glossary_changelog` (§4,
-        # §5). Deferred with translate, which is the only thing that consumes a glossary.
-        return entity_id
+        aliases = [
+            AliasRow(
+                entity_id=entity_id,
+                surface=surface,
+                lang=ctx.novel.source_lang,
+                first_seen_chapter=chapter,
+            )
+        ]
+        if ctx.novel.source_lang != ctx.novel.target_lang:
+            async with ctx.db.transaction():
+                await writer.insert_entity(entity, aliases)
+                await _lock_glossary(
+                    ctx.db,
+                    novel_id=ctx.novel.id,
+                    source_term=surface,
+                    target_term=decision.target_term or surface,
+                    entity_id=entity_id,
+                    chapter=chapter,
+                )
+        else:
+            await writer.insert_entity(entity, aliases)
+        return entity_id, decision.target_term

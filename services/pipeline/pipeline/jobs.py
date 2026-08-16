@@ -14,10 +14,8 @@ Ollama→Anthropic would serve the previous backend's cached output under a stil
 changes the key.
 
 ``stage_config_version`` resolves PER STAGE (§3.5), not to one global value: translate
-uses ``glossary_version``, state uses ``ontology_version``. As of 1.5 the **state** case
-is real — see ``ontology_version`` below. Translate still falls back to
-``cfg.config_version`` until 1.7 introduces the glossary; this function stays the single
-place that changes when it lands, not every call site.
+uses ``glossary_version``, state uses ``ontology_version``. The translate path retains
+a config-version fallback for callers that compute a key before loading a glossary.
 
 Note (§4, PLAN.md §1.2): the ``resolve`` stage is deliberately NOT content-cached — its
 output depends on the live alias index (DB state), not just chapter text. Only
@@ -77,14 +75,20 @@ def ontology_version(ontology: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
-def stage_config_version(stage: str, cfg: Config, *, ontology: dict | None = None) -> str:
+def stage_config_version(
+    stage: str,
+    cfg: Config,
+    *,
+    ontology: dict | None = None,
+    glossary_version: int | None = None,
+) -> str:
     """Per-stage config version input to the idempotency key (§3.5).
 
     ``state`` resolves to the ontology hash and REQUIRES ``ontology`` — passing none
     raises rather than quietly falling back to ``cfg.config_version``, because that
     fallback is indistinguishable from a correct key until the day someone edits an
-    ontology and every chapter serves a stale extraction. Translate still falls back
-    (``glossary_version`` arrives in 1.7).
+    ontology and every chapter serves a stale extraction. Translate uses the supplied
+    glossary snapshot version and otherwise falls back for compatibility.
     """
     if stage == "state":
         if ontology is None:
@@ -93,6 +97,8 @@ def stage_config_version(stage: str, cfg: Config, *, ontology: dict | None = Non
                 "pass ontology= so an ontology edit invalidates the cache"
             )
         return ontology_version(ontology)
+    if stage == "translate" and glossary_version is not None:
+        return str(glossary_version)
     return cfg.config_version
 
 
@@ -102,7 +108,14 @@ def model_id_for_stage(stage: str, cfg: Config) -> str:
     return f"{cfg.llm_provider}:{model_for_stage(stage, cfg)}"
 
 
-def idempotency_key(stage: str, raw_hash: str, cfg: Config, *, ontology: dict | None = None) -> str:
+def idempotency_key(
+    stage: str,
+    raw_hash: str,
+    cfg: Config,
+    *,
+    ontology: dict | None = None,
+    glossary_version: int | None = None,
+) -> str:
     """sha256 over everything the stage output depends on (§3.5, §6.1). Stable for
     identical inputs; changes when the model, prompt_version, or stage config changes.
 
@@ -113,7 +126,9 @@ def idempotency_key(stage: str, raw_hash: str, cfg: Config, *, ontology: dict | 
         stage,
         raw_hash,
         cfg.prompt_version,
-        stage_config_version(stage, cfg, ontology=ontology),
+        stage_config_version(
+            stage, cfg, ontology=ontology, glossary_version=glossary_version
+        ),
         model_id_for_stage(stage, cfg),
     ]
     return hashlib.sha256(_UNIT_SEPARATOR.join(parts).encode("utf-8")).hexdigest()
