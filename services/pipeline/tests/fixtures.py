@@ -4,7 +4,9 @@ live in conftest.py / the test files)."""
 
 from __future__ import annotations
 
+import hashlib
 import uuid
+from collections.abc import Callable
 
 from pipeline.config import Config
 from pipeline.llm.provider import Class, Completion
@@ -55,6 +57,10 @@ class FakeRedis:
 class FakeProvider:
     """An LLMProvider that returns canned text and counts calls.
 
+    ``response`` is either a fixed string or a callable ``(prompt, system) -> str``. The
+    callable form is what multi-call stages need: RESOLVE asks once for a proposal and
+    then once per surface, so a fixed string cannot express its conversation.
+
     Defaults to echoing back the model it was asked for, which is what a direct backend
     does (§5.4) and what keeps results cacheable. ``served_model`` can be overridden to
     simulate a gateway failover (§14.3).
@@ -62,7 +68,7 @@ class FakeProvider:
 
     def __init__(
         self,
-        response: str = "{}",
+        response: str | Callable[[str, str], str] = "{}",
         *,
         provider: str = "ollama",
         served_model: str | None = None,
@@ -94,14 +100,30 @@ class FakeProvider:
                 "model": model,
             }
         )
+        text = self.response(prompt, system) if callable(self.response) else self.response
         return Completion(
-            text=self.response,
+            text=text,
             served_provider=self.provider,
             served_model=self.served_model or (model or ""),
         )
 
     async def embed(self, texts: list[str], *, cls: Class = Class.BATCH) -> list[list[float]]:
-        return [[0.0] * self.embed_dim for _ in texts]
+        """Deterministic, distinct, non-zero vectors.
+
+        Not zeros: pgvector's cosine distance is undefined for a zero vector, so a
+        zero-filled fake would make every ORDER BY in candidate retrieval meaningless
+        (and NaN-ordered) rather than merely arbitrary. Derived from a hash of the text so
+        the same surface embeds identically across calls, which is what makes re-run
+        idempotency assertable.
+        """
+        vectors: list[list[float]] = []
+        for text in texts:
+            digest = hashlib.sha256(text.encode("utf-8")).digest()
+            vec = [0.0] * self.embed_dim
+            for i in range(min(self.embed_dim, len(digest))):
+                vec[i] = (digest[i] / 255.0) or 0.01
+            vectors.append(vec)
+        return vectors
 
 
 async def make_novel(
@@ -133,6 +155,38 @@ async def delete_novel(conn, novel_id: str) -> None:
             await conn.execute("DELETE FROM novel WHERE id = %s", (novel_id,))
         else:
             await conn.execute(f"DELETE FROM {table} WHERE novel_id = %s", (novel_id,))
+
+
+async def seed_entities(
+    conn,
+    novel_id: str,
+    surfaces: dict[str, str],
+    *,
+    chapter: int = 1,
+    lang: str = "en",
+) -> dict[str, str]:
+    """Insert entities + aliases for ``{surface: kind}``, returning the surface -> id map.
+
+    Stands in for RESOLVE in tests that exercise other stages. Since 1.6, graph-write
+    binds names ONLY through ``state.resolutions`` and creates no entities of its own, so
+    a test that writes facts has to supply both the rows and the map — the FK on
+    ``fact.entity_id`` is real.
+    """
+    resolutions: dict[str, str] = {}
+    for surface, kind in surfaces.items():
+        entity_id = str(uuid.uuid4())
+        resolutions[surface] = entity_id
+        await conn.execute(
+            "INSERT INTO entity (id, novel_id, kind, canonical, first_seen_chapter) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (entity_id, novel_id, kind, surface, chapter),
+        )
+        await conn.execute(
+            "INSERT INTO alias (entity_id, surface, lang, first_seen_chapter) "
+            "VALUES (%s, %s, %s, %s)",
+            (entity_id, surface, lang, chapter),
+        )
+    return resolutions
 
 
 async def seed_flashback(conn, novel_id: str) -> dict:

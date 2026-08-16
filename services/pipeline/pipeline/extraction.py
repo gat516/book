@@ -139,7 +139,10 @@ _NO_RELATIONS = "(none declared — emit an empty edges list)"
 _NO_KINDS = "(none declared — emit an empty entities list)"
 
 
-def _format_kinds(ontology: dict[str, Any]) -> str:
+def format_kinds(ontology: dict[str, Any]) -> str:
+    """Public because RESOLVE's proposal prompt (resolution.py) asks for the same kinds
+    list. One formatter means the two prompts cannot drift into describing the same
+    ontology differently."""
     kinds = [str(k) for k in ontology.get("kinds", [])]
     return "\n".join(f"- {k}" for k in kinds) if kinds else _NO_KINDS
 
@@ -169,7 +172,7 @@ def _format_relations(ontology: dict[str, Any]) -> str:
 def build_system_prompt(ontology: dict[str, Any]) -> str:
     """The stable prefix: instructions + this novel's ontology, no chapter text (§6.2)."""
     return _SYSTEM_TEMPLATE.format(
-        kinds=_format_kinds(ontology),
+        kinds=format_kinds(ontology),
         attributes=_format_attributes(ontology),
         relations=_format_relations(ontology),
     )

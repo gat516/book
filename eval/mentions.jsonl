@@ -1,0 +1,4 @@
+// Labeled mentions for entity-resolution accuracy. See README.md for the format.
+// Empty on purpose: labels come from real ingested chapters, not invented ones — a
+// fabricated eval set measures nothing and hides the fact that nothing is measured yet.
+// Add ~20 whenever you test resolution against a real novel.

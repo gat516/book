@@ -22,7 +22,14 @@ from __future__ import annotations
 import json
 
 import pytest
-from fixtures import FakeProvider, FakeRedis, delete_novel, make_config, make_novel
+from fixtures import (
+    FakeProvider,
+    FakeRedis,
+    delete_novel,
+    make_config,
+    make_novel,
+    seed_entities,
+)
 
 from pipeline.cache import LLMCache
 from pipeline.context import NovelMeta, PipelineState, StageContext, language_profile_for
@@ -93,9 +100,15 @@ def _state() -> PipelineState:
     )
 
 
-async def _run(ctx, *, stages=(StateStage(), GraphWriteStage())) -> PipelineState:
+async def _run(
+    ctx, *, stages=(StateStage(), GraphWriteStage()), resolutions: dict[str, str] | None = None
+) -> PipelineState:
+    """Run stages over one chapter. ``resolutions`` stands in for RESOLVE, which these
+    tests deliberately don't run — since 1.6 graph-write binds names only through that
+    map and creates no entities itself, so a test that expects facts must supply it."""
     state = _state()
     state.envelope.novel_id = ctx.novel.id
+    state.resolutions = dict(resolutions or {})
     for stage in stages:
         await stage.run(ctx, state)
     return state
@@ -109,6 +122,11 @@ async def _counts(db, novel_id) -> dict[str, int]:
         ).fetchone()
         counts[table] = row[0]
     return counts
+
+
+# The surfaces RESPONSE names, with their kinds — what a successful RESOLVE would have
+# produced for this chapter.
+CAST = {"Li Xiaoyao": "character", "Azure Cloud Sect": "sect"}
 
 
 @pytest.fixture
@@ -125,7 +143,8 @@ async def novel(db_conn):
 
 async def test_extraction_lands_in_the_graph(db_conn, novel):
     provider = FakeProvider(RESPONSE)
-    await _run(_ctx(db_conn, novel, provider, LLMCache(FakeRedis())))
+    resolutions = await seed_entities(db_conn, novel, CAST)
+    await _run(_ctx(db_conn, novel, provider, LLMCache(FakeRedis())), resolutions=resolutions)
 
     assert await _counts(db_conn, novel) == {"entity": 2, "fact": 1, "edge": 1, "event": 1}
 
@@ -197,12 +216,13 @@ async def test_crash_before_write_reuses_the_cached_response(db_conn, novel):
     provider = FakeProvider(RESPONSE)
     cache = LLMCache(FakeRedis())
     ctx = _ctx(db_conn, novel, provider, cache)
+    resolutions = await seed_entities(db_conn, novel, CAST)
 
-    await _run(ctx, stages=(StateStage(),))
+    await _run(ctx, stages=(StateStage(),), resolutions=resolutions)
     assert len(provider.calls) == 1
-    assert await _counts(db_conn, novel) == {"entity": 0, "fact": 0, "edge": 0, "event": 0}
+    assert (await _counts(db_conn, novel))["fact"] == 0
 
-    state = await _run(ctx)
+    state = await _run(ctx, resolutions=resolutions)
     assert len(provider.calls) == 1, "cache hit must not re-call the model"
     assert state.extraction is not None
     assert (await _counts(db_conn, novel))["fact"] == 1
@@ -223,6 +243,22 @@ async def test_skipped_stage_writes_nothing_but_an_empty_extraction_is_not_a_ski
     # Second run: the job is done, so the stage returns without output at all.
     state = await _run(ctx)
     assert state.extraction is None
+
+
+async def test_unresolved_surface_is_dropped_and_counted(db_conn, novel):
+    """The 1.6 binding contract: graph-write does no name matching of its own, so a
+    surface RESOLVE never bound is dropped rather than guessed at. Seeding only half the
+    cast is exactly the extraction/resolution disagreement the eval set measures."""
+    partial = await seed_entities(db_conn, novel, {"Li Xiaoyao": "character"})
+    await _run(
+        _ctx(db_conn, novel, FakeProvider(RESPONSE), LLMCache(FakeRedis())),
+        resolutions=partial,
+    )
+
+    counts = await _counts(db_conn, novel)
+    assert counts["fact"] == 1  # the Li Xiaoyao fact survives
+    assert counts["edge"] == 0  # the edge needs Azure Cloud Sect, which never resolved
+    assert counts["entity"] == 1, "graph-write must not create the missing entity"
 
 
 async def test_ontology_edit_forces_re_extraction(db_conn, novel):
@@ -259,7 +295,11 @@ async def test_flashback_story_time_is_preserved(db_conn, novel):
             ],
         }
     )
-    await _run(_ctx(db_conn, novel, FakeProvider(response), LLMCache(FakeRedis())))
+    resolutions = await seed_entities(db_conn, novel, {"Li Xiaoyao": "character"})
+    await _run(
+        _ctx(db_conn, novel, FakeProvider(response), LLMCache(FakeRedis())),
+        resolutions=resolutions,
+    )
 
     row = await (
         await db_conn.execute(
@@ -285,7 +325,11 @@ async def test_story_time_after_knowledge_time_is_clamped(db_conn, novel):
             ],
         }
     )
-    await _run(_ctx(db_conn, novel, FakeProvider(response), LLMCache(FakeRedis())))
+    resolutions = await seed_entities(db_conn, novel, {"Li Xiaoyao": "character"})
+    await _run(
+        _ctx(db_conn, novel, FakeProvider(response), LLMCache(FakeRedis())),
+        resolutions=resolutions,
+    )
 
     row = await (
         await db_conn.execute(
@@ -298,7 +342,8 @@ async def test_story_time_after_knowledge_time_is_clamped(db_conn, novel):
 async def test_fact_about_an_undeclared_surface_is_dropped(db_conn, novel):
     """Binding a surface the extractor never declared would invent an entity, which
     pollutes the resolver's candidate set for every later chapter — worse than a missing
-    fact."""
+    fact. Since 1.6 the mechanism is the resolutions map rather than a declared-entities
+    check, but the guarantee is the same one."""
     response = json.dumps(
         {
             "entities": [{"surface": "Li Xiaoyao", "kind": "character"}],
@@ -308,7 +353,11 @@ async def test_fact_about_an_undeclared_surface_is_dropped(db_conn, novel):
             ],
         }
     )
-    await _run(_ctx(db_conn, novel, FakeProvider(response), LLMCache(FakeRedis())))
+    resolutions = await seed_entities(db_conn, novel, {"Li Xiaoyao": "character"})
+    await _run(
+        _ctx(db_conn, novel, FakeProvider(response), LLMCache(FakeRedis())),
+        resolutions=resolutions,
+    )
 
     counts = await _counts(db_conn, novel)
     assert counts["fact"] == 1

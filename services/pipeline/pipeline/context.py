@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from pipeline.cache import LLMCache
     from pipeline.extraction import Extraction
     from pipeline.llm.provider import LLMProvider
+    from pipeline.mentions import Span
 
 
 @dataclass(frozen=True)
@@ -101,8 +102,14 @@ class PipelineState:
 
     envelope: ChapterEnvelope
     chunks: list[Chunk] = field(default_factory=list)  # chunk stage (1.4)
-    mentions: list[Any] = field(default_factory=list)  # scan stage
-    resolutions: list[Any] = field(default_factory=list)  # resolve stage
+    mentions: "list[Span]" = field(default_factory=list)  # scan stage (1.6)
+
+    # resolve stage (1.6): the AUTHORITATIVE surface -> entity_id map. Every stage that
+    # needs to turn a name into an id reads this and nothing else — a surface absent from
+    # it is an unresolved mention, not an invitation to bind by exact match (that was the
+    # 1.5 placeholder, and exact matching is the entity-drift bug §12 risk #2 describes).
+    resolutions: dict[str, str] = field(default_factory=dict)
+
     translation: str | None = None  # translate stage
 
     # state stage (1.5). ``extraction`` is None when the stage was skipped entirely

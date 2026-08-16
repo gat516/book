@@ -1,0 +1,51 @@
+// textproc — the Python↔Rust contract (instructions.md §3.3).
+//
+// Written as a literal artifact BEFORE any Rust exists, because the Phase-1 Python stub
+// (services/pipeline/pipeline/mentions.py) is shaped from this same file. That makes the
+// Phase-4 Rust swap a transport change rather than a refactor of every call site.
+//
+// Messages return BOTH byte and char offsets. aho-corasick (Rust) matches on bytes and
+// returns byte offsets; the display layer indexes UTF-8 by character. Mapping them once
+// here, at the source, is what stops every caller from redoing it — and getting it wrong
+// on exactly the CJK text this system exists to process.
+//
+// Aho-Corasick semantics (§5.3 depends on this): the matcher finds exact substrings
+// WITHOUT segmentation — 王 is found inside 王国 regardless. Segmentation (jieba/lindera)
+// is NOT on the match path; it is a post-match boundary filter that suppresses false
+// positives. Use MatchKind::LeftmostLongest to prefer 王国 over 王 where appropriate.
+// Do not wire a mandatory segmenter into the matcher.
+//
+// Rust toolchain is pinned in §3.6: tonic 0.14.x with tonic-prost-build, Rust >= 1.88.
+
+syntax = "proto3";
+package textproc;
+
+service TextProc {
+  // Aho-Corasick over an alias set → mention spans, for retrieve-then-resolve.
+  rpc ScanMentions (MentionScanRequest) returns (MentionScanResponse);
+  // Deterministic canonical-term replacement across cached translations (retro-update).
+  rpc ApplyRetroUpdate (RetroRequest) returns (RetroResponse);
+  // Content hashing / near-dup detection for cache keys + scrape stop-conditions.
+  rpc HashContent (HashRequest) returns (HashResponse);
+}
+
+message Alias { string alias_id = 1; string surface = 2; }
+
+message MentionScanRequest {
+  string text     = 1;
+  repeated Alias aliases = 2;
+  string lang     = 3;      // BCP-47; selects the post-match boundary filter (§5.3)
+}
+message Span {
+  string alias_id  = 1;
+  uint32 byte_start = 2; uint32 byte_end = 3;   // aho-corasick native (bytes)
+  uint32 char_start = 4; uint32 char_end = 5;   // mapped for the display layer
+}
+message MentionScanResponse { repeated Span spans = 1; }
+
+message HashRequest  { string text = 1; }
+message HashResponse { string sha256 = 1; string near_dup_sig = 2; }
+
+message RetroRequest  { string text = 1; repeated Replacement replacements = 2; }
+message Replacement   { string from = 1; string to = 2; }
+message RetroResponse { string text = 1; }

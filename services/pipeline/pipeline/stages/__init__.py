@@ -1,12 +1,13 @@
 """Pipeline stages (instructions.md §5). Runtime order: chunk → scan → resolve →
 translate → state → graph-write. Chunk and graph-write are real (1.4), state is real
-(1.5); scan/resolve/translate remain no-op stubs until 1.6-1.7.
+(1.5), scan and resolve are real (1.6); translate is the last no-op stub (1.7).
 
-State runs before graph-write but is built before resolve, which runs before it (PLAN.md
-1.5): it populates fact/edge/event, which every downstream feature reads, and it can be
-developed against an English test novel where resolution is easy and translation skipped.
-Until resolve lands, graph-write binds entity surfaces with a placeholder — see
-``GraphWriter.bind_surfaces``.
+The build order deliberately differs from the runtime order (PLAN.md): state was filled
+before resolve even though it runs after it, because state populates fact/edge/event —
+what every downstream feature reads — and can be developed against an English test novel
+where resolution is easy and translation is skipped. Resolve then replaced the
+exact-match placeholder that stood in for it, and now owns ``state.resolutions``, the
+single surface → entity_id map every later stage binds through.
 """
 
 from pipeline.stages.chunk import ChunkStage

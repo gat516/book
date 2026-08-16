@@ -8,9 +8,10 @@ extraction was written, which is flipped to ``done`` in that same transaction. M
 outside would open a window where the facts exist and the job doesn't know it, and the
 retry would insert them all again.
 
-Surfaces become entity ids via ``GraphWriter.bind_surfaces``, which is a placeholder for
-RESOLVE (1.6) — see its docstring. When 1.6 lands it supplies ``state.resolutions`` and
-this stage stops guessing.
+Surfaces become entity ids via ``state.resolutions``, which RESOLVE (1.6) owns and which
+is the only binding path here. This stage does no name matching of its own — the
+exact-match placeholder it used through 1.5 is gone, because exact matching is the
+entity-drift bug (§12 risk #2), not a mild approximation of resolution.
 
 ``state.extraction is None`` means the state stage skipped itself (its work was already
 written); that is deliberately distinct from an empty ``Extraction``, which means the
@@ -68,14 +69,16 @@ class GraphWriteStage:
         async with ctx.db.transaction():
             await writer.replace_chunks(ctx.novel.id, chapter_index, state.chunks, embeddings)
 
-            written = (0, 0, 0)
+            written = (0, 0, 0, 0)
             if state.extraction is not None:
-                written = await self._write_extraction(ctx, writer, state.extraction, chapter_index)
+                written = await self._write_extraction(
+                    ctx, writer, state.extraction, chapter_index, state.resolutions
+                )
                 if state.state_job_key is not None:
                     await mark_job_done(ctx.db, state.state_job_key)
 
         log.info(
-            "stage %s chapter=%d chunks=%d facts=%d edges=%d events=%d",
+            "stage %s chapter=%d chunks=%d facts=%d edges=%d events=%d unresolved=%d",
             self.name,
             chapter_index,
             len(state.chunks),
@@ -88,29 +91,30 @@ class GraphWriteStage:
         writer: GraphWriter,
         extraction: Extraction,
         chapter_index: int,
-    ) -> tuple[int, int, int]:
-        # The extractor is instructed to declare every surface it references in
-        # ``entities``; anything referencing an undeclared one is dropped rather than
-        # bound to an invented entity. A silently-invented entity is worse than a missing
-        # fact — it pollutes the resolver's candidate set for every later chapter.
-        kinds = {e.surface: e.kind for e in extraction.entities}
+        bound: dict[str, str],
+    ) -> tuple[int, int, int, int]:
+        # ``bound`` is RESOLVE's surface -> entity_id map, and it is the ONLY way a name
+        # becomes an id here (1.6). A surface missing from it is an unresolved mention:
+        # the row is dropped, not bound by exact match. That subsumes the older
+        # "declared in extraction.entities" check — binding can no longer invent an
+        # entity, so a surface the extractor failed to declare simply never resolves.
+        #
+        # Dropping is the right trade against binding to a guess: an invented entity
+        # pollutes the resolver's candidate set for every later chapter, permanently and
+        # silently, while a dropped fact shows up as the unresolved count this returns —
+        # which is the drift signal the eval set measures (workstream A).
+        unresolved: set[str] = set()
 
-        def declared(*surfaces: str) -> bool:
-            missing = [s for s in surfaces if s not in kinds]
+        def resolved(*surfaces: str) -> bool:
+            missing = [s for s in surfaces if s not in bound]
+            unresolved.update(missing)
             if missing:
-                log.warning("dropping extraction row referencing undeclared %s", missing)
+                log.warning("dropping extraction row: unresolved %s", missing)
             return not missing
 
-        facts = [f for f in extraction.facts if declared(f.entity)]
-        edges = [e for e in extraction.edges if declared(e.src, e.dst)]
-        events = [(ev, [s for s in ev.entities if s in kinds]) for ev in extraction.events]
-
-        bound = await writer.bind_surfaces(
-            ctx.novel.id,
-            chapter_index,
-            list(kinds.items()),
-            lang=ctx.novel.source_lang,
-        )
+        facts = [f for f in extraction.facts if resolved(f.entity)]
+        edges = [e for e in extraction.edges if resolved(e.src, e.dst)]
+        events = [(ev, [s for s in ev.entities if s in bound]) for ev in extraction.events]
 
         fact_rows = [
             FactRow(
@@ -155,4 +159,4 @@ class GraphWriteStage:
         await writer.insert_facts(fact_rows)
         await writer.insert_edges(edge_rows)
         await writer.insert_events(event_rows)
-        return len(fact_rows), len(edge_rows), len(event_rows)
+        return len(fact_rows), len(edge_rows), len(event_rows), len(unresolved)

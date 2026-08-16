@@ -20,10 +20,10 @@ Every method runs inside the caller's transaction — callers open one per chapt
 
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from pgvector import Vector
 from pgvector.psycopg import register_vector_async
 
 from pipeline.context import Chunk
@@ -40,6 +40,16 @@ class EntityRow:
     canonical: str
     first_seen_chapter: int
     embedding: list[float] | None = None
+
+
+@dataclass(frozen=True)
+class CandidateRow:
+    """An existing entity offered to RESOLVE's disambiguator. Read-only; the write rows
+    below are what actually go to Postgres."""
+
+    id: str
+    canonical: str
+    kind: str
 
 
 @dataclass(frozen=True)
@@ -201,76 +211,73 @@ class GraphWriter:
                 [(r.novel_id, r.chapter_index, r.summary, r.entity_ids) for r in rows],
             )
 
-    async def bind_surfaces(
-        self, novel_id: str, chapter_index: int, surfaces: list[tuple[str, str]], *, lang: str
-    ) -> dict[str, str]:
-        """PROVISIONAL surface -> entity_id binding. Replaced by RESOLVE in 1.6.
+    async def exact_matches(self, novel_id: str, surface: str) -> list[CandidateRow]:
+        """Entities whose canonical name or one of whose aliases IS this surface.
 
-        The state extractor names entities by the string the chapter used; facts need a
-        real ``entity.id``. Deciding which existing entity a surface refers to is exactly
-        the retrieve-then-resolve problem §5 warns silently fails at scale — vector
-        candidates plus an LLM that confirms rather than free-generates. None of that
-        exists yet, so this does the honest minimum: **exact match on an existing alias
-        or canonical name within the novel, otherwise a new entity.**
-
-        That is a deliberately weak resolver and it drifts in the documented way — two
-        spellings of one character become two entities. It is not a design, it is a
-        placeholder that lets 1.5's writes be real; when 1.6 lands, ``state.resolutions``
-        supplies the mapping and graph-write stops calling this.
-
-        No chapter gate here on purpose: ingestion is not a read path. The spoiler gate
-        (§0.3) applies to what a *reader* may see, and is enforced on the way out; an
-        ingest worker resolving chapter 500 legitimately sees every entity in the novel.
-
-        Runs inside the caller's transaction, like every other method here.
+        The cheap, certain half of retrieve-then-resolve. A hit here still goes to the
+        disambiguator when it is ambiguous (two characters genuinely called "Chen"), but
+        it is also what catches a candidate the ANN search missed — which is why 0003's
+        comment can say approximate search is acceptable for this lookup and not for
+        chunks. Exact match is the safety net under the approximation.
         """
-        bound: dict[str, str] = {}
-        new_entities: list[EntityRow] = []
-        new_aliases: list[AliasRow] = []
+        rows = await (
+            await self.db.execute(
+                """
+                SELECT DISTINCT e.id, e.canonical, e.kind
+                FROM entity e
+                LEFT JOIN alias a ON a.entity_id = e.id
+                WHERE e.novel_id = %s AND (a.surface = %s OR e.canonical = %s)
+                """,
+                (novel_id, surface, surface),
+            )
+        ).fetchall()
+        return [CandidateRow(id=str(r[0]), canonical=r[1], kind=r[2]) for r in rows]
 
-        async with self.db.cursor() as cur:
-            for surface, kind in surfaces:
-                if surface in bound:
-                    continue
-                await cur.execute(
-                    """
-                    SELECT e.id FROM entity e
-                    LEFT JOIN alias a ON a.entity_id = e.id
-                    WHERE e.novel_id = %s AND (a.surface = %s OR e.canonical = %s)
-                    LIMIT 1
-                    """,
-                    (novel_id, surface, surface),
-                )
-                row = await cur.fetchone()
-                if row is not None:
-                    bound[surface] = str(row[0])
-                    continue
-                entity_id = str(uuid.uuid4())
-                bound[surface] = entity_id
-                new_entities.append(
-                    EntityRow(
-                        id=entity_id,
-                        novel_id=novel_id,
-                        kind=kind,
-                        canonical=surface,
-                        first_seen_chapter=chapter_index,
-                        # embedding stays NULL: it is resolve's input (1.6), and a wrong
-                        # vector here would poison the very lookup that replaces this.
-                        embedding=None,
-                    )
-                )
-                new_aliases.append(
-                    AliasRow(
-                        entity_id=entity_id,
-                        surface=surface,
-                        lang=lang,
-                        first_seen_chapter=chapter_index,
-                    )
-                )
+    async def similar_entities(
+        self, novel_id: str, embedding: list[float], *, k: int = 5
+    ) -> list[CandidateRow]:
+        """Nearest entities by cosine distance over ``entity.embedding`` (pgvector).
 
-        await self.upsert_entities(new_entities)
-        await self.upsert_aliases(new_aliases)
-        return bound
+        This is what finds "Azure Cloud Sect" when the chapter says "the Azure Sect" —
+        the case exact matching cannot reach and the reason entity embeddings exist.
+        Uses the HNSW index from 0004, which (unlike the ivfflat it replaced) is built
+        for a table that starts empty and grows by streaming inserts — exactly this
+        workload, since entities are created chapter by chapter.
+
+        Entities with a NULL embedding are skipped rather than ranked: they are the
+        1.5-era rows the placeholder binder created, and a NULL sorts unhelpfully.
+        """
+        rows = await (
+            await self.db.execute(
+                """
+                SELECT e.id, e.canonical, e.kind
+                FROM entity e
+                WHERE e.novel_id = %s AND e.embedding IS NOT NULL
+                ORDER BY e.embedding <=> %s
+                LIMIT %s
+                """,
+                # Vector(), not a bare list: an INSERT coerces a Python list into a
+                # vector column happily (which is why the write paths above pass lists),
+                # but as an OPERATOR argument the same list adapts to double precision[]
+                # and `vector <=> double precision[]` does not exist. The asymmetry is
+                # easy to "simplify" away and the result is a hard error, not a silent
+                # one — so this stays explicit.
+                (novel_id, Vector(embedding), k),
+            )
+        ).fetchall()
+        return [CandidateRow(id=str(r[0]), canonical=r[1], kind=r[2]) for r in rows]
+
+    async def insert_entity(self, entity: EntityRow, aliases: list[AliasRow]) -> None:
+        """Create one entity and its aliases immediately.
+
+        One at a time, not batched at end-of-chapter, because a surface resolved later in
+        the same chapter must be able to match an entity created earlier in it. Batching
+        would make a chapter that introduces a character under two names create two
+        entities — the precise drift this stage exists to prevent, reintroduced as a
+        write-ordering detail.
+        """
+        await self.upsert_entities([entity])
+        await self.upsert_aliases(aliases)
 
     async def replace_chunks(
         self, novel_id: str, chapter_index: int, chunks: list[Chunk], embeddings: list[list[float]]

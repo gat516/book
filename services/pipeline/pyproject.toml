@@ -11,6 +11,10 @@ dependencies = [
     "pydantic>=2.7",
     "anthropic>=0.69",
     "pgvector>=0.3",
+    # Mention scanning (§3.3). Stands in for the Rust `textproc` service until Phase 4;
+    # its iter_long() is the leftmost-longest mode the aho-corasick crate calls
+    # MatchKind::LeftmostLongest, so the swap keeps the same match semantics.
+    "pyahocorasick>=2.1",
 ]
 
 [project.optional-dependencies]
