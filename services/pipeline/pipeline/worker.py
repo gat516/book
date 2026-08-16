@@ -28,9 +28,9 @@ import redis.asyncio as aredis
 from minio import Minio
 
 from pipeline.config import Config
-from pipeline.context import LanguageProfile, NovelMeta, PipelineState, StageContext
+from pipeline.context import NovelMeta, PipelineState, StageContext, language_profile_for
 from pipeline.envelope import ChapterEnvelope, QueueMessage, SourceMeta
-from pipeline.llm import provider_from_env
+from pipeline.llm import embed_provider_from_env, provider_from_env
 from pipeline.stages import DEFAULT_STAGES
 
 log = logging.getLogger(__name__)
@@ -51,11 +51,27 @@ class Worker:
             secure=cfg.object_secure,
         )
         self.provider = provider_from_env(cfg)
+        self.embed_provider = embed_provider_from_env(cfg)
         self.db: psycopg.AsyncConnection | None = None
 
+    async def _assert_embed_dim(self) -> None:
+        """Fail fast at startup, not hundreds of chunks into a run (§10).
+
+        A dimension mismatch between EMBED_DIM and what the model actually returns is
+        otherwise a raw psycopg error on the first chunk insert of the first chapter —
+        this makes it a clear assertion before any work starts.
+        """
+        [vec] = await self.embed_provider.embed(["dimension probe"])
+        if len(vec) != self.cfg.embed_dim:
+            raise RuntimeError(
+                f"embed model {self.cfg.embed_model!r} returned {len(vec)} dims, "
+                f"but EMBED_DIM={self.cfg.embed_dim} (must match chunk/entity.embedding, see 0004)"
+            )
+
     async def start(self) -> None:
-        # autocommit: each status update lands immediately; the skeleton has no
-        # multi-statement transactions yet (graph-write introduces those in 1.4).
+        await self._assert_embed_dim()
+        # autocommit for chapter-status updates outside graph-write; graph-write itself
+        # (1.4) opens its own explicit transaction per chapter via GraphWriter.
         self.db = await psycopg.AsyncConnection.connect(
             self.cfg.database_url, autocommit=True
         )
@@ -158,8 +174,9 @@ class Worker:
                 target_lang=target_lang,
                 ontology=ontology,
             ),
-            language_profile=LanguageProfile(lang=source_lang),
+            language_profile=language_profile_for(source_lang),
             provider=self.provider,
+            embed_provider=self.embed_provider,
             db=self.db,
             objects=self.minio,
             cfg=self.cfg,

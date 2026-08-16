@@ -34,6 +34,7 @@ class Config:
     llm_model_translate: str
     llm_model_extract: str
     embed_model: str
+    embed_dim: int
     ollama_host: str
 
     # Cache-key inputs (§6.1) — bumping either invalidates the LLM-result cache.
@@ -73,6 +74,7 @@ class Config:
             llm_model_translate=_getenv("LLM_MODEL_TRANSLATE", "qwen2.5:14b"),
             llm_model_extract=_getenv("LLM_MODEL_EXTRACT", "qwen2.5:14b"),
             embed_model=_getenv("EMBED_MODEL", "nomic-embed-text"),
+            embed_dim=int(_getenv("EMBED_DIM", "768")),
             ollama_host=_getenv("OLLAMA_HOST", "http://localhost:11434"),
             prompt_version=_getenv("PROMPT_VERSION", "1"),
             config_version=_getenv("CONFIG_VERSION", "1"),

@@ -26,6 +26,7 @@ def _cfg(**overrides) -> Config:
         llm_model_translate="qwen2.5:14b",
         llm_model_extract="qwen2.5:14b",
         embed_model="nomic-embed-text",
+        embed_dim=768,
         ollama_host="http://localhost:11434",
         prompt_version="1",
         config_version="1",
