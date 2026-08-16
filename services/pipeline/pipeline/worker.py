@@ -1,19 +1,27 @@
-"""The offline worker drain loop (instructions.md §5; PLAN.md §1.1).
+"""The offline worker drain loop (instructions.md §5, §6.3; PLAN.md §1.1).
 
 Drains the Redis ``jobs:pending`` queue that ``ingest-api`` fills, loads each chapter's
 body from the object store, and runs it through the stage list. This phase the stages are
 no-op stubs, so a chapter's whole journey is: pop → load → run stubs → mark ``done``.
 
-Queue discipline (§0.7): ``BLMOVE jobs:pending jobs:processing RIGHT LEFT`` *moves* the
-pointer to a processing list rather than plain-popping it, so a crash mid-chapter leaves
-the pointer recoverable instead of lost. A recovery sweep over ``jobs:processing`` is
-future work (noted, not built).
+Queue discipline (§0.7, §6.3): ``BLMOVE jobs:pending jobs:processing RIGHT LEFT`` *moves*
+the pointer to a processing list rather than plain-popping it, so a crash mid-chapter
+leaves the pointer recoverable instead of lost — but only if something actually recovers
+it. Recording a claim timestamp and running a reaper sweep is what makes that true: on
+claim, ``jobs:processing:started[<raw message>] = now()``; a background reaper re-queues
+any claim older than ``cfg.visibility_timeout`` back onto ``jobs:pending``. Keyed by the
+raw queue message itself (matching the existing ``LREM`` pattern below) rather than a
+``job_id`` — this ``QueueMessage`` doesn't carry one yet; spec §3.4 anticipates a richer
+message shape that would make ``job_id`` the natural key instead. Without the reaper, a
+crashed worker's chapter is stranded in ``jobs:processing`` forever — the pointer is
+"recoverable" only in the sense that nothing stops you from recovering it by hand.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import psycopg
 import redis.asyncio as aredis
@@ -29,6 +37,7 @@ log = logging.getLogger(__name__)
 
 PENDING_QUEUE = "jobs:pending"  # keep in sync with ingest-api/store.go:16
 PROCESSING_QUEUE = "jobs:processing"
+PROCESSING_STARTED = "jobs:processing:started"  # HASH: raw queue message -> claim epoch
 
 
 class Worker:
@@ -52,7 +61,7 @@ class Worker:
         )
         log.info("worker connected; draining %s", PENDING_QUEUE)
         try:
-            await self._loop()
+            await asyncio.gather(self._loop(), self._reap_forever())
         finally:
             await self.db.close()
 
@@ -63,13 +72,52 @@ class Worker:
             )
             if raw is None:
                 continue  # timed out with an empty queue; poll again
+            # Claim timestamp for the reaper (§6.3): this write must land before any
+            # await that could crash the process, or the reaper can't find a claim it
+            # doesn't know exists yet.
+            await self.redis.hset(PROCESSING_STARTED, raw, time.time())
             try:
                 await self._handle(raw)
             except Exception:  # noqa: BLE001 — never let one poisoned chapter kill the loop
                 log.exception("chapter processing failed; leaving pointer in %s", PROCESSING_QUEUE)
                 continue
-            # Success: drop the processing pointer for this message.
+            # Success: drop the processing pointer and its claim record for this message.
             await self.redis.lrem(PROCESSING_QUEUE, 1, raw)
+            await self.redis.hdel(PROCESSING_STARTED, raw)
+
+    async def _reap_forever(self) -> None:
+        """Requeue jobs claimed longer than ``visibility_timeout`` ago (§6.3).
+
+        A job re-appearing in jobs:pending while a crashed worker's claim record still
+        exists is the failure mode this guards: without this loop, ``jobs:processing``
+        plus its claim hash grow forever and no stranded chapter is ever retried.
+        """
+        while True:
+            await asyncio.sleep(self.cfg.reaper_interval)
+            try:
+                await self._reap_once()
+            except Exception:  # noqa: BLE001 — a reaper crash must not kill the worker
+                log.exception("reaper sweep failed")
+
+    async def _reap_once(self) -> None:
+        started: dict[str, str] = await self.redis.hgetall(PROCESSING_STARTED)
+        now = time.time()
+        for raw, started_at in started.items():
+            if now - float(started_at) < self.cfg.visibility_timeout:
+                continue
+            # Only reclaim if the pointer is still actually in jobs:processing — a
+            # completed job that raced this sweep before its own HDEL lands here safely,
+            # since LREM on an absent value is a no-op and we still clear the stale hash
+            # field either way.
+            removed = await self.redis.lrem(PROCESSING_QUEUE, 1, raw)
+            await self.redis.hdel(PROCESSING_STARTED, raw)
+            if removed:
+                await self.redis.lpush(PENDING_QUEUE, raw)
+                log.warning(
+                    "reaper requeued stranded job after %.0fs: %r",
+                    now - float(started_at),
+                    raw,
+                )
 
     async def _handle(self, raw: str) -> None:
         msg = QueueMessage.model_validate_json(raw)

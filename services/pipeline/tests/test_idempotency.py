@@ -5,10 +5,10 @@ under a still-valid key. Pure — no DB, no network.
 
 from __future__ import annotations
 
-import dataclasses
+import hashlib
 
 from pipeline.config import Config
-from pipeline.jobs import idempotency_key, model_id_for_stage
+from pipeline.jobs import idempotency_key, model_for_stage, model_id_for_stage, stage_config_version
 
 RAW_HASH = "sha256:abc123"
 
@@ -30,6 +30,8 @@ def _cfg(**overrides) -> Config:
         prompt_version="1",
         config_version="1",
         queue_timeout=5,
+        visibility_timeout=300,
+        reaper_interval=5,
     )
     base.update(overrides)
     return Config(**base)
@@ -71,3 +73,34 @@ def test_translate_key_differs_from_extract_key():
 def test_different_stage_changes_key():
     cfg = _cfg()
     assert idempotency_key("resolve", RAW_HASH, cfg) != idempotency_key("state", RAW_HASH, cfg)
+
+
+def test_key_uses_unit_separator_not_pipe():
+    # §3.5 mandates 0x1F, not a printable delimiter like '|' — a printable separator can
+    # legally appear inside a model id and make the join ambiguous in principle. Assert
+    # against a hand-computed digest so a future refactor can't silently regress the format.
+    cfg = _cfg()
+    expected_parts = [
+        "state",
+        RAW_HASH,
+        cfg.prompt_version,
+        stage_config_version("state", cfg),
+        model_id_for_stage("state", cfg),
+    ]
+    expected = hashlib.sha256("\x1f".join(expected_parts).encode("utf-8")).hexdigest()
+    assert idempotency_key("state", RAW_HASH, cfg) == expected
+
+    # A pipe-joined digest of the same parts must NOT match — proves the separator
+    # actually changed, not just that some hash is being computed.
+    pipe_digest = hashlib.sha256("|".join(expected_parts).encode("utf-8")).hexdigest()
+    assert idempotency_key("state", RAW_HASH, cfg) != pipe_digest
+
+
+def test_model_for_stage_matches_model_id_for_stage():
+    # jobs.model_for_stage is what stage code passes to complete(model=...); it must be
+    # the same value model_id_for_stage embeds in the cache key, or a stage could ask the
+    # provider for one model while the key claims another (the bug this fixes, §12).
+    cfg = _cfg(llm_model_translate="claude-opus-4-8", llm_model_extract="claude-haiku-4-5")
+    assert model_id_for_stage("translate", cfg) == f"{cfg.llm_provider}:{model_for_stage('translate', cfg)}"
+    assert model_for_stage("translate", cfg) == "claude-opus-4-8"
+    assert model_for_stage("state", cfg) == "claude-haiku-4-5"

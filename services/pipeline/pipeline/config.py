@@ -43,6 +43,15 @@ class Config:
     # Worker
     queue_timeout: int  # seconds BLMOVE blocks before looping (0 = block forever)
 
+    # Crash-recovery reaper (§6.3): a claimed job stranded in jobs:processing longer than
+    # visibility_timeout is assumed crashed and requeued. Default ~3x a generous stage
+    # estimate; retune once real LLM-bearing stages exist and p99.9 stage time is known.
+    # A future gateway's admission lease_timeout must stay BELOW this value (§14.5) —
+    # otherwise a job is requeued while its gateway reservation is still held and the
+    # same work gets admitted twice.
+    visibility_timeout: int
+    reaper_interval: int  # seconds between reaper sweeps
+
     @classmethod
     def load(cls) -> "Config":
         # OBJECT_STORE_ENDPOINT in .env.example is a URL (http://localhost:9000); the
@@ -68,4 +77,6 @@ class Config:
             prompt_version=_getenv("PROMPT_VERSION", "1"),
             config_version=_getenv("CONFIG_VERSION", "1"),
             queue_timeout=int(_getenv("PIPELINE_QUEUE_TIMEOUT", "5")),
+            visibility_timeout=int(_getenv("PIPELINE_VISIBILITY_TIMEOUT", "300")),
+            reaper_interval=int(_getenv("PIPELINE_REAPER_INTERVAL", "5")),
         )
