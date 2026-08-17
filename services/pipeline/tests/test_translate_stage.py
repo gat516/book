@@ -8,6 +8,7 @@ import json
 import pytest
 
 from fixtures import FakeProvider, FakeRedis, delete_novel, make_config, make_novel
+from pipeline.batch import BatchManager
 from pipeline.cache import LLMCache
 from pipeline.context import NovelMeta, PipelineState, StageContext, language_profile_for
 from pipeline.envelope import ChapterEnvelope, SourceMeta
@@ -85,6 +86,7 @@ async def test_translation_pins_served_snapshot_and_rerun_reads_object(db_conn):
             ),
             language_profile=language_profile_for("zh"),
             provider=provider,
+            batch_manager=BatchManager(provider),
             embed_provider=provider,
             db=db_conn,
             objects=objects,
@@ -110,6 +112,8 @@ async def test_translation_pins_served_snapshot_and_rerun_reads_object(db_conn):
 
         assert provider.calls[0]["pin_model"] is True
         assert provider.calls[0]["model"] == "qwen3:8b"
+        assert len(provider.batch_requests) == 1
+        assert len(provider.batch_polls) == 1
         assert pin == ("ollama:qwen3:8b-snapshot",)
         assert chapter[1:] == ("ollama:qwen3:8b-snapshot", 1)
         assert objects.data[(cfg.object_bucket, chapter[0])].decode() == TRANSLATION

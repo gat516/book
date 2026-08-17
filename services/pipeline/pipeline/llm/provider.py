@@ -24,7 +24,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol, TypedDict, runtime_checkable
+from typing import NotRequired, Protocol, TypedDict, runtime_checkable
 
 
 class Class(Enum):
@@ -55,9 +55,12 @@ class Completion:
 
 
 class BatchRequest(TypedDict):
-    id: str  # your idempotency key
+    id: str  # opaque correlation id; stages generally use their current idempotency key
     prompt: str
     system: str
+    json_mode: NotRequired[bool]
+    pin_model: NotRequired[bool]
+    model: NotRequired[str | None]
 
 
 class BatchResult(TypedDict):
@@ -128,7 +131,12 @@ class SequentialBatchMixin:
         for req in requests:
             try:
                 completion = await self.complete(  # type: ignore[attr-defined]
-                    req["prompt"], system=req["system"], cls=Class.BATCH
+                    req["prompt"],
+                    system=req["system"],
+                    json_mode=req.get("json_mode", False),
+                    cls=Class.BATCH,
+                    pin_model=req.get("pin_model", False),
+                    model=req.get("model"),
                 )
                 results.append(
                     {
@@ -139,6 +147,10 @@ class SequentialBatchMixin:
                         "served_model": completion.served_model,
                     }
                 )
+            except AdmissionRejected:
+                # Capacity backpressure belongs to the worker's retry policy. Turning it
+                # into a result error would make ordinary contention count as job failure.
+                raise
             except Exception as exc:  # noqa: BLE001 — surface per-request, don't fail the batch
                 results.append(
                     {

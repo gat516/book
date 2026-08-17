@@ -9,7 +9,13 @@ import uuid
 from collections.abc import Callable
 
 from pipeline.config import Config
-from pipeline.llm.provider import Class, Completion
+from pipeline.llm.provider import (
+    BatchRequest,
+    BatchResult,
+    Class,
+    Completion,
+    SequentialBatchMixin,
+)
 
 
 def make_config(**overrides) -> Config:
@@ -54,7 +60,7 @@ class FakeRedis:
         self.ttls[key] = ex
 
 
-class FakeProvider:
+class FakeProvider(SequentialBatchMixin):
     """An LLMProvider that returns canned text and counts calls.
 
     ``response`` is either a fixed string or a callable ``(prompt, system) -> str``. The
@@ -74,11 +80,22 @@ class FakeProvider:
         served_model: str | None = None,
         embed_dim: int = 768,
     ) -> None:
+        super().__init__()
         self.response = response
         self.provider = provider
         self.served_model = served_model
         self.embed_dim = embed_dim
         self.calls: list[dict] = []
+        self.batch_requests: list[list[BatchRequest]] = []
+        self.batch_polls: list[str] = []
+
+    async def batch_submit(self, requests: list[BatchRequest]) -> str:
+        self.batch_requests.append(requests)
+        return await super().batch_submit(requests)
+
+    async def batch_poll(self, batch_id: str) -> list[BatchResult]:
+        self.batch_polls.append(batch_id)
+        return await super().batch_poll(batch_id)
 
     async def complete(
         self,

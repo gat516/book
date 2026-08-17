@@ -23,6 +23,7 @@ import json
 import pytest
 from fixtures import FakeProvider, FakeRedis, delete_novel, make_config, make_novel, seed_entities
 
+from pipeline.batch import BatchManager
 from pipeline.cache import LLMCache
 from pipeline.context import NovelMeta, PipelineState, StageContext, language_profile_for
 from pipeline.envelope import ChapterEnvelope, SourceMeta
@@ -70,6 +71,7 @@ def _ctx(
         ),
         language_profile=language_profile_for(source_lang),
         provider=provider,
+        batch_manager=BatchManager(provider),
         embed_provider=provider,
         db=db,
         objects=None,

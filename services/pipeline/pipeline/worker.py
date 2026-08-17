@@ -27,6 +27,7 @@ import psycopg
 import redis.asyncio as aredis
 from minio import Minio
 
+from pipeline.batch import BatchManager
 from pipeline.cache import LLMCache
 from pipeline.config import Config
 from pipeline.context import NovelMeta, PipelineState, StageContext, language_profile_for
@@ -52,6 +53,7 @@ class Worker:
             secure=cfg.object_secure,
         )
         self.provider = provider_from_env(cfg)
+        self.batch_manager = BatchManager(self.provider)
         self.embed_provider = embed_provider_from_env(cfg)
         # Same Redis connection as the job queue: both are this service's own state.
         # A future gateway keeps its quota state in a SEPARATE logical database (§15.5)
@@ -181,6 +183,7 @@ class Worker:
             ),
             language_profile=language_profile_for(source_lang),
             provider=self.provider,
+            batch_manager=self.batch_manager,
             embed_provider=self.embed_provider,
             db=self.db,
             objects=self.minio,

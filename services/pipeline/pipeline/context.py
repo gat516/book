@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from psycopg import AsyncConnection
     from minio import Minio
 
+    from pipeline.batch import BatchManager
     from pipeline.cache import LLMCache
     from pipeline.extraction import Extraction
     from pipeline.llm.provider import LLMProvider
@@ -89,6 +90,7 @@ class StageContext:
     novel: NovelMeta
     language_profile: LanguageProfile
     provider: "LLMProvider"
+    batch_manager: "BatchManager"
     embed_provider: "LLMProvider"
     db: "AsyncConnection"
     objects: "Minio"

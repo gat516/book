@@ -31,6 +31,7 @@ from fixtures import (
     seed_entities,
 )
 
+from pipeline.batch import BatchManager
 from pipeline.cache import LLMCache
 from pipeline.context import NovelMeta, PipelineState, StageContext, language_profile_for
 from pipeline.envelope import ChapterEnvelope, SourceMeta
@@ -80,6 +81,7 @@ def _ctx(db, novel_id, provider, cache, *, ontology=None) -> StageContext:
         ),
         language_profile=language_profile_for("en"),
         provider=provider,
+        batch_manager=BatchManager(provider),
         embed_provider=provider,
         db=db,
         objects=None,
@@ -174,6 +176,8 @@ async def test_stage_asks_for_json_at_batch_priority(db_conn, novel):
     call = provider.calls[0]
     assert call["json_mode"] is True
     assert call["cls"] is Class.BATCH
+    assert len(provider.batch_requests) == 1
+    assert len(provider.batch_polls) == 1
     # state-extract is structured data: a different model is a quality variance, not a
     # discontinuity, so it must NOT pin (§15.4 case 2 — only translate pins).
     assert call["pin_model"] is False

@@ -15,7 +15,7 @@ from pipeline.jobs import (
     mark_job_done,
     model_for_stage,
 )
-from pipeline.llm.provider import Class
+from pipeline.llm.provider import BatchRequest
 from pipeline.stages.chunk import chunk_text
 from pipeline.translation import (
     build_system_prompt,
@@ -150,21 +150,24 @@ class TranslateStage:
             served_provider = requested_provider
             served_model = requested_model
         else:
-            completion = await ctx.provider.complete(
-                build_user_prompt(state.envelope.raw_text),
-                system=build_system_prompt(
+            request: BatchRequest = {
+                "id": key,
+                "prompt": build_user_prompt(state.envelope.raw_text),
+                "system": build_system_prompt(
                     source_lang=ctx.novel.source_lang,
                     target_lang=ctx.novel.target_lang,
                     ontology=ctx.novel.ontology,
                     glossary=glossary,
                 ),
-                cls=Class.BATCH,
-                pin_model=True,
-                model=requested_model,
-            )
-            translated = completion.text
-            served_provider = completion.served_provider
-            served_model = completion.served_model
+                "pin_model": True,
+                "model": requested_model,
+            }
+            batch_id = await ctx.batch_manager.batch_submit([request])
+            results = await ctx.batch_manager.batch_poll(batch_id)
+            result = ctx.batch_manager.require_single_result(key, results)
+            translated = result["output"]
+            served_provider = result["served_provider"]
+            served_model = result["served_model"]
 
         translated_by = f"{served_provider}:{served_model}"
         if not served_provider or not served_model:

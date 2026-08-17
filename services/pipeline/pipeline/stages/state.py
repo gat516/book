@@ -38,7 +38,7 @@ from pipeline.jobs import (
     model_for_stage,
     model_id_for_stage,
 )
-from pipeline.llm.provider import Class
+from pipeline.llm.provider import BatchRequest
 
 log = logging.getLogger(__name__)
 
@@ -85,20 +85,23 @@ class StateStage:
             # An AdmissionRejected from here propagates untouched: it is backpressure,
             # not failure, and the retry/attempts policy that must not conflate them
             # lives with the job runner (§6.2, §14.3), not in stage code.
-            completion = await ctx.provider.complete(
-                build_user_prompt(envelope.raw_text),
-                system=build_system_prompt(ctx.novel.ontology),
-                json_mode=True,
-                cls=Class.BATCH,
-                model=model_for_stage(STAGE, ctx.cfg),
-            )
-            raw = completion.text
+            request: BatchRequest = {
+                "id": key,
+                "prompt": build_user_prompt(envelope.raw_text),
+                "system": build_system_prompt(ctx.novel.ontology),
+                "json_mode": True,
+                "model": model_for_stage(STAGE, ctx.cfg),
+            }
+            batch_id = await ctx.batch_manager.batch_submit([request])
+            results = await ctx.batch_manager.batch_poll(batch_id)
+            result = ctx.batch_manager.require_single_result(key, results)
+            raw = result["output"]
             await ctx.cache.put(
                 key,
                 raw,
                 requested_model_id=model_id_for_stage(STAGE, ctx.cfg),
-                served_provider=completion.served_provider,
-                served_model=completion.served_model,
+                served_provider=result["served_provider"],
+                served_model=result["served_model"],
                 stage=STAGE,
             )
 

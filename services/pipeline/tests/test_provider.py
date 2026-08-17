@@ -12,7 +12,13 @@ from __future__ import annotations
 import pytest
 
 from pipeline.jobs import cacheable_result
-from pipeline.llm.provider import BatchRequest, Class, Completion, SequentialBatchMixin
+from pipeline.llm.provider import (
+    AdmissionRejected,
+    BatchRequest,
+    Class,
+    Completion,
+    SequentialBatchMixin,
+)
 
 
 class FakeProvider(SequentialBatchMixin):
@@ -57,6 +63,56 @@ async def test_batch_runs_complete_per_request_and_matches_by_id():
     assert all(r["served_provider"] == "fake" for r in results)
 
 
+async def test_batch_forwards_completion_options_at_batch_priority():
+    class Capture(SequentialBatchMixin):
+        def __init__(self) -> None:
+            super().__init__()
+            self.call: dict | None = None
+
+        async def complete(
+            self,
+            prompt: str,
+            *,
+            system: str = "",
+            json_mode: bool = False,
+            cls: Class = Class.BATCH,
+            pin_model: bool = False,
+            model: str | None = None,
+        ) -> Completion:
+            self.call = {
+                "prompt": prompt,
+                "system": system,
+                "json_mode": json_mode,
+                "cls": cls,
+                "pin_model": pin_model,
+                "model": model,
+            }
+            return Completion(text="ok", served_provider="fake", served_model=model or "")
+
+    provider = Capture()
+    await provider.batch_submit(
+        [
+            {
+                "id": "request",
+                "prompt": "chapter",
+                "system": "stable prefix",
+                "json_mode": True,
+                "pin_model": True,
+                "model": "snapshot",
+            }
+        ]
+    )
+
+    assert provider.call == {
+        "prompt": "chapter",
+        "system": "stable prefix",
+        "json_mode": True,
+        "cls": Class.BATCH,
+        "pin_model": True,
+        "model": "snapshot",
+    }
+
+
 async def test_per_request_error_is_isolated():
     class Boom(SequentialBatchMixin):
         async def complete(
@@ -83,6 +139,29 @@ async def test_per_request_error_is_isolated():
     results = {r["id"]: r for r in await p.batch_poll(batch_id)}
     assert results["good"]["error"] is None
     assert results["bad"]["error"] is not None and "kaboom" in results["bad"]["error"]
+
+
+async def test_admission_rejection_escapes_batch_unchanged():
+    rejected = AdmissionRejected("busy", retry_after_s=2.5)
+
+    class Rejecting(SequentialBatchMixin):
+        async def complete(
+            self,
+            prompt: str,
+            *,
+            system: str = "",
+            json_mode: bool = False,
+            cls: Class = Class.BATCH,
+            pin_model: bool = False,
+            model: str | None = None,
+        ) -> Completion:
+            raise rejected
+
+    with pytest.raises(AdmissionRejected) as caught:
+        await Rejecting().batch_submit([{"id": "request", "prompt": "hi", "system": ""}])
+
+    assert caught.value is rejected
+    assert caught.value.retry_after_s == 2.5
 
 
 async def test_poll_unknown_batch_returns_empty():
