@@ -16,9 +16,7 @@ that used to be two sources of truth that could (and did) disagree.
 from __future__ import annotations
 
 from pipeline.config import Config
-from pipeline.llm.anthropic import AnthropicProvider
-from pipeline.llm.ollama import OllamaProvider
-from pipeline.llm.provider import AdmissionRejected, Class, Completion, LLMProvider
+from novel_llm import AdmissionRejected, AnthropicProvider, Class, Completion, LLMProvider, OllamaProvider
 
 
 def provider_from_env(cfg: Config) -> LLMProvider:

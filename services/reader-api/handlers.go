@@ -14,6 +14,7 @@ import (
 
 type API struct {
 	store ReaderStore
+	ask   AskClient
 }
 
 type progressRequest struct {
@@ -28,6 +29,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/wiki", a.getWiki)
 	mux.HandleFunc("GET /novels/{id}/timeline", a.getTimeline)
 	mux.HandleFunc("GET /novels/{id}/relationships/{eid}", a.getRelationships)
+	mux.HandleFunc("POST /novels/{id}/ask", a.postAsk)
 	return mux
 }
 
@@ -87,6 +89,16 @@ func prepareReaderResponse(w http.ResponseWriter) {
 }
 
 func (a *API) gate(w http.ResponseWriter, r *http.Request) (string, string, int, bool) {
+	requested, err := requestedAt(r)
+	if err != nil {
+		prepareReaderResponse(w)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return "", "", 0, false
+	}
+	return a.gateAt(w, r, requested)
+}
+
+func (a *API) gateAt(w http.ResponseWriter, r *http.Request, requested *int) (string, string, int, bool) {
 	prepareReaderResponse(w)
 	reader, ok := readerID(r)
 	if !ok {
@@ -96,11 +108,6 @@ func (a *API) gate(w http.ResponseWriter, r *http.Request) (string, string, int,
 	novelID, ok := pathUUID(r, "id")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid novel id")
-		return "", "", 0, false
-	}
-	requested, err := requestedAt(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
 		return "", "", 0, false
 	}
 	progress, err := a.store.GetProgress(r.Context(), reader, novelID)

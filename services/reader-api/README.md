@@ -38,6 +38,9 @@ The default address is `:8081`. Configuration:
 - `READER_LISTEN_ADDR`
 - `READER_DATABASE_URL` (falls back to `DATABASE_URL`)
 - `PROGRESS_DATABASE_URL` (falls back to `DATABASE_URL`)
+- `ASKAI_URL` (defaults to `http://localhost:8082`)
+- `ASKAI_INTERNAL_TOKEN` (required shared bearer secret)
+- `ASKAI_TIMEOUT_SECONDS` (defaults to `120`)
 
 The compose owner can switch to both restricted roles for local development. Production
 should use two distinct login credentials with only the required role membership.
@@ -61,6 +64,10 @@ curl localhost:8081/novels/<novel-id>/timeline?at=3 \
 
 curl localhost:8081/novels/<novel-id>/relationships/<entity-id>?at=3 \
   -H 'X-Reader-ID: local-reader'
+
+curl -X POST localhost:8081/novels/<novel-id>/ask \
+  -H 'X-Reader-ID: local-reader' \
+  -d '{"question":"What did the protagonist learn?","at":3}'
 ```
 
 Omitting `at` uses stored progress. A larger value is capped to stored progress; a lower

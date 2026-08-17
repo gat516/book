@@ -35,6 +35,19 @@ type fakeStore struct {
 	lastChapter     int
 }
 
+type fakeAskClient struct {
+	response json.RawMessage
+	err      error
+	novelID  string
+	question string
+	at       int
+}
+
+func (f *fakeAskClient) Ask(_ context.Context, novelID, question string, at int) (json.RawMessage, error) {
+	f.novelID, f.question, f.at = novelID, question, at
+	return f.response, f.err
+}
+
 func (f *fakeStore) Health(context.Context) error { return f.healthErr }
 
 func (f *fakeStore) GetProgress(
@@ -250,6 +263,25 @@ func TestPutProgressRejectsInvalidBodies(t *testing.T) {
 		if response.Code != http.StatusBadRequest {
 			t.Fatalf("body %q status = %d, want 400", body, response.Code)
 		}
+	}
+}
+
+func TestAskUsesEffectiveGateAndMapsAvailability(t *testing.T) {
+	store := readyFake()
+	ask := &fakeAskClient{response: json.RawMessage(`{"answer":"safe","at":5,"retrieved_sources":[],"served_by":null}`)}
+	api := &API{store: store, ask: ask}
+	response := request(t, api, http.MethodPost, "/novels/"+testNovelID+"/ask", `{"question":"What happened?","at":500}`, "reader-a")
+	if response.Code != http.StatusOK || ask.at != 5 || ask.novelID != testNovelID {
+		t.Fatalf("status=%d gate=(%s,%d) body=%s", response.Code, ask.novelID, ask.at, response.Body.String())
+	}
+	if response.Header().Get("Cache-Control") != "private, no-store" {
+		t.Fatal("ask response was cacheable")
+	}
+
+	ask.err = ErrAskRejected
+	response = request(t, api, http.MethodPost, "/novels/"+testNovelID+"/ask", `{"question":"What happened?"}`, "reader-a")
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("rejected status=%d", response.Code)
 	}
 }
 

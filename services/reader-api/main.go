@@ -14,6 +14,9 @@ import (
 
 func main() {
 	cfg := loadConfig()
+	if cfg.AskAIInternalToken == "" {
+		log.Fatal("startup: ASKAI_INTERNAL_TOKEN is required")
+	}
 	startupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	store, err := newStore(startupCtx, cfg)
 	cancel()
@@ -24,7 +27,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           (&API{store: store}).routes(),
+		Handler:           (&API{store: store, ask: newAskClient(cfg)}).routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
