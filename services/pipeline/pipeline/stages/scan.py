@@ -46,13 +46,12 @@ class ScanStage:
             )
         ).fetchall()
 
-        response = scan_mentions(
-            MentionScanRequest(
-                text=state.envelope.raw_text,
-                aliases=[Alias(alias_id=str(entity_id), surface=surface) for entity_id, surface in rows],
-                lang=ctx.novel.source_lang,
-            )
+        request = MentionScanRequest(
+            text=state.envelope.raw_text,
+            aliases=[Alias(alias_id=str(entity_id), surface=surface) for entity_id, surface in rows],
+            lang=ctx.novel.source_lang,
         )
+        response = await ctx.textproc.scan(request) if ctx.textproc else scan_mentions(request)
         state.mentions = response.spans
 
         log.debug(

@@ -1,0 +1,21 @@
+[package]
+name = "textproc"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+
+[dependencies]
+aho-corasick = "1.1"
+hex = "0.4"
+lru = "0.12"
+prost = "0.14"
+sha2 = "0.10"
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread"] }
+tonic = "0.14"
+tonic-health = "0.14"
+tonic-prost = "0.14"
+unicode-normalization = "0.1"
+
+[build-dependencies]
+protoc-bin-vendored = "3"
+tonic-prost-build = "0.14"

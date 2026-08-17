@@ -34,6 +34,7 @@ from pipeline.context import NovelMeta, PipelineState, StageContext, language_pr
 from pipeline.envelope import ChapterEnvelope, QueueMessage, SourceMeta
 from pipeline.llm import embed_provider_from_env, provider_from_env
 from pipeline.stages import DEFAULT_STAGES
+from pipeline.textproc import textproc_from_config
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +56,9 @@ class Worker:
         self.provider = provider_from_env(cfg)
         self.batch_manager = BatchManager(self.provider)
         self.embed_provider = embed_provider_from_env(cfg)
+        self.textproc = textproc_from_config(
+            cfg.textproc_backend, cfg.textproc_grpc_addr, cfg.textproc_timeout_seconds
+        )
         # Same Redis connection as the job queue: both are this service's own state.
         # A future gateway keeps its quota state in a SEPARATE logical database (§15.5)
         # — a backfill filling this one must not evict the limiter's accounting.
@@ -86,6 +90,7 @@ class Worker:
         try:
             await asyncio.gather(self._loop(), self._reap_forever())
         finally:
+            await self.textproc.aclose()
             await self.db.close()
 
     async def _loop(self) -> None:
@@ -189,6 +194,7 @@ class Worker:
             objects=self.minio,
             cfg=self.cfg,
             cache=self.cache,
+            textproc=self.textproc,
         )
         state = PipelineState(envelope=envelope)
 

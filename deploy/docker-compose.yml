@@ -52,6 +52,16 @@ services:
       timeout: 5s
       retries: 10
 
+  textproc:
+    build:
+      context: ..
+      dockerfile: services/textproc/Dockerfile
+    environment:
+      TEXTPROC_LISTEN_ADDR: 0.0.0.0:50051
+      TEXTPROC_MATCHER_CACHE_CAPACITY: 128
+    ports:
+      - "50051:50051"
+
 volumes:
   pgdata:
   redisdata:

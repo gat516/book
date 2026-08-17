@@ -14,12 +14,15 @@ dependencies = [
     # its iter_long() is the leftmost-longest mode the aho-corasick crate calls
     # MatchKind::LeftmostLongest, so the swap keeps the same match semantics.
     "pyahocorasick>=2.1",
+    "grpcio>=1.83",
+    "protobuf>=7.35",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "grpcio-tools>=1.83",
 ]
 
 [tool.pytest.ini_options]

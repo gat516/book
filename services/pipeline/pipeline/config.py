@@ -53,6 +53,12 @@ class Config:
     visibility_timeout: int
     reaper_interval: int  # seconds between reaper sweeps
 
+    # Mention scanning. Python is the explicit standalone-development fallback; the
+    # compose deployment sets this to grpc and talks to the Rust service.
+    textproc_backend: str
+    textproc_grpc_addr: str
+    textproc_timeout_seconds: float
+
     @classmethod
     def load(cls) -> "Config":
         # OBJECT_STORE_ENDPOINT in .env.example is a URL (http://localhost:9000); the
@@ -81,4 +87,7 @@ class Config:
             queue_timeout=int(_getenv("PIPELINE_QUEUE_TIMEOUT", "5")),
             visibility_timeout=int(_getenv("PIPELINE_VISIBILITY_TIMEOUT", "300")),
             reaper_interval=int(_getenv("PIPELINE_REAPER_INTERVAL", "5")),
+            textproc_backend=_getenv("TEXTPROC_BACKEND", "python"),
+            textproc_grpc_addr=_getenv("TEXTPROC_GRPC_ADDR", "localhost:50051"),
+            textproc_timeout_seconds=float(_getenv("TEXTPROC_TIMEOUT_SECONDS", "10")),
         )

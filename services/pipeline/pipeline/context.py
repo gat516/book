@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from pipeline.extraction import Extraction
     from pipeline.llm.provider import LLMProvider
     from pipeline.mentions import Span
+    from pipeline.textproc import TextProcClient
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,7 @@ class StageContext:
     objects: "Minio"
     cfg: Config
     cache: "LLMCache"  # the §6.1 LLM-result cache, shared by every LLM-bearing stage
+    textproc: "TextProcClient | None" = None
 
 
 @dataclass

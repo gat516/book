@@ -40,6 +40,9 @@ def make_config(**overrides) -> Config:
         queue_timeout=5,
         visibility_timeout=300,
         reaper_interval=5,
+        textproc_backend="python",
+        textproc_grpc_addr="localhost:50051",
+        textproc_timeout_seconds=10.0,
     )
     base.update(overrides)
     return Config(**base)
