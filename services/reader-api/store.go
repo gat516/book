@@ -1,0 +1,370 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+var (
+	ErrNotFound        = errors.New("not found")
+	ErrChapterNotReady = errors.New("chapter is not ready")
+)
+
+const (
+	readerRole   = "rls_reader"
+	progressRole = "reader_progress_writer"
+)
+
+type ReaderStore interface {
+	Health(context.Context) error
+	GetProgress(context.Context, string, string) (Progress, error)
+	AdvanceProgress(context.Context, string, string, int) (Progress, error)
+	GetEntity(context.Context, string, string, int) (EntityView, error)
+	ListWiki(context.Context, string, int) ([]EntitySummary, error)
+	ListTimeline(context.Context, string, int) ([]EventView, error)
+	ListRelationships(context.Context, string, string, int) ([]RelationshipView, error)
+}
+
+type Store struct {
+	readerDB   *pgxpool.Pool
+	progressDB *pgxpool.Pool
+}
+
+func newRolePool(ctx context.Context, databaseURL, role string) (*pgxpool.Pool, error) {
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s database URL: %w", role, err)
+	}
+	config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		_, err := conn.Exec(ctx, "SET ROLE "+pgx.Identifier{role}.Sanitize())
+		return err
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("create %s pool: %w", role, err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping %s pool: %w", role, err)
+	}
+	return pool, nil
+}
+
+func newStore(ctx context.Context, cfg Config) (*Store, error) {
+	readerDB, err := newRolePool(ctx, cfg.ReaderDatabaseURL, readerRole)
+	if err != nil {
+		return nil, err
+	}
+	progressDB, err := newRolePool(ctx, cfg.ProgressDatabaseURL, progressRole)
+	if err != nil {
+		readerDB.Close()
+		return nil, err
+	}
+	return &Store{readerDB: readerDB, progressDB: progressDB}, nil
+}
+
+func (s *Store) Close() {
+	s.readerDB.Close()
+	s.progressDB.Close()
+}
+
+func (s *Store) Health(ctx context.Context) error {
+	if err := s.readerDB.Ping(ctx); err != nil {
+		return fmt.Errorf("reader database: %w", err)
+	}
+	if err := s.progressDB.Ping(ctx); err != nil {
+		return fmt.Errorf("progress database: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GetProgress(ctx context.Context, readerID, novelID string) (Progress, error) {
+	var progress Progress
+	err := s.progressDB.QueryRow(ctx,
+		`SELECT novel_id::text, reader_id, current_chapter, updated_at
+		 FROM reader_progress WHERE reader_id = $1 AND novel_id = $2`,
+		readerID, novelID,
+	).Scan(&progress.NovelID, &progress.ReaderID, &progress.CurrentChapter, &progress.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Progress{}, ErrNotFound
+	}
+	return progress, err
+}
+
+func (s *Store) AdvanceProgress(
+	ctx context.Context, readerID, novelID string, chapter int,
+) (Progress, error) {
+	var progress Progress
+	err := s.progressDB.QueryRow(ctx,
+		`INSERT INTO reader_progress (reader_id, novel_id, current_chapter)
+		 SELECT $1, c.novel_id, c.chapter_index
+		 FROM chapter c
+		 WHERE c.novel_id = $2 AND c.chapter_index = $3 AND c.status = 'done'
+		 ON CONFLICT (reader_id, novel_id) DO UPDATE
+		 SET current_chapter = GREATEST(reader_progress.current_chapter, EXCLUDED.current_chapter),
+		     updated_at = now()
+		 RETURNING novel_id::text, reader_id, current_chapter, updated_at`,
+		readerID, novelID, chapter,
+	).Scan(&progress.NovelID, &progress.ReaderID, &progress.CurrentChapter, &progress.UpdatedAt)
+	if err == nil {
+		return progress, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return Progress{}, err
+	}
+
+	var exists bool
+	if lookupErr := s.progressDB.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM novel WHERE id = $1)`, novelID,
+	).Scan(&exists); lookupErr != nil {
+		return Progress{}, lookupErr
+	}
+	if !exists {
+		return Progress{}, ErrNotFound
+	}
+	return Progress{}, ErrChapterNotReady
+}
+
+func (s *Store) withReaderTx(
+	ctx context.Context, novelID string, at int, operation func(pgx.Tx) error,
+) error {
+	tx, err := s.readerDB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	if _, err := tx.Exec(ctx,
+		`SELECT set_config('app.novel_id', $1, true),
+		        set_config('app.current_chapter', $2, true)`,
+		novelID, fmt.Sprintf("%d", at),
+	); err != nil {
+		return err
+	}
+	if err := operation(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) GetEntity(
+	ctx context.Context, novelID, entityID string, at int,
+) (EntityView, error) {
+	view := EntityView{Aliases: []string{}, Facts: []FactView{}}
+	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx,
+			`SELECT id::text, canonical, kind, first_seen_chapter
+			 FROM entity
+			 WHERE novel_id = $1 AND id = $2 AND first_seen_chapter <= $3`,
+			novelID, entityID, at,
+		).Scan(&view.ID, &view.Canonical, &view.Kind, &view.FirstSeenChapter); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+
+		aliasRows, err := tx.Query(ctx,
+			`SELECT surface FROM alias
+			 WHERE entity_id = $1 AND first_seen_chapter <= $2
+			 ORDER BY first_seen_chapter, surface`, entityID, at)
+		if err != nil {
+			return err
+		}
+		defer aliasRows.Close()
+		for aliasRows.Next() {
+			var alias string
+			if err := aliasRows.Scan(&alias); err != nil {
+				return err
+			}
+			view.Aliases = append(view.Aliases, alias)
+		}
+		if err := aliasRows.Err(); err != nil {
+			return err
+		}
+
+		factRows, err := tx.Query(ctx,
+			`WITH visible AS (
+			   SELECT id, attribute, value, kind, supersedes, valid_from_chapter,
+			          source_chapter, confidence
+			   FROM fact
+			   WHERE novel_id = $1 AND entity_id = $2
+			     AND source_chapter <= $3 AND valid_from_chapter <= $3
+			 )
+			 SELECT DISTINCT ON (f.attribute)
+			        f.attribute, f.value, f.valid_from_chapter, f.source_chapter, f.confidence
+			 FROM visible f
+			 WHERE f.kind <> 'retraction'
+			   AND NOT EXISTS (SELECT 1 FROM visible successor WHERE successor.supersedes = f.id)
+			 ORDER BY f.attribute, f.valid_from_chapter DESC, f.source_chapter DESC,
+			          f.confidence DESC, f.id DESC`, novelID, entityID, at)
+		if err != nil {
+			return err
+		}
+		defer factRows.Close()
+		for factRows.Next() {
+			var fact FactView
+			if err := factRows.Scan(
+				&fact.Attribute, &fact.Value, &fact.ValidFromChapter,
+				&fact.SourceChapter, &fact.Confidence,
+			); err != nil {
+				return err
+			}
+			view.Facts = append(view.Facts, fact)
+		}
+		return factRows.Err()
+	})
+	return view, err
+}
+
+func (s *Store) ListWiki(ctx context.Context, novelID string, at int) ([]EntitySummary, error) {
+	entities := []EntitySummary{}
+	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT id::text, canonical, kind, first_seen_chapter
+			 FROM entity
+			 WHERE novel_id = $1 AND first_seen_chapter <= $2
+			 ORDER BY first_seen_chapter, canonical, id`, novelID, at)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var entity EntitySummary
+			if err := rows.Scan(
+				&entity.ID, &entity.Canonical, &entity.Kind, &entity.FirstSeenChapter,
+			); err != nil {
+				return err
+			}
+			entities = append(entities, entity)
+		}
+		return rows.Err()
+	})
+	return entities, err
+}
+
+func (s *Store) ListTimeline(ctx context.Context, novelID string, at int) ([]EventView, error) {
+	events := []EventView{}
+	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT id, chapter_index, summary, entity_ids
+			 FROM event
+			 WHERE novel_id = $1 AND chapter_index <= $2
+			 ORDER BY chapter_index, id`, novelID, at)
+		if err != nil {
+			return err
+		}
+		type eventRow struct {
+			event EventView
+			ids   []uuid.UUID
+		}
+		buffered := []eventRow{}
+		for rows.Next() {
+			row := eventRow{event: EventView{Entities: []EntitySummary{}}}
+			if err := rows.Scan(
+				&row.event.ID, &row.event.ChapterIndex, &row.event.Summary, &row.ids,
+			); err != nil {
+				rows.Close()
+				return err
+			}
+			buffered = append(buffered, row)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+
+		for _, row := range buffered {
+			entityRows, err := tx.Query(ctx,
+				`SELECT e.id::text, e.canonical, e.kind, e.first_seen_chapter
+				 FROM unnest($1::uuid[]) WITH ORDINALITY AS ref(id, ordinal)
+				 JOIN entity e ON e.id = ref.id
+				 WHERE e.novel_id = $2 AND e.first_seen_chapter <= $3
+				 ORDER BY ref.ordinal`, row.ids, novelID, at)
+			if err != nil {
+				return err
+			}
+			for entityRows.Next() {
+				var entity EntitySummary
+				if err := entityRows.Scan(
+					&entity.ID, &entity.Canonical, &entity.Kind, &entity.FirstSeenChapter,
+				); err != nil {
+					entityRows.Close()
+					return err
+				}
+				row.event.Entities = append(row.event.Entities, entity)
+			}
+			if err := entityRows.Err(); err != nil {
+				entityRows.Close()
+				return err
+			}
+			entityRows.Close()
+			events = append(events, row.event)
+		}
+		return nil
+	})
+	return events, err
+}
+
+func (s *Store) ListRelationships(
+	ctx context.Context, novelID, entityID string, at int,
+) ([]RelationshipView, error) {
+	relationships := []RelationshipView{}
+	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
+		var exists bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (
+			   SELECT 1 FROM entity
+			   WHERE novel_id = $1 AND id = $2 AND first_seen_chapter <= $3
+			 )`, novelID, entityID, at,
+		).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return ErrNotFound
+		}
+
+		rows, err := tx.Query(ctx,
+			`SELECT edge.id, edge.rel_type,
+			        CASE WHEN edge.src_id = $2 THEN 'outgoing' ELSE 'incoming' END,
+			        other.id::text, other.canonical, other.kind, other.first_seen_chapter,
+			        edge.valid_from_chapter, edge.valid_to_chapter, edge.source_chapter
+			 FROM edge
+			 JOIN entity other ON other.id = CASE
+			   WHEN edge.src_id = $2 THEN edge.dst_id ELSE edge.src_id END
+			 WHERE edge.novel_id = $1 AND (edge.src_id = $2 OR edge.dst_id = $2)
+			   AND edge.source_chapter <= $3 AND edge.valid_from_chapter <= $3
+			   AND (edge.valid_to_chapter IS NULL OR edge.valid_to_chapter > $3)
+			   AND other.novel_id = $1 AND other.first_seen_chapter <= $3
+			 ORDER BY edge.rel_type,
+			          CASE WHEN edge.src_id = $2 THEN 'outgoing' ELSE 'incoming' END,
+			          other.canonical, edge.id`, novelID, entityID, at)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var relationship RelationshipView
+			if err := rows.Scan(
+				&relationship.ID, &relationship.Relation, &relationship.Direction,
+				&relationship.Entity.ID, &relationship.Entity.Canonical,
+				&relationship.Entity.Kind, &relationship.Entity.FirstSeenChapter,
+				&relationship.ValidFromChapter, &relationship.ValidToChapter,
+				&relationship.SourceChapter,
+			); err != nil {
+				return err
+			}
+			relationships = append(relationships, relationship)
+		}
+		return rows.Err()
+	})
+	return relationships, err
+}
+
+var _ ReaderStore = (*Store)(nil)
