@@ -23,6 +23,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "grpcio-tools>=1.83",
+    "grpcio-health-checking>=1.83",
 ]
 
 [tool.pytest.ini_options]

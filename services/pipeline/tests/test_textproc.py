@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import grpc
 import pytest
 
 from pipeline import textproc_pb2, textproc_pb2_grpc
 from pipeline.mentions import Alias, MentionScanRequest
 from pipeline.textproc import GrpcTextProcClient, PythonTextProcClient, textproc_from_config
+
+GOLDEN_CASES = Path(__file__).parents[2] / "textproc" / "tests" / "scan_cases.json"
 
 
 class Servicer(textproc_pb2_grpc.TextProcServicer):
@@ -54,3 +59,22 @@ async def test_python_backend_is_explicit_fallback() -> None:
     assert isinstance(client, PythonTextProcClient)
     response = await client.scan(MentionScanRequest(text="王国", aliases=[Alias(alias_id="short", surface="王"), Alias(alias_id="long", surface="王国")]))
     assert [span.alias_id for span in response.spans] == ["long"]
+
+
+@pytest.mark.asyncio
+async def test_python_backend_matches_shared_golden_cases() -> None:
+    client = PythonTextProcClient()
+    cases = json.loads(GOLDEN_CASES.read_text())
+    for case in cases:
+        response = await client.scan(
+            MentionScanRequest(
+                text=case["text"],
+                aliases=[Alias(alias_id=alias_id, surface=surface) for alias_id, surface in case["aliases"]],
+                lang=case["lang"],
+            )
+        )
+        actual = [
+            [span.alias_id, span.byte_start, span.byte_end, span.char_start, span.char_end]
+            for span in response.spans
+        ]
+        assert actual == case["spans"], case["name"]

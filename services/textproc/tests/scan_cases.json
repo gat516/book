@@ -1,0 +1,42 @@
+[
+  {
+    "name": "leftmost_longest_ascii",
+    "text": "Li Xiaoyao arrived.",
+    "lang": "en",
+    "aliases": [["short", "Li"], ["full", "Li Xiaoyao"]],
+    "spans": [["full", 0, 10, 0, 10]]
+  },
+  {
+    "name": "cjk_offsets",
+    "text": "第一章：青云宗",
+    "lang": "zh",
+    "aliases": [["sect", "青云宗"]],
+    "spans": [["sect", 12, 21, 4, 7]]
+  },
+  {
+    "name": "shared_surface_and_repeated_matches",
+    "text": "Chen met Chen.",
+    "lang": "en",
+    "aliases": [["e1", "Chen"], ["e2", "Chen"]],
+    "spans": [["e1", 0, 4, 0, 4], ["e2", 0, 4, 0, 4], ["e1", 9, 13, 9, 13], ["e2", 9, 13, 9, 13]]
+  },
+  {
+    "name": "emoji_and_supplementary_unicode",
+    "text": "😀𐐷Hero😀",
+    "lang": "en",
+    "aliases": [["emoji", "😀"], ["supplementary", "𐐷"], ["hero", "Hero"]],
+    "spans": [
+      ["emoji", 0, 4, 0, 1],
+      ["supplementary", 4, 8, 1, 2],
+      ["hero", 8, 12, 2, 6],
+      ["emoji", 12, 16, 6, 7]
+    ]
+  },
+  {
+    "name": "empty_surfaces",
+    "text": "Nothing matches.",
+    "lang": "en",
+    "aliases": [["empty", ""]],
+    "spans": []
+  }
+]

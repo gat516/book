@@ -61,6 +61,11 @@ services:
       TEXTPROC_MATCHER_CACHE_CAPACITY: 128
     ports:
       - "50051:50051"
+    healthcheck:
+      test: ["CMD", "textproc", "--health-check"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
 volumes:
   pgdata:

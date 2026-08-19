@@ -6,6 +6,9 @@ WORKDIR /src/services/textproc
 RUN cargo build --release
 
 FROM build AS test
+RUN rustup component add rustfmt clippy
+RUN cargo fmt --check
+RUN cargo clippy --all-targets -- -D warnings
 RUN cargo test
 
 FROM debian:bookworm-slim
