@@ -95,9 +95,19 @@ class Worker:
 
     async def _loop(self) -> None:
         while True:
-            raw = await self.redis.blmove(
-                PENDING_QUEUE, PROCESSING_QUEUE, self.cfg.queue_timeout, "RIGHT", "LEFT"
-            )
+            try:
+                raw = await self.redis.blmove(
+                    PENDING_QUEUE, PROCESSING_QUEUE, self.cfg.queue_timeout, "RIGHT", "LEFT"
+                )
+            except aredis.TimeoutError:
+                # redis-py (observed on 8.0.1) can raise a client-side TimeoutError from a
+                # BLMOVE that legitimately times out on an empty queue, instead of
+                # returning None — indistinguishable here from an ordinary empty-queue
+                # timeout, and the correct recovery is identical either way: poll again.
+                # Without this the worker crashes outright the first time the queue goes
+                # idle for cfg.queue_timeout seconds, which defeats the whole point of a
+                # long-running drain loop.
+                continue
             if raw is None:
                 continue  # timed out with an empty queue; poll again
             # Claim timestamp for the reaper (§6.3): this write must land before any

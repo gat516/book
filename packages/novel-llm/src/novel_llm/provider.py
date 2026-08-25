@@ -88,7 +88,12 @@ class SequentialBatchMixin:
             except AdmissionRejected:
                 raise
             except Exception as exc:  # noqa: BLE001
-                results.append({"id": req["id"], "output": "", "error": str(exc),
+                # str(exc) alone can be "" for exceptions raised with no message (seen
+                # from httpx/json failures), which turned BatchRequestFailed's message
+                # into "batch request '...' failed: " with zero diagnostic content.
+                # Always include the exception type so a blank message is never silent.
+                message = str(exc) or repr(exc)
+                results.append({"id": req["id"], "output": "", "error": f"{type(exc).__name__}: {message}",
                                 "served_provider": "", "served_model": ""})
         batch_id = uuid.uuid4().hex
         self._batches[batch_id] = results
