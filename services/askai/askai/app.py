@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from psycopg.rows import tuple_row
 from psycopg_pool import AsyncConnectionPool
 
-from novel_llm import AdmissionRejected, Class, LLMProvider
+from novel_llm import AdmissionRejected, Class, GatewayProvider, LLMProvider
 
 from askai.config import Config, load_config
 from askai.provider_config import build_provider, load_provider_config
@@ -90,14 +90,23 @@ class Service:
         return provider
 
     async def ask(self, request: AskRequest) -> AskResponse:
-        vectors = await self.embed_provider.embed([request.question], cls=Class.INTERACTIVE)
+        gateway_provider: LLMProvider | None = None
+        if self.config.llm_provider == "gateway":
+            gateway_provider = self._provider_cache.get(request.novel_id)
+            if gateway_provider is None:
+                gateway_provider = GatewayProvider(address=self.config.gateway_addr, tenant=request.novel_id,
+                    provider=self.config.gateway_provider, model=self.config.model,
+                    backend=self.config.gateway_backend, embed_model=self.config.embed_model,
+                    max_output_tokens=self.config.gateway_max_output_tokens)
+                self._provider_cache[request.novel_id] = gateway_provider
+        vectors = await (gateway_provider or self.embed_provider).embed([request.question], cls=Class.INTERACTIVE)
         if len(vectors) != 1 or len(vectors[0]) != self.config.embed_dim:
             raise RuntimeError("embedding provider returned an unexpected dimension")
         async with self.pool.connection() as conn:
             async with conn.transaction():
                 await conn.execute("SELECT set_config('app.novel_id', %s, true)", (request.novel_id,))
                 await conn.execute("SELECT set_config('app.current_chapter', %s, true)", (str(request.at),))
-                provider = await self._provider_for_novel(conn, request.novel_id)
+                provider = gateway_provider or await self._provider_for_novel(conn, request.novel_id)
                 sources = await retrieve(conn, request.novel_id, request.at, vectors[0], max_chunks=self.config.max_chunks, max_entities=self.config.max_entities, max_facts=self.config.max_facts, max_edges=self.config.max_edges)
         context, used = build_context(sources, self.config.max_context_chars)
         if not used:
@@ -132,17 +141,21 @@ def create_app(service: Service) -> FastAPI:
 
 
 def app_from_env() -> FastAPI:
-    from novel_llm import AnthropicProvider, DeepSeekProvider, OllamaProvider
+    from novel_llm import AnthropicProvider, DeepSeekProvider, GatewayProvider, OllamaProvider
     cfg = load_config()
     match cfg.llm_provider:
         case "ollama":
             provider: LLMProvider = OllamaProvider(host=cfg.ollama_host, model=cfg.model)
         case "deepseek":
             provider = DeepSeekProvider(model=cfg.model, base_url=cfg.deepseek_base_url, api_key=cfg.deepseek_api_key)
+        case "gateway":
+            provider = GatewayProvider(address=cfg.gateway_addr, tenant="default", provider=cfg.gateway_provider,
+                model=cfg.model, backend=cfg.gateway_backend, embed_model=cfg.embed_model,
+                max_output_tokens=cfg.gateway_max_output_tokens)
         case _:
             provider = AnthropicProvider(model=cfg.model)
     # Always Ollama for embeddings, regardless of LLM_PROVIDER — see Service's docstring.
-    embed_provider = OllamaProvider(host=cfg.ollama_host, model=cfg.embed_model)
+    embed_provider = provider if cfg.llm_provider == "gateway" else OllamaProvider(host=cfg.ollama_host, model=cfg.embed_model)
     return create_app(Service(cfg, provider, embed_provider))
 
 

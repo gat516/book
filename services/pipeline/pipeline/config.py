@@ -60,6 +60,10 @@ class Config:
     textproc_backend: str
     textproc_grpc_addr: str
     textproc_timeout_seconds: float
+    gateway_addr: str = "localhost:8081"
+    gateway_backend: str = "local_gpu"
+    gateway_provider: str = "ollama"
+    gateway_max_output_tokens: int = 8192
 
     @classmethod
     def load(cls) -> "Config":
@@ -86,6 +90,10 @@ class Config:
             ollama_host=_getenv("OLLAMA_HOST", "http://localhost:11434"),
             deepseek_api_key=_getenv("DEEPSEEK_API_KEY", ""),
             deepseek_base_url=_getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+            gateway_addr=_getenv("LLM_GATEWAY_ADDR", "localhost:8081"),
+            gateway_backend=_getenv("LLM_GATEWAY_BACKEND", "local_gpu"),
+            gateway_provider=_getenv("LLM_GATEWAY_PROVIDER", "ollama"),
+            gateway_max_output_tokens=int(_getenv("LLM_GATEWAY_MAX_OUTPUT_TOKENS", "8192")),
             prompt_version=_getenv("PROMPT_VERSION", "1"),
             config_version=_getenv("CONFIG_VERSION", "1"),
             queue_timeout=int(_getenv("PIPELINE_QUEUE_TIMEOUT", "5")),

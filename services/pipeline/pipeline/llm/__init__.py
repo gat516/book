@@ -22,12 +22,13 @@ from novel_llm import (
     Class,
     Completion,
     DeepSeekProvider,
+    GatewayProvider,
     LLMProvider,
     OllamaProvider,
 )
 
 
-def provider_from_env(cfg: Config) -> LLMProvider:
+def provider_from_env(cfg: Config, *, tenant: str = "default") -> LLMProvider:
     """Return the completion backend named by ``LLM_PROVIDER``, defaulted to the cheap
     extraction model. Callers needing a different model pass ``model=`` per call.
 
@@ -46,12 +47,22 @@ def provider_from_env(cfg: Config) -> LLMProvider:
                 base_url=cfg.deepseek_base_url,
                 api_key=cfg.deepseek_api_key,
             )
+        case "gateway":
+            return GatewayProvider(address=cfg.gateway_addr, tenant=tenant,
+                provider=cfg.gateway_provider, model=cfg.llm_model_extract,
+                backend=cfg.gateway_backend, embed_model=cfg.embed_model,
+                max_output_tokens=cfg.gateway_max_output_tokens)
         case other:
             raise ValueError(f"unknown LLM_PROVIDER: {other!r}")
 
 
-def embed_provider_from_env(cfg: Config) -> LLMProvider:
+def embed_provider_from_env(cfg: Config, *, tenant: str = "default") -> LLMProvider:
     """Return the embedding backend — always Ollama ``nomic-embed-text`` (§5.4)."""
+    if cfg.llm_provider == "gateway":
+        return GatewayProvider(address=cfg.gateway_addr, tenant=tenant,
+            provider=cfg.gateway_provider, model=cfg.llm_model_extract,
+            backend=cfg.gateway_backend, embed_model=cfg.embed_model,
+            max_output_tokens=cfg.gateway_max_output_tokens)
     return OllamaProvider(host=cfg.ollama_host, model=cfg.embed_model)
 
 

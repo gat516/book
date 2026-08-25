@@ -24,6 +24,10 @@ class Config:
     ollama_host: str = "http://localhost:11434"
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
+    gateway_addr: str = "localhost:8081"
+    gateway_backend: str = "local_gpu"
+    gateway_provider: str = "ollama"
+    gateway_max_output_tokens: int = 8192
 
 
 def load_config() -> Config:
@@ -39,4 +43,8 @@ def load_config() -> Config:
         ollama_host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
         deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", ""),
         deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        gateway_addr=os.getenv("LLM_GATEWAY_ADDR", "localhost:8081"),
+        gateway_backend=os.getenv("LLM_GATEWAY_BACKEND", "local_gpu"),
+        gateway_provider=os.getenv("LLM_GATEWAY_PROVIDER", "ollama"),
+        gateway_max_output_tokens=int(os.getenv("LLM_GATEWAY_MAX_OUTPUT_TOKENS", "8192")),
     )

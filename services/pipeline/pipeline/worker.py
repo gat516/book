@@ -33,7 +33,7 @@ from pipeline.config import Config
 from pipeline.context import NovelMeta, PipelineState, StageContext, language_profile_for
 from pipeline.envelope import ChapterEnvelope, QueueMessage, SourceMeta
 from pipeline.llm import embed_provider_from_env, provider_from_env
-from pipeline.llm.provider import LLMProvider
+from pipeline.llm.provider import AdmissionRejected, LLMProvider
 from pipeline.provider_config import build_provider, load_provider_config
 from pipeline.stages import DEFAULT_STAGES
 from pipeline.textproc import textproc_from_config
@@ -126,6 +126,15 @@ class Worker:
             await self.redis.hset(PROCESSING_STARTED, raw, time.time())
             try:
                 await self._handle(raw)
+            except AdmissionRejected as exc:
+                # Backpressure is not a failed chapter. Keep the claim recoverable
+                # during the requested delay, then place it back on the pending queue.
+                await asyncio.sleep(max(exc.retry_after_s, 0.25))
+                await self.redis.lrem(PROCESSING_QUEUE, 1, raw)
+                await self.redis.hdel(PROCESSING_STARTED, raw)
+                await self.redis.lpush(PENDING_QUEUE, raw)
+                log.info("gateway admission deferred chapter for %.3fs", exc.retry_after_s)
+                continue
             except Exception:  # noqa: BLE001 — never let one poisoned chapter kill the loop
                 log.exception("chapter processing failed; leaving pointer in %s", PROCESSING_QUEUE)
                 continue
@@ -210,7 +219,7 @@ class Worker:
             language_profile=language_profile_for(source_lang),
             provider=provider,
             batch_manager=batch_manager,
-            embed_provider=self.embed_provider,
+            embed_provider=provider if self.cfg.llm_provider == "gateway" else self.embed_provider,
             db=self.db,
             objects=self.minio,
             cfg=self.cfg,
@@ -223,6 +232,9 @@ class Worker:
         try:
             for stage in DEFAULT_STAGES:
                 await stage.run(ctx, state)
+        except AdmissionRejected:
+            # The outer loop requeues without turning capacity pressure into a job error.
+            raise
         except Exception:
             await self._set_status(msg, "error")
             raise
@@ -238,6 +250,11 @@ class Worker:
         cached = self._provider_cache.get(novel_id)
         if cached is not None:
             return cached
+        if self.cfg.llm_provider == "gateway":
+            provider = provider_from_env(self.cfg, tenant=novel_id)
+            result = (provider, BatchManager(provider), self.cfg.gateway_provider)
+            self._provider_cache[novel_id] = result
+            return result
         row = await load_provider_config(self.db, novel_id)
         if row is None:
             result = (self._default_provider, self._default_batch_manager, self.cfg.llm_provider)
