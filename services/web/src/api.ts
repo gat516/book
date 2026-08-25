@@ -2,9 +2,12 @@ import { readerId } from "./readerId";
 import type {
   AskResponse,
   ChapterResponse,
+  CorrectGlossaryTermRequest,
+  CorrectGlossaryTermResponse,
   CreateNovelRequest,
   CreateNovelResponse,
   EntityResponse,
+  GlossaryResponse,
   NovelListResponse,
   NovelSummary,
   PasteChapterRequest,
@@ -89,6 +92,21 @@ export function getScrapeStatus(novelId: string): Promise<ScrapeJobView> {
 
 export function cancelScrape(novelId: string): Promise<{ status: string }> {
   return request(`/novels/${novelId}/scrape/cancel`, { method: "POST" });
+}
+
+export function getGlossary(novelId: string, at: number): Promise<GlossaryResponse> {
+  return request(`/novels/${novelId}/glossary?at=${at}`);
+}
+
+export function correctGlossaryTerm(
+  novelId: string,
+  sourceTerm: string,
+  body: CorrectGlossaryTermRequest,
+): Promise<CorrectGlossaryTermResponse> {
+  return request(`/novels/${novelId}/glossary/${encodeURIComponent(sourceTerm)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
 }
 
 export function putProgress(novelId: string, chapter: number): Promise<Progress> {

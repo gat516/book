@@ -231,3 +231,32 @@ body {
   color: #666;
   font-size: 0.9rem;
 }
+
+.app-toggle-glossary {
+  margin: 0.5rem 0 0.5rem 0.5rem;
+}
+
+.glossary-view table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.glossary-view th,
+.glossary-view td {
+  text-align: left;
+  padding: 0.35rem 0.6rem 0.35rem 0;
+  border-bottom: 1px solid #eee;
+}
+
+.glossary-view input {
+  width: 100%;
+}
+
+.glossary-note {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.glossary-error {
+  color: #b00020;
+}

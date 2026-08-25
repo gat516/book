@@ -38,6 +38,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("POST /novels", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.createNovel)))
 	mux.HandleFunc("POST /novels/{id}/chapters", api.pasteChapter)
+	mux.HandleFunc("PATCH /novels/{id}/glossary/{term}", api.correctGlossaryTerm)
 	mux.HandleFunc("GET /healthz", api.healthz)
 
 	srv := &http.Server{

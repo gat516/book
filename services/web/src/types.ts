@@ -62,6 +62,33 @@ export interface ScrapeJobView {
   updated_at: string;
 }
 
+export interface GlossaryTermView {
+  source_term: string;
+  target_term: string;
+  version: number;
+  locked_at_chapter: number;
+}
+
+export interface GlossaryResponse {
+  novel_id: string;
+  at: number;
+  terms: GlossaryTermView[];
+}
+
+// ingest-api's correctGlossaryTermReq/Resp, proxied verbatim by reader-api's
+// PATCH /novels/{id}/glossary/{term}.
+export interface CorrectGlossaryTermRequest {
+  target_term: string;
+  at_chapter: number;
+}
+
+export interface CorrectGlossaryTermResponse {
+  novel_id: string;
+  source_term: string;
+  target_term: string;
+  version: number;
+}
+
 export interface SpanView {
   entity_id: string;
   char_start: number;

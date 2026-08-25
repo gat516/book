@@ -72,6 +72,19 @@ type RelationshipsResponse struct {
 	Relationships []RelationshipView `json:"relationships"`
 }
 
+type GlossaryTermView struct {
+	SourceTerm      string `json:"source_term"`
+	TargetTerm      string `json:"target_term"`
+	Version         int    `json:"version"`
+	LockedAtChapter int    `json:"locked_at_chapter"`
+}
+
+type GlossaryResponse struct {
+	NovelID string             `json:"novel_id"`
+	At      int                `json:"at"`
+	Terms   []GlossaryTermView `json:"terms"`
+}
+
 type ScrapeJobView struct {
 	ID              int64     `json:"id"`
 	NovelID         string    `json:"novel_id"`

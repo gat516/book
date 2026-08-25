@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { AddChapterForm } from "./components/AddChapterForm";
 import { AskBox } from "./components/AskBox";
+import { GlossaryView } from "./components/GlossaryView";
 import { NovelCreateForm } from "./components/NovelCreateForm";
 import { NovelPicker } from "./components/NovelPicker";
 import { ProgressControls } from "./components/ProgressControls";
@@ -43,6 +44,7 @@ export default function App() {
   // bouncing straight back to a blank "add a chapter" form, which would look like the
   // paste silently failed.
   const [justAdded, setJustAdded] = useState<number | null>(null);
+  const [showGlossary, setShowGlossary] = useState(false);
 
   function chooseNovel(id: string) {
     setNovelInLocation(id);
@@ -53,6 +55,7 @@ export default function App() {
     setNoChapter(false);
     setAddingChapter(false);
     setJustAdded(null);
+    setShowGlossary(false);
   }
 
   function backToNovels() {
@@ -62,6 +65,7 @@ export default function App() {
     setNoChapter(false);
     setAddingChapter(false);
     setJustAdded(null);
+    setShowGlossary(false);
   }
 
   function chapterAdded(index: number) {
@@ -118,12 +122,17 @@ export default function App() {
         />
       ) : (
         <>
-          <ReaderPane
-            novelId={novelId}
-            chapterIndex={chapterIndex}
-            onChapterLoaded={chapterLoaded}
-            onNoChapter={() => setNoChapter(true)}
-          />
+          {/* ReaderPane stays mounted (just hidden) rather than unmounting behind the
+              glossary toggle, so switching back doesn't re-fetch/re-bootstrap progress. */}
+          <div style={{ display: showGlossary ? "none" : "block" }}>
+            <ReaderPane
+              novelId={novelId}
+              chapterIndex={chapterIndex}
+              onChapterLoaded={chapterLoaded}
+              onNoChapter={() => setNoChapter(true)}
+            />
+          </div>
+          {showGlossary && chapter && <GlossaryView novelId={novelId} at={chapter.at} />}
           <ProgressControls
             novelId={novelId}
             chapterIndex={chapterIndex}
@@ -133,7 +142,12 @@ export default function App() {
           <button className="app-add-chapter" onClick={startAddingChapter}>
             + Add chapter
           </button>
-          {chapter && <AskBox novelId={novelId} at={chapter.at} />}
+          {chapter && (
+            <button className="app-toggle-glossary" onClick={() => setShowGlossary((v) => !v)}>
+              {showGlossary ? "← Back to reading" : "Glossary"}
+            </button>
+          )}
+          {chapter && !showGlossary && <AskBox novelId={novelId} at={chapter.at} />}
         </>
       )}
     </main>

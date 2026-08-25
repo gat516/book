@@ -41,6 +41,8 @@ type fakeStore struct {
 	scrapeJob       ScrapeJobView
 	scrapeJobErr    error
 	cancelErr       error
+	glossary        []GlossaryTermView
+	glossaryErr     error
 	lastAt          int
 	lastReader      string
 	lastChapter     int
@@ -60,6 +62,11 @@ func (f *fakeIngestClient) CreateNovel(_ context.Context, body json.RawMessage) 
 }
 
 func (f *fakeIngestClient) PasteChapter(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
+}
+
+func (f *fakeIngestClient) CorrectGlossaryTerm(_ context.Context, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
 	return f.response, f.status, f.err
 }
@@ -140,6 +147,11 @@ func (f *fakeStore) LatestScrapeJob(context.Context, string) (ScrapeJobView, err
 
 func (f *fakeStore) RequestScrapeCancel(context.Context, string) error {
 	return f.cancelErr
+}
+
+func (f *fakeStore) ListGlossary(_ context.Context, _ string, at int) ([]GlossaryTermView, error) {
+	f.lastAt = at
+	return f.glossary, f.glossaryErr
 }
 
 func (f *fakeStore) GetChapter(
@@ -529,6 +541,49 @@ func TestPostScrapeCancel(t *testing.T) {
 		"/novels/"+testNovelID+"/scrape/cancel", "", "")
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestGetGlossaryUsesGate(t *testing.T) {
+	store := readyFake() // progress.CurrentChapter == 5
+	store.glossary = []GlossaryTermView{{SourceTerm: "青云宗", TargetTerm: "Azure Cloud Sect", Version: 1, LockedAtChapter: 1}}
+	response := request(t, &API{store: store}, http.MethodGet, "/novels/"+testNovelID+"/glossary", "", "reader-a")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	var body GlossaryResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.At != 5 || len(body.Terms) != 1 {
+		t.Fatalf("response = %#v", body)
+	}
+}
+
+func TestGetGlossaryRequiresPrincipal(t *testing.T) {
+	response := request(t, &API{store: readyFake()}, http.MethodGet, "/novels/"+testNovelID+"/glossary", "", "")
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestPatchGlossaryTermRequiresPrincipal(t *testing.T) {
+	response := request(t, &API{store: readyFake(), ingest: &fakeIngestClient{}}, http.MethodPatch,
+		"/novels/"+testNovelID+"/glossary/%E9%9D%92%E4%BA%91%E5%AE%97", `{"target_term":"x","at_chapter":1}`, "")
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestPatchGlossaryTermProxiesToIngestClient(t *testing.T) {
+	ingest := &fakeIngestClient{response: json.RawMessage(`{"version":2}`), status: http.StatusOK}
+	response := request(t, &API{store: readyFake(), ingest: ingest}, http.MethodPatch,
+		"/novels/"+testNovelID+"/glossary/%E9%9D%92%E4%BA%91%E5%AE%97", `{"target_term":"Verdant Cloud Sect","at_chapter":1}`, "reader-a")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	if string(ingest.lastBody) != `{"target_term":"Verdant Cloud Sect","at_chapter":1}` {
+		t.Fatalf("body forwarded = %q", ingest.lastBody)
 	}
 }
 

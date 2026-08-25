@@ -85,6 +85,15 @@ curl localhost:8081/novels/<novel-id>
 # Creation proxies to ingest-api (see ingest-api's README for the auth it requires there —
 # reader-api forwards it, the browser never needs the token).
 curl -X POST localhost:8081/novels -d '{"title":"Test Novel"}'
+
+# Glossary: read is gated like every other view; correction proxies to ingest-api and
+# requires X-Reader-ID (a correction is a specific reader's action, unlike novel/chapter
+# creation, which have no reader-identity concept at all).
+curl localhost:8081/novels/<novel-id>/glossary?at=3 \
+  -H 'X-Reader-ID: local-reader'
+curl -X PATCH localhost:8081/novels/<novel-id>/glossary/<url-encoded-source-term> \
+  -H 'X-Reader-ID: local-reader' \
+  -d '{"target_term":"Corrected Term","at_chapter":3}'
 ```
 
 Omitting `at` uses stored progress. A larger value is capped to stored progress; a lower

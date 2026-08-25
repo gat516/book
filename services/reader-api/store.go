@@ -39,6 +39,7 @@ type ReaderStore interface {
 	CreateScrapeJob(context.Context, string, string, string) (int64, error)
 	LatestScrapeJob(context.Context, string) (ScrapeJobView, error)
 	RequestScrapeCancel(context.Context, string) error
+	ListGlossary(context.Context, string, int) ([]GlossaryTermView, error)
 }
 
 type Store struct {
@@ -307,6 +308,38 @@ func (s *Store) ListWiki(ctx context.Context, novelID string, at int) ([]EntityS
 		return rows.Err()
 	})
 	return entities, err
+}
+
+// ListGlossary gates on locked_at_chapter <= at, mirroring ListWiki's
+// first_seen_chapter <= at pattern — a term locked at chapter 400 (e.g. proving a sect
+// exists) is itself spoiler information. glossary carries no RLS policy (0002_rls.sql
+// doesn't list it), so — unlike every other gated read here — this filter is app-layer
+// only; still routed through withReaderTx for the same connection/role discipline as
+// everything else, even though there's no inner RLS layer to back it up for this table.
+func (s *Store) ListGlossary(ctx context.Context, novelID string, at int) ([]GlossaryTermView, error) {
+	terms := []GlossaryTermView{}
+	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT source_term, target_term, version, locked_at_chapter
+			 FROM glossary
+			 WHERE novel_id = $1 AND locked_at_chapter <= $2
+			 ORDER BY source_term`, novelID, at)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var term GlossaryTermView
+			if err := rows.Scan(
+				&term.SourceTerm, &term.TargetTerm, &term.Version, &term.LockedAtChapter,
+			); err != nil {
+				return err
+			}
+			terms = append(terms, term)
+		}
+		return rows.Err()
+	})
+	return terms, err
 }
 
 func (s *Store) ListTimeline(ctx context.Context, novelID string, at int) ([]EventView, error) {

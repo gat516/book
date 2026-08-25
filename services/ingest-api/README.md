@@ -52,6 +52,12 @@ curl -sX POST localhost:8080/novels/<uuid>/chapters \
 # → 202 {"novel_id":...,"chapter_index":1,"raw_hash":"sha256:...","status":"ingested"}
 
 curl -s localhost:8080/healthz    # → {"status":"ok"} (pings pg + redis)
+
+# correct a glossary term a human believes is wrong (PLAN.md Phase N2). Forward-only:
+# chapters already translated with the old term are unaffected — see glossary.go.
+curl -sX PATCH localhost:8080/novels/<uuid>/glossary/<url-encoded-source-term> \
+  -d '{"target_term":"Corrected Term","at_chapter":42}'
+# → {"novel_id":...,"source_term":...,"target_term":"Corrected Term","version":<N>}
 ```
 
 ## Verify the three landing zones
@@ -65,6 +71,18 @@ docker exec deploy-minio-1 sh -c \
    mc ls --recursive local/raw-chapters"
 ```
 
+## Tests
+
+```bash
+go test ./...   # glossary_hash_test.go's cross-language guard runs standalone, no DB
+
+# Run the Postgres-backed glossary correction tests against a migrated database:
+INGEST_TEST_DATABASE_URL=postgres://engine:engine@localhost:5432/novel_engine \
+  go test ./...
+```
+
+Without `INGEST_TEST_DATABASE_URL`, the database-backed tests skip cleanly.
+
 ## Files
 
 | File | Role |
@@ -75,3 +93,4 @@ docker exec deploy-minio-1 sh -c \
 | `ontology.go` | genre → preset ontology (§4.1) + generic fallback |
 | `store.go` | pg / redis / minio data-access helpers |
 | `handlers.go` | HTTP handlers + validation |
+| `glossary.go` | glossary correction — Go port of `resolve.py`'s hash-chain audit trail |

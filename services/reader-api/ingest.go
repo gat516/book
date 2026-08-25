@@ -7,19 +7,21 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
 var ErrIngestUnavailable = errors.New("ingest-api unavailable")
 
-// IngestClient proxies novel/chapter writes to ingest-api, the writer service.
+// IngestClient proxies novel/chapter/glossary writes to ingest-api, the writer service.
 // reader-api is the only thing the browser talks to (services/web/vite.config.ts's own
 // comment says so); this mirrors AskClient's shape exactly (services/reader-api/ask.go)
 // rather than inventing a second proxy pattern.
 type IngestClient interface {
 	CreateNovel(ctx context.Context, body json.RawMessage) (json.RawMessage, int, error)
 	PasteChapter(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
+	CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
 }
 
 type ingestHTTPClient struct {
@@ -36,10 +38,11 @@ func newIngestClient(cfg Config) IngestClient {
 	}
 }
 
-// post forwards body to ingest-api at path, optionally with the internal bearer token
-// (only POST /novels requires it — ingest-api is otherwise unauthenticated by design).
-func (c *ingestHTTPClient) post(ctx context.Context, path string, body json.RawMessage, withToken bool) (json.RawMessage, int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+// send forwards body to ingest-api at path via method, optionally with the internal
+// bearer token (only POST /novels requires it — ingest-api is otherwise unauthenticated
+// by design).
+func (c *ingestHTTPClient) send(ctx context.Context, method, path string, body json.RawMessage, withToken bool) (json.RawMessage, int, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, fmt.Errorf("build ingest-api request: %w", err)
 	}
@@ -60,9 +63,14 @@ func (c *ingestHTTPClient) post(ctx context.Context, path string, body json.RawM
 }
 
 func (c *ingestHTTPClient) CreateNovel(ctx context.Context, body json.RawMessage) (json.RawMessage, int, error) {
-	return c.post(ctx, "/novels", body, true)
+	return c.send(ctx, http.MethodPost, "/novels", body, true)
 }
 
 func (c *ingestHTTPClient) PasteChapter(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
-	return c.post(ctx, "/novels/"+novelID+"/chapters", body, false)
+	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/chapters", body, false)
+}
+
+func (c *ingestHTTPClient) CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error) {
+	path := "/novels/" + novelID + "/glossary/" + url.PathEscape(sourceTerm)
+	return c.send(ctx, http.MethodPatch, path, body, false)
 }

@@ -40,6 +40,8 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("POST /novels/{id}/scrape", a.postScrape)
 	mux.HandleFunc("GET /novels/{id}/scrape/status", a.getScrapeStatus)
 	mux.HandleFunc("POST /novels/{id}/scrape/cancel", a.postScrapeCancel)
+	mux.HandleFunc("GET /novels/{id}/glossary", a.getGlossary)
+	mux.HandleFunc("PATCH /novels/{id}/glossary/{term}", a.patchGlossaryTerm)
 	return mux
 }
 
@@ -450,6 +452,51 @@ func (a *API) postScrapeCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cancel_requested"})
+}
+
+func (a *API) getGlossary(w http.ResponseWriter, r *http.Request) {
+	_, novelID, at, ok := a.gate(w, r)
+	if !ok {
+		return
+	}
+	terms, err := a.store.ListGlossary(r.Context(), novelID, at)
+	if err != nil {
+		log.Printf("list glossary: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load glossary")
+		return
+	}
+	writeJSON(w, http.StatusOK, GlossaryResponse{NovelID: novelID, At: at, Terms: terms})
+}
+
+// patchGlossaryTerm proxies a human correction to ingest-api (see ingest.go). Gated with
+// X-Reader-ID like every other reader-api write (the accepted repo-wide "fake principal"
+// tradeoff) — unlike postNovel/postChapter/postScrape, which have no reader-identity
+// concept at all, a glossary correction is an action a specific reader takes.
+func (a *API) patchGlossaryTerm(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	if _, ok := readerID(r); !ok {
+		writeError(w, http.StatusUnauthorized, "X-Reader-ID is required")
+		return
+	}
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read request body")
+		return
+	}
+	result, status, err := a.ingest.CorrectGlossaryTerm(r.Context(), novelID, r.PathValue("term"), body)
+	if err != nil {
+		log.Printf("correct glossary term: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
 }
 
 func (a *API) healthz(w http.ResponseWriter, r *http.Request) {

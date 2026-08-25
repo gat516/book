@@ -187,6 +187,56 @@ func (a *API) pasteChapter(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type correctGlossaryTermReq struct {
+	TargetTerm string `json:"target_term"`
+	AtChapter  int    `json:"at_chapter"`
+}
+
+type correctGlossaryTermResp struct {
+	NovelID    string `json:"novel_id"`
+	SourceTerm string `json:"source_term"`
+	TargetTerm string `json:"target_term"`
+	Version    int    `json:"version"`
+}
+
+// correctGlossaryTerm handles PATCH /novels/{id}/glossary/{term} — a human correcting a
+// term the pipeline locked (PLAN.md Phase N2). Forward-only: this changes the term for
+// chapters translated from here on; chapters already translated with the old term are
+// unaffected (the retro-update engine that would fix those is a separate, unbuilt
+// milestone — instructions.md/PLAN.md Milestone 3.1).
+func (a *API) correctGlossaryTerm(w http.ResponseWriter, r *http.Request) {
+	novelID := r.PathValue("id")
+	sourceTerm := r.PathValue("term")
+
+	var req correctGlossaryTermReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.TargetTerm == "" {
+		writeErr(w, http.StatusBadRequest, "target_term is required")
+		return
+	}
+	if req.AtChapter < 0 {
+		writeErr(w, http.StatusBadRequest, "at_chapter must be >= 0")
+		return
+	}
+
+	version, err := a.store.CorrectGlossaryTerm(r.Context(), novelID, sourceTerm, req.TargetTerm, req.AtChapter)
+	if errors.Is(err, ErrGlossaryTermNotFound) {
+		writeErr(w, http.StatusNotFound, "no such glossary term")
+		return
+	}
+	if err != nil {
+		log.Printf("correctGlossaryTerm: %v", err)
+		writeErr(w, http.StatusInternalServerError, "could not correct glossary term")
+		return
+	}
+	writeJSON(w, http.StatusOK, correctGlossaryTermResp{
+		NovelID: novelID, SourceTerm: sourceTerm, TargetTerm: req.TargetTerm, Version: version,
+	})
+}
+
 // healthz is a cheap liveness probe used by compose and manual sanity checks.
 func (a *API) healthz(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
