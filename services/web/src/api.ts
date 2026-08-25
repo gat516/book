@@ -1,6 +1,8 @@
 import { readerId } from "./readerId";
 import type {
   AskResponse,
+  BootstrapGlossaryRequest,
+  BootstrapGlossaryResponse,
   ChapterResponse,
   CorrectGlossaryTermRequest,
   CorrectGlossaryTermResponse,
@@ -105,6 +107,16 @@ export function correctGlossaryTerm(
 ): Promise<CorrectGlossaryTermResponse> {
   return request(`/novels/${novelId}/glossary/${encodeURIComponent(sourceTerm)}`, {
     method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function bootstrapGlossary(
+  novelId: string,
+  body: BootstrapGlossaryRequest,
+): Promise<BootstrapGlossaryResponse> {
+  return request(`/novels/${novelId}/glossary/bootstrap`, {
+    method: "POST",
     body: JSON.stringify(body),
   });
 }

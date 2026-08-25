@@ -338,6 +338,68 @@ func (a *API) correctGlossaryTerm(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type bootstrapGlossaryReq struct {
+	Terms []bootstrapGlossaryTermReq `json:"terms"`
+}
+
+type bootstrapGlossaryTermReq struct {
+	SourceTerm string `json:"source_term"`
+	TargetTerm string `json:"target_term"`
+}
+
+type bootstrapGlossaryResp struct {
+	NovelID string                    `json:"novel_id"`
+	Terms   []correctGlossaryTermResp `json:"terms"`
+}
+
+// bootstrapGlossary handles POST /novels/{id}/glossary/bootstrap — a human seeding the
+// glossary from an existing (paired raw + fan-translated) bootstrap paste, before any
+// chapter has actually been through RESOLVE (PLAN.md Phase N6). Each term locks via the
+// same path resolve.py's _lock_glossary itself takes (see glossary.go's
+// BootstrapGlossaryTerm) with entity_id left NULL until RESOLVE creates the real entity.
+//
+// Each term is its own BootstrapGlossaryTerm call/transaction (not one all-or-nothing
+// transaction for the whole list) — but this handler still stops at the first failure,
+// so terms before it in the request are already locked while terms after it are not. A
+// re-submission of the same list is safe (every earlier term's call is now a no-op, per
+// BootstrapGlossaryTerm's own idempotency), which is the intended recovery path rather
+// than rollback.
+func (a *API) bootstrapGlossary(w http.ResponseWriter, r *http.Request) {
+	novelID := r.PathValue("id")
+
+	var req bootstrapGlossaryReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if len(req.Terms) == 0 {
+		writeErr(w, http.StatusBadRequest, "terms must be non-empty")
+		return
+	}
+
+	results := make([]correctGlossaryTermResp, 0, len(req.Terms))
+	for _, term := range req.Terms {
+		if term.SourceTerm == "" || term.TargetTerm == "" {
+			writeErr(w, http.StatusBadRequest, "source_term and target_term are required for every entry")
+			return
+		}
+		version, err := a.store.BootstrapGlossaryTerm(r.Context(), novelID, term.SourceTerm, term.TargetTerm)
+		if err != nil && !errors.Is(err, ErrGlossaryTermConflict) {
+			log.Printf("bootstrapGlossary: %v", err)
+			writeErr(w, http.StatusInternalServerError, "could not seed glossary term "+term.SourceTerm)
+			return
+		}
+		if errors.Is(err, ErrGlossaryTermConflict) {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		results = append(results, correctGlossaryTermResp{
+			NovelID: novelID, SourceTerm: term.SourceTerm, TargetTerm: term.TargetTerm, Version: version,
+		})
+	}
+	writeJSON(w, http.StatusCreated, bootstrapGlossaryResp{NovelID: novelID, Terms: results})
+}
+
 // healthz is a cheap liveness probe used by compose and manual sanity checks.
 func (a *API) healthz(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

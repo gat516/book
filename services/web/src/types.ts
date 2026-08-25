@@ -89,6 +89,24 @@ export interface CorrectGlossaryTermResponse {
   version: number;
 }
 
+// ingest-api's bootstrapGlossaryReq/Resp, proxied verbatim by reader-api's
+// POST /novels/{id}/glossary/bootstrap (PLAN.md Phase N6). Locks a term before any
+// entity for it exists — RESOLVE binds entity_id the first time it actually meets the
+// surface, using this locked target_term rather than proposing its own.
+export interface BootstrapGlossaryTermInput {
+  source_term: string;
+  target_term: string;
+}
+
+export interface BootstrapGlossaryRequest {
+  terms: BootstrapGlossaryTermInput[];
+}
+
+export interface BootstrapGlossaryResponse {
+  novel_id: string;
+  terms: CorrectGlossaryTermResponse[];
+}
+
 export interface SpanView {
   entity_id: string;
   char_start: number;

@@ -169,9 +169,17 @@ def build_disambiguation_system_prompt(*, source_lang: str, target_lang: str) ->
 
 
 def build_disambiguation_user_prompt(
-    surface: str, candidates: list[Candidate], *, context: str = ""
+    surface: str, candidates: list[Candidate], *, context: str = "", locked_target: str | None = None
 ) -> str:
-    """Volatile suffix: the surface, its surrounding text, and the candidate list."""
+    """Volatile suffix: the surface, its surrounding text, and the candidate list.
+
+    ``locked_target`` (PLAN.md Phase N6): a human already locked this surface's translated
+    term via glossary bootstrap, before any entity for it existed. This is advisory only —
+    a prompt hint so the model doesn't waste effort proposing an incompatible target_term —
+    not the enforcement mechanism; resolve.py._decide overrides target_term with the locked
+    value structurally regardless of what the model returns, the same "parser/code enforces,
+    prompt only informs" posture parse_decision's FreeGeneratedEntity tripwire already uses.
+    """
     if candidates:
         listed = "\n".join(
             f'- entity_id: {c.entity_id} | canonical: {c.canonical} | kind: {c.kind}'
@@ -183,6 +191,11 @@ def build_disambiguation_user_prompt(
     if context:
         parts.append(f"Context: {context}")
     parts.append(f"Candidates:\n{listed}")
+    if locked_target:
+        parts.append(
+            f'A human has already locked this name\'s target_term to "{locked_target}". '
+            f'If the decision is "new", target_term MUST be exactly "{locked_target}".'
+        )
     return "\n\n".join(parts)
 
 

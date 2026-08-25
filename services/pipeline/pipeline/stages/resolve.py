@@ -108,7 +108,23 @@ async def _lock_glossary(
         if existing is None:
             raise RuntimeError("glossary conflict reported but the existing row disappeared")
         existing_target, existing_entity, existing_version = existing
-        if existing_target != target_term or str(existing_entity) != entity_id:
+        if existing_target != target_term:
+            raise ValueError(
+                f"glossary term {source_term!r} is already locked to "
+                f"{existing_target!r}/{existing_entity}, not {target_term!r}/{entity_id}"
+            )
+        if existing_entity is None:
+            # PLAN.md Phase N6: a glossary-bootstrap term locked before any entity for it
+            # existed (locked_at_chapter=0, entity_id NULL). This is the first time RESOLVE
+            # has actually created that entity — bind it now rather than raising; a NULL
+            # existing_entity is "not yet bound", not a conflicting bind, unlike a real
+            # entity_id mismatch (still checked below for the ordinary re-run case).
+            await db.execute(
+                "UPDATE glossary SET entity_id = %s WHERE novel_id = %s AND source_term = %s",
+                (entity_id, novel_id, source_term),
+            )
+            return existing_version
+        if str(existing_entity) != entity_id:
             raise ValueError(
                 f"glossary term {source_term!r} is already locked to "
                 f"{existing_target!r}/{existing_entity}, not {target_term!r}/{entity_id}"
@@ -138,6 +154,19 @@ async def _lock_glossary(
         (novel_id, seq, source_term, target_term, chapter, prev_hash or None, row_hash),
     )
     return version
+
+
+async def _locked_target(db, novel_id: str, source_term: str) -> str | None:
+    """The glossary's already-locked target_term for source_term, if any (PLAN.md Phase
+    N6: a glossary-bootstrap seed locks this before any entity exists for it — see
+    _lock_glossary's NULL-entity_id backfill path, which this pairs with)."""
+    row = await (
+        await db.execute(
+            "SELECT target_term FROM glossary WHERE novel_id = %s AND source_term = %s",
+            (novel_id, source_term),
+        )
+    ).fetchone()
+    return row[0] if row else None
 
 
 def _context_around(text: str, surface: str, *, window: int = CONTEXT_WINDOW) -> str:
@@ -269,9 +298,13 @@ class ResolveStage:
         kind: str,
     ) -> tuple[str | None, str | None]:
         """Confirm a candidate or create a new entity. ``None`` means unresolved."""
+        locked_target: str | None = None
+        if ctx.novel.source_lang != ctx.novel.target_lang:
+            locked_target = await _locked_target(ctx.db, ctx.novel.id, surface)
+
         completion = await ctx.provider.complete(
             build_disambiguation_user_prompt(
-                surface, candidates, context=_context_around(text, surface)
+                surface, candidates, context=_context_around(text, surface), locked_target=locked_target
             ),
             system=build_disambiguation_system_prompt(
                 source_lang=ctx.novel.source_lang,
@@ -314,7 +347,12 @@ class ResolveStage:
                 await writer.upsert_aliases([alias])
             return decision.entity_id, None
 
-        if ctx.novel.source_lang != ctx.novel.target_lang and not decision.target_term:
+        # PLAN.md Phase N6: locked_target (a glossary-bootstrap seed) wins over whatever
+        # the model proposed — structural enforcement, not trust in prompt compliance
+        # (build_disambiguation_user_prompt's docstring explains why this mirrors
+        # FreeGeneratedEntity's "parser enforces, not the prompt" posture).
+        target_term = locked_target or decision.target_term
+        if ctx.novel.source_lang != ctx.novel.target_lang and not target_term:
             log.warning("resolve: missing target term for translated entity %r", surface)
             return None, None
 
@@ -324,7 +362,7 @@ class ResolveStage:
             novel_id=ctx.novel.id,
             kind=kind,
             canonical=(
-                decision.target_term
+                target_term
                 if ctx.novel.source_lang != ctx.novel.target_lang
                 else surface
             ),
@@ -346,10 +384,10 @@ class ResolveStage:
                     ctx.db,
                     novel_id=ctx.novel.id,
                     source_term=surface,
-                    target_term=decision.target_term or surface,
+                    target_term=target_term or surface,
                     entity_id=entity_id,
                     chapter=chapter,
                 )
         else:
             await writer.insert_entity(entity, aliases)
-        return entity_id, decision.target_term
+        return entity_id, target_term

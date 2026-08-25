@@ -24,6 +24,7 @@ type IngestClient interface {
 	CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
 	GetProviderConfig(ctx context.Context, novelID string) (json.RawMessage, int, error)
 	PutProviderConfig(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
+	BootstrapGlossary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 }
 
 type ingestHTTPClient struct {
@@ -83,4 +84,8 @@ func (c *ingestHTTPClient) GetProviderConfig(ctx context.Context, novelID string
 
 func (c *ingestHTTPClient) PutProviderConfig(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
 	return c.send(ctx, http.MethodPatch, "/novels/"+novelID+"/provider-config", body, false)
+}
+
+func (c *ingestHTTPClient) BootstrapGlossary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/glossary/bootstrap", body, false)
 }

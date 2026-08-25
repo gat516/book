@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { pasteChapter } from "../api";
+import { BootstrapChapterForm } from "./BootstrapChapterForm";
 import { ScrapeForm } from "./ScrapeForm";
 
 interface Props {
@@ -9,10 +10,10 @@ interface Props {
   onCancel: () => void;
 }
 
-// Paste and scrape both work (PLAN.md N5). Half-translated bootstrap via manual paste of
-// a paired raw+translation text (the general N6 case, distinct from scrape's own
-// mode="bootstrap") is still a separate, not-yet-built feature — listed disabled so this
-// picker doesn't need rebuilding once it lands.
+// Paste, scrape, and half-translated bootstrap all work (PLAN.md N5, N6). Bootstrap is a
+// manual paste of a paired raw+translation text plus an explicit term mapping, distinct
+// from scrape's own mode="bootstrap" (which fetches already-translated text from a site
+// instead of taking it as pasted input).
 type Method = "paste" | "scrape" | "bootstrap";
 
 export function AddChapterForm({ novelId, nextChapterIndex, onAdded, onCancel }: Props) {
@@ -48,13 +49,21 @@ export function AddChapterForm({ novelId, nextChapterIndex, onAdded, onCancel }:
         <label>
           <input type="radio" checked={method === "scrape"} onChange={() => setMethod("scrape")} /> Scrape from URL
         </label>
-        <label className="add-chapter-form-disabled">
-          <input type="radio" disabled /> Half-translated bootstrap (coming soon)
+        <label>
+          <input type="radio" checked={method === "bootstrap"} onChange={() => setMethod("bootstrap")} /> I already
+          have a translation
         </label>
       </fieldset>
 
       {method === "scrape" ? (
         <ScrapeForm novelId={novelId} onDone={() => onAdded(chapterIndex)} />
+      ) : method === "bootstrap" ? (
+        <BootstrapChapterForm
+          novelId={novelId}
+          chapterIndex={chapterIndex}
+          onChapterIndexChange={setChapterIndex}
+          onAdded={onAdded}
+        />
       ) : (
         <form onSubmit={submit}>
           <label>

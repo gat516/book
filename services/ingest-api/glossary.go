@@ -14,6 +14,12 @@ import (
 
 var ErrGlossaryTermNotFound = errors.New("no such glossary term")
 
+// ErrGlossaryTermConflict is returned by BootstrapGlossaryTerm when the caller supplies a
+// (source_term, target_term) pair that collides with an already-locked source_term whose
+// target_term differs — the same "already locked, target mismatches" case
+// resolve.py's _lock_glossary raises ValueError for.
+var ErrGlossaryTermConflict = errors.New("glossary term already locked to a different target")
+
 // CorrectGlossaryTerm updates a locked glossary term's target and appends a
 // tamper-evident audit row, reusing the exact invariants
 // services/pipeline/pipeline/stages/resolve.py's _lock_glossary established (read there
@@ -103,6 +109,112 @@ func (s *Store) CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm, ne
 		   (novel_id, seq, source_term, old_target, new_target, changed_at_chapter, prev_hash, row_hash)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		novelID, seq, sourceTerm, oldTarget, newTarget, atChapter, prevHashArg, rowHash,
+	); err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return newVersion, nil
+}
+
+// BootstrapGlossaryTerm seeds a locked glossary term before any chapter has been
+// translated (PLAN.md Phase N6): a human supplies (source_term, target_term) pairs
+// alongside a paired raw+already-translated bootstrap paste. It takes the exact same
+// "original insert" path resolve.py's _lock_glossary itself takes — entity_id starts
+// NULL (no entity exists yet) and gets backfilled by _lock_glossary's own NULL-entity_id
+// case the first time RESOLVE actually creates the entity for this surface (see that
+// function's comment). locked_at_chapter is always 0 here: "locked before any chapter is
+// read", never a chapter-specific correction (that's CorrectGlossaryTerm's job).
+//
+// ON CONFLICT DO NOTHING + a target-match check on conflict, mirroring _lock_glossary
+// exactly: re-bootstrapping the same (source_term, target_term) pair is a harmless no-op
+// (idempotent, matching this repo's ingestion-is-idempotent principle, §0.7); a
+// conflicting target_term for an already-locked source_term is ErrGlossaryTermConflict,
+// not a silent overwrite (correcting an existing term is CorrectGlossaryTerm's job, not
+// this one's).
+func (s *Store) BootstrapGlossaryTerm(ctx context.Context, novelID, sourceTerm, targetTerm string) (int, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	// pg_advisory_xact_lock: same novel-wide serialization CorrectGlossaryTerm and
+	// _lock_glossary both use, so a concurrent bootstrap and a concurrent RESOLVE never
+	// race on the version counter or the changelog hash chain.
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", novelID); err != nil {
+		return 0, err
+	}
+
+	var maxVersion int
+	if err := tx.QueryRow(ctx,
+		"SELECT COALESCE(MAX(version), 0) FROM glossary WHERE novel_id = $1", novelID,
+	).Scan(&maxVersion); err != nil {
+		return 0, err
+	}
+	newVersion := maxVersion + 1
+
+	var inserted bool
+	err = tx.QueryRow(ctx,
+		`INSERT INTO glossary (novel_id, source_term, target_term, version, locked_at_chapter)
+		 VALUES ($1, $2, $3, $4, 0)
+		 ON CONFLICT (novel_id, source_term) DO NOTHING
+		 RETURNING true`,
+		novelID, sourceTerm, targetTerm, newVersion,
+	).Scan(&inserted)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		var existingTarget string
+		if err := tx.QueryRow(ctx,
+			"SELECT target_term, version FROM glossary WHERE novel_id = $1 AND source_term = $2",
+			novelID, sourceTerm,
+		).Scan(&existingTarget, &newVersion); err != nil {
+			return 0, err
+		}
+		if existingTarget != targetTerm {
+			return 0, fmt.Errorf("%w: %q is already locked to %q, not %q",
+				ErrGlossaryTermConflict, sourceTerm, existingTarget, targetTerm)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return 0, err
+		}
+		return newVersion, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+
+	var prevSeq int
+	var prevHash string
+	err = tx.QueryRow(ctx,
+		"SELECT seq, row_hash FROM glossary_changelog WHERE novel_id = $1 ORDER BY seq DESC LIMIT 1",
+		novelID,
+	).Scan(&prevSeq, &prevHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		prevSeq, prevHash = 0, ""
+	} else if err != nil {
+		return 0, err
+	}
+	seq := prevSeq + 1
+
+	// old_target is "" in the hash payload (never a real prior value — this is an
+	// original insert, exactly like _lock_glossary's own original-insert path) but NULL
+	// in the changelog row itself; that split matches _lock_glossary byte-for-byte.
+	payload := pythonJSONArray(novelID, seq, sourceTerm, "", targetTerm, 0, prevHash)
+	sum := sha256.Sum256([]byte(prevHash + payload))
+	rowHash := hex.EncodeToString(sum[:])
+
+	var prevHashArg any
+	if prevHash != "" {
+		prevHashArg = prevHash
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO glossary_changelog
+		   (novel_id, seq, source_term, old_target, new_target, changed_at_chapter, prev_hash, row_hash)
+		 VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)`,
+		novelID, seq, sourceTerm, targetTerm, 0, prevHashArg, rowHash,
 	); err != nil {
 		return 0, err
 	}

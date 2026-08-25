@@ -349,6 +349,71 @@ async def test_translated_new_entity_locks_target_term_and_audit(db_conn):
         await delete_novel(db_conn, novel_id)
 
 
+async def test_bootstrap_glossary_term_is_backfilled_not_reproposed(db_conn):
+    """PLAN.md Phase N6: a glossary-bootstrap seed (POST .../glossary/bootstrap) locks a
+    term BEFORE any entity exists for it — entity_id NULL, locked_at_chapter=0. The first
+    time RESOLVE actually meets that surface, it must (a) use the human-locked target_term
+    structurally, ignoring anything the model proposes, and (b) backfill entity_id onto
+    the existing row rather than raising _lock_glossary's mismatch ValueError against a
+    NULL entity_id (which is "not yet bound", not a real conflict)."""
+    novel_id = await make_novel(
+        db_conn, source_lang="zh", target_lang="en", ontology=json.dumps(ONTOLOGY)
+    )
+    try:
+        async with db_conn.transaction():
+            await db_conn.execute(
+                "INSERT INTO glossary (novel_id, source_term, target_term, version, locked_at_chapter) "
+                "VALUES (%s, %s, %s, 1, 0)",
+                (novel_id, "青云宗", "Azure Cloud Sect"),
+            )
+            await db_conn.execute(
+                "INSERT INTO glossary_changelog "
+                "(novel_id, seq, source_term, old_target, new_target, changed_at_chapter, prev_hash, row_hash) "
+                "VALUES (%s, 1, %s, NULL, %s, 0, NULL, 'seedhash')",
+                (novel_id, "青云宗", "Azure Cloud Sect"),
+            )
+
+        # The model tries to propose a DIFFERENT target_term — proving the locked seed
+        # wins structurally, not merely as an unenforced prompt suggestion.
+        provider = FakeProvider(
+            _responder(
+                propose={"青云宗": "sect"},
+                decide={"青云宗": {"decision": "new", "target_term": "Blue Cloud Sect"}},
+            )
+        )
+        state = await _run(
+            _ctx(db_conn, novel_id, provider, source_lang="zh", target_lang="en"),
+            "他回到了青云宗。",
+        )
+
+        entity_id = state.resolutions["青云宗"]
+        entity = await (
+            await db_conn.execute("SELECT canonical FROM entity WHERE id = %s", (entity_id,))
+        ).fetchone()
+        glossary = await (
+            await db_conn.execute(
+                "SELECT target_term, entity_id, version FROM glossary "
+                "WHERE novel_id = %s AND source_term = %s",
+                (novel_id, "青云宗"),
+            )
+        ).fetchone()
+        changelog_count = await (
+            await db_conn.execute(
+                "SELECT count(*) FROM glossary_changelog WHERE novel_id = %s AND source_term = %s",
+                (novel_id, "青云宗"),
+            )
+        ).fetchone()
+
+        # Locked seed wins, not the model's "Blue Cloud Sect" proposal.
+        assert entity == ("Azure Cloud Sect",)
+        assert (glossary[0], str(glossary[1]), glossary[2]) == ("Azure Cloud Sect", entity_id, 1)
+        # No new changelog entry: this is a backfill of the existing bootstrap row, not a
+        # new lock — version and audit trail are untouched, exactly Phase N6's "Done when".
+        assert changelog_count == (1,)
+    finally:
+        await delete_novel(db_conn, novel_id)
+
+
 async def test_entity_created_earlier_in_a_chapter_is_visible_later_in_it(db_conn, novel):
     """Entities are inserted per decision, not batched at end-of-chapter. Batching would
     mean a chapter introducing a character under two names creates two entities — the

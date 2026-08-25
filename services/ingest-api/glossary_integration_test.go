@@ -154,3 +154,81 @@ func TestCorrectGlossaryTermNotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ErrGlossaryTermNotFound", err)
 	}
 }
+
+func TestBootstrapGlossaryTermUsesNovelWideVersionCounterAndLeavesEntityNull(t *testing.T) {
+	store := integrationStore(t)
+	ctx := context.Background()
+	// One term already locked at version 1 (as if by an earlier bootstrap call) —
+	// bootstrapping a second, distinct term must produce version 2 (novel-wide MAX+1),
+	// same invariant CorrectGlossaryTerm's own version-counter test exercises.
+	novelID := seedNovelWithGlossary(t, store, map[string]string{"青云宗": "Azure Cloud Sect"})
+
+	version, err := store.BootstrapGlossaryTerm(ctx, novelID, "陈枫", "Chen Feng")
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if version != 2 {
+		t.Fatalf("version = %d, want 2 (novel-wide MAX+1)", version)
+	}
+
+	var target string
+	var entityID *string
+	var lockedAt int
+	if err := store.db.QueryRow(ctx,
+		"SELECT target_term, entity_id, locked_at_chapter FROM glossary WHERE novel_id = $1 AND source_term = $2",
+		novelID, "陈枫",
+	).Scan(&target, &entityID, &lockedAt); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if target != "Chen Feng" {
+		t.Fatalf("target_term = %q, want %q", target, "Chen Feng")
+	}
+	if entityID != nil {
+		t.Fatalf("entity_id = %v, want NULL (PLAN.md Phase N6: no entity exists until RESOLVE creates one)", *entityID)
+	}
+	if lockedAt != 0 {
+		t.Fatalf("locked_at_chapter = %d, want 0 (locked before any chapter is read)", lockedAt)
+	}
+}
+
+func TestBootstrapGlossaryTermIsIdempotent(t *testing.T) {
+	store := integrationStore(t)
+	ctx := context.Background()
+	novelID := seedNovelWithGlossary(t, store, map[string]string{})
+
+	first, err := store.BootstrapGlossaryTerm(ctx, novelID, "青云宗", "Azure Cloud Sect")
+	if err != nil {
+		t.Fatalf("first bootstrap: %v", err)
+	}
+	second, err := store.BootstrapGlossaryTerm(ctx, novelID, "青云宗", "Azure Cloud Sect")
+	if err != nil {
+		t.Fatalf("re-bootstrap with the same target: %v", err)
+	}
+	if second != first {
+		t.Fatalf("re-bootstrap version = %d, want %d (unchanged, no-op)", second, first)
+	}
+
+	var count int
+	if err := store.db.QueryRow(ctx,
+		"SELECT count(*) FROM glossary_changelog WHERE novel_id = $1", novelID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count changelog: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("changelog rows = %d, want 1 (re-bootstrap must not append a second entry)", count)
+	}
+}
+
+func TestBootstrapGlossaryTermConflictsOnDifferentTarget(t *testing.T) {
+	store := integrationStore(t)
+	ctx := context.Background()
+	novelID := seedNovelWithGlossary(t, store, map[string]string{})
+
+	if _, err := store.BootstrapGlossaryTerm(ctx, novelID, "青云宗", "Azure Cloud Sect"); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	_, err := store.BootstrapGlossaryTerm(ctx, novelID, "青云宗", "Different Name")
+	if !errors.Is(err, ErrGlossaryTermConflict) {
+		t.Fatalf("err = %v, want ErrGlossaryTermConflict", err)
+	}
+}
