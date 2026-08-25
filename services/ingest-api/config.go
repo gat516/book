@@ -1,6 +1,10 @@
 package main
 
-import "os"
+import (
+	"encoding/base64"
+	"log"
+	"os"
+)
 
 // Config holds everything the service needs to reach its backing stores. Values come
 // from the environment (see .env.example / deploy/docker-compose.yml); each has a
@@ -21,6 +25,13 @@ type Config struct {
 	// browser (novel creation). Not general auth: ingest-api otherwise stays the "no
 	// auth/gate here" writer service its own doc comment describes.
 	IngestInternalToken string
+
+	// ProviderConfigKey encrypts/decrypts novel_provider_config.api_key_cipher (PLAN.md
+	// Phase N3). Zero value (unset) is valid at startup — most novels never set a
+	// provider_config at all — but any request that does one requires this to be set;
+	// see ErrProviderConfigKeyNotSet.
+	ProviderConfigKey    [32]byte
+	ProviderConfigKeySet bool
 }
 
 // getenv returns the env var if set and non-empty, otherwise the fallback.
@@ -33,7 +44,7 @@ func getenv(key, fallback string) string {
 
 // loadConfig reads configuration from the environment with compose-friendly defaults.
 func loadConfig() Config {
-	return Config{
+	cfg := Config{
 		ListenAddr:  getenv("LISTEN_ADDR", ":8080"),
 		DatabaseURL: getenv("DATABASE_URL", "postgres://engine:engine@localhost:5432/novel_engine"),
 		RedisURL:    getenv("REDIS_URL", "redis://localhost:6379"),
@@ -48,4 +59,18 @@ func loadConfig() Config {
 
 		IngestInternalToken: os.Getenv("INGEST_INTERNAL_TOKEN"),
 	}
+
+	if raw := os.Getenv("INGEST_PROVIDER_CONFIG_KEY"); raw != "" {
+		decoded, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil {
+			log.Fatalf("startup: INGEST_PROVIDER_CONFIG_KEY is not valid base64: %v", err)
+		}
+		if len(decoded) != 32 {
+			log.Fatalf("startup: INGEST_PROVIDER_CONFIG_KEY must decode to 32 bytes, got %d", len(decoded))
+		}
+		copy(cfg.ProviderConfigKey[:], decoded)
+		cfg.ProviderConfigKeySet = true
+	}
+
+	return cfg
 }

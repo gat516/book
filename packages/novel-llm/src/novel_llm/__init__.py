@@ -1,6 +1,7 @@
 """Shared provider contracts and direct LLM backends."""
 
 from novel_llm.anthropic import AnthropicProvider
+from novel_llm.deepseek import DeepSeekProvider
 from novel_llm.ollama import OllamaProvider
 from novel_llm.provider import (
     AdmissionRejected,
@@ -19,6 +20,7 @@ __all__ = [
     "BatchResult",
     "Class",
     "Completion",
+    "DeepSeekProvider",
     "LLMProvider",
     "OllamaProvider",
     "SequentialBatchMixin",

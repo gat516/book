@@ -71,6 +71,15 @@ func (f *fakeIngestClient) CorrectGlossaryTerm(_ context.Context, _, _ string, b
 	return f.response, f.status, f.err
 }
 
+func (f *fakeIngestClient) GetProviderConfig(_ context.Context, _ string) (json.RawMessage, int, error) {
+	return f.response, f.status, f.err
+}
+
+func (f *fakeIngestClient) PutProviderConfig(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
+}
+
 type fakeAskClient struct {
 	response json.RawMessage
 	err      error

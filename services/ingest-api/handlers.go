@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -15,6 +16,7 @@ import (
 // API holds the dependencies the HTTP handlers need.
 type API struct {
 	store *Store
+	cfg   Config
 }
 
 // --- request/response bodies ---
@@ -24,6 +26,18 @@ type createNovelReq struct {
 	SourceLang string `json:"source_lang"`
 	TargetLang string `json:"target_lang"`
 	Genre      string `json:"genre"` // optional; selects a preset ontology (§4.1)
+
+	// ProviderConfig is optional (PLAN.md Phase N3): a novel's own LLM provider/model/API
+	// key, encrypted at rest, overriding LLM_PROVIDER for this novel only. Omit entirely
+	// to use the process-wide default.
+	ProviderConfig *providerConfigReq `json:"provider_config,omitempty"`
+}
+
+type providerConfigReq struct {
+	Provider string `json:"provider"` // anthropic|deepseek|ollama
+	Model    string `json:"model,omitempty"`
+	BaseURL  string `json:"base_url,omitempty"`
+	APIKey   string `json:"api_key,omitempty"` // plaintext in the request; never stored as such
 }
 
 type createNovelResp struct {
@@ -84,14 +98,101 @@ func (a *API) createNovel(w http.ResponseWriter, r *http.Request) {
 		req.TargetLang = req.SourceLang
 	}
 
+	var providerConfig *ProviderConfigInput
+	if req.ProviderConfig != nil {
+		pc, err := a.buildProviderConfigInput(*req.ProviderConfig)
+		if err != nil {
+			if errors.Is(err, ErrProviderConfigKeyNotSet) {
+				writeErr(w, http.StatusServiceUnavailable, "server is not configured to accept provider_config")
+				return
+			}
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		providerConfig = &pc
+	}
+
 	ont := ontologyForGenre(req.Genre)
-	id, err := a.store.insertNovel(r.Context(), req.Title, req.SourceLang, req.TargetLang, req.Genre, ont)
+	id, err := a.store.insertNovel(r.Context(), req.Title, req.SourceLang, req.TargetLang, req.Genre, ont, providerConfig)
 	if err != nil {
 		log.Printf("createNovel: %v", err)
 		writeErr(w, http.StatusInternalServerError, "could not create novel")
 		return
 	}
 	writeJSON(w, http.StatusCreated, createNovelResp{ID: id})
+}
+
+// buildProviderConfigInput validates req and encrypts its API key (if any) under the
+// server's INGEST_PROVIDER_CONFIG_KEY. Returns ErrProviderConfigKeyNotSet if the request
+// needs the key but the server has none configured.
+func (a *API) buildProviderConfigInput(req providerConfigReq) (ProviderConfigInput, error) {
+	switch req.Provider {
+	case "anthropic", "deepseek", "ollama":
+	default:
+		return ProviderConfigInput{}, fmt.Errorf("provider must be one of anthropic, deepseek, ollama")
+	}
+
+	in := ProviderConfigInput{Provider: req.Provider, Model: req.Model, BaseURL: req.BaseURL}
+	if req.APIKey != "" {
+		if !a.cfg.ProviderConfigKeySet {
+			return ProviderConfigInput{}, ErrProviderConfigKeyNotSet
+		}
+		cipher, nonce, err := encryptProviderConfig([]byte(req.APIKey), a.cfg.ProviderConfigKey)
+		if err != nil {
+			return ProviderConfigInput{}, fmt.Errorf("encrypt api_key: %w", err)
+		}
+		in.APIKeyCipher, in.APIKeyNonce = cipher, nonce
+	}
+	return in, nil
+}
+
+// getProviderConfig handles GET /novels/{id}/provider-config — masked read, never
+// decrypts (returns api_key_set: bool, not the key).
+func (a *API) getProviderConfig(w http.ResponseWriter, r *http.Request) {
+	novelID := r.PathValue("id")
+	view, err := a.store.GetProviderConfig(r.Context(), novelID)
+	if errors.Is(err, ErrProviderConfigNotFound) {
+		writeErr(w, http.StatusNotFound, "no provider config for this novel")
+		return
+	}
+	if err != nil {
+		log.Printf("getProviderConfig: %v", err)
+		writeErr(w, http.StatusInternalServerError, "lookup failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// putProviderConfig handles PATCH /novels/{id}/provider-config — replaces the novel's
+// provider config wholesale, re-encrypting the API key if one is supplied.
+func (a *API) putProviderConfig(w http.ResponseWriter, r *http.Request) {
+	novelID := r.PathValue("id")
+	var req providerConfigReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	in, err := a.buildProviderConfigInput(req)
+	if err != nil {
+		if errors.Is(err, ErrProviderConfigKeyNotSet) {
+			writeErr(w, http.StatusServiceUnavailable, "server is not configured to accept provider_config")
+			return
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := a.store.UpsertProviderConfig(r.Context(), novelID, in); err != nil {
+		log.Printf("putProviderConfig: %v", err)
+		writeErr(w, http.StatusInternalServerError, "could not save provider config")
+		return
+	}
+	view, err := a.store.GetProviderConfig(r.Context(), novelID)
+	if err != nil {
+		log.Printf("putProviderConfig readback: %v", err)
+		writeErr(w, http.StatusInternalServerError, "saved but readback failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 // pasteChapter handles POST /novels/{id}/chapters — the core paste-ingest path (§7.1):

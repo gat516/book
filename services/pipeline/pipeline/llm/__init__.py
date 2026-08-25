@@ -16,17 +16,36 @@ that used to be two sources of truth that could (and did) disagree.
 from __future__ import annotations
 
 from pipeline.config import Config
-from novel_llm import AdmissionRejected, AnthropicProvider, Class, Completion, LLMProvider, OllamaProvider
+from novel_llm import (
+    AdmissionRejected,
+    AnthropicProvider,
+    Class,
+    Completion,
+    DeepSeekProvider,
+    LLMProvider,
+    OllamaProvider,
+)
 
 
 def provider_from_env(cfg: Config) -> LLMProvider:
     """Return the completion backend named by ``LLM_PROVIDER``, defaulted to the cheap
-    extraction model. Callers needing a different model pass ``model=`` per call."""
+    extraction model. Callers needing a different model pass ``model=`` per call.
+
+    This is the process-wide *fallback* used when a novel has no
+    ``novel_provider_config`` row (PLAN.md Phase N4's zero-config backward compat) — the
+    per-novel path constructs providers directly from decrypted config, not through here.
+    """
     match cfg.llm_provider:
         case "ollama":
             return OllamaProvider(host=cfg.ollama_host, model=cfg.llm_model_extract)
         case "anthropic":
             return AnthropicProvider(model=cfg.llm_model_extract)
+        case "deepseek":
+            return DeepSeekProvider(
+                model=cfg.llm_model_extract,
+                base_url=cfg.deepseek_base_url,
+                api_key=cfg.deepseek_api_key,
+            )
         case other:
             raise ValueError(f"unknown LLM_PROVIDER: {other!r}")
 

@@ -35,6 +35,8 @@ def make_config(**overrides) -> Config:
         embed_model="nomic-embed-text",
         embed_dim=768,
         ollama_host="http://localhost:11434",
+        deepseek_api_key="",
+        deepseek_base_url="https://api.deepseek.com",
         prompt_version="1",
         config_version="1",
         queue_timeout=5,

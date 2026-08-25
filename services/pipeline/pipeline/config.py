@@ -36,6 +36,8 @@ class Config:
     embed_model: str
     embed_dim: int
     ollama_host: str
+    deepseek_api_key: str
+    deepseek_base_url: str
 
     # Cache-key inputs (§6.1) — bumping either invalidates the LLM-result cache.
     prompt_version: str
@@ -82,6 +84,8 @@ class Config:
             embed_model=_getenv("EMBED_MODEL", "nomic-embed-text"),
             embed_dim=int(_getenv("EMBED_DIM", "768")),
             ollama_host=_getenv("OLLAMA_HOST", "http://localhost:11434"),
+            deepseek_api_key=_getenv("DEEPSEEK_API_KEY", ""),
+            deepseek_base_url=_getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
             prompt_version=_getenv("PROMPT_VERSION", "1"),
             config_version=_getenv("CONFIG_VERSION", "1"),
             queue_timeout=int(_getenv("PIPELINE_QUEUE_TIMEOUT", "5")),

@@ -42,6 +42,8 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("POST /novels/{id}/scrape/cancel", a.postScrapeCancel)
 	mux.HandleFunc("GET /novels/{id}/glossary", a.getGlossary)
 	mux.HandleFunc("PATCH /novels/{id}/glossary/{term}", a.patchGlossaryTerm)
+	mux.HandleFunc("GET /novels/{id}/provider-config", a.getProviderConfig)
+	mux.HandleFunc("PATCH /novels/{id}/provider-config", a.putProviderConfig)
 	return mux
 }
 
@@ -491,6 +493,51 @@ func (a *API) patchGlossaryTerm(w http.ResponseWriter, r *http.Request) {
 	result, status, err := a.ingest.CorrectGlossaryTerm(r.Context(), novelID, r.PathValue("term"), body)
 	if err != nil {
 		log.Printf("correct glossary term: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
+}
+
+// getProviderConfig proxies a novel's masked provider config from ingest-api. No
+// X-Reader-ID gate (mirrors postNovel/postScrape — this is novel administration, not a
+// reader-identity-scoped action).
+func (a *API) getProviderConfig(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	result, status, err := a.ingest.GetProviderConfig(r.Context(), novelID)
+	if err != nil {
+		log.Printf("get provider config: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
+}
+
+// putProviderConfig proxies a provider-config create/replace to ingest-api.
+func (a *API) putProviderConfig(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read request body")
+		return
+	}
+	result, status, err := a.ingest.PutProviderConfig(r.Context(), novelID, body)
+	if err != nil {
+		log.Printf("put provider config: %v", err)
 		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
 		return
 	}

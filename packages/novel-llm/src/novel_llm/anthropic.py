@@ -8,11 +8,14 @@ from novel_llm.provider import Class, Completion, SequentialBatchMixin
 
 
 class AnthropicProvider(SequentialBatchMixin):
-    def __init__(self, *, model: str, max_tokens: int = 8192) -> None:
+    def __init__(self, *, model: str, max_tokens: int = 8192, api_key: str | None = None) -> None:
         super().__init__()
         self._model = model
         self._max_tokens = max_tokens
-        self._client = anthropic.AsyncAnthropic()
+        # api_key=None behaves identically to omitting the kwarg — the SDK falls back to
+        # ANTHROPIC_API_KEY from the environment either way. Explicit param exists so a
+        # per-novel provider_config (PLAN.md Phase N3) can supply its own key.
+        self._client = anthropic.AsyncAnthropic(api_key=api_key)
 
     async def complete(self, prompt: str, *, system: str = "", json_mode: bool = False,
                        cls: Class = Class.BATCH, pin_model: bool = False,

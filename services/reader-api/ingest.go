@@ -22,6 +22,8 @@ type IngestClient interface {
 	CreateNovel(ctx context.Context, body json.RawMessage) (json.RawMessage, int, error)
 	PasteChapter(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
+	GetProviderConfig(ctx context.Context, novelID string) (json.RawMessage, int, error)
+	PutProviderConfig(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 }
 
 type ingestHTTPClient struct {
@@ -73,4 +75,12 @@ func (c *ingestHTTPClient) PasteChapter(ctx context.Context, novelID string, bod
 func (c *ingestHTTPClient) CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error) {
 	path := "/novels/" + novelID + "/glossary/" + url.PathEscape(sourceTerm)
 	return c.send(ctx, http.MethodPatch, path, body, false)
+}
+
+func (c *ingestHTTPClient) GetProviderConfig(ctx context.Context, novelID string) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodGet, "/novels/"+novelID+"/provider-config", nil, false)
+}
+
+func (c *ingestHTTPClient) PutProviderConfig(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodPatch, "/novels/"+novelID+"/provider-config", body, false)
 }

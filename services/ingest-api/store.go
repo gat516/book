@@ -26,7 +26,13 @@ type Store struct {
 }
 
 // insertNovel creates a novel row with the resolved ontology and returns its generated id.
-func (s *Store) insertNovel(ctx context.Context, title, sourceLang, targetLang, genre string, ont Ontology) (string, error) {
+// providerConfig is optional (PLAN.md Phase N3); when present, the novel row and its
+// novel_provider_config row are inserted in one transaction — a half-written provider
+// config is worse than failing novel creation entirely.
+func (s *Store) insertNovel(
+	ctx context.Context, title, sourceLang, targetLang, genre string, ont Ontology,
+	providerConfig *ProviderConfigInput,
+) (string, error) {
 	ontJSON, err := json.Marshal(ont)
 	if err != nil {
 		return "", fmt.Errorf("marshal ontology: %w", err)
@@ -37,14 +43,30 @@ func (s *Store) insertNovel(ctx context.Context, title, sourceLang, targetLang, 
 	if genre != "" {
 		genreArg = genre
 	}
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
 	var id string
-	err = s.db.QueryRow(ctx,
+	if err := tx.QueryRow(ctx,
 		`INSERT INTO novel (title, source_lang, target_lang, genre, ontology)
 		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
 		title, sourceLang, targetLang, genreArg, ontJSON,
-	).Scan(&id)
-	if err != nil {
+	).Scan(&id); err != nil {
 		return "", fmt.Errorf("insert novel: %w", err)
+	}
+
+	if providerConfig != nil {
+		if err := insertProviderConfig(ctx, tx, id, *providerConfig); err != nil {
+			return "", fmt.Errorf("insert provider config: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("commit: %w", err)
 	}
 	return id, nil
 }

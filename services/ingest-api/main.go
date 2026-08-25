@@ -31,7 +31,7 @@ func main() {
 		log.Fatalf("startup: %v", err)
 	}
 
-	api := &API{store: store}
+	api := &API{store: store, cfg: cfg}
 
 	// Go 1.22+ ServeMux supports method + path-parameter patterns, so we get routing
 	// with zero dependencies. {id} is read in handlers via r.PathValue("id").
@@ -39,6 +39,8 @@ func main() {
 	mux.Handle("POST /novels", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.createNovel)))
 	mux.HandleFunc("POST /novels/{id}/chapters", api.pasteChapter)
 	mux.HandleFunc("PATCH /novels/{id}/glossary/{term}", api.correctGlossaryTerm)
+	mux.HandleFunc("GET /novels/{id}/provider-config", api.getProviderConfig)
+	mux.HandleFunc("PATCH /novels/{id}/provider-config", api.putProviderConfig)
 	mux.HandleFunc("GET /healthz", api.healthz)
 
 	srv := &http.Server{
