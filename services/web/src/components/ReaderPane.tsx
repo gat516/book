@@ -7,6 +7,10 @@ interface Props {
   novelId: string;
   chapterIndex: number;
   onChapterLoaded: (chapter: ChapterResponse) => void;
+  // Called instead of rendering an error when the requested chapter (and typically every
+  // chapter — a brand-new novel) doesn't exist yet, so the caller can offer to add one
+  // instead of showing a raw "chapter is missing or not done" string.
+  onNoChapter: () => void;
 }
 
 interface Segment {
@@ -37,7 +41,7 @@ function segment(text: string, spans: { char_start: number; char_end: number; en
   return segments;
 }
 
-export function ReaderPane({ novelId, chapterIndex, onChapterLoaded }: Props) {
+export function ReaderPane({ novelId, chapterIndex, onChapterLoaded, onNoChapter }: Props) {
   const [chapter, setChapter] = useState<ChapterResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
@@ -53,16 +57,29 @@ export function ReaderPane({ novelId, chapterIndex, onChapterLoaded }: Props) {
     setChapter(null);
     setError(null);
 
-    async function load() {
+    async function load(): Promise<ChapterResponse | "no-chapter"> {
       try {
         return await getChapter(novelId, chapterIndex);
       } catch (err) {
+        if (err instanceof ApiError && err.status === 404 && err.code === "chapter not found") {
+          return "no-chapter";
+        }
         // A brand-new reader has no `reader_progress` row yet, so every gated endpoint
         // 404s — including this one — until one exists (reader-api's design, not a bug).
         // A first-time reader just wants to start reading, so bootstrap progress to this
         // chapter and retry once, rather than surfacing a raw 404 as the landing state.
         if (err instanceof ApiError && err.status === 404 && err.code === "reader progress not found") {
-          await putProgress(novelId, chapterIndex);
+          try {
+            await putProgress(novelId, chapterIndex);
+          } catch (putErr) {
+            // The novel has no chapters yet (or not this one) — AdvanceProgress only
+            // succeeds against a chapter with status='done', so this 409 means "nothing
+            // to read here" rather than a real failure.
+            if (putErr instanceof ApiError && putErr.status === 409) {
+              return "no-chapter";
+            }
+            throw putErr;
+          }
           return await getChapter(novelId, chapterIndex);
         }
         throw err;
@@ -72,6 +89,10 @@ export function ReaderPane({ novelId, chapterIndex, onChapterLoaded }: Props) {
     load()
       .then((response) => {
         if (cancelled) return;
+        if (response === "no-chapter") {
+          onNoChapter();
+          return;
+        }
         setChapter(response);
         onChapterLoaded(response);
       })

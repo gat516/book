@@ -54,6 +54,11 @@ func (f *fakeIngestClient) CreateNovel(_ context.Context, body json.RawMessage) 
 	return f.response, f.status, f.err
 }
 
+func (f *fakeIngestClient) PasteChapter(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
+}
+
 type fakeAskClient struct {
 	response json.RawMessage
 	err      error
@@ -430,6 +435,18 @@ func TestPostNovelMapsIngestUnavailable(t *testing.T) {
 	response := request(t, api, http.MethodPost, "/novels", `{"title":"New Novel"}`, "")
 	if response.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestPostChapterProxiesToIngestClient(t *testing.T) {
+	ingest := &fakeIngestClient{response: json.RawMessage(`{"status":"ingested"}`), status: http.StatusAccepted}
+	api := &API{store: readyFake(), ingest: ingest}
+	response := request(t, api, http.MethodPost, "/novels/"+testNovelID+"/chapters", `{"chapter_index":1,"raw_text":"hi"}`, "")
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%s", response.Code, response.Body.String())
+	}
+	if string(ingest.lastBody) != `{"chapter_index":1,"raw_text":"hi"}` {
+		t.Fatalf("body forwarded = %q", ingest.lastBody)
 	}
 }
 

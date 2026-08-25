@@ -7,6 +7,8 @@ import type {
   EntityResponse,
   NovelListResponse,
   NovelSummary,
+  PasteChapterRequest,
+  PasteChapterResponse,
   Progress,
 } from "./types";
 
@@ -54,6 +56,10 @@ export function getNovel(novelId: string): Promise<NovelSummary> {
 
 export function createNovel(body: CreateNovelRequest): Promise<CreateNovelResponse> {
   return request(`/novels`, { method: "POST", body: JSON.stringify(body) });
+}
+
+export function pasteChapter(novelId: string, body: PasteChapterRequest): Promise<PasteChapterResponse> {
+  return request(`/novels/${novelId}/chapters`, { method: "POST", body: JSON.stringify(body) });
 }
 
 export function getChapter(novelId: string, n: number): Promise<ChapterResponse> {

@@ -35,6 +35,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels", a.getNovels)
 	mux.HandleFunc("GET /novels/{id}", a.getNovel)
 	mux.HandleFunc("POST /novels", a.postNovel)
+	mux.HandleFunc("POST /novels/{id}/chapters", a.postChapter)
 	return mux
 }
 
@@ -331,6 +332,32 @@ func (a *API) postNovel(w http.ResponseWriter, r *http.Request) {
 	result, status, err := a.ingest.CreateNovel(r.Context(), body)
 	if err != nil {
 		log.Printf("create novel: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
+}
+
+// postChapter proxies chapter paste to ingest-api — see ingest.go. Unauthenticated on
+// ingest-api's side by design (only POST /novels is token-gated there); this route
+// exists so the browser only ever talks to reader-api, per vite.config.ts's invariant.
+func (a *API) postChapter(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read request body")
+		return
+	}
+	result, status, err := a.ingest.PasteChapter(r.Context(), novelID, body)
+	if err != nil {
+		log.Printf("paste chapter: %v", err)
 		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
 		return
 	}

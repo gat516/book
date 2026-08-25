@@ -27,6 +27,20 @@ export interface CreateNovelResponse {
   id: string;
 }
 
+// ingest-api's pasteChapterReq/pasteChapterResp, proxied verbatim by reader-api's
+// POST /novels/{id}/chapters.
+export interface PasteChapterRequest {
+  chapter_index: number;
+  raw_text: string;
+}
+
+export interface PasteChapterResponse {
+  novel_id: string;
+  chapter_index: number;
+  raw_hash: string;
+  status: string;
+}
+
 export interface SpanView {
   entity_id: string;
   char_start: number;
