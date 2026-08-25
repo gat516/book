@@ -11,11 +11,13 @@ Per-site adapters, not a generic extractor (`adapter.go`'s `siteFor`, keyed by h
 - **freewebnovel.com** — an already-translated site. `mode=bootstrap`: fetched text has
   no separate original, so it's stored as both `raw_text` and `translated_text`
   (`TranslateStage`'s early-out then skips the LLM call for that chapter entirely).
-- **look.twword.com** — a raw source-language site. `mode=translate`: the pipeline
-  machine-translates it normally. **Its `robots.txt` disallows all bots except a named
-  allowlist of major crawlers** — this scraper honors that (fails the job with a clear
-  `last_error` rather than fetching anyway), so scraping this specific site will not
-  currently succeed unless that changes.
+- **m.shuhaige.net** — a raw source-language site. `mode=translate`: the pipeline
+  machine-translates it normally. Chapters here are also split across multiple *pages*
+  (not chapters) via a "下一页"/"next page" link that becomes "下一章"/"next chapter"
+  on a chapter's final page — the walk loop doesn't distinguish the two, it just follows
+  whichever is present. (An earlier adapter targeted look.twword.com instead; that site's
+  `robots.txt` disallows all bots except a named allowlist of major crawlers, a blanket
+  policy this scraper — which honors robots.txt — will never satisfy, so it was replaced.)
 
 Adding a third site is adding one file implementing the `Site` interface plus a
 `siteFor` case — nothing else changes.

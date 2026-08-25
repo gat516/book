@@ -3,8 +3,8 @@
 //
 // Deliberately per-site, not generic (docs/PLAN.md's own Milestone 2 tradeoff: "one line
 // per site beats fighting a generic algorithm's edge cases"). Two sites are wired today
-// (freewebnovel.go, twword.go); adding a third is adding one file, not touching the walk
-// loop.
+// (freewebnovel.go, shuhaige.go); adding a third is adding one file, not touching the
+// walk loop.
 package main
 
 import "context"
@@ -43,8 +43,8 @@ func siteFor(host string) Site {
 	switch host {
 	case "freewebnovel.com", "www.freewebnovel.com":
 		return freewebnovelSite{}
-	case "look.twword.com":
-		return twwordSite{}
+	case "m.shuhaige.net":
+		return shuhaigeSite{}
 	default:
 		return nil
 	}
