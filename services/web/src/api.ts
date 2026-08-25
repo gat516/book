@@ -10,6 +10,8 @@ import type {
   PasteChapterRequest,
   PasteChapterResponse,
   Progress,
+  ScrapeJobView,
+  StartScrapeRequest,
 } from "./types";
 
 class ApiError extends Error {
@@ -75,6 +77,18 @@ export function ask(novelId: string, question: string, at: number): Promise<AskR
     method: "POST",
     body: JSON.stringify({ question, at }),
   });
+}
+
+export function startScrape(novelId: string, body: StartScrapeRequest): Promise<{ id: number }> {
+  return request(`/novels/${novelId}/scrape`, { method: "POST", body: JSON.stringify(body) });
+}
+
+export function getScrapeStatus(novelId: string): Promise<ScrapeJobView> {
+  return request(`/novels/${novelId}/scrape/status`);
+}
+
+export function cancelScrape(novelId: string): Promise<{ status: string }> {
+  return request(`/novels/${novelId}/scrape/cancel`, { method: "POST" });
 }
 
 export function putProgress(novelId: string, chapter: number): Promise<Progress> {

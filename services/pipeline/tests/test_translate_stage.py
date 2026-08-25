@@ -125,3 +125,59 @@ async def test_translation_pins_served_snapshot_and_rerun_reads_object(db_conn):
         assert second.translation == TRANSLATION
     finally:
         await delete_novel(db_conn, novel_id)
+
+
+async def test_bootstrapped_chapter_skips_translation_entirely(db_conn):
+    """PLAN.md N5/N6: a chapter scraped from an already-translated site (or pasted with
+    an explicit translated_text) has translated_uri set by ingest-api at insert time,
+    translated_by='external', and no translate job ever created. This must be a distinct
+    path from the ordinary job_is_done cache-hit above — that one requires a *completed*
+    job row, which a bootstrapped chapter never has."""
+    novel_id = await make_novel(
+        db_conn, source_lang="zh", target_lang="en", ontology=json.dumps(ONTOLOGY)
+    )
+    try:
+        objects = FakeObjects()
+        objects.data[("bucket", "translated/bootstrap.txt")] = TRANSLATION.encode()
+        await db_conn.execute(
+            """
+            INSERT INTO chapter
+              (novel_id, chapter_index, raw_hash, raw_uri, source_meta,
+               translated_uri, translated_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (novel_id, CHAPTER, RAW_HASH, "raw/test.txt", json.dumps({}),
+             "translated/bootstrap.txt", "external"),
+        )
+
+        provider = FakeProvider("should never be called")
+        cfg = make_config(object_bucket="bucket")
+        ctx = StageContext(
+            novel=NovelMeta(id=novel_id, source_lang="zh", target_lang="en", ontology=ONTOLOGY),
+            language_profile=language_profile_for("zh"),
+            provider=provider,
+            batch_manager=BatchManager(provider),
+            embed_provider=provider,
+            db=db_conn,
+            objects=objects,
+            cfg=cfg,
+            cache=LLMCache(FakeRedis()),
+        )
+
+        state = _state(novel_id)
+        await TranslateStage().run(ctx, state)
+
+        assert state.translation == TRANSLATION
+        assert [chunk.text for chunk in state.chunks] == [TRANSLATION]
+        assert provider.calls == []
+        assert provider.batch_requests == []
+
+        job_count = await (
+            await db_conn.execute(
+                "SELECT count(*) FROM job WHERE novel_id = %s AND stage = 'translate'",
+                (novel_id,),
+            )
+        ).fetchone()
+        assert job_count == (0,)
+    finally:
+        await delete_novel(db_conn, novel_id)

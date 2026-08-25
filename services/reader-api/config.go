@@ -15,6 +15,7 @@ type Config struct {
 
 	IngestAPIURL        string
 	IngestInternalToken string
+	RedisURL            string
 
 	// Object store (MinIO locally, S3 in prod) — for GET /chapter, which reads chapter
 	// bodies pipeline already wrote. Same field names/env vars/defaults as ingest-api.
@@ -48,6 +49,7 @@ func loadConfig() Config {
 
 		IngestAPIURL:        getenv("INGEST_API_URL", "http://localhost:8080"),
 		IngestInternalToken: os.Getenv("INGEST_INTERNAL_TOKEN"),
+		RedisURL:            getenv("REDIS_URL", "redis://localhost:6379"),
 
 		ObjectEndpoint:  getenv("OBJECT_STORE_ENDPOINT", "localhost:9000"),
 		ObjectAccessKey: getenv("OBJECT_STORE_ACCESS_KEY", "minio"),

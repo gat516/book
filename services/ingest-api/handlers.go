@@ -33,6 +33,13 @@ type createNovelResp struct {
 type pasteChapterReq struct {
 	ChapterIndex int    `json:"chapter_index"`
 	RawText      string `json:"raw_text"`
+	// TranslatedText is optional (PLAN.md N5/N6 half-translated bootstrap): when set,
+	// chapter.translated_uri is populated at insert time so TranslateStage skips the LLM
+	// call for this chapter entirely. SiteChapterNo is the site's own printed chapter
+	// label (metadata only, NEVER the gate key — instructions.md §3.1) — set by the
+	// scraper, or by a human who knows the source site's numbering.
+	TranslatedText string `json:"translated_text,omitempty"`
+	SiteChapterNo  string `json:"site_chapter_no,omitempty"`
 }
 
 type pasteChapterResp struct {
@@ -129,19 +136,36 @@ func (a *API) pasteChapter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Pre-translated text (PLAN.md N5/N6): store it too and point translated_uri at it
+	// immediately, so TranslateStage's early-out (services/pipeline/pipeline/stages/
+	// translate.py) skips the LLM call for this chapter entirely. translated_by records
+	// that the translation is external, not model-served, since no provider:model pin
+	// applies here.
+	var translatedURI, translatedBy string
+	if req.TranslatedText != "" {
+		translatedURI, err = a.store.putTranslatedObject(r.Context(), novelID, req.ChapterIndex, req.TranslatedText)
+		if err != nil {
+			log.Printf("pasteChapter putTranslatedObject: %v", err)
+			writeErr(w, http.StatusInternalServerError, "could not store translated body")
+			return
+		}
+		translatedBy = "external"
+	}
+
 	env := ChapterEnvelope{
 		NovelID:      novelID,
 		ChapterIndex: req.ChapterIndex,
 		RawText:      req.RawText,
 		SourceLang:   sourceLang,
 		SourceMeta: SourceMeta{
-			FetchedAt: time.Now().UTC().Format(time.RFC3339),
-			RawHash:   rawHash,
-			Adapter:   "paste",
+			FetchedAt:     time.Now().UTC().Format(time.RFC3339),
+			RawHash:       rawHash,
+			Adapter:       "paste",
+			SiteChapterNo: req.SiteChapterNo,
 		},
 	}
 
-	if err := a.store.insertChapter(r.Context(), env, rawURI); err != nil {
+	if err := a.store.insertChapter(r.Context(), env, rawURI, translatedURI, translatedBy); err != nil {
 		log.Printf("pasteChapter insert: %v", err)
 		writeErr(w, http.StatusInternalServerError, "could not record chapter")
 		return

@@ -36,6 +36,11 @@ type fakeStore struct {
 	novelsErr       error
 	novel           NovelSummary
 	novelErr        error
+	scrapeJobID     int64
+	createScrapeErr error
+	scrapeJob       ScrapeJobView
+	scrapeJobErr    error
+	cancelErr       error
 	lastAt          int
 	lastReader      string
 	lastChapter     int
@@ -123,6 +128,18 @@ func (f *fakeStore) ListNovels(context.Context) ([]NovelSummary, error) {
 
 func (f *fakeStore) GetNovel(context.Context, string) (NovelSummary, error) {
 	return f.novel, f.novelErr
+}
+
+func (f *fakeStore) CreateScrapeJob(context.Context, string, string, string) (int64, error) {
+	return f.scrapeJobID, f.createScrapeErr
+}
+
+func (f *fakeStore) LatestScrapeJob(context.Context, string) (ScrapeJobView, error) {
+	return f.scrapeJob, f.scrapeJobErr
+}
+
+func (f *fakeStore) RequestScrapeCancel(context.Context, string) error {
+	return f.cancelErr
 }
 
 func (f *fakeStore) GetChapter(
@@ -447,6 +464,71 @@ func TestPostChapterProxiesToIngestClient(t *testing.T) {
 	}
 	if string(ingest.lastBody) != `{"chapter_index":1,"raw_text":"hi"}` {
 		t.Fatalf("body forwarded = %q", ingest.lastBody)
+	}
+}
+
+func TestPostScrapeValidatesURLAndMode(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"not a url", `{"start_url":"not-a-url"}`},
+		{"relative url", `{"start_url":"/chapter-1"}`},
+		{"bad scheme", `{"start_url":"ftp://example.com/chapter-1"}`},
+		{"bad mode", `{"start_url":"https://example.com/chapter-1","mode":"bogus"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := request(t, &API{store: readyFake()}, http.MethodPost,
+				"/novels/"+testNovelID+"/scrape", test.body, "")
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestPostScrapeStartsJob(t *testing.T) {
+	store := readyFake()
+	store.scrapeJobID = 42
+	response := request(t, &API{store: store}, http.MethodPost,
+		"/novels/"+testNovelID+"/scrape", `{"start_url":"https://freewebnovel.com/novel/x/chapter-1"}`, "")
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%s", response.Code, response.Body.String())
+	}
+	var body map[string]int64
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["id"] != 42 {
+		t.Fatalf("response = %#v", body)
+	}
+}
+
+func TestPostScrapeConflictWhenAlreadyActive(t *testing.T) {
+	store := readyFake()
+	store.createScrapeErr = ErrScrapeJobActive
+	response := request(t, &API{store: store}, http.MethodPost,
+		"/novels/"+testNovelID+"/scrape", `{"start_url":"https://freewebnovel.com/novel/x/chapter-1"}`, "")
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestGetScrapeStatusNotFound(t *testing.T) {
+	store := readyFake()
+	store.scrapeJobErr = ErrNotFound
+	response := request(t, &API{store: store}, http.MethodGet, "/novels/"+testNovelID+"/scrape/status", "", "")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestPostScrapeCancel(t *testing.T) {
+	response := request(t, &API{store: readyFake()}, http.MethodPost,
+		"/novels/"+testNovelID+"/scrape/cancel", "", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
 	}
 }
 

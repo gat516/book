@@ -1,6 +1,7 @@
 instructions.md
 services/ingest-api/ingest-api
 services/reader-api/reader-api
+services/scraper/scraper
 PLAN.md
 CLAUDE.md
 notes/

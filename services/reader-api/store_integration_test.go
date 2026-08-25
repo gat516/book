@@ -46,12 +46,13 @@ func integrationDatabase(t *testing.T) (*Store, *pgxpool.Pool) {
 		admin.Close()
 		t.Fatalf("database must have migrations through 0007 applied")
 	}
-	// GetChapter (object-store reads) isn't exercised by this integration suite, so a
-	// nil minio client is fine here — adding MinIO as a dependency of this test harness
-	// is out of scope; see handlers_test.go's fakeStore for GetChapter's own coverage.
+	// GetChapter (object-store reads) and scrape-job creation (Redis) aren't exercised by
+	// this integration suite, so nil clients are fine here — adding MinIO/Redis as
+	// dependencies of this test harness is out of scope; see handlers_test.go's fakeStore
+	// for that coverage.
 	store, err := newStore(ctx, Config{
 		ReaderDatabaseURL: databaseURL, ProgressDatabaseURL: databaseURL,
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		admin.Close()
 		t.Fatalf("reader store: %v", err)

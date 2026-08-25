@@ -71,18 +71,37 @@ func (s *Store) putRawObject(ctx context.Context, novelID string, chapterIndex i
 	return key, nil
 }
 
+// putTranslatedObject mirrors putRawObject's key scheme, under translated/ instead of
+// chapters/.../raw.txt (PLAN.md N5/N6 half-translated bootstrap).
+func (s *Store) putTranslatedObject(ctx context.Context, novelID string, chapterIndex int, translated string) (string, error) {
+	key := fmt.Sprintf("novels/%s/chapters/%d/translated.txt", novelID, chapterIndex)
+	body := []byte(translated)
+	_, err := s.minio.PutObject(ctx, s.bucket, key, bytes.NewReader(body), int64(len(body)),
+		minio.PutObjectOptions{ContentType: "text/plain; charset=utf-8"})
+	if err != nil {
+		return "", fmt.Errorf("put translated object: %w", err)
+	}
+	return key, nil
+}
+
 // insertChapter writes the chapter row. Idempotent: re-pasting the same (novel, index)
 // is a no-op on the row (ON CONFLICT DO NOTHING) so ingestion can be safely retried.
-func (s *Store) insertChapter(ctx context.Context, env ChapterEnvelope, rawURI string) error {
+// translatedURI/translatedBy are "" for a normal paste (source == target, or translation
+// happens later via the pipeline) and set together only for a pre-translated chapter.
+func (s *Store) insertChapter(ctx context.Context, env ChapterEnvelope, rawURI, translatedURI, translatedBy string) error {
 	metaJSON, err := json.Marshal(env.SourceMeta)
 	if err != nil {
 		return fmt.Errorf("marshal source_meta: %w", err)
 	}
+	var translatedURIArg, translatedByArg any
+	if translatedURI != "" {
+		translatedURIArg, translatedByArg = translatedURI, translatedBy
+	}
 	_, err = s.db.Exec(ctx,
-		`INSERT INTO chapter (novel_id, chapter_index, raw_hash, raw_uri, source_meta, status)
-		 VALUES ($1, $2, $3, $4, $5, 'ingested')
+		`INSERT INTO chapter (novel_id, chapter_index, raw_hash, raw_uri, source_meta, status, translated_uri, translated_by)
+		 VALUES ($1, $2, $3, $4, $5, 'ingested', $6, $7)
 		 ON CONFLICT (novel_id, chapter_index) DO NOTHING`,
-		env.NovelID, env.ChapterIndex, env.SourceMeta.RawHash, rawURI, metaJSON,
+		env.NovelID, env.ChapterIndex, env.SourceMeta.RawHash, rawURI, metaJSON, translatedURIArg, translatedByArg,
 	)
 	if err != nil {
 		return fmt.Errorf("insert chapter: %w", err)

@@ -32,6 +32,8 @@ export interface CreateNovelResponse {
 export interface PasteChapterRequest {
   chapter_index: number;
   raw_text: string;
+  translated_text?: string;
+  site_chapter_no?: string;
 }
 
 export interface PasteChapterResponse {
@@ -39,6 +41,25 @@ export interface PasteChapterResponse {
   chapter_index: number;
   raw_hash: string;
   status: string;
+}
+
+// reader-api's scrapeRequest/ScrapeJobView (services/reader-api/{handlers,models}.go).
+export interface StartScrapeRequest {
+  start_url: string;
+  mode?: "translate" | "bootstrap";
+}
+
+export interface ScrapeJobView {
+  id: number;
+  novel_id: string;
+  start_url: string;
+  mode: string;
+  status: "pending" | "running" | "done" | "error" | "cancelled";
+  chapters_fetched: number;
+  last_error: string | null;
+  cancel_requested: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface SpanView {

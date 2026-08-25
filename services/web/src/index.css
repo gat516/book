@@ -190,6 +190,43 @@ body {
   color: #b00020;
 }
 
+.scrape-form,
+.scrape-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 560px;
+}
+
+.scrape-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.scrape-form fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.scrape-form fieldset label {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.scrape-form-error,
+.scrape-status-summary {
+  color: #666;
+}
+
+.scrape-form-error {
+  color: #b00020;
+}
+
 .chapter-processing-hint {
   color: #666;
   font-size: 0.9rem;

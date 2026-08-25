@@ -31,7 +31,7 @@ STAGE = "translate"
 async def _chapter_row(db, novel_id: str, chapter: int):
     return await (
         await db.execute(
-            "SELECT translated_uri, glossary_version FROM chapter "
+            "SELECT translated_uri, glossary_version, translated_by FROM chapter "
             "WHERE novel_id = %s AND chapter_index = %s",
             (novel_id, chapter),
         )
@@ -93,6 +93,23 @@ class TranslateStage:
     name = STAGE
 
     async def run(self, ctx: StageContext, state: PipelineState) -> None:
+        # Bootstrapped chapter (PLAN.md N5/N6): ingest-api pre-set translated_uri at
+        # paste/scrape time with translated_by="external" — no translate job was ever
+        # created for it, so it's distinct from the ordinary job_is_done cache-hit path
+        # below (which requires a *completed* job row a bootstrapped chapter never has).
+        # Skip the whole pin/provider/LLM machinery entirely; there is nothing to serve.
+        chapter = state.envelope.chapter_index
+        row = await _chapter_row(ctx.db, ctx.novel.id, chapter)
+        if row and row[0] and row[2] == "external":
+            translated = await asyncio.to_thread(
+                _read_object, ctx.objects, ctx.cfg.object_bucket, row[0]
+            )
+            _, glossary = await _glossary(ctx.db, ctx.novel.id)
+            validate_glossary_constraints(state.envelope.raw_text, translated, glossary)
+            self._set_chunks(ctx, state, translated)
+            state.translation = translated
+            return
+
         if ctx.novel.source_lang == ctx.novel.target_lang:
             return
 

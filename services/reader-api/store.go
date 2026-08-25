@@ -8,13 +8,16 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minio/minio-go/v7"
+	"github.com/redis/go-redis/v9"
 )
 
 var (
 	ErrNotFound        = errors.New("not found")
 	ErrChapterNotReady = errors.New("chapter is not ready")
+	ErrScrapeJobActive = errors.New("a scrape is already running for this novel")
 )
 
 const (
@@ -33,6 +36,9 @@ type ReaderStore interface {
 	GetChapter(context.Context, string, int) (ChapterView, error)
 	ListNovels(context.Context) ([]NovelSummary, error)
 	GetNovel(context.Context, string) (NovelSummary, error)
+	CreateScrapeJob(context.Context, string, string, string) (int64, error)
+	LatestScrapeJob(context.Context, string) (ScrapeJobView, error)
+	RequestScrapeCancel(context.Context, string) error
 }
 
 type Store struct {
@@ -40,7 +46,11 @@ type Store struct {
 	progressDB *pgxpool.Pool
 	objects    *minio.Client
 	bucket     string
+	redis      *redis.Client
 }
+
+// scrapePendingQueue must match services/scraper/job.go's pendingQueue constant.
+const scrapePendingQueue = "scrape:pending"
 
 func newRolePool(ctx context.Context, databaseURL, role string) (*pgxpool.Pool, error) {
 	config, err := pgxpool.ParseConfig(databaseURL)
@@ -62,7 +72,7 @@ func newRolePool(ctx context.Context, databaseURL, role string) (*pgxpool.Pool, 
 	return pool, nil
 }
 
-func newStore(ctx context.Context, cfg Config, objects *minio.Client) (*Store, error) {
+func newStore(ctx context.Context, cfg Config, objects *minio.Client, redisClient *redis.Client) (*Store, error) {
 	readerDB, err := newRolePool(ctx, cfg.ReaderDatabaseURL, readerRole)
 	if err != nil {
 		return nil, err
@@ -77,6 +87,7 @@ func newStore(ctx context.Context, cfg Config, objects *minio.Client) (*Store, e
 		progressDB: progressDB,
 		objects:    objects,
 		bucket:     cfg.ObjectBucket,
+		redis:      redisClient,
 	}, nil
 }
 
@@ -499,6 +510,59 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n int) (ChapterV
 	}
 
 	return view, nil
+}
+
+// CreateScrapeJob inserts the job row and pushes its id onto the Redis queue the scraper
+// service drains (PLAN.md Phase N5) — mirrors ingest-api's enqueue-a-pointer pattern for
+// jobs:pending. The partial unique index scrape_job_one_active_per_novel (migration
+// 0009) is what actually enforces "one active scrape per novel"; a violation surfaces
+// here as ErrScrapeJobActive so the handler can map it to 409.
+func (s *Store) CreateScrapeJob(ctx context.Context, novelID, startURL, mode string) (int64, error) {
+	var id int64
+	err := s.progressDB.QueryRow(ctx,
+		`INSERT INTO scrape_job (novel_id, start_url, mode) VALUES ($1, $2, $3) RETURNING id`,
+		novelID, startURL, mode,
+	).Scan(&id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return 0, ErrScrapeJobActive
+		}
+		return 0, err
+	}
+	if err := s.redis.LPush(ctx, scrapePendingQueue, id).Err(); err != nil {
+		return 0, fmt.Errorf("enqueue scrape job: %w", err)
+	}
+	return id, nil
+}
+
+func (s *Store) LatestScrapeJob(ctx context.Context, novelID string) (ScrapeJobView, error) {
+	var job ScrapeJobView
+	err := s.progressDB.QueryRow(ctx,
+		`SELECT id, novel_id::text, start_url, mode, status, chapters_fetched,
+		        last_error, cancel_requested, created_at, updated_at
+		 FROM scrape_job WHERE novel_id = $1 ORDER BY created_at DESC LIMIT 1`,
+		novelID,
+	).Scan(
+		&job.ID, &job.NovelID, &job.StartURL, &job.Mode, &job.Status, &job.ChaptersFetched,
+		&job.LastError, &job.CancelRequested, &job.CreatedAt, &job.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ScrapeJobView{}, ErrNotFound
+	}
+	return job, err
+}
+
+// RequestScrapeCancel is a no-op (not an error) if no job is currently active — the
+// scraper only ever checks cancel_requested on a job it's actively running, so setting
+// it on a terminal job changes nothing observable.
+func (s *Store) RequestScrapeCancel(ctx context.Context, novelID string) error {
+	_, err := s.progressDB.Exec(ctx,
+		`UPDATE scrape_job SET cancel_requested = true
+		 WHERE novel_id = $1 AND status IN ('pending', 'running')`,
+		novelID,
+	)
+	return err
 }
 
 var _ ReaderStore = (*Store)(nil)

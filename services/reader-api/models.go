@@ -72,6 +72,19 @@ type RelationshipsResponse struct {
 	Relationships []RelationshipView `json:"relationships"`
 }
 
+type ScrapeJobView struct {
+	ID              int64     `json:"id"`
+	NovelID         string    `json:"novel_id"`
+	StartURL        string    `json:"start_url"`
+	Mode            string    `json:"mode"`
+	Status          string    `json:"status"`
+	ChaptersFetched int       `json:"chapters_fetched"`
+	LastError       *string   `json:"last_error"`
+	CancelRequested bool      `json:"cancel_requested"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
 type NovelSummary struct {
 	ID         string    `json:"id"`
 	Title      string    `json:"title"`

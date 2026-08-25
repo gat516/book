@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -36,6 +37,9 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}", a.getNovel)
 	mux.HandleFunc("POST /novels", a.postNovel)
 	mux.HandleFunc("POST /novels/{id}/chapters", a.postChapter)
+	mux.HandleFunc("POST /novels/{id}/scrape", a.postScrape)
+	mux.HandleFunc("GET /novels/{id}/scrape/status", a.getScrapeStatus)
+	mux.HandleFunc("POST /novels/{id}/scrape/cancel", a.postScrapeCancel)
 	return mux
 }
 
@@ -364,6 +368,88 @@ func (a *API) postChapter(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(result)
+}
+
+type scrapeRequest struct {
+	StartURL string `json:"start_url"`
+	Mode     string `json:"mode"` // "translate" (default) | "bootstrap"
+}
+
+// postScrape starts a scrape job (PLAN.md Phase N5) — ungated like postNovel, since
+// there's no reader-identity concept for "start ingesting a novel," same as creation.
+// Which sites/URLs are actually supported is the scraper service's concern, not
+// reader-api's; an unsupported host surfaces as the job's own status=error, visible via
+// the status endpoint, rather than being validated twice in two services.
+func (a *API) postScrape(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	var req scrapeRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	parsed, err := url.Parse(req.StartURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		writeError(w, http.StatusBadRequest, "start_url must be an absolute http(s) URL")
+		return
+	}
+	if req.Mode == "" {
+		req.Mode = "translate"
+	}
+	if req.Mode != "translate" && req.Mode != "bootstrap" {
+		writeError(w, http.StatusBadRequest, `mode must be "translate" or "bootstrap"`)
+		return
+	}
+
+	id, err := a.store.CreateScrapeJob(r.Context(), novelID, req.StartURL, req.Mode)
+	switch {
+	case errors.Is(err, ErrScrapeJobActive):
+		writeError(w, http.StatusConflict, "a scrape is already running for this novel")
+	case err != nil:
+		log.Printf("create scrape job: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not start scrape")
+	default:
+		writeJSON(w, http.StatusAccepted, map[string]int64{"id": id})
+	}
+}
+
+func (a *API) getScrapeStatus(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	job, err := a.store.LatestScrapeJob(r.Context(), novelID)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "no scrape job for this novel")
+		return
+	}
+	if err != nil {
+		log.Printf("get scrape status: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load scrape status")
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
+}
+
+func (a *API) postScrapeCancel(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	if err := a.store.RequestScrapeCancel(r.Context(), novelID); err != nil {
+		log.Printf("cancel scrape: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not request cancellation")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancel_requested"})
 }
 
 func (a *API) healthz(w http.ResponseWriter, r *http.Request) {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -29,8 +30,14 @@ func main() {
 		log.Fatalf("startup: object store client: %v", err)
 	}
 
+	redisOpts, err := redis.ParseURL(cfg.RedisURL)
+	if err != nil {
+		log.Fatalf("startup: redis url: %v", err)
+	}
+	redisClient := redis.NewClient(redisOpts)
+
 	startupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	store, err := newStore(startupCtx, cfg, objects)
+	store, err := newStore(startupCtx, cfg, objects, redisClient)
 	cancel()
 	if err != nil {
 		log.Fatalf("startup: %v", err)
