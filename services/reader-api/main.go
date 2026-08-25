@@ -10,6 +10,9 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
 func main() {
@@ -17,8 +20,17 @@ func main() {
 	if cfg.AskAIInternalToken == "" {
 		log.Fatal("startup: ASKAI_INTERNAL_TOKEN is required")
 	}
+
+	objects, err := minio.New(cfg.ObjectEndpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(cfg.ObjectAccessKey, cfg.ObjectSecretKey, ""),
+		Secure: cfg.ObjectUseSSL,
+	})
+	if err != nil {
+		log.Fatalf("startup: object store client: %v", err)
+	}
+
 	startupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	store, err := newStore(startupCtx, cfg)
+	store, err := newStore(startupCtx, cfg, objects)
 	cancel()
 	if err != nil {
 		log.Fatalf("startup: %v", err)

@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/minio/minio-go/v7"
 )
 
 var (
@@ -28,11 +30,14 @@ type ReaderStore interface {
 	ListWiki(context.Context, string, int) ([]EntitySummary, error)
 	ListTimeline(context.Context, string, int) ([]EventView, error)
 	ListRelationships(context.Context, string, string, int) ([]RelationshipView, error)
+	GetChapter(context.Context, string, int) (ChapterView, error)
 }
 
 type Store struct {
 	readerDB   *pgxpool.Pool
 	progressDB *pgxpool.Pool
+	objects    *minio.Client
+	bucket     string
 }
 
 func newRolePool(ctx context.Context, databaseURL, role string) (*pgxpool.Pool, error) {
@@ -55,7 +60,7 @@ func newRolePool(ctx context.Context, databaseURL, role string) (*pgxpool.Pool, 
 	return pool, nil
 }
 
-func newStore(ctx context.Context, cfg Config) (*Store, error) {
+func newStore(ctx context.Context, cfg Config, objects *minio.Client) (*Store, error) {
 	readerDB, err := newRolePool(ctx, cfg.ReaderDatabaseURL, readerRole)
 	if err != nil {
 		return nil, err
@@ -65,7 +70,12 @@ func newStore(ctx context.Context, cfg Config) (*Store, error) {
 		readerDB.Close()
 		return nil, err
 	}
-	return &Store{readerDB: readerDB, progressDB: progressDB}, nil
+	return &Store{
+		readerDB:   readerDB,
+		progressDB: progressDB,
+		objects:    objects,
+		bucket:     cfg.ObjectBucket,
+	}, nil
 }
 
 func (s *Store) Close() {
@@ -365,6 +375,90 @@ func (s *Store) ListRelationships(
 		return rows.Err()
 	})
 	return relationships, err
+}
+
+func (s *Store) readObject(ctx context.Context, key string) (string, error) {
+	obj, err := s.objects.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return "", err
+	}
+	defer obj.Close()
+	body, err := io.ReadAll(obj)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+// GetChapter serves the chapter body + display spans for the reader pane. The novel-id/
+// progress cap is enforced by the caller (handler) before this is invoked; the span
+// query below is additionally RLS-gated (novel_id/chapter_index <= reader_chapter())
+// via withReaderTx, same defense-in-depth every other read gets.
+func (s *Store) GetChapter(ctx context.Context, novelID string, n int) (ChapterView, error) {
+	var rawURI, translatedURI *string
+	var status string
+	err := s.progressDB.QueryRow(ctx,
+		`SELECT raw_uri, translated_uri, status FROM chapter
+		 WHERE novel_id = $1 AND chapter_index = $2`,
+		novelID, n,
+	).Scan(&rawURI, &translatedURI, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ChapterView{}, ErrNotFound
+	}
+	if err != nil {
+		return ChapterView{}, err
+	}
+	if status != "done" {
+		// Defensive belt-and-braces: progress can only ever advance to a chapter that
+		// was `done` at the time (AdvanceProgress's own guard), so this shouldn't be
+		// reachable in practice — but GetChapter is independently callable for any
+		// n <= progress, so it must not trust that invariant blindly.
+		return ChapterView{}, ErrChapterNotReady
+	}
+
+	key := translatedURI
+	if key == nil {
+		key = rawURI
+	}
+	text, err := s.readObject(ctx, *key)
+	if err != nil {
+		return ChapterView{}, err
+	}
+
+	view := ChapterView{Text: text, Spans: []SpanView{}}
+	if err := s.withReaderTx(ctx, novelID, n, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT entity_id::text, char_start, char_end FROM mention_span
+			 WHERE novel_id = $1 AND chapter_index = $2 ORDER BY char_start`,
+			novelID, n)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var span SpanView
+			if err := rows.Scan(&span.EntityID, &span.CharStart, &span.CharEnd); err != nil {
+				return err
+			}
+			view.Spans = append(view.Spans, span)
+		}
+		return rows.Err()
+	}); err != nil {
+		return ChapterView{}, err
+	}
+
+	// "Has next" is an EXISTENCE check decoupled from the reader's own progress — a
+	// linear reader finishing chapter n for the first time needs "Next" enabled once
+	// n+1 exists and is processed, not only once progress has already passed it.
+	if err := s.progressDB.QueryRow(ctx,
+		`SELECT EXISTS (
+		   SELECT 1 FROM chapter WHERE novel_id = $1 AND chapter_index = $2 AND status = 'done'
+		 )`, novelID, n+1,
+	).Scan(&view.HasNext); err != nil {
+		return ChapterView{}, err
+	}
+
+	return view, nil
 }
 
 var _ ReaderStore = (*Store)(nil)

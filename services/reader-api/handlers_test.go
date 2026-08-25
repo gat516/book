@@ -30,9 +30,12 @@ type fakeStore struct {
 	timelineErr     error
 	relationships   []RelationshipView
 	relationshipErr error
+	chapter         ChapterView
+	chapterErr      error
 	lastAt          int
 	lastReader      string
 	lastChapter     int
+	lastChapterArg  int
 }
 
 type fakeAskClient struct {
@@ -93,6 +96,13 @@ func (f *fakeStore) ListRelationships(
 	return f.relationships, f.relationshipErr
 }
 
+func (f *fakeStore) GetChapter(
+	_ context.Context, _ string, n int,
+) (ChapterView, error) {
+	f.lastChapterArg = n
+	return f.chapter, f.chapterErr
+}
+
 func request(t *testing.T, api *API, method, target, body, reader string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
@@ -121,6 +131,11 @@ func readyFake() *fakeStore {
 		wiki:          []EntitySummary{},
 		timeline:      []EventView{},
 		relationships: []RelationshipView{},
+		chapter: ChapterView{
+			Text:    "chapter text",
+			Spans:   []SpanView{{EntityID: testEntityID, CharStart: 0, CharEnd: 7}},
+			HasNext: true,
+		},
 	}
 }
 
@@ -292,6 +307,55 @@ func TestStoreErrorsMapToInternalServerError(t *testing.T) {
 		"/novels/"+testNovelID+"/wiki", "", "reader-a")
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", response.Code)
+	}
+}
+
+func TestGetChapterWithinProgressSucceeds(t *testing.T) {
+	store := readyFake() // progress.CurrentChapter == 5
+	response := request(t, &API{store: store}, http.MethodGet,
+		"/novels/"+testNovelID+"/chapter/3", "", "reader-a")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	if store.lastChapterArg != 3 {
+		t.Fatalf("store called with chapter %d, want 3", store.lastChapterArg)
+	}
+	var body ChapterResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	// At must be the reader's STORED PROGRESS (5), not the requested chapter (3) — the
+	// client uses this exact value as the hover-card cache key (PLAN.md §5.3/§6.1).
+	if body.At != 5 || body.ChapterIndex != 3 || body.Text != "chapter text" || !body.HasNext {
+		t.Fatalf("response = %#v", body)
+	}
+}
+
+func TestGetChapterBeyondProgressIsNotFound(t *testing.T) {
+	store := readyFake() // progress.CurrentChapter == 5
+	response := request(t, &API{store: store}, http.MethodGet,
+		"/novels/"+testNovelID+"/chapter/6", "", "reader-a")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestGetChapterInvalidIndexIsBadRequest(t *testing.T) {
+	store := readyFake()
+	response := request(t, &API{store: store}, http.MethodGet,
+		"/novels/"+testNovelID+"/chapter/-1", "", "reader-a")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestGetChapterMapsChapterNotReady(t *testing.T) {
+	store := readyFake()
+	store.chapterErr = ErrChapterNotReady
+	response := request(t, &API{store: store}, http.MethodGet,
+		"/novels/"+testNovelID+"/chapter/1", "", "reader-a")
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", response.Code, response.Body.String())
 	}
 }
 

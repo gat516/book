@@ -1,7 +1,15 @@
 instructions.md
 services/ingest-api/ingest-api
+services/reader-api/reader-api
 PLAN.md
 CLAUDE.md
 notes/
 .claude/
-docs/ 
+docs/
+
+__pycache__/
+*.pyc
+
+node_modules/
+dist/
+*.tsbuildinfo

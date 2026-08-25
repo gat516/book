@@ -10,8 +10,9 @@ import pytest
 
 from pipeline.context import Chunk
 from pipeline.graph import EntityRow, FactRow, GraphWriter
+from pipeline.mentions import Span
 
-from fixtures import delete_novel, make_novel
+from fixtures import delete_novel, make_novel, seed_entities
 
 pytestmark = pytest.mark.db
 
@@ -44,6 +45,30 @@ async def test_replace_chunks_is_idempotent(db_conn):
             )
         ).fetchone()
         assert row[0] == 2  # not 4 — replace, not append
+    finally:
+        await delete_novel(db_conn, novel_id)
+
+
+async def test_replace_mention_spans_is_idempotent(db_conn):
+    novel_id = await make_novel(db_conn)
+    try:
+        known = await seed_entities(db_conn, novel_id, {"Li Xiaoyao": "character"})
+        entity_id = known["Li Xiaoyao"]
+        writer = await _writer(db_conn)
+        spans = [Span(alias_id=entity_id, byte_start=0, byte_end=10, char_start=0, char_end=10)]
+
+        async with db_conn.transaction():
+            await writer.replace_mention_spans(novel_id, 1, spans)
+        async with db_conn.transaction():
+            await writer.replace_mention_spans(novel_id, 1, spans)
+
+        row = await (
+            await db_conn.execute(
+                "SELECT count(*) FROM mention_span WHERE novel_id = %s AND chapter_index = %s",
+                (novel_id, 1),
+            )
+        ).fetchone()
+        assert row[0] == 1  # not 2 — replace, not append
     finally:
         await delete_novel(db_conn, novel_id)
 

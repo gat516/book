@@ -29,6 +29,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/wiki", a.getWiki)
 	mux.HandleFunc("GET /novels/{id}/timeline", a.getTimeline)
 	mux.HandleFunc("GET /novels/{id}/relationships/{eid}", a.getRelationships)
+	mux.HandleFunc("GET /novels/{id}/chapter/{n}", a.getChapter)
 	mux.HandleFunc("POST /novels/{id}/ask", a.postAsk)
 	return mux
 }
@@ -237,6 +238,48 @@ func (a *API) getRelationships(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, RelationshipsResponse{
 		NovelID: novelID, At: at, EntityID: entityID, Relationships: relationships,
 	})
+}
+
+func (a *API) getChapter(w http.ResponseWriter, r *http.Request) {
+	// requested=nil: "at" has no meaning for which chapter to serve (chapter n IS the
+	// resource) — gateAt is reused purely for the reader/novel validation + progress
+	// lookup every other handler already does, so `progress` here is stored progress
+	// with no further capping.
+	_, novelID, progress, ok := a.gateAt(w, r, nil)
+	if !ok {
+		return
+	}
+	n, err := strconv.Atoi(r.PathValue("n"))
+	if err != nil || n < 0 {
+		writeError(w, http.StatusBadRequest, "invalid chapter index")
+		return
+	}
+	if n > progress {
+		// 404, not 403 — same "don't confirm existence of gated content" posture as
+		// getEntity/getRelationships.
+		writeError(w, http.StatusNotFound, "chapter not found")
+		return
+	}
+
+	chapter, err := a.store.GetChapter(r.Context(), novelID, n)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		writeError(w, http.StatusNotFound, "chapter not found")
+	case errors.Is(err, ErrChapterNotReady):
+		writeError(w, http.StatusConflict, "chapter is not ready")
+	case err != nil:
+		log.Printf("get chapter: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load chapter")
+	default:
+		writeJSON(w, http.StatusOK, ChapterResponse{
+			NovelID:      novelID,
+			ChapterIndex: n,
+			At:           progress,
+			Text:         chapter.Text,
+			Spans:        chapter.Spans,
+			HasNext:      chapter.HasNext,
+		})
+	}
 }
 
 func (a *API) healthz(w http.ResponseWriter, r *http.Request) {

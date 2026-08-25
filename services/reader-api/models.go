@@ -71,3 +71,32 @@ type RelationshipsResponse struct {
 	EntityID      string             `json:"entity_id"`
 	Relationships []RelationshipView `json:"relationships"`
 }
+
+type SpanView struct {
+	EntityID  string `json:"entity_id"`
+	CharStart int    `json:"char_start"`
+	CharEnd   int    `json:"char_end"`
+}
+
+// ChapterView is what the store hands back; ChapterResponse is what the handler sends.
+// Kept separate so the store layer doesn't know about JSON tags.
+type ChapterView struct {
+	Text    string
+	Spans   []SpanView
+	HasNext bool
+}
+
+type ChapterResponse struct {
+	NovelID      string     `json:"novel_id"`
+	ChapterIndex int        `json:"chapter_index"`
+	// At is the reader's STORED PROGRESS (not the chapter index n). Re-reading an old
+	// chapter (n < progress) still uses progress here: the reader has already legitimately
+	// learned everything up to it, so showing those facts on old text is not a leak — the
+	// gate protects against learning the future relative to what's been read, not against
+	// carrying already-learned knowledge backward. This is also the exact value the client
+	// must use as the hover-card cache key's `at` (PLAN.md §5.3/§6.1).
+	At      int        `json:"at"`
+	Text    string     `json:"text"`
+	Spans   []SpanView `json:"spans"`
+	HasNext bool       `json:"has_next"`
+}

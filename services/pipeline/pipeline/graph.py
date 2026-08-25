@@ -31,6 +31,8 @@ from pipeline.context import Chunk
 if TYPE_CHECKING:
     from psycopg import AsyncConnection
 
+    from pipeline.mentions import Span
+
 
 @dataclass(frozen=True)
 class EntityRow:
@@ -301,5 +303,30 @@ class GraphWriter:
                     [
                         (novel_id, chapter_index, c.text, emb)
                         for c, emb in zip(chunks, embeddings)
+                    ],
+                )
+
+    async def replace_mention_spans(
+        self, novel_id: str, chapter_index: int, spans: list["Span"]
+    ) -> None:
+        """Delete this chapter's existing display spans and re-insert. Same discipline
+        as ``replace_chunks``: derived data, not knowledge, no natural key to
+        `ON CONFLICT` against — delete-and-reinsert is what makes re-running a chapter
+        idempotent (§0.7). ``span.alias_id`` carries the entity id (§4's alias-id
+        convention, shared with the extraction-time scanner)."""
+        async with self.db.cursor() as cur:
+            await cur.execute(
+                "DELETE FROM mention_span WHERE novel_id = %s AND chapter_index = %s",
+                (novel_id, chapter_index),
+            )
+            if spans:
+                await cur.executemany(
+                    """
+                    INSERT INTO mention_span (novel_id, chapter_index, entity_id, char_start, char_end)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    [
+                        (novel_id, chapter_index, s.alias_id, s.char_start, s.char_end)
+                        for s in spans
                     ],
                 )

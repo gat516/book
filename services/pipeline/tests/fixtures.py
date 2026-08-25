@@ -170,6 +170,7 @@ async def delete_novel(conn, novel_id: str) -> None:
         "edge",
         "event",
         "chunk",
+        "mention_span",
         "alias",
         "glossary_changelog",
         "glossary",

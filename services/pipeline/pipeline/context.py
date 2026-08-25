@@ -108,6 +108,11 @@ class PipelineState:
     chunks: list[Chunk] = field(default_factory=list)  # chunk stage (1.4)
     mentions: "list[Span]" = field(default_factory=list)  # scan stage (1.6)
 
+    # display-scan stage (Phase 5.2): mentions against the DISPLAY text (translated, or
+    # source if untranslated), for the reader UI's highlighting. Offsets here are NOT
+    # comparable to `mentions` above when the novel is translated — different text.
+    display_spans: "list[Span]" = field(default_factory=list)
+
     # resolve stage (1.6): the AUTHORITATIVE surface -> entity_id map. Every stage that
     # needs to turn a name into an id reads this and nothing else — a surface absent from
     # it is an unresolved mention, not an invitation to bind by exact match (that was the

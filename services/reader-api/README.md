@@ -41,6 +41,9 @@ The default address is `:8081`. Configuration:
 - `ASKAI_URL` (defaults to `http://localhost:8082`)
 - `ASKAI_INTERNAL_TOKEN` (required shared bearer secret)
 - `ASKAI_TIMEOUT_SECONDS` (defaults to `120`)
+- `OBJECT_STORE_ENDPOINT`, `OBJECT_STORE_ACCESS_KEY`, `OBJECT_STORE_SECRET_KEY`,
+  `OBJECT_STORE_BUCKET`, `OBJECT_STORE_USE_SSL` (same names/defaults as ingest-api —
+  `GET /chapter` reads the chapter bodies pipeline already wrote)
 
 The compose owner can switch to both restricted roles for local development. Production
 should use two distinct login credentials with only the required role membership.
@@ -52,6 +55,9 @@ should use two distinct login credentials with only the required role membership
 curl -X PUT localhost:8081/novels/<novel-id>/progress \
   -H 'X-Reader-ID: local-reader' \
   -d '{"chapter":5}'
+
+curl localhost:8081/novels/<novel-id>/chapter/1 \
+  -H 'X-Reader-ID: local-reader'
 
 curl localhost:8081/novels/<novel-id>/wiki?at=3 \
   -H 'X-Reader-ID: local-reader'
@@ -72,6 +78,11 @@ curl -X POST localhost:8081/novels/<novel-id>/ask \
 
 Omitting `at` uses stored progress. A larger value is capped to stored progress; a lower
 value supports rereading without lowering the durable clearance ceiling.
+
+`GET /chapter/{n}` has no `?at=` — chapter `n` *is* the resource, gated by `n <= stored
+progress` (404 otherwise). Its response `at` field is always the stored progress, not
+`n`; the web client uses that value as the entity-hover cache key for spans on that
+chapter (see `services/web/`).
 
 ## Tests
 
