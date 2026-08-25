@@ -36,9 +36,15 @@ class AskResponse(BaseModel):
 
 
 class Service:
-    def __init__(self, config: Config, provider: LLMProvider) -> None:
+    def __init__(self, config: Config, provider: LLMProvider, embed_provider: LLMProvider | None = None) -> None:
         self.config = config
         self.provider = provider
+        # Embedding is a SEPARATE backend from completion (pipeline/llm/__init__.py's
+        # embed_provider_from_env: "always Ollama nomic-embed-text, §5.4") — Anthropic
+        # has no embeddings endpoint, and reusing a chat-only Ollama model for /api/embed
+        # 501s. Defaults to `provider` only so tests that pass one fake for both keep
+        # working; app_from_env always wires two distinct providers.
+        self.embed_provider = embed_provider or provider
         self.pool = AsyncConnectionPool(config.database_url, open=False, kwargs={"row_factory": tuple_row}, configure=self._configure_connection)
 
     async def _configure_connection(self, conn) -> None:
@@ -49,18 +55,19 @@ class Service:
         if not self.config.internal_token or not self.config.model:
             raise RuntimeError("ASKAI_INTERNAL_TOKEN and LLM_MODEL_ASK (or LLM_MODEL_EXTRACT) are required")
         await self.pool.open()
-        dimensions = await self.provider.embed(["embedding dimension check"], cls=Class.INTERACTIVE)
+        dimensions = await self.embed_provider.embed(["embedding dimension check"], cls=Class.INTERACTIVE)
         if len(dimensions) != 1 or len(dimensions[0]) != self.config.embed_dim:
             raise RuntimeError("embedding dimension does not match EMBED_DIM")
 
     async def close(self) -> None:
         await self.pool.close()
-        close = getattr(self.provider, "aclose", None)
-        if close:
-            await close()
+        for candidate in {id(self.provider): self.provider, id(self.embed_provider): self.embed_provider}.values():
+            close = getattr(candidate, "aclose", None)
+            if close:
+                await close()
 
     async def ask(self, request: AskRequest) -> AskResponse:
-        vectors = await self.provider.embed([request.question], cls=Class.INTERACTIVE)
+        vectors = await self.embed_provider.embed([request.question], cls=Class.INTERACTIVE)
         if len(vectors) != 1 or len(vectors[0]) != self.config.embed_dim:
             raise RuntimeError("embedding provider returned an unexpected dimension")
         async with self.pool.connection() as conn:
@@ -103,11 +110,14 @@ def create_app(service: Service) -> FastAPI:
 def app_from_env() -> FastAPI:
     from novel_llm import AnthropicProvider, OllamaProvider
     cfg = load_config()
+    ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
     if os.getenv("LLM_PROVIDER", "anthropic") == "ollama":
-        provider: LLMProvider = OllamaProvider(host=os.getenv("OLLAMA_HOST", "http://localhost:11434"), model=cfg.model)
+        provider: LLMProvider = OllamaProvider(host=ollama_host, model=cfg.model)
     else:
         provider = AnthropicProvider(model=cfg.model)
-    return create_app(Service(cfg, provider))
+    # Always Ollama for embeddings, regardless of LLM_PROVIDER — see Service's docstring.
+    embed_provider = OllamaProvider(host=ollama_host, model=cfg.embed_model)
+    return create_app(Service(cfg, provider, embed_provider))
 
 
 app = app_from_env()

@@ -17,6 +17,7 @@ class Config:
     max_facts: int = 64
     max_edges: int = 32
     max_context_chars: int = 48_000
+    embed_model: str = "nomic-embed-text"
 
 
 def load_config() -> Config:
@@ -27,4 +28,5 @@ def load_config() -> Config:
         embed_dim=int(os.getenv("EMBED_DIM", "768")),
         host=os.getenv("ASKAI_HOST", "0.0.0.0"),
         port=int(os.getenv("ASKAI_PORT", "8082")),
+        embed_model=os.getenv("EMBED_MODEL", "nomic-embed-text"),
     )
