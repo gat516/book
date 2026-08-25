@@ -99,6 +99,12 @@ class StageContext:
     cache: "LLMCache"  # the §6.1 LLM-result cache, shared by every LLM-bearing stage
     textproc: "TextProcClient | None" = None
 
+    # The provider identity actually backing `provider`/`batch_manager` for this chapter
+    # (PLAN.md Phase N4): the novel's own novel_provider_config.provider if it has one,
+    # else cfg.llm_provider. "" (the default) means "not set — fall back to cfg.llm_provider"
+    # for callers/tests built before this field existed; the worker always sets it for real.
+    provider_id: str = ""
+
 
 @dataclass
 class PipelineState:

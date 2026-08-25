@@ -127,6 +127,63 @@ async def test_translation_pins_served_snapshot_and_rerun_reads_object(db_conn):
         await delete_novel(db_conn, novel_id)
 
 
+async def test_per_novel_provider_pin_ignores_process_default(db_conn):
+    """PLAN.md Phase N4 regression: a novel pinned to a provider that differs from the
+    process's LLM_PROVIDER must not trip the pin-mismatch check, as long as
+    ctx.provider_id reflects the novel's own resolved provider — which is exactly what
+    worker.py's _provider_for_novel sets it to from novel_provider_config, not what
+    ctx.cfg.llm_provider (the process-wide fallback) says. Before this phase's fix, both
+    spots in _run_with_pin compared against ctx.cfg.llm_provider directly and this
+    novel/process combination would have raised."""
+    novel_id = await make_novel(
+        db_conn, source_lang="zh", target_lang="en", ontology=json.dumps(ONTOLOGY)
+    )
+    try:
+        await db_conn.execute(
+            "UPDATE novel SET translation_provider = %s WHERE id = %s",
+            ("deepseek:deepseek-chat", novel_id),
+        )
+        await db_conn.execute(
+            """
+            INSERT INTO chapter
+              (novel_id, chapter_index, raw_hash, raw_uri, source_meta)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (novel_id, CHAPTER, RAW_HASH, "raw/test.txt", json.dumps({})),
+        )
+
+        provider = FakeProvider(TRANSLATION, provider="deepseek", served_model="deepseek-chat")
+        objects = FakeObjects()
+        # Process-wide default is ollama; this novel's own resolved provider (as the
+        # worker would set ctx.provider_id from its novel_provider_config row) is deepseek.
+        cfg = make_config(llm_provider="ollama", llm_model_translate="deepseek-chat")
+        ctx = StageContext(
+            novel=NovelMeta(id=novel_id, source_lang="zh", target_lang="en", ontology=ONTOLOGY),
+            language_profile=language_profile_for("zh"),
+            provider=provider,
+            batch_manager=BatchManager(provider),
+            embed_provider=provider,
+            db=db_conn,
+            objects=objects,
+            cfg=cfg,
+            cache=LLMCache(FakeRedis()),
+            provider_id="deepseek",
+        )
+
+        state = _state(novel_id)
+        await TranslateStage().run(ctx, state)  # must not raise
+
+        chapter = await (
+            await db_conn.execute(
+                "SELECT translated_by FROM chapter WHERE novel_id = %s AND chapter_index = %s",
+                (novel_id, CHAPTER),
+            )
+        ).fetchone()
+        assert chapter == ("deepseek:deepseek-chat",)
+    finally:
+        await delete_novel(db_conn, novel_id)
+
+
 async def test_bootstrapped_chapter_skips_translation_entirely(db_conn):
     """PLAN.md N5/N6: a chapter scraped from an already-translated site (or pasted with
     an explicit translated_text) has translated_uri set by ingest-api at insert time,

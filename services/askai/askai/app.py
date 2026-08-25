@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hmac
 import logging
-import os
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -14,6 +13,7 @@ from psycopg_pool import AsyncConnectionPool
 from novel_llm import AdmissionRejected, Class, LLMProvider
 
 from askai.config import Config, load_config
+from askai.provider_config import build_provider, load_provider_config
 from askai.retrieval import build_context, retrieve
 
 log = logging.getLogger(__name__)
@@ -46,6 +46,10 @@ class Service:
         # working; app_from_env always wires two distinct providers.
         self.embed_provider = embed_provider or provider
         self.pool = AsyncConnectionPool(config.database_url, open=False, kwargs={"row_factory": tuple_row}, configure=self._configure_connection)
+        # Per-novel completion provider cache (PLAN.md Phase N4), mirroring
+        # pipeline/worker.py's _provider_cache: a provider wraps a live httpx/SDK client,
+        # so this is built once per novel and reused, not reconstructed per question.
+        self._provider_cache: dict[str, LLMProvider] = {}
 
     async def _configure_connection(self, conn) -> None:
         await conn.execute("SET ROLE rls_reader")
@@ -61,10 +65,29 @@ class Service:
 
     async def close(self) -> None:
         await self.pool.close()
-        for candidate in {id(self.provider): self.provider, id(self.embed_provider): self.embed_provider}.values():
+        candidates = {id(self.provider): self.provider, id(self.embed_provider): self.embed_provider}
+        candidates.update({id(p): p for p in self._provider_cache.values()})
+        for candidate in candidates.values():
             close = getattr(candidate, "aclose", None)
             if close:
                 await close()
+
+    async def _provider_for_novel(self, conn, novel_id: str) -> LLMProvider:
+        cached = self._provider_cache.get(novel_id)
+        if cached is not None:
+            return cached
+        row = await load_provider_config(conn, novel_id)
+        if row is None:
+            provider = self.provider
+        else:
+            provider = build_provider(
+                row,
+                default_model=self.config.model,
+                ollama_host=self.config.ollama_host,
+                deepseek_base_url=self.config.deepseek_base_url,
+            )
+        self._provider_cache[novel_id] = provider
+        return provider
 
     async def ask(self, request: AskRequest) -> AskResponse:
         vectors = await self.embed_provider.embed([request.question], cls=Class.INTERACTIVE)
@@ -74,11 +97,12 @@ class Service:
             async with conn.transaction():
                 await conn.execute("SELECT set_config('app.novel_id', %s, true)", (request.novel_id,))
                 await conn.execute("SELECT set_config('app.current_chapter', %s, true)", (str(request.at),))
+                provider = await self._provider_for_novel(conn, request.novel_id)
                 sources = await retrieve(conn, request.novel_id, request.at, vectors[0], max_chunks=self.config.max_chunks, max_entities=self.config.max_entities, max_facts=self.config.max_facts, max_edges=self.config.max_edges)
         context, used = build_context(sources, self.config.max_context_chars)
         if not used:
             return AskResponse(answer=INSUFFICIENT, at=request.at, retrieved_sources=[], served_by=None)
-        completion = await self.provider.complete(f"Question:\n{request.question}\n\nRetrieved context:\n{context}", system=SYSTEM, cls=Class.INTERACTIVE, model=self.config.model)
+        completion = await provider.complete(f"Question:\n{request.question}\n\nRetrieved context:\n{context}", system=SYSTEM, cls=Class.INTERACTIVE, model=self.config.model)
         log.info("ask completed novel=%s at=%s sources=%s", request.novel_id, request.at, used)
         return AskResponse(answer=completion.text, at=request.at, retrieved_sources=used, served_by={"provider": completion.served_provider, "model": completion.served_model})
 
@@ -108,15 +132,17 @@ def create_app(service: Service) -> FastAPI:
 
 
 def app_from_env() -> FastAPI:
-    from novel_llm import AnthropicProvider, OllamaProvider
+    from novel_llm import AnthropicProvider, DeepSeekProvider, OllamaProvider
     cfg = load_config()
-    ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-    if os.getenv("LLM_PROVIDER", "anthropic") == "ollama":
-        provider: LLMProvider = OllamaProvider(host=ollama_host, model=cfg.model)
-    else:
-        provider = AnthropicProvider(model=cfg.model)
+    match cfg.llm_provider:
+        case "ollama":
+            provider: LLMProvider = OllamaProvider(host=cfg.ollama_host, model=cfg.model)
+        case "deepseek":
+            provider = DeepSeekProvider(model=cfg.model, base_url=cfg.deepseek_base_url, api_key=cfg.deepseek_api_key)
+        case _:
+            provider = AnthropicProvider(model=cfg.model)
     # Always Ollama for embeddings, regardless of LLM_PROVIDER — see Service's docstring.
-    embed_provider = OllamaProvider(host=ollama_host, model=cfg.embed_model)
+    embed_provider = OllamaProvider(host=cfg.ollama_host, model=cfg.embed_model)
     return create_app(Service(cfg, provider, embed_provider))
 
 

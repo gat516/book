@@ -18,6 +18,12 @@ class Config:
     max_edges: int = 32
     max_context_chars: int = 48_000
     embed_model: str = "nomic-embed-text"
+    # Process-wide provider defaults (PLAN.md Phase N4) — the fallback for a novel with
+    # no novel_provider_config row. Mirrors pipeline/config.py's fields of the same name.
+    llm_provider: str = "anthropic"
+    ollama_host: str = "http://localhost:11434"
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com"
 
 
 def load_config() -> Config:
@@ -29,4 +35,8 @@ def load_config() -> Config:
         host=os.getenv("ASKAI_HOST", "0.0.0.0"),
         port=int(os.getenv("ASKAI_PORT", "8082")),
         embed_model=os.getenv("EMBED_MODEL", "nomic-embed-text"),
+        llm_provider=os.getenv("LLM_PROVIDER", "anthropic"),
+        ollama_host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
+        deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", ""),
+        deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
     )

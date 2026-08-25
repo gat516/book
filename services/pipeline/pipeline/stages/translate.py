@@ -128,18 +128,24 @@ class TranslateStage:
         chapter = state.envelope.chapter_index
         raw_hash = state.envelope.source_meta.raw_hash
         glossary_version, glossary = await _glossary(ctx.db, ctx.novel.id)
+        # The provider actually resolved for this novel this chapter (PLAN.md Phase N4:
+        # its own novel_provider_config.provider if it has one, else the process-wide
+        # cfg.llm_provider) — NOT ctx.cfg.llm_provider directly, which would ignore a
+        # per-novel override entirely and could wrongly reject a novel pinned to a
+        # provider that differs from the process default.
+        resolved_provider = ctx.provider_id or ctx.cfg.llm_provider
         if pinned is None:
-            requested_provider = ctx.cfg.llm_provider
+            requested_provider = resolved_provider
             requested_model = model_for_stage(STAGE, ctx.cfg)
             requested_id = f"{requested_provider}:{requested_model}"
         else:
             requested_provider, separator, requested_model = pinned.partition(":")
             if not separator or not requested_provider or not requested_model:
                 raise RuntimeError(f"invalid translation provider pin {pinned!r}")
-            if requested_provider != ctx.cfg.llm_provider:
+            if requested_provider != resolved_provider:
                 raise RuntimeError(
                     f"novel translation provider is pinned to {pinned!r}; "
-                    f"configured provider is {ctx.cfg.llm_provider!r}"
+                    f"configured provider is {resolved_provider!r}"
                 )
             requested_id = pinned
 

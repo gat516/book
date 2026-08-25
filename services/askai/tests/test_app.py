@@ -63,8 +63,13 @@ async def test_empty_retrieval_does_not_complete(monkeypatch) -> None:
 
     monkeypatch.setattr("askai.app.retrieve", empty)
 
+    class Cursor:
+        async def fetchone(self):
+            return None  # no novel_provider_config row -> Service falls back to self.provider
+
     class Connection:
-        async def execute(self, *args): pass
+        async def execute(self, *args):
+            return Cursor()
         def transaction(self): return self
         async def __aenter__(self): return self
         async def __aexit__(self, *args): pass

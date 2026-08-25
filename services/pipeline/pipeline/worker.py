@@ -33,6 +33,8 @@ from pipeline.config import Config
 from pipeline.context import NovelMeta, PipelineState, StageContext, language_profile_for
 from pipeline.envelope import ChapterEnvelope, QueueMessage, SourceMeta
 from pipeline.llm import embed_provider_from_env, provider_from_env
+from pipeline.llm.provider import LLMProvider
+from pipeline.provider_config import build_provider, load_provider_config
 from pipeline.stages import DEFAULT_STAGES
 from pipeline.textproc import textproc_from_config
 
@@ -53,9 +55,17 @@ class Worker:
             secret_key=cfg.object_secret_key,
             secure=cfg.object_secure,
         )
-        self.provider = provider_from_env(cfg)
-        self.batch_manager = BatchManager(self.provider)
+        # _default_provider/_default_batch_manager back every novel with no
+        # novel_provider_config row of its own (PLAN.md Phase N4's zero-config backward
+        # compat) — renamed from the old self.provider/self.batch_manager, which every
+        # chapter used unconditionally regardless of novel.
+        self._default_provider = provider_from_env(cfg)
+        self._default_batch_manager = BatchManager(self._default_provider)
         self.embed_provider = embed_provider_from_env(cfg)
+        # Per-novel (provider, batch_manager, provider_id) cache, keyed by novel_id — a
+        # provider wraps a live httpx/SDK client, so this must be built once and reused
+        # across chapters, not reconstructed per chapter (PLAN.md Phase N4).
+        self._provider_cache: dict[str, tuple[LLMProvider, BatchManager, str]] = {}
         self.textproc = textproc_from_config(
             cfg.textproc_backend, cfg.textproc_grpc_addr, cfg.textproc_timeout_seconds
         )
@@ -179,6 +189,7 @@ class Worker:
             log.warning("no novel row for %s; dropping", msg.novel_id)
             return
         source_lang, target_lang, ontology = novel
+        provider, batch_manager, provider_id = await self._provider_for_novel(msg.novel_id)
 
         raw_text = await asyncio.to_thread(self._get_object, raw_uri)
 
@@ -197,14 +208,15 @@ class Worker:
                 ontology=ontology,
             ),
             language_profile=language_profile_for(source_lang),
-            provider=self.provider,
-            batch_manager=self.batch_manager,
+            provider=provider,
+            batch_manager=batch_manager,
             embed_provider=self.embed_provider,
             db=self.db,
             objects=self.minio,
             cfg=self.cfg,
             cache=self.cache,
             textproc=self.textproc,
+            provider_id=provider_id,
         )
         state = PipelineState(envelope=envelope)
 
@@ -216,6 +228,24 @@ class Worker:
             raise
         await self._set_status(msg, "done")
         log.info("chapter %s/%s done", msg.novel_id, msg.chapter_index)
+
+    async def _provider_for_novel(self, novel_id: str) -> tuple[LLMProvider, BatchManager, str]:
+        """Return (provider, batch_manager, provider_id) for novel_id, memoized for the
+        life of the process (PLAN.md Phase N4). A novel with no novel_provider_config row
+        gets the process-wide default; the cache holds that too, so this is still one
+        lookup per novel rather than one per chapter.
+        """
+        cached = self._provider_cache.get(novel_id)
+        if cached is not None:
+            return cached
+        row = await load_provider_config(self.db, novel_id)
+        if row is None:
+            result = (self._default_provider, self._default_batch_manager, self.cfg.llm_provider)
+        else:
+            provider = build_provider(row, self.cfg)
+            result = (provider, BatchManager(provider), row.provider)
+        self._provider_cache[novel_id] = result
+        return result
 
     async def _fetch_one(self, sql: str, params: tuple):
         async with self.db.cursor() as cur:  # type: ignore[union-attr]
