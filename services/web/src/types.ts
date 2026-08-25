@@ -1,6 +1,32 @@
 // Mirrors services/reader-api/models.go's JSON shapes 1:1. Keep in sync by hand — this
 // is a two-service monorepo, not a shared-schema one (PLAN.md 5.1 scope).
 
+export interface NovelSummary {
+  id: string;
+  title: string;
+  source_lang: string;
+  target_lang: string;
+  genre: string | null;
+  created_at: string;
+}
+
+export interface NovelListResponse {
+  novels: NovelSummary[];
+}
+
+export interface CreateNovelRequest {
+  title: string;
+  source_lang?: string;
+  target_lang?: string;
+  genre?: string;
+}
+
+// ingest-api's createNovelResp, proxied verbatim by reader-api's POST /novels — NOT a
+// full NovelSummary (creation returns only the generated id).
+export interface CreateNovelResponse {
+  id: string;
+}
+
 export interface SpanView {
   entity_id: string;
   char_start: number;

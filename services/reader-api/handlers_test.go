@@ -32,10 +32,26 @@ type fakeStore struct {
 	relationshipErr error
 	chapter         ChapterView
 	chapterErr      error
+	novels          []NovelSummary
+	novelsErr       error
+	novel           NovelSummary
+	novelErr        error
 	lastAt          int
 	lastReader      string
 	lastChapter     int
 	lastChapterArg  int
+}
+
+type fakeIngestClient struct {
+	response json.RawMessage
+	status   int
+	err      error
+	lastBody json.RawMessage
+}
+
+func (f *fakeIngestClient) CreateNovel(_ context.Context, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
 }
 
 type fakeAskClient struct {
@@ -96,6 +112,14 @@ func (f *fakeStore) ListRelationships(
 	return f.relationships, f.relationshipErr
 }
 
+func (f *fakeStore) ListNovels(context.Context) ([]NovelSummary, error) {
+	return f.novels, f.novelsErr
+}
+
+func (f *fakeStore) GetNovel(context.Context, string) (NovelSummary, error) {
+	return f.novel, f.novelErr
+}
+
 func (f *fakeStore) GetChapter(
 	_ context.Context, _ string, n int,
 ) (ChapterView, error) {
@@ -136,6 +160,8 @@ func readyFake() *fakeStore {
 			Spans:   []SpanView{{EntityID: testEntityID, CharStart: 0, CharEnd: 7}},
 			HasNext: true,
 		},
+		novels: []NovelSummary{{ID: testNovelID, Title: "Test Novel", SourceLang: "zh", TargetLang: "en"}},
+		novel:  NovelSummary{ID: testNovelID, Title: "Test Novel", SourceLang: "zh", TargetLang: "en"},
 	}
 }
 
@@ -356,6 +382,54 @@ func TestGetChapterMapsChapterNotReady(t *testing.T) {
 		"/novels/"+testNovelID+"/chapter/1", "", "reader-a")
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestGetNovelsRequiresNoPrincipal(t *testing.T) {
+	store := readyFake()
+	response := request(t, &API{store: store}, http.MethodGet, "/novels", "", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	var body NovelListResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Novels) != 1 || body.Novels[0].ID != testNovelID {
+		t.Fatalf("response = %#v", body)
+	}
+}
+
+func TestGetNovelNotFound(t *testing.T) {
+	store := readyFake()
+	store.novelErr = ErrNotFound
+	response := request(t, &API{store: store}, http.MethodGet, "/novels/"+testNovelID, "", "")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestPostNovelProxiesToIngestClient(t *testing.T) {
+	ingest := &fakeIngestClient{response: json.RawMessage(`{"id":"` + testNovelID + `"}`), status: http.StatusCreated}
+	api := &API{store: readyFake(), ingest: ingest}
+	response := request(t, api, http.MethodPost, "/novels", `{"title":"New Novel"}`, "")
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", response.Code, response.Body.String())
+	}
+	if string(ingest.lastBody) != `{"title":"New Novel"}` {
+		t.Fatalf("body forwarded = %q", ingest.lastBody)
+	}
+	if !strings.Contains(response.Body.String(), testNovelID) {
+		t.Fatalf("response body = %s", response.Body.String())
+	}
+}
+
+func TestPostNovelMapsIngestUnavailable(t *testing.T) {
+	ingest := &fakeIngestClient{err: ErrIngestUnavailable}
+	api := &API{store: readyFake(), ingest: ingest}
+	response := request(t, api, http.MethodPost, "/novels", `{"title":"New Novel"}`, "")
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", response.Code, response.Body.String())
 	}
 }
 

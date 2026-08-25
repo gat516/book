@@ -13,6 +13,9 @@ type Config struct {
 	AskAIInternalToken  string
 	AskAITimeoutSeconds int
 
+	IngestAPIURL        string
+	IngestInternalToken string
+
 	// Object store (MinIO locally, S3 in prod) — for GET /chapter, which reads chapter
 	// bodies pipeline already wrote. Same field names/env vars/defaults as ingest-api.
 	ObjectEndpoint  string
@@ -42,6 +45,9 @@ func loadConfig() Config {
 		AskAIURL:            getenv("ASKAI_URL", "http://localhost:8082"),
 		AskAIInternalToken:  os.Getenv("ASKAI_INTERNAL_TOKEN"),
 		AskAITimeoutSeconds: timeout,
+
+		IngestAPIURL:        getenv("INGEST_API_URL", "http://localhost:8080"),
+		IngestInternalToken: os.Getenv("INGEST_INTERNAL_TOKEN"),
 
 		ObjectEndpoint:  getenv("OBJECT_STORE_ENDPOINT", "localhost:9000"),
 		ObjectAccessKey: getenv("OBJECT_STORE_ACCESS_KEY", "minio"),

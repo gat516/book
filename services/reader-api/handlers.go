@@ -13,8 +13,9 @@ import (
 )
 
 type API struct {
-	store ReaderStore
-	ask   AskClient
+	store  ReaderStore
+	ask    AskClient
+	ingest IngestClient
 }
 
 type progressRequest struct {
@@ -31,6 +32,9 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/relationships/{eid}", a.getRelationships)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}", a.getChapter)
 	mux.HandleFunc("POST /novels/{id}/ask", a.postAsk)
+	mux.HandleFunc("GET /novels", a.getNovels)
+	mux.HandleFunc("GET /novels/{id}", a.getNovel)
+	mux.HandleFunc("POST /novels", a.postNovel)
 	return mux
 }
 
@@ -280,6 +284,59 @@ func (a *API) getChapter(w http.ResponseWriter, r *http.Request) {
 			HasNext:      chapter.HasNext,
 		})
 	}
+}
+
+// getNovels/getNovel are deliberately ungated — no X-Reader-ID, no gate() call. Novel
+// metadata is not spoiler content (see Store.ListNovels/GetNovel's comment).
+func (a *API) getNovels(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novels, err := a.store.ListNovels(r.Context())
+	if err != nil {
+		log.Printf("list novels: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not list novels")
+		return
+	}
+	writeJSON(w, http.StatusOK, NovelListResponse{Novels: novels})
+}
+
+func (a *API) getNovel(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	novel, err := a.store.GetNovel(r.Context(), novelID)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "novel not found")
+		return
+	}
+	if err != nil {
+		log.Printf("get novel: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load novel")
+		return
+	}
+	writeJSON(w, http.StatusOK, novel)
+}
+
+// postNovel proxies novel creation to ingest-api (the writer service) — see ingest.go.
+// The request body is forwarded verbatim; reader-api does not interpret it.
+func (a *API) postNovel(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read request body")
+		return
+	}
+	result, status, err := a.ingest.CreateNovel(r.Context(), body)
+	if err != nil {
+		log.Printf("create novel: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
 }
 
 func (a *API) healthz(w http.ResponseWriter, r *http.Request) {

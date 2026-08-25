@@ -18,6 +18,9 @@ import (
 
 func main() {
 	cfg := loadConfig()
+	if cfg.IngestInternalToken == "" {
+		log.Fatal("startup: INGEST_INTERNAL_TOKEN is required")
+	}
 
 	// Fail fast if any backing store is unreachable — clearer than a first-request 500.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -33,7 +36,7 @@ func main() {
 	// Go 1.22+ ServeMux supports method + path-parameter patterns, so we get routing
 	// with zero dependencies. {id} is read in handlers via r.PathValue("id").
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /novels", api.createNovel)
+	mux.Handle("POST /novels", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.createNovel)))
 	mux.HandleFunc("POST /novels/{id}/chapters", api.pasteChapter)
 	mux.HandleFunc("GET /healthz", api.healthz)
 

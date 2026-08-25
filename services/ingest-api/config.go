@@ -16,6 +16,11 @@ type Config struct {
 	ObjectSecretKey string
 	ObjectBucket    string // bucket that holds raw chapter bodies
 	ObjectUseSSL    bool
+
+	// IngestInternalToken gates POST /novels — the one route reader-api proxies for the
+	// browser (novel creation). Not general auth: ingest-api otherwise stays the "no
+	// auth/gate here" writer service its own doc comment describes.
+	IngestInternalToken string
 }
 
 // getenv returns the env var if set and non-empty, otherwise the fallback.
@@ -40,5 +45,7 @@ func loadConfig() Config {
 		ObjectSecretKey: getenv("OBJECT_STORE_SECRET_KEY", "minio12345"),
 		ObjectBucket:    getenv("OBJECT_STORE_BUCKET", "raw-chapters"),
 		ObjectUseSSL:    os.Getenv("OBJECT_STORE_USE_SSL") == "true",
+
+		IngestInternalToken: os.Getenv("INGEST_INTERNAL_TOKEN"),
 	}
 }

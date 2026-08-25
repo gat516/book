@@ -1,5 +1,14 @@
 import { readerId } from "./readerId";
-import type { AskResponse, ChapterResponse, EntityResponse, Progress } from "./types";
+import type {
+  AskResponse,
+  ChapterResponse,
+  CreateNovelRequest,
+  CreateNovelResponse,
+  EntityResponse,
+  NovelListResponse,
+  NovelSummary,
+  Progress,
+} from "./types";
 
 class ApiError extends Error {
   constructor(
@@ -31,6 +40,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(response.status, code);
   }
   return response.json() as Promise<T>;
+}
+
+// Ungated on the server (novel metadata has no source_chapter to gate on) — the
+// X-Reader-ID header sent by `request()` is simply ignored by reader-api for these.
+export function listNovels(): Promise<NovelListResponse> {
+  return request(`/novels`);
+}
+
+export function getNovel(novelId: string): Promise<NovelSummary> {
+  return request(`/novels/${novelId}`);
+}
+
+export function createNovel(body: CreateNovelRequest): Promise<CreateNovelResponse> {
+  return request(`/novels`, { method: "POST", body: JSON.stringify(body) });
 }
 
 export function getChapter(novelId: string, n: number): Promise<ChapterResponse> {

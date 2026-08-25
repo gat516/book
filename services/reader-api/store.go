@@ -31,6 +31,8 @@ type ReaderStore interface {
 	ListTimeline(context.Context, string, int) ([]EventView, error)
 	ListRelationships(context.Context, string, string, int) ([]RelationshipView, error)
 	GetChapter(context.Context, string, int) (ChapterView, error)
+	ListNovels(context.Context) ([]NovelSummary, error)
+	GetNovel(context.Context, string) (NovelSummary, error)
 }
 
 type Store struct {
@@ -138,6 +140,44 @@ func (s *Store) AdvanceProgress(
 		return Progress{}, ErrNotFound
 	}
 	return Progress{}, ErrChapterNotReady
+}
+
+// ListNovels and GetNovel are ungated: novel metadata (title/langs/genre/created_at) has
+// no source_chapter column to gate on, so gating it would be theater, not security. Both
+// query readerDB directly (no withReaderTx/SET LOCAL) since `novel` carries no RLS policy
+// (0002_rls.sql enables it only on fact/edge/event/chunk/entity/alias).
+func (s *Store) ListNovels(ctx context.Context) ([]NovelSummary, error) {
+	rows, err := s.readerDB.Query(ctx,
+		`SELECT id::text, title, source_lang, target_lang, genre, created_at
+		 FROM novel ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	novels := []NovelSummary{}
+	for rows.Next() {
+		var novel NovelSummary
+		if err := rows.Scan(
+			&novel.ID, &novel.Title, &novel.SourceLang, &novel.TargetLang,
+			&novel.Genre, &novel.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		novels = append(novels, novel)
+	}
+	return novels, rows.Err()
+}
+
+func (s *Store) GetNovel(ctx context.Context, novelID string) (NovelSummary, error) {
+	var novel NovelSummary
+	err := s.readerDB.QueryRow(ctx,
+		`SELECT id::text, title, source_lang, target_lang, genre, created_at
+		 FROM novel WHERE id = $1`, novelID,
+	).Scan(&novel.ID, &novel.Title, &novel.SourceLang, &novel.TargetLang, &novel.Genre, &novel.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return NovelSummary{}, ErrNotFound
+	}
+	return novel, err
 }
 
 func (s *Store) withReaderTx(

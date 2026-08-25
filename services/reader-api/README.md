@@ -44,6 +44,8 @@ The default address is `:8081`. Configuration:
 - `OBJECT_STORE_ENDPOINT`, `OBJECT_STORE_ACCESS_KEY`, `OBJECT_STORE_SECRET_KEY`,
   `OBJECT_STORE_BUCKET`, `OBJECT_STORE_USE_SSL` (same names/defaults as ingest-api —
   `GET /chapter` reads the chapter bodies pipeline already wrote)
+- `INGEST_API_URL` (defaults to `http://localhost:8080`), `INGEST_INTERNAL_TOKEN`
+  (shared secret reader-api sends to ingest-api's `POST /novels` — see ingest-api's README)
 
 The compose owner can switch to both restricted roles for local development. Production
 should use two distinct login credentials with only the required role membership.
@@ -74,6 +76,15 @@ curl localhost:8081/novels/<novel-id>/relationships/<entity-id>?at=3 \
 curl -X POST localhost:8081/novels/<novel-id>/ask \
   -H 'X-Reader-ID: local-reader' \
   -d '{"question":"What did the protagonist learn?","at":3}'
+
+# Novel list/detail are ungated (no X-Reader-ID needed) — novel metadata has no
+# source_chapter to gate on.
+curl localhost:8081/novels
+curl localhost:8081/novels/<novel-id>
+
+# Creation proxies to ingest-api (see ingest-api's README for the auth it requires there —
+# reader-api forwards it, the browser never needs the token).
+curl -X POST localhost:8081/novels -d '{"title":"Test Novel"}'
 ```
 
 Omitting `at` uses stored progress. A larger value is capped to stored progress; a lower

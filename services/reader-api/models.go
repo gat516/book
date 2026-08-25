@@ -72,6 +72,19 @@ type RelationshipsResponse struct {
 	Relationships []RelationshipView `json:"relationships"`
 }
 
+type NovelSummary struct {
+	ID         string    `json:"id"`
+	Title      string    `json:"title"`
+	SourceLang string    `json:"source_lang"`
+	TargetLang string    `json:"target_lang"`
+	Genre      *string   `json:"genre"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type NovelListResponse struct {
+	Novels []NovelSummary `json:"novels"`
+}
+
 type SpanView struct {
 	EntityID  string `json:"entity_id"`
 	CharStart int    `json:"char_start"`
@@ -87,8 +100,8 @@ type ChapterView struct {
 }
 
 type ChapterResponse struct {
-	NovelID      string     `json:"novel_id"`
-	ChapterIndex int        `json:"chapter_index"`
+	NovelID      string `json:"novel_id"`
+	ChapterIndex int    `json:"chapter_index"`
 	// At is the reader's STORED PROGRESS (not the chapter index n). Re-reading an old
 	// chapter (n < progress) still uses progress here: the reader has already legitimately
 	// learned everything up to it, so showing those facts on old text is not a leak — the

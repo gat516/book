@@ -82,3 +82,51 @@ body {
 .reader-pane-error {
   color: #b00020;
 }
+
+.novel-picker ul {
+  list-style: none;
+  padding: 0;
+}
+
+.novel-picker li {
+  margin-bottom: 0.5rem;
+}
+
+.novel-picker button,
+.novel-create-form button {
+  cursor: pointer;
+}
+
+.novel-picker-langs {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.novel-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 400px;
+}
+
+.novel-create-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.novel-create-form-hint {
+  color: #666;
+  font-weight: normal;
+  font-size: 0.85rem;
+}
+
+.novel-create-form-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.novel-picker-error,
+.novel-create-form-error {
+  color: #b00020;
+}

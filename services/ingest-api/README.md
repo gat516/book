@@ -29,13 +29,20 @@ go run .          # listens on :8080, auto-creates the object-store bucket
 
 Config is read from the environment with localhost defaults matching the compose stack
 (`config.go`): `DATABASE_URL`, `REDIS_URL`, `OBJECT_STORE_ENDPOINT`,
-`OBJECT_STORE_ACCESS_KEY/SECRET_KEY/BUCKET`, `LISTEN_ADDR`.
+`OBJECT_STORE_ACCESS_KEY/SECRET_KEY/BUCKET`, `LISTEN_ADDR`, `INGEST_INTERNAL_TOKEN`
+(required — see below).
 
 ## Endpoints
+
+`POST /novels` is the one route with any auth: it requires
+`Authorization: Bearer $INGEST_INTERNAL_TOKEN`, since `reader-api` is the only intended
+caller (it proxies novel creation for the browser — see `services/reader-api/ingest.go`).
+Every other route is unauthenticated, per this service's "no auth/gate here" design.
 
 ```bash
 # register a novel (genre selects a preset ontology, §4.1; unknown/empty → generic)
 curl -sX POST localhost:8080/novels \
+  -H "Authorization: Bearer $INGEST_INTERNAL_TOKEN" \
   -d '{"title":"Test Novel","source_lang":"en","target_lang":"en","genre":"xianxia"}'
 # → {"id":"<uuid>"}
 
