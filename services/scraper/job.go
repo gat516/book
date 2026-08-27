@@ -142,16 +142,50 @@ func (w *Worker) handle(ctx context.Context, jobID int64) error {
 		return w.fail(ctx, jobID, err.Error())
 	}
 
+	// Part tracking (see SourceMeta.Part in ingest-api): this site serves one source
+	// chapter as several paginated pages, each of which becomes its own chapter row. Pages
+	// of the same chapter carry an identical title, so a title change is the chapter
+	// boundary and the part counter restarts there.
+	//
+	// Note the counter starts from part 1 at the START URL, so a scrape that begins
+	// mid-chapter labels that first partial chapter from 1 rather than its true part
+	// number — the site does not expose one, and only the first chapter of a run is
+	// affected.
+	previousTitle := ""
+	part := 0
+
 	onChapter := func(page Page) error {
-		req := pasteChapterRequest{ChapterIndex: nextIndex, RawText: page.Text, SiteChapterNo: page.Title}
+		if page.Title == previousTitle {
+			part++
+		} else {
+			part = 1
+			previousTitle = page.Title
+		}
+		req := pasteChapterRequest{
+			ChapterIndex:  nextIndex,
+			RawText:       page.Text,
+			SiteChapterNo: page.Title,
+			Part:          part,
+		}
 		if job.mode == "bootstrap" {
 			req.TranslatedText = page.Text
 		}
-		if err := w.ingest.PasteChapter(ctx, job.novelID, req); err != nil {
+		duplicate, err := w.ingest.PasteChapter(ctx, job.novelID, req)
+		if err != nil {
 			return err
 		}
+		if duplicate {
+			// This novel already holds this exact body (migration 0013). Nothing was
+			// written, so nextIndex must NOT advance — otherwise the next genuinely-new
+			// page would be inserted at a gapped index. Keep walking rather than stopping:
+			// re-running a scrape from the original start URL crosses the whole
+			// already-ingested prefix before reaching new chapters, and stopping at the
+			// first duplicate would mean it never gets there.
+			log.Printf("scrape job %d: skipping already-ingested page %q", jobID, page.Title)
+			return nil
+		}
 		nextIndex++
-		_, err := w.db.Exec(ctx,
+		_, err = w.db.Exec(ctx,
 			`UPDATE scrape_job SET chapters_fetched = chapters_fetched + 1, updated_at = now() WHERE id = $1`,
 			jobID,
 		)

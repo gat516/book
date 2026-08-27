@@ -27,26 +27,40 @@ type pasteChapterRequest struct {
 	RawText        string `json:"raw_text"`
 	TranslatedText string `json:"translated_text,omitempty"`
 	SiteChapterNo  string `json:"site_chapter_no,omitempty"`
+	Part           int    `json:"part,omitempty"`
 }
 
-func (c *ingestClient) PasteChapter(ctx context.Context, novelID string, req pasteChapterRequest) error {
+type pasteChapterResponse struct {
+	ChapterIndex int  `json:"chapter_index"`
+	Duplicate    bool `json:"duplicate"`
+}
+
+// PasteChapter posts one scraped page. It reports whether ingest-api recognised the body
+// as already-ingested content (migration 0013's content-hash dedup): a re-run over pages
+// this novel already holds answers 200 + duplicate:true and writes nothing, where a fresh
+// page answers 202. Both are success — only a genuine failure returns an error.
+func (c *ingestClient) PasteChapter(ctx context.Context, novelID string, req pasteChapterRequest) (bool, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return err
+		return false, err
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		fmt.Sprintf("%s/novels/%s/chapters", c.baseURL, novelID), bytes.NewReader(body))
 	if err != nil {
-		return err
+		return false, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("ingest-api returned %d for chapter %d", resp.StatusCode, req.ChapterIndex)
+	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("ingest-api returned %d for chapter %d", resp.StatusCode, req.ChapterIndex)
 	}
-	return nil
+	var parsed pasteChapterResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return false, fmt.Errorf("decode ingest-api response for chapter %d: %w", req.ChapterIndex, err)
+	}
+	return parsed.Duplicate, nil
 }

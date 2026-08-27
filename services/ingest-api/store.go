@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minio/minio-go/v7"
 	"github.com/redis/go-redis/v9"
@@ -77,6 +79,29 @@ func (s *Store) getNovelSourceLang(ctx context.Context, novelID string) (string,
 	var lang string
 	err := s.db.QueryRow(ctx, `SELECT source_lang FROM novel WHERE id = $1`, novelID).Scan(&lang)
 	return lang, err
+}
+
+// chapterIndexByHash reports whether this novel already holds a chapter with exactly this
+// body, and at which chapter_index (migration 0013). This is the content-addressed half of
+// "ingestion is idempotent, content-hash keyed" (instructions.md §0) — raw_hash was
+// recorded from the very first migration but never actually keyed on, which is how a
+// re-run scrape silently re-ingested 27 chapters under fresh indices.
+//
+// Cheap by construction: the hash is already computed for every paste regardless (it is
+// the cache key), and 0013's unique index makes this an index probe rather than a scan.
+func (s *Store) chapterIndexByHash(ctx context.Context, novelID, rawHash string) (int, bool, error) {
+	var chapterIndex int
+	err := s.db.QueryRow(ctx,
+		`SELECT chapter_index FROM chapter WHERE novel_id = $1 AND raw_hash = $2`,
+		novelID, rawHash,
+	).Scan(&chapterIndex)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("lookup chapter by hash: %w", err)
+	}
+	return chapterIndex, true, nil
 }
 
 // putRawObject uploads a chapter body to the object store and returns its key (raw_uri).

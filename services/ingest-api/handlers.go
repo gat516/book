@@ -54,6 +54,10 @@ type pasteChapterReq struct {
 	// scraper, or by a human who knows the source site's numbering.
 	TranslatedText string `json:"translated_text,omitempty"`
 	SiteChapterNo  string `json:"site_chapter_no,omitempty"`
+	// Part is which piece of a multi-page source chapter this is (see SourceMeta.Part).
+	// Omitted or 0 means part 1 — an ordinary chapter is "part 1" without the caller
+	// having to say so.
+	Part int `json:"part,omitempty"`
 }
 
 type pasteChapterResp struct {
@@ -61,6 +65,11 @@ type pasteChapterResp struct {
 	ChapterIndex int    `json:"chapter_index"`
 	RawHash      string `json:"raw_hash"`
 	Status       string `json:"status"`
+	// Duplicate reports that this exact body was already ingested for this novel, at the
+	// ChapterIndex returned above (which is the EXISTING chapter's index, not the one the
+	// caller asked for). Nothing was written. Callers that walk a source — the scraper —
+	// use this to skip past already-ingested pages instead of re-adding them.
+	Duplicate bool `json:"duplicate,omitempty"`
 }
 
 // writeJSON marshals v and writes it with the given status. Small helper so handlers stay
@@ -229,6 +238,32 @@ func (a *API) pasteChapter(w http.ResponseWriter, r *http.Request) {
 	sum := sha256.Sum256([]byte(req.RawText))
 	rawHash := "sha256:" + hex.EncodeToString(sum[:])
 
+	// Content-addressed dedup (migration 0013). A re-run scrape re-walks pages already
+	// ingested and offers them under FRESH chapter indices (the scraper assigns MAX+1 at
+	// job start), so nothing conflicts on (novel_id, chapter_index) and every chapter gets
+	// silently duplicated — observed for real, 27 duplicate chapters in one novel.
+	//
+	// Only a hash match at a DIFFERENT index is a duplicate. A match at the SAME index is
+	// an ordinary re-paste, which stays deliberately allowed: it falls through to the
+	// enqueue below so a stalled pipeline can be retriggered by re-pasting (see that call's
+	// comment). Collapsing both cases here would quietly remove that affordance.
+	existingIndex, found, err := a.store.chapterIndexByHash(r.Context(), novelID, rawHash)
+	if err != nil {
+		log.Printf("pasteChapter dedup lookup: %v", err)
+		writeErr(w, http.StatusInternalServerError, "lookup failed")
+		return
+	}
+	if found && existingIndex != req.ChapterIndex {
+		writeJSON(w, http.StatusOK, pasteChapterResp{
+			NovelID:      novelID,
+			ChapterIndex: existingIndex,
+			RawHash:      rawHash,
+			Status:       "duplicate",
+			Duplicate:    true,
+		})
+		return
+	}
+
 	// Big body → object store; keep only a pointer in Postgres.
 	rawURI, err := a.store.putRawObject(r.Context(), novelID, req.ChapterIndex, req.RawText)
 	if err != nil {
@@ -253,6 +288,13 @@ func (a *API) pasteChapter(w http.ResponseWriter, r *http.Request) {
 		translatedBy = "external"
 	}
 
+	// "Part 1 unless told otherwise": normalize here rather than storing 0, so every
+	// consumer reads a real 1-based part without repeating this defaulting.
+	part := req.Part
+	if part < 1 {
+		part = 1
+	}
+
 	env := ChapterEnvelope{
 		NovelID:      novelID,
 		ChapterIndex: req.ChapterIndex,
@@ -263,6 +305,7 @@ func (a *API) pasteChapter(w http.ResponseWriter, r *http.Request) {
 			RawHash:       rawHash,
 			Adapter:       "paste",
 			SiteChapterNo: req.SiteChapterNo,
+			Part:          part,
 		},
 	}
 
