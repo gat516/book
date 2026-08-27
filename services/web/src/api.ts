@@ -137,6 +137,38 @@ export function bootstrapGlossary(
   });
 }
 
+// Queue a window of chapters for translation starting at `from`. Omitting `count` lets the
+// server apply the novel's own translate_lookahead. Safe to call repeatedly: the server
+// only queues chapters not already queued, so a repeat returns an empty list.
+export function translateAhead(
+  novelId: string,
+  from: number,
+  count?: number,
+): Promise<{ novel_id: string; queued: number[] }> {
+  return request(`/novels/${novelId}/translate-ahead`, {
+    method: "POST",
+    body: JSON.stringify(count === undefined ? { from } : { from, count }),
+  });
+}
+
+// A chapter's translation as it is being produced. `available` is false whenever nothing
+// is streaming — before TRANSLATE starts, once the chapter is finished, or on a provider
+// that can't stream — so callers render on `available`, not on truthiness of `text`.
+export function getChapterPreview(
+  novelId: string,
+  n: number,
+): Promise<{
+  novel_id: string;
+  chapter_index: number;
+  available: boolean;
+  text?: string;
+  // Pipeline status of the chapter itself, so one read answers both "how far along is it"
+  // and "is it readable now".
+  status: string;
+}> {
+  return request(`/novels/${novelId}/chapter/${n}/preview`);
+}
+
 export function putProgress(novelId: string, chapter: number): Promise<Progress> {
   return request(`/novels/${novelId}/progress`, {
     method: "PUT",

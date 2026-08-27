@@ -1,12 +1,24 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getPipelineStatus } from "../api";
 import type { PipelineStatusResponse } from "../types";
+import { usePolling } from "../usePolling";
 
 interface Props {
   novelId: string;
+  // Fired whenever the set of in-flight chapters changes, so a parent can refresh itself
+  // on real pipeline progress instead of running a second timer of its own.
+  onProgress?: () => void;
 }
 
-const POLL_INTERVAL_MS = 3000;
+// 3s was needlessly aggressive for work that takes minutes per chapter, and it was one of
+// several timers running on the same page.
+const POLL_INTERVAL_MS = 8000;
+// Idle still polls, just rarely. Disabling it outright was a latch with no way out: the
+// first poll after opening a chapter can legitimately see an empty queue (the request that
+// queues it hasn't landed yet), and stopping there meant nothing ever looked again — the
+// view claimed "Pipeline idle" while the worker was minutes into translating that very
+// chapter. Backing off keeps an idle page cheap without making it blind.
+const IDLE_POLL_INTERVAL_MS = 20000;
 
 // Human labels for the pipeline's stage names (worker.py's DEFAULT_STAGES). The raw names
 // are internal jargon; "resolve" means nothing to someone waiting on a chapter.
@@ -34,29 +46,36 @@ function elapsed(seconds: number): string {
 // unreadable for many minutes with no outward sign: a single TRANSLATE call against a
 // local model is one long HTTP request, and chapter.status stays "ingested" until every
 // stage has finished — so "still working" and "worker is dead" look identical without it.
-export function PipelineStatus({ novelId }: Props) {
+export function PipelineStatus({ novelId, onProgress }: Props) {
   const [status, setStatus] = useState<PipelineStatusResponse | null>(null);
   const [unreachable, setUnreachable] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function poll() {
-      try {
-        const latest = await getPipelineStatus(novelId);
-        if (cancelled) return;
-        setStatus(latest);
-        setUnreachable(false);
-      } catch {
-        if (!cancelled) setUnreachable(true);
-      }
+  const poll = useCallback(async () => {
+    try {
+      const latest = await getPipelineStatus(novelId);
+      setStatus((previous) => {
+        // Only notify on an actual change in what's being worked on. Firing every tick
+        // would make the parent re-fetch on a timer again, which is the pattern this is
+        // meant to replace.
+        const before = previous?.in_flight.map((c) => c.chapter_index).join(",") ?? "";
+        const after = latest.in_flight.map((c) => c.chapter_index).join(",");
+        if (previous !== null && before !== after) onProgress?.();
+        return latest;
+      });
+      setUnreachable(false);
+    } catch {
+      setUnreachable(true);
     }
+  }, [novelId, onProgress]);
+
+  useEffect(() => {
     poll();
-    const timer = setInterval(poll, POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [novelId]);
+  }, [poll]);
+
+  // Poll fast while there is something to report, slowly otherwise — but never stop, so
+  // work starting after an idle reading is still noticed (see IDLE_POLL_INTERVAL_MS).
+  const busy = status === null || status.in_flight.length > 0 || status.pending > 0;
+  usePolling(poll, busy ? POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS, true);
 
   if (unreachable) return <p className="pipeline-status">Pipeline status unavailable.</p>;
   if (!status) return null;

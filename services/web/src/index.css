@@ -370,3 +370,51 @@ body {
 .chapter-list-part {
   color: #666;
 }
+
+.chapter-list-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0.75rem 0;
+}
+
+.chapter-list-collapsed-hint {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.chapter-pending-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.chapter-preview {
+  margin: 1rem 0;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 0.75rem;
+  background: #fafafa;
+}
+
+.chapter-preview-label {
+  margin: 0 0 0.5rem;
+  color: #666;
+  font-size: 0.85rem;
+}
+
+.chapter-preview-text {
+  white-space: pre-wrap;
+  max-height: 24rem;
+  overflow-y: auto;
+}
+
+.chapter-preview-cursor {
+  animation: chapter-preview-blink 1s step-end infinite;
+  color: #888;
+}
+
+@keyframes chapter-preview-blink {
+  50% { opacity: 0; }
+}

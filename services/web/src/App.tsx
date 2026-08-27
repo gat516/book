@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ApiError, getProgress, putProgress } from "./api";
+import { ApiError, getProgress, listChapters, putProgress } from "./api";
 import { AddChapterForm } from "./components/AddChapterForm";
 import { AskBox } from "./components/AskBox";
 import { ChapterList } from "./components/ChapterList";
@@ -44,10 +44,20 @@ export default function App() {
   // then visibly jump. Gate the reader on this instead.
   const [progressLoaded, setProgressLoaded] = useState(false);
   const [chapter, setChapter] = useState<ChapterResponse | null>(null);
-  // Distinct from "loading" — set when the requested chapter doesn't exist (typically:
-  // a brand-new novel with nothing pasted yet), so we can offer to add one instead of
-  // showing an error or silently trying to render an empty reader pane.
+  // Distinct from "loading" — set when the requested chapter isn't readable. Note this
+  // covers TWO very different situations that the reader endpoints report identically
+  // (a 404 for the chapter, then a 409 from bootstrapping progress):
+  //
+  //   - the novel genuinely has no chapters yet, and
+  //   - the novel has chapters, but none have finished translating.
+  //
+  // Conflating them was a real dead end: a novel with 177 ingested chapters showed the
+  // "add a chapter" form and offered no way to reach any of them. hasChapters below is
+  // what separates the two.
   const [noChapter, setNoChapter] = useState(false);
+  // null = not yet determined. Set when noChapter fires, by asking how many chapters the
+  // novel actually holds.
+  const [hasChapters, setHasChapters] = useState<boolean | null>(null);
   const [addingChapter, setAddingChapter] = useState(false);
   // A chapter the reader opened that the pipeline hasn't finished translating. Rendering
   // ChapterPending for it holds them here and polls until it's readable.
@@ -89,6 +99,7 @@ export default function App() {
     setChapterIndex(1);
     setChapter(null);
     setNoChapter(false);
+    setHasChapters(null);
     setAddingChapter(false);
     setPending(null);
     setShowGlossary(false);
@@ -100,10 +111,25 @@ export default function App() {
     setNovelId(null);
     setChapter(null);
     setNoChapter(false);
+    setHasChapters(null);
     setAddingChapter(false);
     setPending(null);
     setShowGlossary(false);
     setShowChapters(false);
+  }
+
+  // The reader endpoints can't tell "novel is empty" from "nothing translated yet" — both
+  // surface as an unreadable chapter — so ask the chapter index directly and route
+  // accordingly: an empty novel wants the add form, a full one wants its chapter list.
+  async function handleNoChapter() {
+    setNoChapter(true);
+    try {
+      const list = await listChapters(novelId!, 1, 0);
+      setHasChapters(list.total > 0);
+      if (list.total > 0) setShowChapters(true);
+    } catch {
+      setHasChapters(false); // can't tell — fall back to the add form rather than a dead end
+    }
   }
 
   // Land on `index`, clearing whatever view was covering the reader.
@@ -111,6 +137,7 @@ export default function App() {
     setChapterIndex(index);
     setChapter(null);
     setNoChapter(false);
+    setHasChapters(null);
     setPending(null);
     setShowChapters(false);
     setShowGlossary(false);
@@ -119,6 +146,7 @@ export default function App() {
   function chapterAdded(index: number) {
     setAddingChapter(false);
     setNoChapter(false);
+    setHasChapters(null);
     // A freshly pasted/scraped chapter is status='ingested' until the worker finishes it,
     // so route straight to the pending view rather than bouncing off an unreadable fetch.
     setPending({ index });
@@ -185,6 +213,18 @@ export default function App() {
             setShowChapters(true);
           }}
         />
+      ) : noChapter && hasChapters ? (
+        /* Chapters exist, just none finished translating. The list is the only useful view
+           here — from it, opening a chapter queues it and shows it arriving. Rendering the
+           add form instead (what this used to do) was a dead end on a novel that already
+           held 177 chapters. Kept as its own branch rather than relying on showChapters so
+           closing the list can't drop the reader back into that dead end. */
+        <ChapterList
+          novelId={novelId}
+          currentChapter={chapterIndex}
+          onOpen={openChapter}
+          onClose={backToNovels}
+        />
       ) : noChapter ? (
         <AddChapterForm
           novelId={novelId}
@@ -203,7 +243,7 @@ export default function App() {
               novelId={novelId}
               chapterIndex={chapterIndex}
               onChapterLoaded={chapterLoaded}
-              onNoChapter={() => setNoChapter(true)}
+              onNoChapter={handleNoChapter}
             />
           </div>
           {showGlossary && chapter && <GlossaryView novelId={novelId} at={chapter.at} />}

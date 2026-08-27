@@ -1,13 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ApiError, cancelScrape, getScrapeStatus, startScrape } from "../api";
 import type { ScrapeJobView } from "../types";
+import { usePolling } from "../usePolling";
 
 interface Props {
   novelId: string;
   onDone: () => void; // called once a job reaches a terminal state, to refresh the reader
 }
 
-const POLL_INTERVAL_MS = 2000;
+// 2s was far tighter than the thing it watches: the scraper is rate-limited to well under
+// one page per second, so a status poll at that rate mostly returned an unchanged row
+// while competing with the other live views on the page.
+const POLL_INTERVAL_MS = 5000;
 
 // Two real sources this was built and tested against (PLAN.md Phase N5):
 //   - an already-translated site (mode "bootstrap" — fetched text needs no LLM call)
@@ -20,46 +24,36 @@ export function ScrapeForm({ novelId, onDone }: Props) {
   const [job, setJob] = useState<ScrapeJobView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     // Pick up an already-running job for this novel (e.g. after a page reload) rather
     // than assuming a fresh mount means no job exists.
     getScrapeStatus(novelId)
-      .then((existing) => {
-        setJob(existing);
-        if (existing.status === "pending" || existing.status === "running") startPolling();
-      })
+      .then(setJob)
       .catch(() => {
         /* no job yet for this novel — fine, the form below is the way to start one */
       });
-    return () => stopPolling();
+  }, [novelId]);
+
+  const poll = useCallback(async () => {
+    try {
+      const latest = await getScrapeStatus(novelId);
+      setJob(latest);
+      if (latest.status !== "pending" && latest.status !== "running") onDone();
+    } catch (err) {
+      setError(String(err));
+    }
+    // onDone is recreated by the parent on every render; depending on it here would
+    // rebuild this callback constantly. usePolling holds the callback in a ref, so the
+    // interval is unaffected either way.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [novelId]);
 
-  function stopPolling() {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-  }
-
-  function startPolling() {
-    stopPolling();
-    pollRef.current = setInterval(async () => {
-      try {
-        const latest = await getScrapeStatus(novelId);
-        setJob(latest);
-        if (latest.status !== "pending" && latest.status !== "running") {
-          stopPolling();
-          onDone();
-        }
-      } catch (err) {
-        stopPolling();
-        setError(String(err));
-      }
-    }, POLL_INTERVAL_MS);
-  }
+  // Driven by the job's own state rather than an imperative start/stop pair: a finished,
+  // cancelled or errored job simply isn't "active", so the timer stops on its own and
+  // can't be left running by a missed stopPolling() call.
+  const active = job !== null && (job.status === "pending" || job.status === "running");
+  usePolling(poll, POLL_INTERVAL_MS, active && error === null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -68,9 +62,9 @@ export function ScrapeForm({ novelId, onDone }: Props) {
     setError(null);
     try {
       await startScrape(novelId, { start_url: startURL, mode });
-      const initial = await getScrapeStatus(novelId);
-      setJob(initial);
-      startPolling();
+      // Setting the job to a running status is what arms the poll now — no separate
+      // start call to forget.
+      setJob(await getScrapeStatus(novelId));
     } catch (err) {
       setError(err instanceof ApiError && err.status === 409 ? "A scrape is already running for this novel." : String(err));
     } finally {
@@ -85,8 +79,6 @@ export function ScrapeForm({ novelId, onDone }: Props) {
       setError(String(err));
     }
   }
-
-  const active = job && (job.status === "pending" || job.status === "running");
 
   if (active) {
     return (
