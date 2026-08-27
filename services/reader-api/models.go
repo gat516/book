@@ -167,6 +167,22 @@ type PipelineStatusResponse struct {
 	InFlight []InFlightChapter `json:"in_flight"`
 }
 
+// ChapterPreviewResponse carries a chapter's translation as it is being produced.
+// Available is false whenever nothing is streaming — before TRANSLATE starts, for a
+// provider that can't stream, and after the chapter is finished (at which point the real
+// chapter endpoint serves it).
+type ChapterPreviewResponse struct {
+	NovelID      string `json:"novel_id"`
+	ChapterIndex int    `json:"chapter_index"`
+	Available    bool   `json:"available"`
+	Text         string `json:"text,omitempty"`
+	// Status is the chapter's pipeline status ("ingested"/"queued"/"done"/"error"), served
+	// alongside the preview so a waiting client learns both "how far along is it" and "is
+	// it ready" from ONE read. Previously readiness was probed by repeatedly attempting
+	// PUT /progress — a write, several times a minute, to answer a read-only question.
+	Status string `json:"status"`
+}
+
 // ChapterView is what the store hands back; ChapterResponse is what the handler sends.
 // Kept separate so the store layer doesn't know about JSON tags.
 type ChapterView struct {

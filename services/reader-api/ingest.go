@@ -25,6 +25,7 @@ type IngestClient interface {
 	GetProviderConfig(ctx context.Context, novelID string) (json.RawMessage, int, error)
 	PutProviderConfig(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	BootstrapGlossary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
+	TranslateAhead(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 }
 
 type ingestHTTPClient struct {
@@ -88,4 +89,8 @@ func (c *ingestHTTPClient) PutProviderConfig(ctx context.Context, novelID string
 
 func (c *ingestHTTPClient) BootstrapGlossary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
 	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/glossary/bootstrap", body, false)
+}
+
+func (c *ingestHTTPClient) TranslateAhead(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/translate-ahead", body, false)
 }

@@ -54,6 +54,9 @@ type fakeStore struct {
 	lastChapterLimit  int
 	lastChapterOffset int
 	pipelineStatusErr error
+	previewText       string
+	previewStatus     string
+	previewErr        error
 }
 
 type fakeIngestClient struct {
@@ -88,6 +91,11 @@ func (f *fakeIngestClient) PutProviderConfig(_ context.Context, _ string, body j
 }
 
 func (f *fakeIngestClient) BootstrapGlossary(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
+}
+
+func (f *fakeIngestClient) TranslateAhead(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
 	return f.response, f.status, f.err
 }
@@ -191,6 +199,10 @@ func (f *fakeStore) ListChapters(
 
 func (f *fakeStore) PipelineStatus(_ context.Context, novelID string) (PipelineStatusResponse, error) {
 	return PipelineStatusResponse{NovelID: novelID, InFlight: []InFlightChapter{}}, f.pipelineStatusErr
+}
+
+func (f *fakeStore) TranslationPreview(_ context.Context, _ string, _ int) (string, bool, string, error) {
+	return f.previewText, f.previewText != "", f.previewStatus, f.previewErr
 }
 
 func request(t *testing.T, api *API, method, target, body, reader string) *httptest.ResponseRecorder {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -35,6 +36,8 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/chapters", a.getChapters)
 	mux.HandleFunc("GET /novels/{id}/progress", a.getProgress)
 	mux.HandleFunc("GET /novels/{id}/pipeline", a.getPipelineStatus)
+	mux.HandleFunc("POST /novels/{id}/translate-ahead", a.postTranslateAhead)
+	mux.HandleFunc("GET /novels/{id}/chapter/{n}/preview", a.getChapterPreview)
 	mux.HandleFunc("POST /novels/{id}/ask", a.postAsk)
 	mux.HandleFunc("GET /novels", a.getNovels)
 	mux.HandleFunc("GET /novels/{id}", a.getNovel)
@@ -177,7 +180,31 @@ func (a *API) putProgress(w http.ResponseWriter, r *http.Request) {
 		log.Printf("advance progress: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not update progress")
 	default:
+		// Reading pulls translation forward: keep the novel's lookahead window queued
+		// ahead of wherever the reader just reached (migration 0015). Best-effort — a
+		// failure here means the next chapter isn't queued yet, not that the reader's
+		// progress failed, so it must never turn a successful advance into an error.
+		a.queueAhead(r.Context(), novelID, progress.CurrentChapter+1)
 		writeJSON(w, http.StatusOK, progress)
+	}
+}
+
+// queueAhead asks ingest-api to queue the novel's lookahead window starting at `from`.
+// Count is omitted so ingest-api applies novel.translate_lookahead. Errors are logged and
+// swallowed: every caller is doing something else that already succeeded.
+func (a *API) queueAhead(ctx context.Context, novelID string, from int) {
+	// reader-api can run without an ingest client wired (its read paths don't need one),
+	// and advancing progress must not panic when it isn't there — queueing ahead is an
+	// optimisation, never a requirement for the reader to make progress.
+	if a.ingest == nil {
+		return
+	}
+	body, err := json.Marshal(map[string]int{"from": from})
+	if err != nil {
+		return
+	}
+	if _, _, err := a.ingest.TranslateAhead(ctx, novelID, body); err != nil {
+		log.Printf("queue ahead for %s from %d: %v", novelID, from, err)
 	}
 }
 
@@ -362,6 +389,63 @@ func (a *API) getChapters(w http.ResponseWriter, r *http.Request) {
 		Offset:   offset,
 		Progress: progress,
 	})
+}
+
+// getChapterPreview serves the partial translation of a chapter still being translated, so
+// a reader waiting on it watches the text arrive instead of a spinner. Returns
+// available:false (not 404) when nothing is streaming — "no preview yet" is the ordinary
+// state, not an error, and the client polls the same endpoint either way.
+func (a *API) getChapterPreview(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	n, err := strconv.Atoi(r.PathValue("n"))
+	if err != nil || n < 0 {
+		writeError(w, http.StatusBadRequest, "invalid chapter index")
+		return
+	}
+	text, available, status, err := a.store.TranslationPreview(r.Context(), novelID, n)
+	if err != nil {
+		log.Printf("translation preview: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not read preview")
+		return
+	}
+	writeJSON(w, http.StatusOK, ChapterPreviewResponse{
+		NovelID:      novelID,
+		ChapterIndex: n,
+		Available:    available,
+		Text:         text,
+		Status:       status,
+	})
+}
+
+// postTranslateAhead proxies a translation-window request to ingest-api, which owns
+// chapter writes. Ungated: it queues work, it doesn't reveal chapter content, and the
+// chapters it queues remain unreadable until the reader's own progress reaches them.
+func (a *API) postTranslateAhead(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read request body")
+		return
+	}
+	result, status, err := a.ingest.TranslateAhead(r.Context(), novelID, body)
+	if err != nil {
+		log.Printf("translate ahead: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
 }
 
 // getPipelineStatus reports what the worker is doing right now for this novel. Ungated

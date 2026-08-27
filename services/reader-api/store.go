@@ -38,6 +38,7 @@ type ReaderStore interface {
 	GetChapter(context.Context, string, int) (ChapterView, error)
 	ListChapters(context.Context, string, int, int) ([]ChapterListItem, int, error)
 	PipelineStatus(context.Context, string) (PipelineStatusResponse, error)
+	TranslationPreview(context.Context, string, int) (string, bool, string, error)
 	ListNovels(context.Context) ([]NovelSummary, error)
 	GetNovel(context.Context, string) (NovelSummary, error)
 	CreateScrapeJob(context.Context, string, string, string) (int64, error)
@@ -65,6 +66,9 @@ const (
 	pipelineProcessingQueue = "jobs:processing"
 	pipelineProcessingStart = "jobs:processing:started"
 	pipelineProcessingStage = "jobs:processing:stage"
+	// Partial translation text for a chapter still in flight. Format must match
+	// services/pipeline/pipeline/worker.py's PREVIEW_KEY.
+	pipelinePreviewKeyFmt = "translate:preview:%s:%d"
 )
 
 func newRolePool(ctx context.Context, databaseURL, role string) (*pgxpool.Pool, error) {
@@ -282,6 +286,40 @@ func (s *Store) PipelineStatus(ctx context.Context, novelID string) (PipelineSta
 		status.InFlight = append(status.InFlight, item)
 	}
 	return status, nil
+}
+
+// TranslationPreview returns the partial translation of a chapter currently being
+// translated, and whether one exists at all. Absent is the normal case: the key only lives
+// while the TRANSLATE stage is streaming, and the worker deletes it once the chapter is
+// readable for real.
+//
+// Not progress-gated, and that is a deliberate narrow exception rather than an oversight.
+// A chapter being translated is by definition not 'done', so stored progress can never
+// have reached it — gating on progress would make the preview permanently unreachable and
+// the feature pointless. What the gate actually protects is incidentally learning future
+// facts (hover cards, Ask-AI drawing on unread chapters); this shows only the one chapter
+// the reader deliberately opened and is waiting on. GetChapter's gate is untouched.
+func (s *Store) TranslationPreview(ctx context.Context, novelID string, chapterIndex int) (string, bool, string, error) {
+	// Chapter status comes back with the preview so one poll answers both "how far along"
+	// and "can I read it now". A chapter with no row at all reports "" rather than
+	// erroring — the caller renders that the same as "nothing to show yet".
+	var status string
+	err := s.progressDB.QueryRow(ctx,
+		`SELECT status FROM chapter WHERE novel_id = $1 AND chapter_index = $2`,
+		novelID, chapterIndex,
+	).Scan(&status)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return "", false, "", fmt.Errorf("read chapter status: %w", err)
+	}
+
+	text, err := s.redis.Get(ctx, fmt.Sprintf(pipelinePreviewKeyFmt, novelID, chapterIndex)).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", false, status, nil
+	}
+	if err != nil {
+		return "", false, status, fmt.Errorf("read translation preview: %w", err)
+	}
+	return text, true, status, nil
 }
 
 func (s *Store) GetNovel(ctx context.Context, novelID string) (NovelSummary, error) {
