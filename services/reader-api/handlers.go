@@ -32,6 +32,9 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/timeline", a.getTimeline)
 	mux.HandleFunc("GET /novels/{id}/relationships/{eid}", a.getRelationships)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}", a.getChapter)
+	mux.HandleFunc("GET /novels/{id}/chapters", a.getChapters)
+	mux.HandleFunc("GET /novels/{id}/progress", a.getProgress)
+	mux.HandleFunc("GET /novels/{id}/pipeline", a.getPipelineStatus)
 	mux.HandleFunc("POST /novels/{id}/ask", a.postAsk)
 	mux.HandleFunc("GET /novels", a.getNovels)
 	mux.HandleFunc("GET /novels/{id}", a.getNovel)
@@ -286,14 +289,127 @@ func (a *API) getChapter(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load chapter")
 	default:
 		writeJSON(w, http.StatusOK, ChapterResponse{
-			NovelID:      novelID,
-			ChapterIndex: n,
-			At:           progress,
-			Text:         chapter.Text,
-			Spans:        chapter.Spans,
-			HasNext:      chapter.HasNext,
+			NovelID:       novelID,
+			ChapterIndex:  n,
+			At:            progress,
+			Text:          chapter.Text,
+			Spans:         chapter.Spans,
+			HasNext:       chapter.HasNext,
+			SiteChapterNo: chapter.SiteChapterNo,
+			Part:          chapter.Part,
 		})
 	}
+}
+
+// defaultChapterPage/maxChapterPage bound the chapter index: a scraped novel can hold
+// thousands of chapters, so this endpoint is never unbounded.
+const (
+	defaultChapterPage = 100
+	maxChapterPage     = 500
+)
+
+// getChapters serves the paged chapter index (metadata only — see store.ListChapters for
+// why it is deliberately ungated). Progress is reported best-effort: a reader with no
+// progress row yet gets 0 rather than a 404, since the index is exactly what a brand-new
+// reader needs in order to pick a starting chapter.
+func (a *API) getChapters(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+
+	limit := defaultChapterPage
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		limit = min(parsed, maxChapterPage)
+	}
+	offset := 0
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			writeError(w, http.StatusBadRequest, "invalid offset")
+			return
+		}
+		offset = parsed
+	}
+
+	progress := 0
+	if reader, ok := readerID(r); ok {
+		if stored, err := a.store.GetProgress(r.Context(), reader, novelID); err == nil {
+			progress = stored.CurrentChapter
+		} else if !errors.Is(err, ErrNotFound) {
+			log.Printf("get progress for chapter list: %v", err)
+		}
+	}
+
+	chapters, total, err := a.store.ListChapters(r.Context(), novelID, limit, offset)
+	if err != nil {
+		log.Printf("list chapters: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not list chapters")
+		return
+	}
+	writeJSON(w, http.StatusOK, ChapterListResponse{
+		NovelID:  novelID,
+		Chapters: chapters,
+		Total:    total,
+		Limit:    limit,
+		Offset:   offset,
+		Progress: progress,
+	})
+}
+
+// getPipelineStatus reports what the worker is doing right now for this novel. Ungated
+// and reader-agnostic (no X-Reader-ID): it exposes queue mechanics — a chapter index, a
+// stage name, an elapsed time — and no chapter content whatsoever, so there is nothing
+// here for the spoiler gate to protect.
+func (a *API) getPipelineStatus(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	status, err := a.store.PipelineStatus(r.Context(), novelID)
+	if err != nil {
+		log.Printf("pipeline status: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not read pipeline status")
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+// getProgress reports where this reader left off, so the UI can reopen the novel on the
+// chapter they were last reading instead of restarting at chapter 1. The PUT counterpart
+// already existed; this read side did not.
+func (a *API) getProgress(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	reader, ok := readerID(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "X-Reader-ID is required")
+		return
+	}
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	progress, err := a.store.GetProgress(r.Context(), reader, novelID)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "reader progress not found")
+		return
+	}
+	if err != nil {
+		log.Printf("get progress: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not resolve reader progress")
+		return
+	}
+	writeJSON(w, http.StatusOK, progress)
 }
 
 // getNovels/getNovel are deliberately ungated — no X-Reader-ID, no gate() call. Novel

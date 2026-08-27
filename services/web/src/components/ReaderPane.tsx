@@ -112,6 +112,19 @@ export function ReaderPane({ novelId, chapterIndex, onChapterLoaded, onNoChapter
 
   return (
     <div className="reader-pane">
+      <p className="reader-pane-chapter-label">
+        Chapter {chapterIndex}
+        {chapter.site_chapter_no && (
+          <span className="reader-pane-site-chapter-no">
+            {" "}
+            — {chapter.site_chapter_no}
+            {/* This site paginates a chapter across several pages, each ingested as its
+                own chapter row; without the part number a reader can't tell why the text
+                stops mid-scene. Hidden when the chapter isn't split. */}
+            {chapter.part > 1 && ` (part ${chapter.part})`}
+          </span>
+        )}
+      </p>
       {segments.map((piece, index) =>
         piece.entityId ? (
           <mark

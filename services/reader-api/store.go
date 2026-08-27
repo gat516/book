@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -34,6 +36,8 @@ type ReaderStore interface {
 	ListTimeline(context.Context, string, int) ([]EventView, error)
 	ListRelationships(context.Context, string, string, int) ([]RelationshipView, error)
 	GetChapter(context.Context, string, int) (ChapterView, error)
+	ListChapters(context.Context, string, int, int) ([]ChapterListItem, int, error)
+	PipelineStatus(context.Context, string) (PipelineStatusResponse, error)
 	ListNovels(context.Context) ([]NovelSummary, error)
 	GetNovel(context.Context, string) (NovelSummary, error)
 	CreateScrapeJob(context.Context, string, string, string) (int64, error)
@@ -52,6 +56,16 @@ type Store struct {
 
 // scrapePendingQueue must match services/scraper/job.go's pendingQueue constant.
 const scrapePendingQueue = "scrape:pending"
+
+// These three must match services/pipeline/pipeline/worker.py's constants of the same
+// names — they are the pipeline's own queue keys, read here (never written) purely to
+// report what the worker is doing.
+const (
+	pipelinePendingQueue    = "jobs:pending"
+	pipelineProcessingQueue = "jobs:processing"
+	pipelineProcessingStart = "jobs:processing:started"
+	pipelineProcessingStage = "jobs:processing:stage"
+)
 
 func newRolePool(ctx context.Context, databaseURL, role string) (*pgxpool.Pool, error) {
 	config, err := pgxpool.ParseConfig(databaseURL)
@@ -178,6 +192,96 @@ func (s *Store) ListNovels(ctx context.Context) ([]NovelSummary, error) {
 		novels = append(novels, novel)
 	}
 	return novels, rows.Err()
+}
+
+// ListChapters pages the chapter index for a novel. Deliberately NOT progress-gated: this
+// returns navigation/ingestion metadata (index, the site's own printed label, pipeline
+// status) and never chapter text — the spoiler gate that matters stays fully enforced in
+// GetChapter, which still refuses any chapter above stored progress. Without an ungated
+// index there is no way to navigate to, or even see the existence of, a chapter you have
+// not reached, which is what makes a several-thousand-chapter novel usable at all.
+//
+// Uses progressDB (not readerDB/withReaderTx) for the same reason GetChapter does: `chapter`
+// carries no RLS policy, and this is a plain metadata read with no gate columns to set.
+func (s *Store) ListChapters(ctx context.Context, novelID string, limit, offset int) ([]ChapterListItem, int, error) {
+	var total int
+	if err := s.progressDB.QueryRow(ctx,
+		`SELECT count(*) FROM chapter WHERE novel_id = $1`, novelID,
+	).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	// COALESCE(..., 1): rows ingested before Part existed carry no 'part' key, and an
+	// ordinary non-paginated chapter is part 1 by definition — so the absent case and the
+	// default case are the same answer.
+	rows, err := s.progressDB.Query(ctx,
+		`SELECT chapter_index, source_meta->>'site_chapter_no',
+		        COALESCE((source_meta->>'part')::int, 1), status
+		 FROM chapter WHERE novel_id = $1
+		 ORDER BY chapter_index
+		 LIMIT $2 OFFSET $3`,
+		novelID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	chapters := []ChapterListItem{}
+	for rows.Next() {
+		var item ChapterListItem
+		var siteChapterNo *string
+		if err := rows.Scan(&item.ChapterIndex, &siteChapterNo, &item.Part, &item.Status); err != nil {
+			return nil, 0, err
+		}
+		if siteChapterNo != nil {
+			item.SiteChapterNo = *siteChapterNo
+		}
+		chapters = append(chapters, item)
+	}
+	return chapters, total, rows.Err()
+}
+
+// PipelineStatus reports the worker's live queue state for one novel. Read-only against
+// the pipeline's Redis keys — reader-api never writes them; the worker owns that queue.
+//
+// Errors from the individual per-claim lookups are swallowed rather than failing the whole
+// request: this is an observability endpoint, and a partially-populated answer ("chapter 1
+// in flight, stage unknown") is far more useful to someone staring at a stuck reader than
+// a 500.
+func (s *Store) PipelineStatus(ctx context.Context, novelID string) (PipelineStatusResponse, error) {
+	status := PipelineStatusResponse{NovelID: novelID, InFlight: []InFlightChapter{}}
+
+	pending, err := s.redis.LLen(ctx, pipelinePendingQueue).Result()
+	if err != nil {
+		return PipelineStatusResponse{}, fmt.Errorf("pending queue depth: %w", err)
+	}
+	status.Pending = int(pending)
+
+	claims, err := s.redis.LRange(ctx, pipelineProcessingQueue, 0, -1).Result()
+	if err != nil {
+		return PipelineStatusResponse{}, fmt.Errorf("processing queue: %w", err)
+	}
+
+	for _, raw := range claims {
+		var msg struct {
+			NovelID      string `json:"novel_id"`
+			ChapterIndex int    `json:"chapter_index"`
+		}
+		if err := json.Unmarshal([]byte(raw), &msg); err != nil || msg.NovelID != novelID {
+			continue
+		}
+		item := InFlightChapter{ChapterIndex: msg.ChapterIndex}
+		if stage, err := s.redis.HGet(ctx, pipelineProcessingStage, raw).Result(); err == nil {
+			item.Stage = stage
+		}
+		if startedAt, err := s.redis.HGet(ctx, pipelineProcessingStart, raw).Float64(); err == nil {
+			if elapsed := time.Since(time.Unix(int64(startedAt), 0)).Seconds(); elapsed > 0 {
+				item.ElapsedSecs = int(elapsed)
+			}
+		}
+		status.InFlight = append(status.InFlight, item)
+	}
+	return status, nil
 }
 
 func (s *Store) GetNovel(ctx context.Context, novelID string) (NovelSummary, error) {
@@ -479,13 +583,15 @@ func (s *Store) readObject(ctx context.Context, key string) (string, error) {
 // query below is additionally RLS-gated (novel_id/chapter_index <= reader_chapter())
 // via withReaderTx, same defense-in-depth every other read gets.
 func (s *Store) GetChapter(ctx context.Context, novelID string, n int) (ChapterView, error) {
-	var rawURI, translatedURI *string
+	var rawURI, translatedURI, siteChapterNo *string
 	var status string
+	var part int
 	err := s.progressDB.QueryRow(ctx,
-		`SELECT raw_uri, translated_uri, status FROM chapter
-		 WHERE novel_id = $1 AND chapter_index = $2`,
+		`SELECT raw_uri, translated_uri, status, source_meta->>'site_chapter_no',
+		        COALESCE((source_meta->>'part')::int, 1)
+		 FROM chapter WHERE novel_id = $1 AND chapter_index = $2`,
 		novelID, n,
-	).Scan(&rawURI, &translatedURI, &status)
+	).Scan(&rawURI, &translatedURI, &status, &siteChapterNo, &part)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ChapterView{}, ErrNotFound
 	}
@@ -509,7 +615,10 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n int) (ChapterV
 		return ChapterView{}, err
 	}
 
-	view := ChapterView{Text: text, Spans: []SpanView{}}
+	view := ChapterView{Text: text, Spans: []SpanView{}, Part: part}
+	if siteChapterNo != nil {
+		view.SiteChapterNo = *siteChapterNo
+	}
 	if err := s.withReaderTx(ctx, novelID, n, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
 			`SELECT entity_id::text, char_start, char_end FROM mention_span

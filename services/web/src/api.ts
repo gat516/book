@@ -3,6 +3,7 @@ import type {
   AskResponse,
   BootstrapGlossaryRequest,
   BootstrapGlossaryResponse,
+  ChapterListResponse,
   ChapterResponse,
   CorrectGlossaryTermRequest,
   CorrectGlossaryTermResponse,
@@ -12,6 +13,7 @@ import type {
   GlossaryResponse,
   NovelListResponse,
   NovelSummary,
+  PipelineStatusResponse,
   PasteChapterRequest,
   PasteChapterResponse,
   Progress,
@@ -71,6 +73,20 @@ export function pasteChapter(novelId: string, body: PasteChapterRequest): Promis
 
 export function getChapter(novelId: string, n: number): Promise<ChapterResponse> {
   return request(`/novels/${novelId}/chapter/${n}`);
+}
+
+export function listChapters(novelId: string, limit: number, offset: number): Promise<ChapterListResponse> {
+  return request(`/novels/${novelId}/chapters?limit=${limit}&offset=${offset}`);
+}
+
+// Where this reader left off. 404s for a reader who has never opened this novel — callers
+// treat that as "start at the beginning" rather than an error.
+export function getProgress(novelId: string): Promise<Progress> {
+  return request(`/novels/${novelId}/progress`);
+}
+
+export function getPipelineStatus(novelId: string): Promise<PipelineStatusResponse> {
+  return request(`/novels/${novelId}/pipeline`);
 }
 
 export function getEntity(novelId: string, entityId: string, at: number): Promise<EntityResponse> {

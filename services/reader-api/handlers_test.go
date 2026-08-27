@@ -47,6 +47,13 @@ type fakeStore struct {
 	lastReader      string
 	lastChapter     int
 	lastChapterArg  int
+
+	chapterList       []ChapterListItem
+	chapterListTotal  int
+	chapterListErr    error
+	lastChapterLimit  int
+	lastChapterOffset int
+	pipelineStatusErr error
 }
 
 type fakeIngestClient struct {
@@ -173,6 +180,17 @@ func (f *fakeStore) GetChapter(
 ) (ChapterView, error) {
 	f.lastChapterArg = n
 	return f.chapter, f.chapterErr
+}
+
+func (f *fakeStore) ListChapters(
+	_ context.Context, _ string, limit, offset int,
+) ([]ChapterListItem, int, error) {
+	f.lastChapterLimit, f.lastChapterOffset = limit, offset
+	return f.chapterList, f.chapterListTotal, f.chapterListErr
+}
+
+func (f *fakeStore) PipelineStatus(_ context.Context, novelID string) (PipelineStatusResponse, error) {
+	return PipelineStatusResponse{NovelID: novelID, InFlight: []InFlightChapter{}}, f.pipelineStatusErr
 }
 
 func request(t *testing.T, api *API, method, target, body, reader string) *httptest.ResponseRecorder {
@@ -430,6 +448,66 @@ func TestGetChapterMapsChapterNotReady(t *testing.T) {
 		"/novels/"+testNovelID+"/chapter/1", "", "reader-a")
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestGetChaptersClampsLimitAndReportsProgress(t *testing.T) {
+	store := readyFake()
+	store.chapterList = []ChapterListItem{
+		{ChapterIndex: 1, SiteChapterNo: "第4610章 帝一！", Status: "done"},
+		{ChapterIndex: 2, Status: "ingested"},
+	}
+	store.chapterListTotal = 29
+
+	// limit above maxChapterPage must clamp rather than be honoured verbatim — an
+	// unbounded page over a several-thousand-chapter novel is the thing this guards.
+	response := request(t, &API{store: store}, http.MethodGet,
+		"/novels/"+testNovelID+"/chapters?limit=9999&offset=10", "", "reader-a")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	if store.lastChapterLimit != maxChapterPage {
+		t.Fatalf("limit = %d, want clamped to %d", store.lastChapterLimit, maxChapterPage)
+	}
+	if store.lastChapterOffset != 10 {
+		t.Fatalf("offset = %d, want 10", store.lastChapterOffset)
+	}
+
+	var body ChapterListResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Total != 29 {
+		t.Fatalf("total = %d, want 29", body.Total)
+	}
+	if body.Progress != 5 {
+		t.Fatalf("progress = %d, want 5 (readyFake's stored progress)", body.Progress)
+	}
+	if len(body.Chapters) != 2 || body.Chapters[1].Status != "ingested" {
+		t.Fatalf("chapters = %+v", body.Chapters)
+	}
+}
+
+// A brand-new reader has no reader_progress row, but the chapter index is exactly what
+// they need to pick a starting chapter — so it must report progress 0, not 404 the way
+// every gated endpoint does.
+func TestGetChaptersWithoutProgressRowStillLists(t *testing.T) {
+	store := readyFake()
+	store.progressErr = ErrNotFound
+	store.chapterList = []ChapterListItem{{ChapterIndex: 1, Status: "done"}}
+	store.chapterListTotal = 1
+
+	response := request(t, &API{store: store}, http.MethodGet,
+		"/novels/"+testNovelID+"/chapters", "", "reader-new")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	var body ChapterListResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Progress != 0 {
+		t.Fatalf("progress = %d, want 0", body.Progress)
 	}
 }
 

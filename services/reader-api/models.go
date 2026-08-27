@@ -117,17 +117,77 @@ type SpanView struct {
 	CharEnd   int    `json:"char_end"`
 }
 
+// ChapterListItem is one row of the chapter index — navigation/ingestion metadata only,
+// never chapter text. Status is the pipeline status ('ingested' until the worker finishes
+// it, then 'done', or 'error'), which is what lets the UI say "still being translated"
+// instead of bouncing off GetChapter's 404/409.
+type ChapterListItem struct {
+	ChapterIndex  int    `json:"chapter_index"`
+	SiteChapterNo string `json:"site_chapter_no,omitempty"`
+	// Part of a multi-page source chapter (1-based; 1 for an ordinary chapter). Sites that
+	// paginate a chapter produce several rows sharing one SiteChapterNo, distinguished
+	// only by this.
+	Part   int    `json:"part"`
+	Status string `json:"status"`
+}
+
+// ChapterListResponse pages the index: a scraped novel can hold thousands of chapters, so
+// this is never returned unbounded. Progress is the reader's stored current_chapter (0 when
+// they have none yet) so the UI can mark "you are here" without a second round trip.
+type ChapterListResponse struct {
+	NovelID  string            `json:"novel_id"`
+	Chapters []ChapterListItem `json:"chapters"`
+	Total    int               `json:"total"`
+	Limit    int               `json:"limit"`
+	Offset   int               `json:"offset"`
+	Progress int               `json:"progress"`
+}
+
+// InFlightChapter is one chapter the pipeline worker currently holds a claim on.
+// Stage is the pipeline stage running right now ("translate", "resolve", …), empty if the
+// worker claimed the chapter but hasn't started a stage yet.
+type InFlightChapter struct {
+	ChapterIndex int    `json:"chapter_index"`
+	Stage        string `json:"stage,omitempty"`
+	ElapsedSecs  int    `json:"elapsed_secs"`
+}
+
+// PipelineStatusResponse answers "what is the worker actually doing right now" — the one
+// question neither the chapter list nor the scrape status could answer. A single TRANSLATE
+// call against a local model can run for minutes with no outward change, which is
+// indistinguishable from a hung or stopped worker without this.
+//
+// Read from Redis (the queue the worker drains), not Postgres: chapter.status only flips
+// once every stage has finished, so it is blind to work in progress by construction.
+type PipelineStatusResponse struct {
+	NovelID string `json:"novel_id"`
+	// Pending counts the WHOLE queue, not just this novel: the worker drains one shared
+	// queue, so another novel's backlog is exactly why this novel's chapters are waiting.
+	Pending  int               `json:"pending"`
+	InFlight []InFlightChapter `json:"in_flight"`
+}
+
 // ChapterView is what the store hands back; ChapterResponse is what the handler sends.
 // Kept separate so the store layer doesn't know about JSON tags.
 type ChapterView struct {
-	Text    string
-	Spans   []SpanView
-	HasNext bool
+	Text          string
+	Spans         []SpanView
+	HasNext       bool
+	SiteChapterNo string // "" when this chapter has none (a plain paste, not a scrape)
+	Part          int    // 1-based; 1 for an ordinary (non-paginated) chapter
 }
 
 type ChapterResponse struct {
 	NovelID      string `json:"novel_id"`
 	ChapterIndex int    `json:"chapter_index"`
+	// SiteChapterNo is the source site's own printed chapter label (e.g. "第4610章"),
+	// distinct from ChapterIndex — our own sequential counter for THIS ingestion batch,
+	// not the novel's overall chapter number (instructions.md §3.1: chapter_index is the
+	// gate key, site_chapter_no is inert display metadata). Omitted when absent (a plain
+	// paste, not a scrape) so the reader UI can distinguish "no site label" from "".
+	SiteChapterNo string `json:"site_chapter_no,omitempty"`
+	// Part of a multi-page source chapter (1-based; 1 when the chapter isn't paginated).
+	Part int `json:"part"`
 	// At is the reader's STORED PROGRESS (not the chapter index n). Re-reading an old
 	// chapter (n < progress) still uses progress here: the reader has already legitimately
 	// learned everything up to it, so showing those facts on old text is not a leak — the

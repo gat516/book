@@ -26,6 +26,16 @@ body {
   font-size: 1.1rem;
 }
 
+.reader-pane-chapter-label {
+  font-size: 0.85rem;
+  color: #888;
+  margin: 0 0 0.75rem;
+}
+
+.reader-pane-site-chapter-no {
+  font-style: italic;
+}
+
 .mention {
   position: relative;
   background: #fff3b0;
@@ -284,4 +294,79 @@ body {
 
 .glossary-error {
   color: #b00020;
+}
+
+/* --- chapter index (PLAN.md follow-up: navigating a scraped novel's thousands of
+   chapters, and seeing which are still mid-translation) --- */
+
+.chapter-list-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.chapter-list table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.chapter-list th,
+.chapter-list td {
+  text-align: left;
+  padding: 0.35rem 0.6rem 0.35rem 0;
+  border-bottom: 1px solid #eee;
+}
+
+.chapter-list-current td {
+  font-weight: 600;
+  background: #fff8dc;
+}
+
+.chapter-list-count {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.chapter-list-jump,
+.chapter-list-pager {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+
+.chapter-list-error,
+.chapter-pending-error {
+  color: #b00020;
+}
+
+.chapter-pending-site {
+  font-weight: 400;
+  color: #666;
+}
+
+.chapter-pending-hint {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.pipeline-status {
+  background: #f5f5f5;
+  border-left: 3px solid #bbb;
+  padding: 0.5rem 0.75rem;
+  margin: 0.75rem 0;
+  font-size: 0.9rem;
+}
+
+.pipeline-status p {
+  margin: 0.2rem 0;
+}
+
+.pipeline-status-queue {
+  color: #666;
+}
+
+.chapter-list-part {
+  color: #666;
 }

@@ -107,6 +107,48 @@ export interface BootstrapGlossaryResponse {
   terms: CorrectGlossaryTermResponse[];
 }
 
+// reader-api's ChapterListItem/ChapterListResponse — the paged chapter index. Metadata
+// only (never chapter text), which is why it is ungated: the spoiler gate that matters
+// still lives in GET /chapter/{n}.
+export interface ChapterListItem {
+  chapter_index: number;
+  site_chapter_no?: string;
+  // Which piece of a multi-page source chapter this is (1-based; 1 when not paginated).
+  // Sites that split a chapter across pages yield several rows sharing one
+  // site_chapter_no, distinguished only by this.
+  part: number;
+  // Pipeline status: "ingested" until the worker finishes it, then "done" (readable) or
+  // "error". This is what lets the UI say "still being translated" up front instead of
+  // bouncing off the chapter endpoint.
+  status: string;
+}
+
+export interface ChapterListResponse {
+  novel_id: string;
+  chapters: ChapterListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  progress: number;
+}
+
+// reader-api's PipelineStatusResponse — what the worker is doing right now. Read from the
+// worker's Redis queue, so it reflects work in progress, which chapter.status cannot:
+// that only flips once every stage has finished.
+export interface InFlightChapter {
+  chapter_index: number;
+  stage?: string;
+  elapsed_secs: number;
+}
+
+export interface PipelineStatusResponse {
+  novel_id: string;
+  // Whole-queue depth, not just this novel — another novel's backlog is exactly why this
+  // one might be waiting.
+  pending: number;
+  in_flight: InFlightChapter[];
+}
+
 export interface SpanView {
   entity_id: string;
   char_start: number;
@@ -123,6 +165,12 @@ export interface ChapterResponse {
   text: string;
   spans: SpanView[];
   has_next: boolean;
+  // The source site's own printed chapter label (e.g. "第4610章"), when this chapter came
+  // from a scrape — NOT the same number as chapter_index, which is our own sequential
+  // counter for this ingestion batch. Absent for a plain paste with no site of origin.
+  site_chapter_no?: string;
+  // Which piece of a multi-page source chapter this is (1-based; 1 when not paginated).
+  part: number;
 }
 
 export interface FactView {
