@@ -58,6 +58,13 @@ type pasteChapterReq struct {
 	// Omitted or 0 means part 1 — an ordinary chapter is "part 1" without the caller
 	// having to say so.
 	Part int `json:"part,omitempty"`
+	// Enqueue controls whether accepting this chapter also queues it for translation.
+	// Absent means true, so a human pasting one chapter still gets it translated
+	// immediately. The scraper sets it false: it ingests far faster than the pipeline can
+	// translate, and queueing every fetched chapter is what buried the reader's own
+	// chapters behind hundreds nobody was reading. reader-api queues those on demand
+	// instead, near the reader's position (novel.translate_lookahead, migration 0015).
+	Enqueue *bool `json:"enqueue,omitempty"`
 }
 
 type pasteChapterResp struct {
@@ -315,12 +322,15 @@ func (a *API) pasteChapter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Signal the pipeline. We enqueue even on re-paste so a stalled pipeline can be
-	// retriggered; the pipeline itself dedups on content (§6.1).
-	if err := a.store.enqueue(r.Context(), QueueMessage{NovelID: novelID, ChapterIndex: req.ChapterIndex}); err != nil {
-		log.Printf("pasteChapter enqueue: %v", err)
-		writeErr(w, http.StatusInternalServerError, "could not enqueue job")
-		return
+	// Signal the pipeline, unless the caller is ingesting ahead of the reader. We enqueue
+	// even on re-paste so a stalled pipeline can be retriggered; the pipeline itself dedups
+	// on content (§6.1).
+	if req.Enqueue == nil || *req.Enqueue {
+		if err := a.store.enqueue(r.Context(), QueueMessage{NovelID: novelID, ChapterIndex: req.ChapterIndex}); err != nil {
+			log.Printf("pasteChapter enqueue: %v", err)
+			writeErr(w, http.StatusInternalServerError, "could not enqueue job")
+			return
+		}
 	}
 
 	writeJSON(w, http.StatusAccepted, pasteChapterResp{
@@ -329,6 +339,61 @@ func (a *API) pasteChapter(w http.ResponseWriter, r *http.Request) {
 		RawHash:      rawHash,
 		Status:       "ingested",
 	})
+}
+
+type translateAheadReq struct {
+	// From is the first chapter index to consider; Count how many to look at from there.
+	// Count omitted (or 0) uses the novel's own translate_lookahead (migration 0015).
+	From  int `json:"from"`
+	Count int `json:"count,omitempty"`
+}
+
+type translateAheadResp struct {
+	NovelID string `json:"novel_id"`
+	// Queued lists only chapters this call actually moved into the queue — repeated calls
+	// return an empty list rather than re-queueing, which is what makes it safe for the
+	// reader to fire on every chapter turn.
+	Queued []int `json:"queued"`
+}
+
+// translateAhead queues translation for a window of chapters starting at From. Called as
+// the reader advances, so translation follows the reader rather than racing the scraper
+// through a whole novel (see store.queueTranslationRange).
+func (a *API) translateAhead(w http.ResponseWriter, r *http.Request) {
+	novelID := r.PathValue("id")
+
+	var req translateAheadReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.From < 0 {
+		writeErr(w, http.StatusBadRequest, "from must be >= 0")
+		return
+	}
+
+	count := req.Count
+	if count <= 0 {
+		lookahead, err := a.store.novelLookahead(r.Context(), novelID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "novel not found")
+			return
+		}
+		if err != nil {
+			log.Printf("translateAhead lookahead: %v", err)
+			writeErr(w, http.StatusInternalServerError, "lookup failed")
+			return
+		}
+		count = lookahead
+	}
+
+	queued, err := a.store.queueTranslationRange(r.Context(), novelID, req.From, count)
+	if err != nil {
+		log.Printf("translateAhead: %v", err)
+		writeErr(w, http.StatusInternalServerError, "could not queue translation")
+		return
+	}
+	writeJSON(w, http.StatusOK, translateAheadResp{NovelID: novelID, Queued: queued})
 }
 
 type correctGlossaryTermReq struct {

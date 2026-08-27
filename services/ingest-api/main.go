@@ -40,6 +40,7 @@ func main() {
 	mux.HandleFunc("POST /novels/{id}/chapters", api.pasteChapter)
 	mux.HandleFunc("PATCH /novels/{id}/glossary/{term}", api.correctGlossaryTerm)
 	mux.HandleFunc("POST /novels/{id}/glossary/bootstrap", api.bootstrapGlossary)
+	mux.HandleFunc("POST /novels/{id}/translate-ahead", api.translateAhead)
 	mux.HandleFunc("GET /novels/{id}/provider-config", api.getProviderConfig)
 	mux.HandleFunc("PATCH /novels/{id}/provider-config", api.putProviderConfig)
 	mux.HandleFunc("GET /healthz", api.healthz)

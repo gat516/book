@@ -104,6 +104,75 @@ func (s *Store) chapterIndexByHash(ctx context.Context, novelID, rawHash string)
 	return chapterIndex, true, nil
 }
 
+// queueTranslationRange marks every still-unqueued chapter in [from, from+count) as
+// 'queued' and pushes a pipeline job for each, returning the indices actually queued.
+//
+// This is the demand-driven half of translation (migration 0015). Ingestion no longer
+// queues what it accepts, because fetching outruns translating by orders of magnitude and
+// queueing everything buried the reader's own chapters behind hundreds nobody was reading.
+//
+// The UPDATE ... WHERE status = 'ingested' RETURNING is what makes this safe to call
+// repeatedly and concurrently: only the caller that actually flips a row observes it, so a
+// chapter is queued exactly once no matter how many readers ask. Chapters already queued,
+// done, or errored are skipped by the same predicate.
+func (s *Store) queueTranslationRange(ctx context.Context, novelID string, from, count int) ([]int, error) {
+	if count <= 0 {
+		return []int{}, nil
+	}
+	// 'error' is re-queueable, not terminal. A chapter fails for reasons that are often
+	// external and fixable — a model that mangles terminology, a provider outage, a
+	// timeout — so refusing to retry it would strand it permanently, including after the
+	// operator switches to a provider that would succeed. 'ingested' and 'error' are the
+	// two states with no pending work; 'queued' and 'done' are excluded so repeat calls
+	// stay no-ops and finished chapters are never redone.
+	rows, err := s.db.Query(ctx,
+		`UPDATE chapter SET status = 'queued'
+		 WHERE novel_id = $1 AND chapter_index >= $2 AND chapter_index < $3
+		   AND status IN ('ingested', 'error')
+		 RETURNING chapter_index`,
+		novelID, from, from+count,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("mark chapters queued: %w", err)
+	}
+	queued := []int{}
+	for rows.Next() {
+		var index int
+		if err := rows.Scan(&index); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		queued = append(queued, index)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for _, index := range queued {
+		if err := s.enqueue(ctx, QueueMessage{NovelID: novelID, ChapterIndex: index}); err != nil {
+			// The row is already marked 'queued', so returning here would strand it: it
+			// would never be re-queued by a later call. Put it back so the next request
+			// retries it.
+			_, _ = s.db.Exec(ctx,
+				`UPDATE chapter SET status = 'ingested'
+				 WHERE novel_id = $1 AND chapter_index = $2 AND status = 'queued'`,
+				novelID, index)
+			return nil, fmt.Errorf("enqueue chapter %d: %w", index, err)
+		}
+	}
+	return queued, nil
+}
+
+// novelLookahead returns how many chapters past the reader this novel keeps translated.
+func (s *Store) novelLookahead(ctx context.Context, novelID string) (int, error) {
+	var lookahead int
+	err := s.db.QueryRow(ctx,
+		`SELECT translate_lookahead FROM novel WHERE id = $1`, novelID,
+	).Scan(&lookahead)
+	return lookahead, err
+}
+
 // putRawObject uploads a chapter body to the object store and returns its key (raw_uri).
 // The key is deterministic so re-pasting the same chapter overwrites identical bytes
 // rather than accumulating duplicates (idempotency, §0.7).
