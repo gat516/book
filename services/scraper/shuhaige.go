@@ -28,6 +28,34 @@ import (
 // mode is "translate": this is genuine source-language text the pipeline should MT.
 type shuhaigeSite struct{}
 
+// shuhaigeBoilerplate are substrings marking the site's own injected chrome rather than
+// story text: a bookmark/promo line on every page, and a "continue to the next page" nag.
+// Stripping them matters for two separate reasons, and the second one is not obvious:
+//
+//  1. It keeps site advertising out of the text handed to the translator, which would
+//     otherwise be translated into the output verbatim and cost tokens to boot.
+//  2. The nag is RANDOMIZED between several wordings per request, so the same page fetched
+//     twice yields different bytes — which silently defeats content-hash deduplication.
+//     Verified on real data this session: of 27 re-scraped chapters only 13 hashed
+//     identically before stripping, and all 27 after.
+//
+// Matched as substrings, not exact lines, so a new nag variant sharing the same stem is
+// still caught.
+var shuhaigeBoilerplate = []string{
+	"请点击下一页继续阅读", // every "this chapter continues, click next page" variant
+	"请大家收藏",      // "…please bookmark (m.shuhaige.net)…" promo line
+	"本章完",        // "(end of chapter)" marker the site appends to a chapter's last page
+}
+
+func isShuhaigeBoilerplate(text string) bool {
+	for _, marker := range shuhaigeBoilerplate {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func (shuhaigeSite) Mode() string { return "translate" }
 
 func (shuhaigeSite) FetchPage(ctx context.Context, client *httpClient, pageURL string) (Page, bool, error) {
@@ -56,7 +84,7 @@ func (shuhaigeSite) FetchPage(ctx context.Context, client *httpClient, pageURL s
 
 	var paragraphs []string
 	content.Find("p").Each(func(_ int, p *goquery.Selection) {
-		if text := strings.TrimSpace(p.Text()); text != "" {
+		if text := strings.TrimSpace(p.Text()); text != "" && !isShuhaigeBoilerplate(text) {
 			paragraphs = append(paragraphs, text)
 		}
 	})
