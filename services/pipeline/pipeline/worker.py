@@ -49,6 +49,40 @@ PROCESSING_STARTED = "jobs:processing:started"  # HASH: raw queue message -> cla
 # outward sign, which is indistinguishable from a hung worker. reader-api surfaces this.
 PROCESSING_STAGE = "jobs:processing:stage"
 
+class ChapterFailed(Exception):
+    """A chapter failed and the failure is already recorded on its row (status='error').
+
+    Distinguishing this from an arbitrary crash matters for queue hygiene. The reaper
+    exists to recover jobs whose worker died mid-flight, so a claim is normally left in
+    jobs:processing for it to find. But a chapter that failed cleanly is not lost — the
+    outcome is durably recorded — and leaving its claim behind has two bad effects: it
+    shows up as phantom in-flight work for a whole visibility_timeout, and the reaper then
+    requeues it to fail again on the next sweep, forever, burning model time on a chapter
+    that fails deterministically.
+    """
+
+
+TRANSLATE_STAGE = "translate"
+# Partial translation text, so a reader watching an in-progress chapter sees it arrive
+# rather than staring at a spinner for minutes. Keyed per chapter and short-lived: it is a
+# view of work in flight, never a source of record — the finished translation goes to the
+# object store like always.
+PREVIEW_KEY = "translate:preview:{novel_id}:{chapter_index}"
+PREVIEW_TTL_SECONDS = 900
+# Write at most this often. A token-rate write would hammer Redis for no visible benefit;
+# prose arriving twice a second already reads as live.
+PREVIEW_THROTTLE_SECONDS = 0.5
+
+
+def _set_stream_sink(provider, sink) -> None:
+    """Attach a partial-output observer if this provider supports one.
+
+    Only some backends can stream (OllamaProvider today), and the LLMProvider protocol
+    deliberately says nothing about it — so this is a capability check, not an assumption.
+    """
+    if hasattr(provider, "stream_sink"):
+        provider.stream_sink = sink
+
 
 class Worker:
     def __init__(self, cfg: Config) -> None:
@@ -141,11 +175,21 @@ class Worker:
                 await self.redis.lpush(PENDING_QUEUE, raw)
                 log.info("gateway admission deferred chapter for %.3fs", exc.retry_after_s)
                 continue
+            except ChapterFailed:
+                # The outcome is recorded on the chapter row, so this job is not lost and
+                # must not be resurrected: drop the claim outright. Leaving it made failed
+                # chapters appear as in-flight work and had the reaper retry them on every
+                # sweep — re-running a translation that fails the same way each time.
+                log.exception("chapter processing failed; recorded and dropping claim")
+                await self.redis.lrem(PROCESSING_QUEUE, 1, raw)
+                await self.redis.hdel(PROCESSING_STARTED, raw)
+                await self.redis.hdel(PROCESSING_STAGE, raw)
+                continue
             except Exception:  # noqa: BLE001 — never let one poisoned chapter kill the loop
+                # Failed BEFORE the outcome could be recorded (e.g. the chapter row or
+                # object store was unreachable), so this one really is unfinished business:
+                # leave the claim for the reaper to requeue.
                 log.exception("chapter processing failed; leaving pointer in %s", PROCESSING_QUEUE)
-                # Clear the stage marker but leave the claim: the reaper still owns
-                # recovery here, and a stale "translating…" would otherwise be reported
-                # for a chapter nothing is working on.
                 await self.redis.hdel(PROCESSING_STAGE, raw)
                 continue
             # Success: drop the processing pointer and its claim record for this message.
@@ -247,15 +291,48 @@ class Worker:
                 # is currently blocking rather than the last one that finished — the whole
                 # point here is explaining a chapter that appears stuck.
                 await self.redis.hset(PROCESSING_STAGE, raw, stage.name)
-                await stage.run(ctx, state)
+                # Stream partial output for the one stage that produces prose. Scoped to
+                # translate deliberately: RESOLVE and STATE emit JSON, and feeding that to
+                # a reader-facing preview would be noise.
+                streaming = stage.name == TRANSLATE_STAGE
+                if streaming:
+                    _set_stream_sink(provider, self._preview_sink(msg.novel_id, msg.chapter_index))
+                try:
+                    await stage.run(ctx, state)
+                finally:
+                    if streaming:
+                        _set_stream_sink(provider, None)
         except AdmissionRejected:
             # The outer loop requeues without turning capacity pressure into a job error.
             raise
-        except Exception:
+        except Exception as exc:
             await self._set_status(msg, "error")
-            raise
+            # Re-raise as ChapterFailed so the drain loop knows the outcome was recorded
+            # and the claim can be dropped rather than left for the reaper to retry.
+            raise ChapterFailed(f"chapter {msg.chapter_index} failed") from exc
         await self._set_status(msg, "done")
+        # The chapter is readable from the object store now, so the in-flight preview would
+        # only ever be a stale, partial copy of it.
+        await self._clear_preview(msg.novel_id, msg.chapter_index)
         log.info("chapter %s/%s done", msg.novel_id, msg.chapter_index)
+
+    def _preview_sink(self, novel_id: str, chapter_index: int):
+        """Build a throttled writer for one chapter's in-progress translation."""
+        key = PREVIEW_KEY.format(novel_id=novel_id, chapter_index=chapter_index)
+        last_write = 0.0
+
+        async def sink(text: str) -> None:
+            nonlocal last_write
+            now = time.monotonic()
+            if now - last_write < PREVIEW_THROTTLE_SECONDS:
+                return
+            last_write = now
+            await self.redis.set(key, text, ex=PREVIEW_TTL_SECONDS)
+
+        return sink
+
+    async def _clear_preview(self, novel_id: str, chapter_index: int) -> None:
+        await self.redis.delete(PREVIEW_KEY.format(novel_id=novel_id, chapter_index=chapter_index))
 
     async def _provider_for_novel(self, novel_id: str) -> tuple[LLMProvider, BatchManager, str]:
         """Return (provider, batch_manager, provider_id) for novel_id, memoized for the
