@@ -38,6 +38,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/pipeline", a.getPipelineStatus)
 	mux.HandleFunc("POST /novels/{id}/translate-ahead", a.postTranslateAhead)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}/preview", a.getChapterPreview)
+	mux.HandleFunc("GET /novels/{id}/translation-health", a.getTranslationHealth)
 	mux.HandleFunc("POST /novels/{id}/ask", a.postAsk)
 	mux.HandleFunc("GET /novels", a.getNovels)
 	mux.HandleFunc("GET /novels/{id}", a.getNovel)
@@ -420,6 +421,24 @@ func (a *API) getChapterPreview(w http.ResponseWriter, r *http.Request) {
 		Text:         text,
 		Status:       status,
 	})
+}
+
+// getTranslationHealth reports whether this novel's terminology is being translated
+// consistently. Ungated: it returns counts and a judgement, never chapter content.
+func (a *API) getTranslationHealth(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	health, err := a.store.TranslationHealth(r.Context(), novelID)
+	if err != nil {
+		log.Printf("translation health: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not read translation health")
+		return
+	}
+	writeJSON(w, http.StatusOK, health)
 }
 
 // postTranslateAhead proxies a translation-window request to ingest-api, which owns

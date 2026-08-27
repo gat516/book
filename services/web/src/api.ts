@@ -14,6 +14,7 @@ import type {
   NovelListResponse,
   NovelSummary,
   PipelineStatusResponse,
+  TranslationHealth,
   PasteChapterRequest,
   PasteChapterResponse,
   Progress,
@@ -167,6 +168,10 @@ export function getChapterPreview(
   status: string;
 }> {
   return request(`/novels/${novelId}/chapter/${n}/preview`);
+}
+
+export function getTranslationHealth(novelId: string): Promise<TranslationHealth> {
+  return request(`/novels/${novelId}/translation-health`);
 }
 
 export function putProgress(novelId: string, chapter: number): Promise<Progress> {

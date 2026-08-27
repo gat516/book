@@ -183,6 +183,34 @@ type ChapterPreviewResponse struct {
 	Status string `json:"status"`
 }
 
+// TranslationHealth reports whether this novel's terminology is being translated
+// consistently. It measures the model's self-agreement, not translation quality — quality
+// needs a human, but "the model proposed four different English names for one character"
+// is countable, and is what a reader would want flagged.
+//
+// Signal comes from glossary_candidate (migration 0016): every target the model has
+// proposed is recorded there until corroborated, so competing proposals for one source
+// term are visible directly rather than inferred.
+type TranslationHealth struct {
+	NovelID string `json:"novel_id"`
+	// LockedTerms have been corroborated and are enforced on every translation.
+	LockedTerms int `json:"locked_terms"`
+	// UnstableTerms are source terms with more than one distinct proposed target — the
+	// model naming the same entity differently in different chapters.
+	UnstableTerms int `json:"unstable_terms"`
+	// ProvisionalTerms are distinct source terms seen but not yet corroborated. Part of
+	// the sample size: without them, a model so inconsistent that nothing ever locks
+	// would report almost no evidence and never be flagged.
+	ProvisionalTerms int `json:"provisional_terms"`
+	// FailedChapters were rejected by glossary validation, usually the same underlying
+	// cause seen from the other end.
+	FailedChapters int `json:"failed_chapters"`
+	// Warn is the server's judgement, so every client applies the same threshold rather
+	// than each inventing one. Reason is empty when Warn is false.
+	Warn   bool   `json:"warn"`
+	Reason string `json:"reason,omitempty"`
+}
+
 // ChapterView is what the store hands back; ChapterResponse is what the handler sends.
 // Kept separate so the store layer doesn't know about JSON tags.
 type ChapterView struct {

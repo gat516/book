@@ -9,6 +9,7 @@ import { NovelCreateForm } from "./components/NovelCreateForm";
 import { NovelPicker } from "./components/NovelPicker";
 import { ProgressControls } from "./components/ProgressControls";
 import { ReaderPane } from "./components/ReaderPane";
+import { TranslationNotice } from "./components/TranslationNotice";
 import type { ChapterListItem, ChapterResponse } from "./types";
 
 // `?novel=` is preferred over a hardcoded default so the app is shareable/demoable via
@@ -239,6 +240,9 @@ export default function App() {
           {/* ReaderPane stays mounted (just hidden) rather than unmounting behind the
               glossary toggle, so switching back doesn't re-fetch/re-bootstrap progress. */}
           <div style={{ display: showGlossary ? "none" : "block" }}>
+            {/* Above the text rather than over it: a caveat about the translation should
+                be visible before reading, without interrupting it. */}
+            <TranslationNotice novelId={novelId} />
             <ReaderPane
               novelId={novelId}
               chapterIndex={chapterIndex}

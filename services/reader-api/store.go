@@ -39,6 +39,7 @@ type ReaderStore interface {
 	ListChapters(context.Context, string, int, int) ([]ChapterListItem, int, error)
 	PipelineStatus(context.Context, string) (PipelineStatusResponse, error)
 	TranslationPreview(context.Context, string, int) (string, bool, string, error)
+	TranslationHealth(context.Context, string) (TranslationHealth, error)
 	ListNovels(context.Context) ([]NovelSummary, error)
 	GetNovel(context.Context, string) (NovelSummary, error)
 	CreateScrapeJob(context.Context, string, string, string) (int64, error)
@@ -320,6 +321,66 @@ func (s *Store) TranslationPreview(ctx context.Context, novelID string, chapterI
 		return "", false, status, fmt.Errorf("read translation preview: %w", err)
 	}
 	return text, true, status, nil
+}
+
+// Thresholds for warning about translation instability. Deliberately conservative: a
+// false alarm trains the reader to ignore the notice, which costs more than staying quiet.
+const (
+	// Below this many observed terms there isn't enough evidence to judge — an early
+	// chapter with two competing names is normal, not a problem.
+	healthMinTermsObserved = 8
+	// Fraction of observed terms the model is naming inconsistently.
+	healthUnstableFraction = 0.25
+	// Enough rejected chapters that the cause is systematic rather than incidental.
+	healthFailedChapters = 3
+)
+
+// TranslationHealth measures how consistently this novel's terminology is being
+// translated. See the TranslationHealth type for why glossary_candidate is the signal.
+func (s *Store) TranslationHealth(ctx context.Context, novelID string) (TranslationHealth, error) {
+	health := TranslationHealth{NovelID: novelID}
+
+	// glossary and glossary_candidate are readable by the reader role (0010, 0017).
+	// ProvisionalTerms counts DISTINCT source terms still awaiting corroboration, and is
+	// counted separately from unstable ones for a reason found by testing: deriving the
+	// sample size from locked+unstable alone means a model so inconsistent that nothing
+	// ever gets locked reports a tiny sample and never trips the threshold — staying
+	// silent in exactly the worst case. Provisional terms are the bulk of the evidence
+	// early on, so they belong in the denominator.
+	if err := s.readerDB.QueryRow(ctx,
+		`SELECT
+		   (SELECT count(*) FROM glossary WHERE novel_id = $1),
+		   (SELECT count(*) FROM (
+		      SELECT source_term FROM glossary_candidate
+		      WHERE novel_id = $1
+		      GROUP BY source_term
+		      HAVING count(DISTINCT target_term) > 1
+		    ) competing),
+		   (SELECT count(DISTINCT source_term) FROM glossary_candidate WHERE novel_id = $1)`,
+		novelID,
+	).Scan(&health.LockedTerms, &health.UnstableTerms, &health.ProvisionalTerms); err != nil {
+		return TranslationHealth{}, fmt.Errorf("read terminology stability: %w", err)
+	}
+
+	// chapter lives on the progress pool, same as everywhere else that reads it.
+	if err := s.progressDB.QueryRow(ctx,
+		`SELECT count(*) FROM chapter WHERE novel_id = $1 AND status = 'error'`, novelID,
+	).Scan(&health.FailedChapters); err != nil {
+		return TranslationHealth{}, fmt.Errorf("count failed chapters: %w", err)
+	}
+
+	// Promotion deletes a term's candidates, so locked and provisional never double-count.
+	observed := health.LockedTerms + health.ProvisionalTerms
+	switch {
+	case health.FailedChapters >= healthFailedChapters:
+		health.Warn = true
+		health.Reason = "several chapters were rejected because the translation didn't use the locked names consistently"
+	case observed >= healthMinTermsObserved &&
+		float64(health.UnstableTerms) >= float64(observed)*healthUnstableFraction:
+		health.Warn = true
+		health.Reason = "the model is giving the same names different translations between chapters"
+	}
+	return health, nil
 }
 
 func (s *Store) GetNovel(ctx context.Context, novelID string) (NovelSummary, error) {

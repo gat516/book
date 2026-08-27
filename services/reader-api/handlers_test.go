@@ -57,6 +57,8 @@ type fakeStore struct {
 	previewText       string
 	previewStatus     string
 	previewErr        error
+	health            TranslationHealth
+	healthErr2        error
 }
 
 type fakeIngestClient struct {
@@ -203,6 +205,12 @@ func (f *fakeStore) PipelineStatus(_ context.Context, novelID string) (PipelineS
 
 func (f *fakeStore) TranslationPreview(_ context.Context, _ string, _ int) (string, bool, string, error) {
 	return f.previewText, f.previewText != "", f.previewStatus, f.previewErr
+}
+
+func (f *fakeStore) TranslationHealth(_ context.Context, novelID string) (TranslationHealth, error) {
+	health := f.health
+	health.NovelID = novelID
+	return health, f.healthErr2
 }
 
 func request(t *testing.T, api *API, method, target, body, reader string) *httptest.ResponseRecorder {

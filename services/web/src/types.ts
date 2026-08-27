@@ -149,6 +149,17 @@ export interface PipelineStatusResponse {
   in_flight: InFlightChapter[];
 }
 
+// reader-api's TranslationHealth — whether the model is naming things consistently.
+// `warn` is the server's judgement so every client applies the same threshold.
+export interface TranslationHealth {
+  novel_id: string;
+  locked_terms: number;
+  unstable_terms: number;
+  failed_chapters: number;
+  warn: boolean;
+  reason?: string;
+}
+
 export interface SpanView {
   entity_id: string;
   char_start: number;
