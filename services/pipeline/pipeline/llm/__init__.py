@@ -38,7 +38,9 @@ def provider_from_env(cfg: Config, *, tenant: str = "default") -> LLMProvider:
     """
     match cfg.llm_provider:
         case "ollama":
-            return OllamaProvider(host=cfg.ollama_host, model=cfg.llm_model_extract)
+            return OllamaProvider(
+                host=cfg.ollama_host, model=cfg.llm_model_extract, timeout=cfg.ollama_timeout_seconds
+            )
         case "anthropic":
             return AnthropicProvider(model=cfg.llm_model_extract)
         case "deepseek":
@@ -63,7 +65,9 @@ def embed_provider_from_env(cfg: Config, *, tenant: str = "default") -> LLMProvi
             provider=cfg.gateway_provider, model=cfg.llm_model_extract,
             backend=cfg.gateway_backend, embed_model=cfg.embed_model,
             max_output_tokens=cfg.gateway_max_output_tokens)
-    return OllamaProvider(host=cfg.ollama_host, model=cfg.embed_model)
+    return OllamaProvider(
+        host=cfg.ollama_host, model=cfg.embed_model, timeout=cfg.ollama_timeout_seconds
+    )
 
 
 __all__ = [

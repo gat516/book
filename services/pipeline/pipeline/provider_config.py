@@ -73,7 +73,11 @@ def build_provider(row: ProviderConfigRow, cfg: Config) -> LLMProvider:
     own default model when the novel didn't override one."""
     match row.provider:
         case "ollama":
-            return OllamaProvider(host=row.base_url or cfg.ollama_host, model=row.model or cfg.llm_model_extract)
+            return OllamaProvider(
+                host=row.base_url or cfg.ollama_host,
+                model=row.model or cfg.llm_model_extract,
+                timeout=cfg.ollama_timeout_seconds,
+            )
         case "anthropic":
             return AnthropicProvider(model=row.model or cfg.llm_model_extract, api_key=row.api_key)
         case "deepseek":

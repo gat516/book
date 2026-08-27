@@ -36,6 +36,7 @@ class Config:
     embed_model: str
     embed_dim: int
     ollama_host: str
+    ollama_timeout_seconds: float
     deepseek_api_key: str
     deepseek_base_url: str
 
@@ -88,6 +89,13 @@ class Config:
             embed_model=_getenv("EMBED_MODEL", "nomic-embed-text"),
             embed_dim=int(_getenv("EMBED_DIM", "768")),
             ollama_host=_getenv("OLLAMA_HOST", "http://localhost:11434"),
+            # A full-chapter TRANSLATE call is a much bigger prompt than the per-surface
+            # RESOLVE calls, so on slow/local hardware it can outlast OllamaProvider's own
+            # 120s httpx default well before the pipeline's own visibility_timeout would
+            # ever matter. Independent knob, not derived from visibility_timeout: this is
+            # an HTTP client timeout (one call), that's a crash-recovery window (whole
+            # chapter, several calls).
+            ollama_timeout_seconds=float(_getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
             deepseek_api_key=_getenv("DEEPSEEK_API_KEY", ""),
             deepseek_base_url=_getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
             gateway_addr=_getenv("LLM_GATEWAY_ADDR", "localhost:8081"),
