@@ -71,6 +71,21 @@ def test_glossary_validation_rejects_empty_translation():
         validate_glossary_constraints("无名之人。", "  ", [])
 
 
+def test_glossary_validation_ignores_blank_terms():
+    """A blank locked term must not be treated as a constraint.
+
+    Regression guard for a real failure: str.count("") is len(text) + 1, so an empty
+    source term silently "requires" its target ~2000 times per chapter and fails every
+    translation of that novel forever, under any model. Glossary rows are immutable, so
+    one blank row was unrecoverable without hand-editing the table.
+    """
+    validate_glossary_constraints(
+        "青云宗的大门打开了。",
+        "The gates of the Azure Cloud Sect opened.",
+        [("", "Xuan Lu"), ("   ", "Dream King"), ("青云宗", "Azure Cloud Sect")],
+    )
+
+
 def test_glossary_validation_ignores_terms_absent_from_chapter():
     validate_glossary_constraints(
         "李逍遥笑了。",

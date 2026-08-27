@@ -76,7 +76,18 @@ async def _lock_glossary(
 
     The advisory lock makes ``MAX(version)`` and the changelog hash chain a
     per-novel serialized operation. Existing terms are immutable in this stage.
+
+    A blank source or target is refused outright rather than locked. Glossary rows are
+    immutable once written and every later translation is validated against them, so a
+    single blank row is unrecoverable without hand-editing the table: ``"text".count("")``
+    is ``len(text) + 1``, meaning an empty source term silently demands its target appear
+    ~2000 times in every chapter and fails all of them, permanently. The LLM proposing an
+    empty surface is enough to trigger it, which is exactly how it happened.
     """
+    if not source_term.strip() or not target_term.strip():
+        raise ValueError(
+            f"refusing to lock a blank glossary term: {source_term!r} => {target_term!r}"
+        )
     await db.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (novel_id,))
     row = await (
         await db.execute(
@@ -229,6 +240,13 @@ class ResolveStage:
         unresolved = ambiguous + [
             m.surface for m in proposal.mentions if m.surface not in resolutions
         ]
+        # Drop blank surfaces before they can reach _lock_glossary. The proposal pass is
+        # the one generative step here, and a model that returns an empty (or whitespace)
+        # surface would otherwise get it locked into the glossary permanently — see
+        # _lock_glossary's docstring for why a single blank row bricks translation for the
+        # whole novel. Filtering here rather than only raising there keeps one weak
+        # proposal from failing the entire chapter.
+        unresolved = [surface for surface in unresolved if surface.strip()]
         # dict.fromkeys: dedupe while keeping order, so a re-run resolves in the same
         # sequence and the entities it creates get the same first-seen ordering.
         unresolved = list(dict.fromkeys(unresolved))

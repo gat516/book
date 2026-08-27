@@ -10,7 +10,7 @@ class GlossaryViolation(ValueError):
 
 
 _SYSTEM = """\
-Translate a serialized novel chapter from {source_lang} to {target_lang}.
+Translate a serialized chapter from {source_lang} to {target_lang}.
 
 The ontology below describes names whose identity must remain stable. The glossary is a
 set of LOCKED TERM CONSTRAINTS: whenever a source term occurs, render its exact target
@@ -55,6 +55,14 @@ def validate_glossary_constraints(
     missing: list[str] = []
     untranslated: list[str] = []
     for source, target in glossary:
+        # A blank source term makes this check nonsensical rather than strict:
+        # "text".count("") is len(text) + 1, so an empty locked term would demand its
+        # target appear ~2000 times in a chapter and fail EVERY translation of this novel
+        # forever, under any model. Observed for real before resolve.py stopped locking
+        # them (see _lock_glossary's guard) — this stays as the defensive half, since the
+        # glossary is also writable by hand through the correction/bootstrap endpoints.
+        if not source.strip() or not target.strip():
+            continue
         required_count = source_text.count(source)
         if required_count == 0:
             continue
