@@ -43,6 +43,11 @@ log = logging.getLogger(__name__)
 PENDING_QUEUE = "jobs:pending"  # keep in sync with ingest-api/store.go:16
 PROCESSING_QUEUE = "jobs:processing"
 PROCESSING_STARTED = "jobs:processing:started"  # HASH: raw queue message -> claim epoch
+# HASH: raw queue message -> the stage currently running for it. Purely observational —
+# nothing recovers from it and the reaper ignores it — but without it a chapter in flight
+# is a black box: a single TRANSLATE call on a local model can run for minutes with no
+# outward sign, which is indistinguishable from a hung worker. reader-api surfaces this.
+PROCESSING_STAGE = "jobs:processing:stage"
 
 
 class Worker:
@@ -132,15 +137,21 @@ class Worker:
                 await asyncio.sleep(max(exc.retry_after_s, 0.25))
                 await self.redis.lrem(PROCESSING_QUEUE, 1, raw)
                 await self.redis.hdel(PROCESSING_STARTED, raw)
+                await self.redis.hdel(PROCESSING_STAGE, raw)
                 await self.redis.lpush(PENDING_QUEUE, raw)
                 log.info("gateway admission deferred chapter for %.3fs", exc.retry_after_s)
                 continue
             except Exception:  # noqa: BLE001 — never let one poisoned chapter kill the loop
                 log.exception("chapter processing failed; leaving pointer in %s", PROCESSING_QUEUE)
+                # Clear the stage marker but leave the claim: the reaper still owns
+                # recovery here, and a stale "translating…" would otherwise be reported
+                # for a chapter nothing is working on.
+                await self.redis.hdel(PROCESSING_STAGE, raw)
                 continue
             # Success: drop the processing pointer and its claim record for this message.
             await self.redis.lrem(PROCESSING_QUEUE, 1, raw)
             await self.redis.hdel(PROCESSING_STARTED, raw)
+            await self.redis.hdel(PROCESSING_STAGE, raw)
 
     async def _reap_forever(self) -> None:
         """Requeue jobs claimed longer than ``visibility_timeout`` ago (§6.3).
@@ -168,6 +179,7 @@ class Worker:
             # field either way.
             removed = await self.redis.lrem(PROCESSING_QUEUE, 1, raw)
             await self.redis.hdel(PROCESSING_STARTED, raw)
+            await self.redis.hdel(PROCESSING_STAGE, raw)
             if removed:
                 await self.redis.lpush(PENDING_QUEUE, raw)
                 log.warning(
@@ -231,6 +243,10 @@ class Worker:
 
         try:
             for stage in DEFAULT_STAGES:
+                # Publish the stage before running it, so an observer sees the stage that
+                # is currently blocking rather than the last one that finished — the whole
+                # point here is explaining a chapter that appears stuck.
+                await self.redis.hset(PROCESSING_STAGE, raw, stage.name)
                 await stage.run(ctx, state)
         except AdmissionRejected:
             # The outer loop requeues without turning capacity pressure into a job error.
