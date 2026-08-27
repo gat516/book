@@ -60,7 +60,7 @@ def _responder(*, propose: dict[str, str], decide: dict[str, dict]):
 
 
 def _ctx(
-    db, novel_id, provider, *, source_lang: str = "en", target_lang: str = "en"
+    db, novel_id, provider, *, source_lang: str = "en", target_lang: str = "en", **cfg_overrides
 ) -> StageContext:
     return StageContext(
         novel=NovelMeta(
@@ -75,7 +75,7 @@ def _ctx(
         embed_provider=provider,
         db=db,
         objects=None,
-        cfg=make_config(),
+        cfg=make_config(**cfg_overrides),
         cache=LLMCache(FakeRedis()),
     )
 
@@ -410,6 +410,127 @@ async def test_bootstrap_glossary_term_is_backfilled_not_reproposed(db_conn):
         # No new changelog entry: this is a backfill of the existing bootstrap row, not a
         # new lock — version and audit trail are untouched, exactly Phase N6's "Done when".
         assert changelog_count == (1,)
+    finally:
+        await delete_novel(db_conn, novel_id)
+
+
+# --- glossary poisoning guards (migration 0016) ------------------------------
+#
+# A locked term is immutable and enforced against every later translation, so a bad one is
+# unrecoverable: the observed failure had a small model return one invented name for six
+# different source terms, after which no correct translation could ever satisfy the
+# glossary and the novel became permanently untranslatable. These guard the write path so
+# model weakness degrades quality instead of bricking a novel.
+
+
+async def test_duplicate_target_term_is_refused(db_conn):
+    """Guard 1: one target term per novel. The six-way collapse is exactly this."""
+    novel_id = await make_novel(
+        db_conn, source_lang="zh", target_lang="en", ontology=json.dumps(ONTOLOGY)
+    )
+    try:
+        ids = await seed_entities(db_conn, novel_id, {"凌峰": "character", "姜梦月": "character"})
+        async with db_conn.transaction():
+            first = await _lock_glossary(
+                db_conn, novel_id=novel_id, source_term="凌峰", target_term="Ling Feng",
+                entity_id=ids["凌峰"], chapter=1, target_lang="en", min_proposals=1,
+            )
+        assert first == 1
+
+        # A different source claiming the same target must be declined, not locked.
+        async with db_conn.transaction():
+            second = await _lock_glossary(
+                db_conn, novel_id=novel_id, source_term="姜梦月", target_term="Ling Feng",
+                entity_id=ids["姜梦月"], chapter=1, target_lang="en", min_proposals=1,
+            )
+        assert second is None
+
+        rows = await (
+            await db_conn.execute(
+                "SELECT source_term FROM glossary WHERE novel_id = %s", (novel_id,)
+            )
+        ).fetchall()
+        assert [r[0] for r in rows] == ["凌峰"], "the first claim must survive intact"
+    finally:
+        await delete_novel(db_conn, novel_id)
+
+
+async def test_untranslated_target_term_is_refused(db_conn):
+    """Guard 2: for zh->en, a target still in the source script means the model didn't
+    translate it — echoing the source back, or emitting a placeholder name."""
+    novel_id = await make_novel(
+        db_conn, source_lang="zh", target_lang="en", ontology=json.dumps(ONTOLOGY)
+    )
+    try:
+        ids = await seed_entities(db_conn, novel_id, {"青云宗": "sect"})
+        async with db_conn.transaction():
+            locked = await _lock_glossary(
+                db_conn, novel_id=novel_id, source_term="青云宗", target_term="青云宗",
+                entity_id=ids["青云宗"], chapter=1, target_lang="en", min_proposals=1,
+            )
+        assert locked is None
+
+        count = await (
+            await db_conn.execute(
+                "SELECT count(*) FROM glossary WHERE novel_id = %s", (novel_id,)
+            )
+        ).fetchone()
+        assert count == (0,)
+    finally:
+        await delete_novel(db_conn, novel_id)
+
+
+async def test_term_locks_only_after_a_second_chapter_agrees(db_conn):
+    """Guard 3: corroboration. One chapter's proposal is held provisionally; a second,
+    independent chapter proposing the same mapping promotes it."""
+    novel_id = await make_novel(
+        db_conn, source_lang="zh", target_lang="en", ontology=json.dumps(ONTOLOGY)
+    )
+    try:
+        ids = await seed_entities(db_conn, novel_id, {"青云宗": "sect"})
+        kwargs = dict(
+            novel_id=novel_id, source_term="青云宗", target_term="Azure Cloud Sect",
+            entity_id=ids["青云宗"], target_lang="en", min_proposals=2,
+        )
+
+        async with db_conn.transaction():
+            assert await _lock_glossary(db_conn, chapter=1, **kwargs) is None
+
+        locked = await (
+            await db_conn.execute(
+                "SELECT count(*) FROM glossary WHERE novel_id = %s", (novel_id,)
+            )
+        ).fetchone()
+        assert locked == (0,), "first sighting must not lock"
+
+        # Re-running the SAME chapter is not independent evidence and must not promote it.
+        async with db_conn.transaction():
+            assert await _lock_glossary(db_conn, chapter=1, **kwargs) is None
+        still_unlocked = await (
+            await db_conn.execute(
+                "SELECT count(*) FROM glossary WHERE novel_id = %s", (novel_id,)
+            )
+        ).fetchone()
+        assert still_unlocked == (0,), "a chapter must not corroborate itself"
+
+        async with db_conn.transaction():
+            assert await _lock_glossary(db_conn, chapter=2, **kwargs) == 1
+
+        row = await (
+            await db_conn.execute(
+                "SELECT target_term FROM glossary WHERE novel_id = %s AND source_term = %s",
+                (novel_id, "青云宗"),
+            )
+        ).fetchone()
+        assert row == ("Azure Cloud Sect",)
+
+        # Promotion clears the provisional record it was promoted from.
+        leftover = await (
+            await db_conn.execute(
+                "SELECT count(*) FROM glossary_candidate WHERE novel_id = %s", (novel_id,)
+            )
+        ).fetchone()
+        assert leftover == (0,)
     finally:
         await delete_novel(db_conn, novel_id)
 

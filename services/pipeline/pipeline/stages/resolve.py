@@ -36,6 +36,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import uuid
 
 from pipeline.context import PipelineState, StageContext
@@ -62,6 +63,74 @@ CANDIDATE_K = 5  # nearest neighbours offered alongside the exact matches
 CONTEXT_WINDOW = 120  # characters either side of the first occurrence, for disambiguation
 UNKNOWN_KIND = "unknown"
 
+# How many DISTINCT chapters must independently propose the same source→target mapping
+# before it is locked (migration 0016). 1 disables corroboration and restores the old
+# lock-on-first-sight behaviour.
+GLOSSARY_MIN_PROPOSALS = 2
+
+# A name should not run to a sentence; a model that returns one has misunderstood the ask.
+MAX_TARGET_TERM_CHARS = 80
+
+_CJK_RANGE = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
+_CJK_LANGS = frozenset({"zh", "ja"})
+
+
+def _target_term_problem(target_term: str, target_lang: str) -> str | None:
+    """Return why this target term is unusable, or None if it looks plausible.
+
+    Cheap shape checks, not a quality judgement — they catch a model that has failed to
+    translate at all rather than one that translated badly. The distinction matters because
+    a locked term is immutable and enforced against every later translation, so garbage
+    here is unrecoverable while a merely mediocre name is not.
+    """
+    target = target_term.strip()
+    if len(target) > MAX_TARGET_TERM_CHARS:
+        return f"looks like prose, not a name ({len(target)} chars)"
+    if target_lang not in _CJK_LANGS and _CJK_RANGE.search(target):
+        # The commonest weak-model failure for zh→en: echoing the source back, or emitting
+        # a placeholder name, instead of rendering it in the target language.
+        return f"contains CJK characters but target language is {target_lang!r}"
+    return None
+
+
+async def _target_term_owner(db, novel_id: str, target_term: str) -> str | None:
+    """Which source term already claims this target in this novel, if any."""
+    row = await (
+        await db.execute(
+            "SELECT source_term FROM glossary WHERE novel_id = %s AND target_term = %s",
+            (novel_id, target_term),
+        )
+    ).fetchone()
+    return row[0] if row else None
+
+
+async def _record_candidate(
+    db, novel_id: str, source_term: str, target_term: str, chapter: int
+) -> int:
+    """Record a proposed mapping and return how many distinct chapters have proposed it.
+
+    The counter advances only when the proposing chapter differs from the last one seen, so
+    re-running a single chapter can never corroborate its own suggestion — "independent"
+    has to mean independent for this guard to be worth anything.
+    """
+    row = await (
+        await db.execute(
+            """
+            INSERT INTO glossary_candidate
+              (novel_id, source_term, target_term, proposals, first_seen_chapter, last_seen_chapter)
+            VALUES (%s, %s, %s, 1, %s, %s)
+            ON CONFLICT (novel_id, source_term, target_term) DO UPDATE
+            SET proposals = glossary_candidate.proposals
+                  + CASE WHEN glossary_candidate.last_seen_chapter = EXCLUDED.last_seen_chapter
+                         THEN 0 ELSE 1 END,
+                last_seen_chapter = EXCLUDED.last_seen_chapter
+            RETURNING proposals
+            """,
+            (novel_id, source_term, target_term, chapter, chapter),
+        )
+    ).fetchone()
+    return row[0]
+
 
 async def _lock_glossary(
     db,
@@ -71,7 +140,10 @@ async def _lock_glossary(
     target_term: str,
     entity_id: str,
     chapter: int,
-) -> int:
+    target_lang: str = "",
+    require_corroboration: bool = True,
+    min_proposals: int = GLOSSARY_MIN_PROPOSALS,
+) -> int | None:
     """Insert one locked term and its tamper-evident audit row.
 
     The advisory lock makes ``MAX(version)`` and the changelog hash chain a
@@ -88,7 +160,55 @@ async def _lock_glossary(
         raise ValueError(
             f"refusing to lock a blank glossary term: {source_term!r} => {target_term!r}"
         )
+
+    # Guard 2 (migration 0016): shape-check before anything permanent happens. Declining to
+    # lock is safe — the surface simply has no locked term, which costs a translation
+    # constraint, not correctness. Locking garbage is what is unrecoverable.
+    if target_lang:
+        problem = _target_term_problem(target_term, target_lang)
+        if problem is not None:
+            log.warning(
+                "resolve: refusing glossary term %r => %r (%s)", source_term, target_term, problem
+            )
+            return None
+
     await db.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (novel_id,))
+
+    # Guard 1 (migration 0016): one target term per novel. A model that returns the same
+    # invented name for several distinct entities is the exact failure that made a novel
+    # permanently untranslatable — every later translation had to contain that one name
+    # once per entity claiming it. First claim wins; later collisions are declined.
+    owner = await _target_term_owner(db, novel_id, target_term)
+    if owner is not None and owner != source_term:
+        log.warning(
+            "resolve: refusing glossary term %r => %r (target already locked to %r)",
+            source_term,
+            target_term,
+            owner,
+        )
+        return None
+
+    # Guard 3 (migration 0016): require corroboration before locking. Skipped for
+    # human-supplied terms, where the person is the corroboration.
+    if require_corroboration and min_proposals > 1:
+        already_locked = await (
+            await db.execute(
+                "SELECT 1 FROM glossary WHERE novel_id = %s AND source_term = %s",
+                (novel_id, source_term),
+            )
+        ).fetchone()
+        if already_locked is None:
+            proposals = await _record_candidate(db, novel_id, source_term, target_term, chapter)
+            if proposals < min_proposals:
+                log.info(
+                    "resolve: holding %r => %r provisionally (%d/%d chapters agree)",
+                    source_term,
+                    target_term,
+                    proposals,
+                    min_proposals,
+                )
+                return None
+
     row = await (
         await db.execute(
             "SELECT version FROM glossary WHERE novel_id = %s ORDER BY version DESC LIMIT 1",
@@ -163,6 +283,12 @@ async def _lock_glossary(
         VALUES (%s, %s, %s, NULL, %s, %s, %s, %s)
         """,
         (novel_id, seq, source_term, target_term, chapter, prev_hash or None, row_hash),
+    )
+    # The mapping is locked now, so its provisional records (including any competing
+    # targets this source accumulated before settling) have served their purpose.
+    await db.execute(
+        "DELETE FROM glossary_candidate WHERE novel_id = %s AND source_term = %s",
+        (novel_id, source_term),
     )
     return version
 
@@ -360,6 +486,8 @@ class ResolveStage:
                         target_term=confirmed.canonical,
                         entity_id=confirmed.entity_id,
                         chapter=chapter,
+                        target_lang=ctx.novel.target_lang,
+                        min_proposals=ctx.cfg.glossary_min_proposals,
                     )
             else:
                 await writer.upsert_aliases([alias])
@@ -405,6 +533,8 @@ class ResolveStage:
                     target_term=target_term or surface,
                     entity_id=entity_id,
                     chapter=chapter,
+                    target_lang=ctx.novel.target_lang,
+                    min_proposals=ctx.cfg.glossary_min_proposals,
                 )
         else:
             await writer.insert_entity(entity, aliases)

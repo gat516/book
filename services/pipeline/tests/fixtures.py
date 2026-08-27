@@ -38,6 +38,10 @@ def make_config(**overrides) -> Config:
         ollama_timeout_seconds=120.0,
         deepseek_api_key="",
         deepseek_base_url="https://api.deepseek.com",
+        # 1 by default so the many tests covering lock MECHANICS (audit chain, entity
+        # binding, idempotency) stay one-chapter and readable. The corroboration guard
+        # itself is exercised by a test that raises this explicitly.
+        glossary_min_proposals=1,
         prompt_version="1",
         config_version="1",
         queue_timeout=5,
@@ -176,6 +180,7 @@ async def delete_novel(conn, novel_id: str) -> None:
         "mention_span",
         "alias",
         "glossary_changelog",
+        "glossary_candidate",
         "glossary",
         "entity",
         "job",

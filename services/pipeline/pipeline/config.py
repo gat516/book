@@ -40,6 +40,13 @@ class Config:
     deepseek_api_key: str
     deepseek_base_url: str
 
+    # How many DISTINCT chapters must independently propose the same source→target mapping
+    # before RESOLVE locks it (migration 0016). Glossary rows are immutable and enforced
+    # against every later translation, so a single hallucinated term is unrecoverable —
+    # requiring the model to agree with itself across chapters is what keeps one bad call
+    # from poisoning a novel. 1 restores lock-on-first-sight.
+    glossary_min_proposals: int
+
     # Cache-key inputs (§6.1) — bumping either invalidates the LLM-result cache.
     prompt_version: str
     config_version: str
@@ -102,6 +109,7 @@ class Config:
             gateway_backend=_getenv("LLM_GATEWAY_BACKEND", "local_gpu"),
             gateway_provider=_getenv("LLM_GATEWAY_PROVIDER", "ollama"),
             gateway_max_output_tokens=int(_getenv("LLM_GATEWAY_MAX_OUTPUT_TOKENS", "8192")),
+            glossary_min_proposals=int(_getenv("GLOSSARY_MIN_PROPOSALS", "2")),
             prompt_version=_getenv("PROMPT_VERSION", "1"),
             config_version=_getenv("CONFIG_VERSION", "1"),
             queue_timeout=int(_getenv("PIPELINE_QUEUE_TIMEOUT", "5")),

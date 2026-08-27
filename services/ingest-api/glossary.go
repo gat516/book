@@ -10,7 +10,18 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// isDuplicateTargetTerm reports whether err is migration 0016's one-target-per-novel
+// index firing. Without this the human-facing bootstrap and correction endpoints would
+// answer a duplicate target with a raw 500 rather than the conflict it actually is.
+func isDuplicateTargetTerm(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) &&
+		pgErr.Code == "23505" &&
+		pgErr.ConstraintName == "glossary_novel_target_key"
+}
 
 var ErrGlossaryTermNotFound = errors.New("no such glossary term")
 
@@ -80,6 +91,10 @@ func (s *Store) CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm, ne
 		"UPDATE glossary SET target_term = $1, version = $2 WHERE novel_id = $3 AND source_term = $4",
 		newTarget, newVersion, novelID, sourceTerm,
 	); err != nil {
+		if isDuplicateTargetTerm(err) {
+			return 0, fmt.Errorf("%w: %q is already the target of another source term",
+				ErrGlossaryTermConflict, newTarget)
+		}
 		return 0, err
 	}
 
@@ -181,6 +196,10 @@ func (s *Store) BootstrapGlossaryTerm(ctx context.Context, novelID, sourceTerm, 
 			return 0, err
 		}
 		return newVersion, nil
+	}
+	if isDuplicateTargetTerm(err) {
+		return 0, fmt.Errorf("%w: %q is already the target of another source term",
+			ErrGlossaryTermConflict, targetTerm)
 	}
 	if err != nil {
 		return 0, err
