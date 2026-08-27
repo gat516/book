@@ -17,6 +17,10 @@ import (
 const (
 	pendingQueue    = "scrape:pending" // keep in sync with reader-api's enqueue key
 	processingQueue = "scrape:processing"
+	// The PIPELINE's queue (services/pipeline/pipeline/worker.py's PENDING_QUEUE), read
+	// here only to measure how far ahead of processing this scrape has run. The scraper
+	// never writes it — ingest-api owns that.
+	pipelinePendingQueue = "jobs:pending"
 )
 
 // Worker drains scrape:pending the same way pipeline/worker.py drains jobs:pending —
@@ -31,6 +35,7 @@ type Worker struct {
 	ingest          *ingestClient
 	client          *httpClient
 	contentLenFloor int
+	maxQueueDepth   int // service default; a scrape job may override it per novel
 }
 
 func NewWorker(cfg Config) (*Worker, error) {
@@ -48,6 +53,7 @@ func NewWorker(cfg Config) (*Worker, error) {
 		ingest:          newIngestClient(cfg.IngestAPIURL),
 		client:          newHTTPClient(cfg.ReqsPerSecond, cfg.JitterMillis, cfg.UserAgentString),
 		contentLenFloor: cfg.ContentLenFloor,
+		maxQueueDepth:   cfg.MaxQueueDepth,
 	}, nil
 }
 
@@ -83,14 +89,64 @@ type jobRow struct {
 	novelID  string
 	startURL string
 	mode     string
+	// maxQueueDepth is per-scrape (nil = fall back to the service default): how far ahead
+	// of the pipeline this novel may be fetched. Per novel rather than process-wide
+	// because the right answer depends on the book — a short novel can be pulled in one
+	// go, a 5000-chapter serial should not be.
+	maxQueueDepth *int
 }
 
 func (w *Worker) loadJob(ctx context.Context, jobID int64) (jobRow, error) {
 	var row jobRow
 	err := w.db.QueryRow(ctx,
-		`SELECT novel_id::text, start_url, mode FROM scrape_job WHERE id = $1`, jobID,
-	).Scan(&row.novelID, &row.startURL, &row.mode)
+		`SELECT novel_id::text, start_url, mode, max_queue_depth FROM scrape_job WHERE id = $1`, jobID,
+	).Scan(&row.novelID, &row.startURL, &row.mode, &row.maxQueueDepth)
 	return row, err
+}
+
+// waitForCapacity blocks while the pipeline's pending queue is at or above this scrape's
+// depth limit, so fetching cannot outrun processing.
+//
+// Fetching is network-bound and processing is LLM-bound — measured on this stack, 145
+// chapters were fetched in 30 minutes while none finished translating. Left uncapped, a
+// long novel is pulled down in hours onto a queue that takes weeks to drain, and the
+// source site is hammered for content nothing can use yet.
+//
+// A depth of 0 disables the limit (fetch as fast as politeness allows).
+func (w *Worker) waitForCapacity(jobID int64, limit int) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if limit <= 0 {
+			return nil
+		}
+		logged := false
+		for {
+			depth, err := w.redis.LLen(ctx, pipelinePendingQueue).Result()
+			if err != nil {
+				// Don't strand a scrape on a transient Redis blip: the limit is a
+				// courtesy throttle, not a correctness invariant.
+				log.Printf("scrape job %d: queue depth check failed, continuing: %v", jobID, err)
+				return nil
+			}
+			if depth < int64(limit) {
+				return nil
+			}
+			if !logged {
+				log.Printf("scrape job %d: pausing, pipeline queue at %d (limit %d)", jobID, depth, limit)
+				logged = true
+			}
+			// Cancellation must still be honoured while paused, otherwise a cancel
+			// request would not take effect until the queue drained.
+			cancelled, err := w.cancelRequested(ctx, jobID)
+			if err == nil && cancelled {
+				return nil // let the walk loop's own shouldStop observe it and stop cleanly
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+			}
+		}
+	}
 }
 
 func (w *Worker) setStatus(ctx context.Context, jobID int64, status, lastError string) error {
@@ -166,6 +222,7 @@ func (w *Worker) handle(ctx context.Context, jobID int64) error {
 			RawText:       page.Text,
 			SiteChapterNo: page.Title,
 			Part:          part,
+			Enqueue:       false, // reader-api queues translation on demand; see the field's comment
 		}
 		if job.mode == "bootstrap" {
 			req.TranslatedText = page.Text
@@ -196,7 +253,14 @@ func (w *Worker) handle(ctx context.Context, jobID int64) error {
 		return w.cancelRequested(ctx, jobID)
 	}
 
-	stopReason, walkErr := walk(ctx, w.client, site, job.startURL, onChapter, shouldStop, w.contentLenFloor)
+	// Per-scrape limit wins; the service default applies when the job didn't specify one.
+	queueLimit := w.maxQueueDepth
+	if job.maxQueueDepth != nil {
+		queueLimit = *job.maxQueueDepth
+	}
+
+	stopReason, walkErr := walk(ctx, w.client, site, job.startURL, onChapter, shouldStop,
+		w.waitForCapacity(jobID, queueLimit), w.contentLenFloor)
 	if walkErr != nil {
 		return w.fail(ctx, jobID, walkErr.Error())
 	}

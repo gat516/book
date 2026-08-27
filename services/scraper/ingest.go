@@ -28,6 +28,10 @@ type pasteChapterRequest struct {
 	TranslatedText string `json:"translated_text,omitempty"`
 	SiteChapterNo  string `json:"site_chapter_no,omitempty"`
 	Part           int    `json:"part,omitempty"`
+	// Always false from the scraper: it ingests far faster than the pipeline translates,
+	// so queueing every fetched chapter buries the reader's own chapters behind hundreds
+	// nobody is reading. reader-api queues them on demand near the reader instead.
+	Enqueue bool `json:"enqueue"`
 }
 
 type pasteChapterResponse struct {
