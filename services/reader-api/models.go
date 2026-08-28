@@ -128,8 +128,9 @@ type ChapterListItem struct {
 	// Part of a multi-page source chapter (1-based; 1 for an ordinary chapter). Sites that
 	// paginate a chapter produce several rows sharing one SiteChapterNo, distinguished
 	// only by this.
-	Part   int    `json:"part"`
-	Status string `json:"status"`
+	Part        int    `json:"part"`
+	Status      string `json:"status"`
+	GraphStatus string `json:"graph_status,omitempty"`
 }
 
 // ChapterListResponse pages the index: a scraped novel can hold thousands of chapters, so

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -143,10 +144,10 @@ func (s *Store) chapterIndexByHash(ctx context.Context, novelID, rawHash string)
 // queues what it accepts, because fetching outruns translating by orders of magnitude and
 // queueing everything buried the reader's own chapters behind hundreds nobody was reading.
 //
-// The UPDATE ... WHERE status = 'ingested' RETURNING is what makes this safe to call
+// The UPDATE ... WHERE status IN ('ingested', 'error') RETURNING makes this safe to call
 // repeatedly and concurrently: only the caller that actually flips a row observes it, so a
 // chapter is queued exactly once no matter how many readers ask. Chapters already queued,
-// done, or errored are skipped by the same predicate.
+// or done are skipped by the same predicate.
 func (s *Store) queueTranslationRange(ctx context.Context, novelID string, from, count int) ([]int, error) {
 	if count <= 0 {
 		return []int{}, nil
@@ -181,15 +182,19 @@ func (s *Store) queueTranslationRange(ctx context.Context, novelID string, from,
 		return nil, err
 	}
 
-	for _, index := range queued {
+	// UPDATE RETURNING has no ordering guarantee. LPUSH followed by the worker's
+	// right-pop is FIFO only if we push the requested chapter range in order.
+	sort.Ints(queued)
+	for i, index := range queued {
 		if err := s.enqueue(ctx, QueueMessage{NovelID: novelID, ChapterIndex: index}); err != nil {
 			// The row is already marked 'queued', so returning here would strand it: it
 			// would never be re-queued by a later call. Put it back so the next request
-			// retries it.
+			// retries it. Release the unattempted suffix too: the UPDATE above claimed
+			// the entire range, not only the chapter whose enqueue failed.
 			_, _ = s.db.Exec(ctx,
 				`UPDATE chapter SET status = 'ingested'
-				 WHERE novel_id = $1 AND chapter_index = $2 AND status = 'queued'`,
-				novelID, index)
+				 WHERE novel_id = $1 AND chapter_index = ANY($2) AND status = 'queued'`,
+				novelID, queued[i:])
 			return nil, fmt.Errorf("enqueue chapter %d: %w", index, err)
 		}
 	}

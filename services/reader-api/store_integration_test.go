@@ -424,6 +424,73 @@ func TestDatabaseRolesAreLeastPrivilege(t *testing.T) {
 	}
 }
 
+func TestNextExistsRegardlessOfTranslationStatusAndGlossaryDeletionIsHidden(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	ctx := context.Background()
+	novelID := uuid.New().String()
+	if _, err := admin.Exec(ctx, `INSERT INTO novel(id,title,source_lang,target_lang,ontology) VALUES ($1,'Navigation test','zh','en','{}')`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		admin.Exec(ctx, `DELETE FROM glossary WHERE novel_id=$1`, novelID)
+		admin.Exec(ctx, `DELETE FROM chapter WHERE novel_id=$1`, novelID)
+		admin.Exec(ctx, `DELETE FROM novel WHERE id=$1`, novelID)
+	})
+	if _, err := admin.Exec(ctx, `INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status) VALUES ($1,2,'nav-test','test','{}','ingested')`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{"ingested", "queued", "error", "done"} {
+		if _, err := admin.Exec(ctx, `UPDATE chapter SET status=$1 WHERE novel_id=$2`, status, novelID); err != nil {
+			t.Fatal(err)
+		}
+		if exists, err := store.hasNextChapter(ctx, novelID, 1); err != nil || !exists {
+			t.Fatalf("next when %s: %v %v", status, exists, err)
+		}
+	}
+	if exists, err := store.hasNextChapter(ctx, novelID, 2); err != nil || exists {
+		t.Fatalf("nonexistent next: %v %v", exists, err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO glossary(novel_id,source_term,target_term,version,locked_at_chapter,deleted) VALUES ($1,'visible','Visible',1,0,false), ($1,'deleted','Deleted',2,0,true), ($1,'future','Future',3,100,false)`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	terms, err := store.ListGlossary(ctx, novelID, 0)
+	if err != nil || len(terms) != 1 || terms[0].SourceTerm != "visible" {
+		t.Fatalf("glossary: %v %v", terms, err)
+	}
+}
+
+func TestReadableTranslationSurvivesGraphFailure(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	ctx := context.Background()
+	novelID := uuid.NewString()
+	if _, err := admin.Exec(ctx, `INSERT INTO novel(id,title,source_lang,target_lang,ontology) VALUES ($1,'Readiness test','zh','en','{}')`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		admin.Exec(ctx, `DELETE FROM reader_progress WHERE novel_id=$1`, novelID)
+		admin.Exec(ctx, `DELETE FROM chapter WHERE novel_id=$1`, novelID)
+		admin.Exec(ctx, `DELETE FROM novel WHERE id=$1`, novelID)
+	})
+	if _, err := admin.Exec(ctx, `INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status,translation_ready) VALUES ($1,1,'ready','raw','{}','error',true),($1,2,'failed','raw','{}','error',false)`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AdvanceProgress(ctx, "readiness-test", novelID, 1); err != nil {
+		t.Fatalf("readable despite graph failure: %v", err)
+	}
+	if _, err := store.AdvanceProgress(ctx, "readiness-test", novelID, 2); err == nil {
+		t.Fatal("failed translation became readable")
+	}
+	chapters, _, err := store.ListChapters(ctx, novelID, 10, 0)
+	if err != nil || len(chapters) != 2 || chapters[0].Status != "done" || chapters[0].GraphStatus != "error" || chapters[1].Status != "error" {
+		t.Fatalf("chapter statuses: %+v %v", chapters, err)
+	}
+	// A ready preview should neither need Redis nor return stale streaming text.
+	_, available, status, err := store.TranslationPreview(ctx, novelID, 1)
+	if err != nil || available || status != "done" {
+		t.Fatalf("preview: %v %s %v", available, status, err)
+	}
+}
+
 func TestGlossaryEntityLinksRespectKnowledgeTime(t *testing.T) {
 	store, admin := integrationDatabase(t)
 	ctx := context.Background()

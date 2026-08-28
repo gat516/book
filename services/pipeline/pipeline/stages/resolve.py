@@ -41,7 +41,7 @@ import uuid
 
 from pipeline.context import PipelineState, StageContext
 from pipeline.graph import AliasRow, CandidateRow, EntityRow, GraphWriter
-from pipeline.jobs import idempotency_key, insert_job, model_for_stage
+from pipeline.jobs import idempotency_key, insert_job, mark_job_done, model_for_stage
 from pipeline.llm.provider import Class
 from pipeline.resolution import (
     NEW_ENTITY,
@@ -335,12 +335,13 @@ class ResolveStage:
         writer = GraphWriter(ctx.db)
         await writer.ready()
 
+        key = idempotency_key(STAGE, envelope.source_meta.raw_hash, ctx.cfg)
         await insert_job(
             ctx.db,
             novel_id=envelope.novel_id,
             chapter_index=envelope.chapter_index,
             stage=STAGE,
-            key=idempotency_key(STAGE, envelope.source_meta.raw_hash, ctx.cfg),
+            key=key,
         )
 
         resolutions: dict[str, str] = {}
@@ -406,6 +407,9 @@ class ResolveStage:
             resolutions[surface] = entity_id
 
         state.resolutions = resolutions
+        # Tracking only: RESOLVE must still run on retries against the live alias
+        # index (§3.5). Its writes have completed before this success marker.
+        await mark_job_done(ctx.db, key)
         log.info(
             "stage %s chapter=%d scanned=%d proposed=%d resolved=%d created=%d",
             self.name,

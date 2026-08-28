@@ -38,3 +38,5 @@ class QueueMessage(BaseModel):
 
     novel_id: str
     chapter_index: int
+    priority: bool = False
+    enrichment: bool = False

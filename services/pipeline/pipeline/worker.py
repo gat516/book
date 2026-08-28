@@ -1,27 +1,18 @@
 """The offline worker drain loop (instructions.md §5, §6.3; PLAN.md §1.1).
 
-Drains the Redis ``jobs:pending`` queue that ``ingest-api`` fills, loads each chapter's
-body from the object store, and runs it through the stage list. This phase the stages are
-no-op stubs, so a chapter's whole journey is: pop → load → run stubs → mark ``done``.
-
-Queue discipline (§0.7, §6.3): ``BLMOVE jobs:pending jobs:processing RIGHT LEFT`` *moves*
-the pointer to a processing list rather than plain-popping it, so a crash mid-chapter
-leaves the pointer recoverable instead of lost — but only if something actually recovers
-it. Recording a claim timestamp and running a reaper sweep is what makes that true: on
-claim, ``jobs:processing:started[<raw message>] = now()``; a background reaper re-queues
-any claim older than ``cfg.visibility_timeout`` back onto ``jobs:pending``. Keyed by the
-raw queue message itself (matching the existing ``LREM`` pattern below) rather than a
-``job_id`` — this ``QueueMessage`` doesn't carry one yet; spec §3.4 anticipates a richer
-message shape that would make ``job_id`` the natural key instead. Without the reaper, a
-crashed worker's chapter is stranded in ``jobs:processing`` forever — the pointer is
-"recoverable" only in the sense that nothing stops you from recovering it by hand.
+Claims chapters atomically in chapter order (with explicit reading priority), renews
+their leases during inference, and recovers abandoned claims. Translation readiness
+is durable and independent of optional graph enrichment. See queue.py for the Redis
+contract; database completion markers still protect append-only graph writes.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 import time
+from contextlib import suppress
 
 import psycopg
 import redis.asyncio as aredis
@@ -35,7 +26,10 @@ from pipeline.envelope import ChapterEnvelope, QueueMessage, SourceMeta
 from pipeline.llm import embed_provider_from_env, provider_from_env
 from pipeline.llm.provider import AdmissionRejected, LLMProvider
 from pipeline.provider_config import build_provider, load_provider_config
+from pipeline import queue
+from pipeline.failures import record_failure
 from pipeline.stages import DEFAULT_STAGES
+from pipeline.stages.translate import TranslateStage
 from pipeline.textproc import textproc_from_config
 
 log = logging.getLogger(__name__)
@@ -113,6 +107,11 @@ class Worker:
         # — a backfill filling this one must not evict the limiter's accounting.
         self.cache = LLMCache(self.redis)
         self.db: psycopg.AsyncConnection | None = None
+        self.stopping = asyncio.Event()
+
+    def request_stop(self) -> None:
+        log.info("shutdown requested; finishing current chapter before stopping")
+        self.stopping.set()
 
     async def _assert_embed_dim(self) -> None:
         """Fail fast at startup, not hundreds of chunks into a run (§10).
@@ -143,59 +142,60 @@ class Worker:
             await self.db.close()
 
     async def _loop(self) -> None:
-        while True:
-            try:
-                raw = await self.redis.blmove(
-                    PENDING_QUEUE, PROCESSING_QUEUE, self.cfg.queue_timeout, "RIGHT", "LEFT"
-                )
-            except aredis.TimeoutError:
-                # redis-py (observed on 8.0.1) can raise a client-side TimeoutError from a
-                # BLMOVE that legitimately times out on an empty queue, instead of
-                # returning None — indistinguishable here from an ordinary empty-queue
-                # timeout, and the correct recovery is identical either way: poll again.
-                # Without this the worker crashes outright the first time the queue goes
-                # idle for cfg.queue_timeout seconds, which defeats the whole point of a
-                # long-running drain loop.
-                continue
+        while not self.stopping.is_set():
+            claimed_at = str(time.time())
+            raw = await self.redis.eval(queue.CLAIM, len(queue.KEYS), *queue.KEYS, claimed_at)
             if raw is None:
-                continue  # timed out with an empty queue; poll again
-            # Claim timestamp for the reaper (§6.3): this write must land before any
-            # await that could crash the process, or the reaper can't find a claim it
-            # doesn't know exists yet.
-            await self.redis.hset(PROCESSING_STARTED, raw, time.time())
+                await self._idle(min(max(self.cfg.queue_timeout, 0.1), 1))
+                continue
+            heartbeat = asyncio.create_task(self._renew_claim(raw, claimed_at))
+            disposition = "done"
             try:
                 await self._handle(raw)
             except AdmissionRejected as exc:
                 # Backpressure is not a failed chapter. Keep the claim recoverable
                 # during the requested delay, then place it back on the pending queue.
                 await asyncio.sleep(max(exc.retry_after_s, 0.25))
-                await self.redis.lrem(PROCESSING_QUEUE, 1, raw)
-                await self.redis.hdel(PROCESSING_STARTED, raw)
-                await self.redis.hdel(PROCESSING_STAGE, raw)
-                await self.redis.lpush(PENDING_QUEUE, raw)
+                disposition = "retry"
                 log.info("gateway admission deferred chapter for %.3fs", exc.retry_after_s)
-                continue
             except ChapterFailed:
                 # The outcome is recorded on the chapter row, so this job is not lost and
                 # must not be resurrected: drop the claim outright. Leaving it made failed
                 # chapters appear as in-flight work and had the reaper retry them on every
                 # sweep — re-running a translation that fails the same way each time.
                 log.exception("chapter processing failed; recorded and dropping claim")
-                await self.redis.lrem(PROCESSING_QUEUE, 1, raw)
-                await self.redis.hdel(PROCESSING_STARTED, raw)
-                await self.redis.hdel(PROCESSING_STAGE, raw)
-                continue
             except Exception:  # noqa: BLE001 — never let one poisoned chapter kill the loop
                 # Failed BEFORE the outcome could be recorded (e.g. the chapter row or
                 # object store was unreachable), so this one really is unfinished business:
                 # leave the claim for the reaper to requeue.
                 log.exception("chapter processing failed; leaving pointer in %s", PROCESSING_QUEUE)
+                disposition = "abandoned"
                 await self.redis.hdel(PROCESSING_STAGE, raw)
-                continue
-            # Success: drop the processing pointer and its claim record for this message.
-            await self.redis.lrem(PROCESSING_QUEUE, 1, raw)
-            await self.redis.hdel(PROCESSING_STARTED, raw)
-            await self.redis.hdel(PROCESSING_STAGE, raw)
+            finally:
+                heartbeat.cancel()
+                with suppress(asyncio.CancelledError):
+                    await heartbeat
+            if disposition != "abandoned":
+                await self.redis.eval(queue.RELEASE, len(queue.KEYS), *queue.KEYS,
+                                      raw, claimed_at, disposition)
+
+    async def _idle(self, seconds: float) -> None:
+        with suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(self.stopping.wait(), timeout=seconds)
+
+    async def _renew_claim(self, raw: str, claimed_at: str) -> None:
+        # Total chapter duration is not evidence of a dead worker. Keep the original
+        # start time for the UI, and renew a separate lease during slow model calls.
+        interval = max(0.1, min(30, self.cfg.visibility_timeout / 3))
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                renewed = await self.redis.eval(queue.RENEW, len(queue.KEYS), *queue.KEYS,
+                                                raw, claimed_at, str(time.time()))
+                if not renewed:
+                    return
+            except Exception:
+                log.exception("could not renew chapter claim")
 
     async def _reap_forever(self) -> None:
         """Requeue jobs claimed longer than ``visibility_timeout`` ago (§6.3).
@@ -204,10 +204,13 @@ class Worker:
         exists is the failure mode this guards: without this loop, ``jobs:processing``
         plus its claim hash grow forever and no stranded chapter is ever retried.
         """
-        while True:
-            await asyncio.sleep(self.cfg.reaper_interval)
+        while not self.stopping.is_set():
+            await self._idle(self.cfg.reaper_interval)
+            if self.stopping.is_set():
+                break
             try:
                 await self._reap_once()
+                await self._retry_enrichment()
             except Exception:  # noqa: BLE001 — a reaper crash must not kill the worker
                 log.exception("reaper sweep failed")
 
@@ -217,15 +220,11 @@ class Worker:
         for raw, started_at in started.items():
             if now - float(started_at) < self.cfg.visibility_timeout:
                 continue
-            # Only reclaim if the pointer is still actually in jobs:processing — a
-            # completed job that raced this sweep before its own HDEL lands here safely,
-            # since LREM on an absent value is a no-op and we still clear the stale hash
-            # field either way.
-            removed = await self.redis.lrem(PROCESSING_QUEUE, 1, raw)
-            await self.redis.hdel(PROCESSING_STARTED, raw)
-            await self.redis.hdel(PROCESSING_STAGE, raw)
+            # Check the latest heartbeat and recover atomically, so a renewal racing
+            # this sweep cannot requeue a chapter that is still actively running.
+            removed = await self.redis.eval(queue.REAP, len(queue.KEYS), *queue.KEYS,
+                                            raw, str(now), self.cfg.visibility_timeout)
             if removed:
-                await self.redis.lpush(PENDING_QUEUE, raw)
                 log.warning(
                     "reaper requeued stranded job after %.0fs: %r",
                     now - float(started_at),
@@ -237,14 +236,17 @@ class Worker:
         assert self.db is not None
 
         chapter = await self._fetch_one(
-            "SELECT raw_hash, raw_uri, source_meta, status FROM chapter"
+            "SELECT raw_hash, raw_uri, source_meta, status, translation_ready, translated_uri FROM chapter"
             " WHERE novel_id = %s AND chapter_index = %s",
             (msg.novel_id, msg.chapter_index),
         )
         if chapter is None:
             log.warning("no chapter row for %s/%s; dropping", msg.novel_id, msg.chapter_index)
             return
-        raw_hash, raw_uri, source_meta, _status = chapter
+        raw_hash, raw_uri, source_meta, _status, readable, translated_uri = chapter
+        if _status == "done":
+            log.info("chapter %s/%s already done; dropping stale pointer", msg.novel_id, msg.chapter_index)
+            return
 
         novel = await self._fetch_one(
             "SELECT source_lang, target_lang, ontology FROM novel WHERE id = %s",
@@ -284,9 +286,18 @@ class Worker:
             provider_id=provider_id,
         )
         state = PipelineState(envelope=envelope)
+        enrichment_error: tuple[str, Exception] | None = None
+        if readable:
+            # Enrichment retries must not regenerate saved prose or apply a newer
+            # glossary to an older translation (§0.2, forward-only corrections).
+            await self.db.execute(
+                "UPDATE chapter SET enrichment_attempts=enrichment_attempts+1 "
+                "WHERE novel_id=%s AND chapter_index=%s", (msg.novel_id, msg.chapter_index))
 
         try:
             for stage in DEFAULT_STAGES:
+                if enrichment_error and stage.name in {"display_scan", "state", "graph_write"}:
+                    continue
                 # Publish the stage before running it, so an observer sees the stage that
                 # is currently blocking rather than the last one that finished — the whole
                 # point here is explaining a chapter that appears stuck.
@@ -298,23 +309,78 @@ class Worker:
                 if streaming:
                     _set_stream_sink(provider, self._preview_sink(msg.novel_id, msg.chapter_index))
                 try:
-                    await stage.run(ctx, state)
+                    if stage.name == TRANSLATE_STAGE and readable:
+                        if translated_uri:
+                            state.translation = await asyncio.to_thread(self._get_object, translated_uri)
+                            TranslateStage._set_chunks(ctx, state, state.translation)
+                    else:
+                        try:
+                            await stage.run(ctx, state)
+                        except AdmissionRejected:
+                            raise
+                        except Exception as exc:
+                            if not readable and stage.name in {"scan", "resolve"}:
+                                # These stages enrich terminology, but the translator can
+                                # still use the already locked glossary. Do not write a
+                                # partial graph with missing identity bindings afterward.
+                                enrichment_error = (stage.name, exc)
+                                log.exception("%s failed; translating with existing glossary", stage.name)
+                                continue
+                            raise
+                    if stage.name == TRANSLATE_STAGE and not readable:
+                        # The translation stage has validated and durably saved the text.
+                        # Unknown facts and later enrichment errors cannot revoke it.
+                        await self.db.execute(
+                            "UPDATE chapter SET translation_ready=true WHERE novel_id=%s AND chapter_index=%s",
+                            (msg.novel_id, msg.chapter_index))
+                        readable = True
+                        log.info("chapter %s/%s translation ready; enriching graph", msg.novel_id, msg.chapter_index)
+                        await self._clear_preview(msg.novel_id, msg.chapter_index)
                 finally:
                     if streaming:
                         _set_stream_sink(provider, None)
+            if enrichment_error:
+                raise enrichment_error[1]
         except AdmissionRejected:
             # The outer loop requeues without turning capacity pressure into a job error.
             raise
         except Exception as exc:
-            await self._set_status(msg, "error")
+            async with self.db.transaction():
+                await record_failure(self.db, msg.novel_id, msg.chapter_index,
+                                     enrichment_error[0] if enrichment_error and exc is enrichment_error[1] else stage.name, exc)
+                await self._set_status(msg, "error")
+                if readable:
+                    # Retry actual extraction failures, not unknown assertions. Bounded
+                    # attempts prevent a malformed response from monopolizing the model.
+                    await self.db.execute(
+                        "UPDATE chapter SET enrichment_retry_at = now() + interval '5 minutes' "
+                        "WHERE novel_id=%s AND chapter_index=%s AND enrichment_attempts < 3",
+                        (msg.novel_id, msg.chapter_index))
             # Re-raise as ChapterFailed so the drain loop knows the outcome was recorded
             # and the claim can be dropped rather than left for the reaper to retry.
             raise ChapterFailed(f"chapter {msg.chapter_index} failed") from exc
         await self._set_status(msg, "done")
+        await self.db.execute(
+            "UPDATE chapter SET translation_ready=true, enrichment_retry_at=NULL "
+            "WHERE novel_id=%s AND chapter_index=%s", (msg.novel_id, msg.chapter_index))
         # The chapter is readable from the object store now, so the in-flight preview would
         # only ever be a stale, partial copy of it.
         await self._clear_preview(msg.novel_id, msg.chapter_index)
         log.info("chapter %s/%s done", msg.novel_id, msg.chapter_index)
+
+    async def _retry_enrichment(self) -> None:
+        assert self.db is not None
+        # Keep the due timestamp until the work succeeds. Queue insertion is atomic and
+        # deduplicated; a crash between database inspection and enqueue cannot strand it.
+        rows = await (await self.db.execute(
+            "SELECT novel_id::text, chapter_index FROM chapter WHERE translation_ready "
+            "AND status='error' AND enrichment_retry_at <= now() AND enrichment_attempts < 3 "
+            "ORDER BY enrichment_retry_at LIMIT 20"
+        )).fetchall()
+        for novel_id, chapter in rows:
+            msg = QueueMessage(novel_id=novel_id, chapter_index=chapter, enrichment=True)
+            await self.redis.eval(queue.ENQUEUE_ENRICHMENT, len(queue.KEYS), *queue.KEYS,
+                                  novel_id, chapter, msg.model_dump_json())
 
     def _preview_sink(self, novel_id: str, chapter_index: int):
         """Build a throttled writer for one chapter's in-progress translation."""
@@ -379,7 +445,13 @@ class Worker:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    asyncio.run(Worker(Config.load()).start())
+    async def run() -> None:
+        worker = Worker(Config.load())
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, worker.request_stop)
+        await worker.start()
+    asyncio.run(run())
 
 
 if __name__ == "__main__":

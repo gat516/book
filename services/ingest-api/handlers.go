@@ -411,8 +411,9 @@ type translateAheadReq struct {
 	// furthest point any reader has reached, or at chapter 1 for a novel nobody has opened
 	// yet. That lets a caller with no reader context — the scraper — keep the window
 	// topped up without having to know or guess a position.
-	From  *int `json:"from,omitempty"`
-	Count int  `json:"count,omitempty"`
+	From     *int `json:"from,omitempty"`
+	Count    int  `json:"count,omitempty"`
+	Priority bool `json:"priority,omitempty"`
 }
 
 type translateAheadResp struct {
@@ -420,7 +421,8 @@ type translateAheadResp struct {
 	// Queued lists only chapters this call actually moved into the queue — repeated calls
 	// return an empty list rather than re-queueing, which is what makes it safe for the
 	// reader to fire on every chapter turn.
-	Queued []int `json:"queued"`
+	Queued      []int `json:"queued"`
+	Prioritized bool  `json:"prioritized"`
 }
 
 // translateAhead queues translation for a window of chapters starting at From. Called as
@@ -438,6 +440,25 @@ func (a *API) translateAhead(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "from must be >= 0")
 		return
 	}
+	if req.Priority {
+		if req.From == nil || req.Count != 1 {
+			writeErr(w, http.StatusBadRequest, "priority requires an explicit from and count=1")
+			return
+		}
+		prioritized, err := a.store.prioritizeChapter(r.Context(), novelID, *req.From)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "chapter not found")
+			return
+		}
+		if err != nil {
+			log.Printf("prioritize chapter: %v", err)
+			writeErr(w, http.StatusInternalServerError, "could not prioritize chapter")
+			return
+		}
+		writeJSON(w, http.StatusOK, translateAheadResp{NovelID: novelID, Queued: []int{}, Prioritized: prioritized})
+		return
+	}
+
 	from := 1
 	if req.From != nil {
 		from = *req.From

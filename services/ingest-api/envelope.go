@@ -36,4 +36,5 @@ type SourceMeta struct {
 type QueueMessage struct {
 	NovelID      string `json:"novel_id"`
 	ChapterIndex int    `json:"chapter_index"`
+	Priority     bool   `json:"priority,omitempty"`
 }

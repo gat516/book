@@ -117,6 +117,19 @@ async def novel(db_conn):
 # --- the drift test: the reason this stage exists ---------------------------
 
 
+async def test_success_is_recorded_but_does_not_skip_live_resolution(db_conn, novel):
+    provider = FakeProvider(_responder(propose={}, decide={}))
+    ctx = _ctx(db_conn, novel, provider)
+    await _run(ctx, "An empty room.")
+    row = await (await db_conn.execute(
+        "SELECT state FROM job WHERE novel_id = %s AND stage = 'resolve'", (novel,)
+    )).fetchone()
+    assert row == ("done",)
+
+    await _run(ctx, "An empty room.")
+    assert len(provider.calls) == 2, "done tracks success, not a content-cache hit"
+
+
 async def test_variant_spelling_resolves_to_the_existing_entity(db_conn, novel):
     """§12 risk #2. The chapter calls a known sect by a shorter name. Exact matching —
     what stood in for resolution through 1.5 — would create a second entity here and the

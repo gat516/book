@@ -95,7 +95,7 @@ Without `INGEST_TEST_DATABASE_URL`, the database-backed tests skip cleanly.
 | `handlers.go` | HTTP handlers + validation |
 | `glossary.go` | glossary correction — Go port of `resolve.py`'s hash-chain audit trail |
 
-### Glossary deletion
+### Glossary deletion and reader priority
 
 Migration `0019_glossary_deletion.sql` adds glossary tombstones. Apply it before
 starting the updated APIs/pipeline. `DELETE /novels/{id}/glossary/{term}` accepts
@@ -105,3 +105,12 @@ advances the novel-wide version, and appends a hash-chained audit entry whose
 are unchanged. RESOLVE will not promote a deleted source again; explicitly adding
 it via `/glossary/bootstrap` restores it with a fresh version. Deleted targets
 can be reused. Create/correct requests trim terms and reject blank values.
+
+`POST /novels/{id}/translate-ahead` with
+`{"from": 12, "count": 1, "priority": true}` retries an errored chapter or moves an
+existing pending pointer to the worker's next dequeue position. It does not flush
+other work or cancel the currently processing chapter. Repeated requests leave
+one pending pointer; the Redis processing-list check and move are atomic. The
+response's `prioritized` reports whether the pointer moved; completed or active
+chapters are not duplicated by the promotion script. Ordinary lookahead requests
+retain FIFO behavior.

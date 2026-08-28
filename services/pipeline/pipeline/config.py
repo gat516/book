@@ -52,11 +52,11 @@ class Config:
     config_version: str
 
     # Worker
-    queue_timeout: int  # seconds BLMOVE blocks before looping (0 = block forever)
+    queue_timeout: int  # idle polling interval, bounded to 0.1–1s for ordered claims
 
-    # Crash-recovery reaper (§6.3): a claimed job stranded in jobs:processing longer than
-    # visibility_timeout is assumed crashed and requeued. Default ~3x a generous stage
-    # estimate; retune once real LLM-bearing stages exist and p99.9 stage time is known.
+    # Crash-recovery reaper (§6.3): renew a separate heartbeat during live work. Only
+    # claims whose heartbeat is stale by visibility_timeout are recovered, regardless
+    # of how long a healthy chapter takes to process.
     # A future gateway's admission lease_timeout must stay BELOW this value (§14.5) —
     # otherwise a job is requeued while its gateway reservation is still held and the
     # same work gets admitted twice.

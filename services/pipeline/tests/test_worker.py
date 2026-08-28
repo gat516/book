@@ -1,0 +1,232 @@
+"""Queue scheduling/recovery regressions against isolated Redis keys, no LLM calls."""
+
+import asyncio
+import json
+import os
+import uuid
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import httpx
+import pytest
+import pytest_asyncio
+import redis.asyncio as redis
+
+from fixtures import make_novel, delete_novel, make_config
+from pipeline import queue
+from pipeline.failures import record_failure, error_code
+from pipeline.worker import Worker, ChapterFailed
+
+
+@pytest_asyncio.fixture
+async def scheduled(monkeypatch):
+    url = os.getenv("PIPELINE_TEST_REDIS_URL")
+    if not url:
+        pytest.skip("PIPELINE_TEST_REDIS_URL is not set")
+    client = redis.from_url(url, decode_responses=True)
+    prefix = f"test:worker:{uuid.uuid4()}:"
+    keys = [prefix + str(i) for i in range(len(queue.KEYS))]
+    monkeypatch.setattr(queue, "KEYS", keys)
+    try:
+        yield client, keys
+    finally:
+        await client.delete(*keys)
+        await client.aclose()
+
+
+def message(n, novel="a", priority=False):
+    value = {"novel_id": novel, "chapter_index": n}
+    if priority:
+        value["priority"] = True
+    return json.dumps(value)
+
+
+async def call(client, script, *args):
+    return await client.eval(script, len(queue.KEYS), *queue.KEYS, *args)
+
+
+async def test_order_retries_before_later_chapters_and_keep_novel_fifo(scheduled):
+    client, keys = scheduled
+    # Oldest queued novel A has shuffled chapters; B must not jump ahead just
+    # because its chapter number is smaller. Simulate completion after each claim.
+    await client.lpush(keys[0], message(10), message(12), message(7), message(1, "b"))
+    for raw in (message(7), message(10), message(12), message(1, "b")):
+        assert await call(client, queue.CLAIM, "100") == raw
+        await call(client, queue.RELEASE, raw, "100", "done")
+    assert await call(client, queue.CLAIM, "101") is None
+
+
+async def test_explicit_priority_wins_once_and_deduplicates(scheduled):
+    client, keys = scheduled
+    priority = message(12, priority=True)
+    await client.lpush(keys[0], message(7), message(12), priority)
+    assert await call(client, queue.CLAIM, "100") == priority
+    assert await client.lrange(keys[0], 0, -1) == [message(7)]
+    await call(client, queue.RELEASE, priority, "100", "done")
+    assert await call(client, queue.CLAIM, "101") == message(7)
+
+
+async def test_same_novel_cannot_run_twice_but_other_novel_can(scheduled):
+    client, keys = scheduled
+    await client.lpush(keys[1], message(2))
+    await client.lpush(keys[0], message(3), message(4, priority=True), message(1, "b"))
+    assert await call(client, queue.CLAIM, "100") == message(1, "b")
+    assert await call(client, queue.CLAIM, "101") is None
+
+
+async def test_heartbeat_protects_slow_job_then_crash_recovers_once(scheduled):
+    client, keys = scheduled
+    raw = message(7)
+    await client.lpush(keys[0], raw)
+    assert await call(client, queue.CLAIM, "100") == raw
+    assert await call(client, queue.RENEW, raw, "100", "500") == 1
+    assert await call(client, queue.REAP, raw, "501", "300") == 0
+    assert await client.hget(keys[2], raw) == "100"  # UI timer stays chapter-wide
+    assert await call(client, queue.REAP, raw, "801", "300") == 1
+    assert await call(client, queue.REAP, raw, "802", "300") == 0
+    assert await call(client, queue.CLAIM, "900") == raw
+    # An old worker cannot renew or acknowledge a newly acquired claim.
+    assert await call(client, queue.RENEW, raw, "100", "901") == 0
+    assert await call(client, queue.RELEASE, raw, "100", "done") == 0
+    assert await client.lrange(keys[1], 0, -1) == [raw]
+
+
+async def test_legacy_claim_without_heartbeat_is_recoverable(scheduled):
+    client, keys = scheduled
+    raw = message(10)
+    await client.lpush(keys[1], raw)
+    await client.hset(keys[2], raw, "100")
+    assert await call(client, queue.REAP, raw, "401", "300") == 1
+    assert await client.lrange(keys[0], 0, -1) == [raw]
+
+
+async def test_worker_reaper_does_not_enqueue_twice(scheduled, monkeypatch):
+    import pipeline.worker as module
+    client, keys = scheduled
+    monkeypatch.setattr(module, "PROCESSING_STARTED", keys[2])
+    worker = Worker.__new__(Worker)
+    worker.redis = client
+    worker.cfg = SimpleNamespace(visibility_timeout=1)
+    raw = message(7)
+    await client.lpush(keys[1], raw)
+    await client.hset(keys[2], raw, "1")
+    await worker._reap_once()
+    assert await client.lrange(keys[0], 0, -1) == [raw]
+
+
+@pytest.mark.parametrize("fail", [False, True])
+async def test_shutdown_finishes_current_claim_and_preserves_pending(scheduled, fail):
+    client, keys = scheduled
+    worker = Worker.__new__(Worker)
+    worker.redis = client
+    worker.stopping = asyncio.Event()
+    worker.cfg = SimpleNamespace(queue_timeout=1, visibility_timeout=300)
+    seen = []
+    async def handle(raw):
+        seen.append(raw)
+        worker.request_stop()
+        if fail:
+            raise ChapterFailed("recorded failure")
+    worker._handle = handle
+    await client.lpush(keys[0], message(2), message(3))
+    await worker._loop()
+    assert seen == [message(2)]
+    assert await client.lrange(keys[0], 0, -1) == [message(3)]
+    assert await client.llen(keys[1]) == 0
+    assert await client.hlen(keys[2]) == 0
+    assert await client.hlen(keys[4]) == 0
+
+
+async def test_completed_pointer_does_not_repeat_any_model_work():
+    worker = Worker.__new__(Worker)
+    worker.db = object()
+    worker._fetch_one = AsyncMock(return_value=("hash", "uri", {}, "done", True, "saved"))
+    await worker._handle(message(4))
+    worker._fetch_one.assert_awaited_once()
+
+
+def test_failure_categories_do_not_include_exception_payload():
+    assert error_code(httpx.ReadTimeout("private URL")) == "provider_timeout"
+    assert error_code(httpx.ConnectError("credentials")) == "provider_connection"
+    assert error_code(ValueError("source text")) == "invalid_stage_output"
+
+
+@pytest.mark.db
+async def test_failure_history_survives_retry_without_recording_private_payload(db_conn):
+    novel = await make_novel(db_conn)
+    try:
+        await record_failure(db_conn, novel, 7, "state", ValueError("private story text"))
+        await record_failure(db_conn, novel, 7, "state", httpx.ReadTimeout("private key"))
+        rows = await (await db_conn.execute(
+            "SELECT stage, error_type, error_code FROM chapter_failure WHERE novel_id=%s ORDER BY id",
+            (novel,),
+        )).fetchall()
+        assert rows == [("state", "ValueError", "invalid_stage_output"),
+                        ("state", "ReadTimeout", "provider_timeout")]
+    finally:
+        await delete_novel(db_conn, novel)
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("failed_stage", ["resolve", "translate", "state", "graph_write"])
+async def test_enrichment_failure_cannot_hide_valid_translation(db_conn, monkeypatch, failed_stage):
+    import pipeline.worker as module
+    novel = await make_novel(db_conn)
+    worker = Worker.__new__(Worker)
+    worker.db, worker.cfg = db_conn, make_config()
+    worker.redis = AsyncMock()
+    worker.minio = worker.cache = worker.textproc = worker.embed_provider = None
+    worker._provider_for_novel = AsyncMock(return_value=(object(), object(), "ollama"))
+    worker._get_object = lambda uri: "saved prose" if uri == "saved" else "original text"
+    calls = []
+    class Stage:
+        def __init__(self, name): self.name = name
+        async def run(self, ctx, state):
+            calls.append(self.name)
+            if self.name == failed_stage:
+                raise ValueError("invalid model output")
+            if self.name == "translate":
+                state.translation = "saved prose"
+                await db_conn.execute("UPDATE chapter SET translated_uri='saved' WHERE novel_id=%s", (novel,))
+            if self.name in {"state", "graph_write"}:
+                row = await (await db_conn.execute("SELECT translation_ready FROM chapter WHERE novel_id=%s", (novel,))).fetchone()
+                assert row[0] is True  # readable BEFORE optional work completes
+    monkeypatch.setattr(module, "DEFAULT_STAGES", [Stage(n) for n in ("resolve", "translate", "state", "graph_write")])
+    try:
+        await db_conn.execute("INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status) VALUES (%s,1,'test','raw','{}','queued')", (novel,))
+        with pytest.raises(ChapterFailed):
+            await worker._handle(message(1, novel))
+        row = await (await db_conn.execute("SELECT status,translation_ready,enrichment_retry_at IS NOT NULL,translated_uri FROM chapter WHERE novel_id=%s", (novel,))).fetchone()
+        readable = failed_stage != "translate"
+        assert row == ("error", readable, readable, "saved" if readable else None)
+        failure = await (await db_conn.execute("SELECT stage FROM chapter_failure WHERE novel_id=%s", (novel,))).fetchone()
+        assert failure[0] == failed_stage
+        if failed_stage == "resolve":
+            assert calls == ["resolve", "translate"]  # no partially bound graph writes
+        else:
+            # Graph retries retain the saved text, even if terminology has since changed.
+            class SuccessfulStage(Stage):
+                async def run(self, ctx, state):
+                    if self.name == "translate" and readable:
+                        pytest.fail("enrichment retry must not retranslate")
+                    if self.name == "graph_write" and readable:
+                        assert state.translation == "saved prose"
+            if readable:
+                monkeypatch.setattr(module, "DEFAULT_STAGES", [SuccessfulStage(n) for n in ("resolve", "translate", "state", "graph_write")])
+                await worker._handle(message(1, novel))
+                row = await (await db_conn.execute("SELECT status,translation_ready,enrichment_retry_at FROM chapter WHERE novel_id=%s", (novel,))).fetchone()
+                assert row == ("done", True, None)
+    finally:
+        await delete_novel(db_conn, novel)
+
+
+async def test_enrichment_retries_are_deduplicated_and_yield_to_reading(scheduled):
+    client, keys = scheduled
+    retry = json.dumps({"novel_id": "a", "chapter_index": 2, "enrichment": True})
+    assert await call(client, queue.ENQUEUE_ENRICHMENT, "a", 2, retry) == 1
+    assert await call(client, queue.ENQUEUE_ENRICHMENT, "a", 2, retry) == 0
+    await client.lpush(keys[0], message(4))
+    assert await call(client, queue.CLAIM, "100") == message(4)
+    await call(client, queue.RELEASE, message(4), "100", "done")
+    assert await call(client, queue.CLAIM, "101") == retry
+    assert await call(client, queue.ENQUEUE_ENRICHMENT, "a", 2, retry) == 0

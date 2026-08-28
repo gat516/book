@@ -147,7 +147,7 @@ func (s *Store) AdvanceProgress(
 		`INSERT INTO reader_progress (reader_id, novel_id, current_chapter)
 		 SELECT $1, c.novel_id, c.chapter_index
 		 FROM chapter c
-		 WHERE c.novel_id = $2 AND c.chapter_index = $3 AND c.status = 'done'
+		 WHERE c.novel_id = $2 AND c.chapter_index = $3 AND (c.translation_ready OR c.status = 'done')
 		 ON CONFLICT (reader_id, novel_id) DO UPDATE
 		 SET current_chapter = GREATEST(reader_progress.current_chapter, EXCLUDED.current_chapter),
 		     updated_at = now()
@@ -221,7 +221,9 @@ func (s *Store) ListChapters(ctx context.Context, novelID string, limit, offset 
 	// default case are the same answer.
 	rows, err := s.progressDB.Query(ctx,
 		`SELECT chapter_index, source_meta->>'site_chapter_no',
-		        COALESCE((source_meta->>'part')::int, 1), status
+		        COALESCE((source_meta->>'part')::int, 1),
+		        CASE WHEN translation_ready THEN 'done' ELSE status END,
+		        CASE WHEN status='done' THEN 'done' WHEN status='error' THEN 'error' ELSE 'pending' END
 		 FROM chapter WHERE novel_id = $1
 		 ORDER BY chapter_index
 		 LIMIT $2 OFFSET $3`,
@@ -235,7 +237,7 @@ func (s *Store) ListChapters(ctx context.Context, novelID string, limit, offset 
 	for rows.Next() {
 		var item ChapterListItem
 		var siteChapterNo *string
-		if err := rows.Scan(&item.ChapterIndex, &siteChapterNo, &item.Part, &item.Status); err != nil {
+		if err := rows.Scan(&item.ChapterIndex, &siteChapterNo, &item.Part, &item.Status, &item.GraphStatus); err != nil {
 			return nil, 0, err
 		}
 		if siteChapterNo != nil {
@@ -306,13 +308,16 @@ func (s *Store) TranslationPreview(ctx context.Context, novelID string, chapterI
 	// erroring — the caller renders that the same as "nothing to show yet".
 	var status string
 	err := s.progressDB.QueryRow(ctx,
-		`SELECT status FROM chapter WHERE novel_id = $1 AND chapter_index = $2`,
+		`SELECT CASE WHEN translation_ready THEN 'done' ELSE status END FROM chapter WHERE novel_id = $1 AND chapter_index = $2`,
 		novelID, chapterIndex,
 	).Scan(&status)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return "", false, "", fmt.Errorf("read chapter status: %w", err)
 	}
 
+	if status == "done" {
+		return "", false, status, nil
+	}
 	text, err := s.redis.Get(ctx, fmt.Sprintf(pipelinePreviewKeyFmt, novelID, chapterIndex)).Result()
 	if errors.Is(err, redis.Nil) {
 		return "", false, status, nil
@@ -691,7 +696,7 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n int) (ChapterV
 	var status string
 	var part int
 	err := s.progressDB.QueryRow(ctx,
-		`SELECT raw_uri, translated_uri, status, source_meta->>'site_chapter_no',
+		`SELECT raw_uri, translated_uri, CASE WHEN translation_ready THEN 'done' ELSE status END, source_meta->>'site_chapter_no',
 		        COALESCE((source_meta->>'part')::int, 1)
 		 FROM chapter WHERE novel_id = $1 AND chapter_index = $2`,
 		novelID, n,
@@ -746,12 +751,9 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n int) (ChapterV
 
 	// "Has next" is an EXISTENCE check decoupled from the reader's own progress — a
 	// linear reader finishing chapter n for the first time needs "Next" enabled once
-	// n+1 exists and is processed, not only once progress has already passed it.
-	if err := s.progressDB.QueryRow(ctx,
-		`SELECT EXISTS (
-		   SELECT 1 FROM chapter WHERE novel_id = $1 AND chapter_index = $2 AND status = 'done'
-		 )`, novelID, n+1,
-	).Scan(&view.HasNext); err != nil {
+	// n+1 exists, even when its translation is pending or failed. Content stays gated.
+	view.HasNext, err = s.hasNextChapter(ctx, novelID, n)
+	if err != nil {
 		return ChapterView{}, err
 	}
 
@@ -812,3 +814,9 @@ func (s *Store) RequestScrapeCancel(ctx context.Context, novelID string) error {
 }
 
 var _ ReaderStore = (*Store)(nil)
+
+func (s *Store) hasNextChapter(ctx context.Context, novelID string, chapter int) (bool, error) {
+	var exists bool
+	err := s.progressDB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM chapter WHERE novel_id=$1 AND chapter_index=$2)`, novelID, chapter+1).Scan(&exists)
+	return exists, err
+}

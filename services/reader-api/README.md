@@ -116,7 +116,7 @@ READER_TEST_DATABASE_URL=postgres://engine:engine@localhost:5432/novel_engine \
 
 Without `READER_TEST_DATABASE_URL`, database-backed tests skip cleanly.
 
-### Glossary management
+### Glossary management and pending navigation
 
 The web glossary is available from the reader, chapter list, and pending view.
 It supports create (bootstrap), read, edit, and confirmed deletion. DELETE is
@@ -125,7 +125,20 @@ Before a reader has progress, GET glossary returns only chapter-zero seed terms;
 otherwise the existing `locked_at_chapter <= min(progress, at)` gate remains.
 Deleted terms are hidden. Changes affect future translation work, not stored prose.
 
+`has_next` now means the next chapter exists, regardless of processing status.
+Clicking Next checks its status: a finished chapter advances progress and opens;
+an unfinished one opens its preview and requests priority. This does not advance
+progress or unlock graph reads until the chapter finishes. The pending view has a
+focused priority/retry button, and successful retry resumes status polling.
+
 Glossary rows may include `entity_id` for the clickable reader inspector. This is
 optional: unbound seeds omit it, and a seed linked to a future entity also omits it
 until `entity.first_seen_chapter <= at`. A left join under the reader role preserves
 the visible glossary seed without exposing a future entity identifier.
+
+## Independent translation readiness
+
+Migration 0021 adds `chapter.translation_ready`. Chapter access, progress and preview
+readiness accept that flag independently of overall pipeline status. Chapter-list
+`graph_status` is separate from the reader-facing status, so a chapter can be Ready
+with graph enrichment pending or failed. Source-chapter RLS gates are unchanged.
