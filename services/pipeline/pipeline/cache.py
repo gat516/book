@@ -51,6 +51,10 @@ class LLMCache:
     async def get(self, key: str) -> str | None:
         return await self.redis.get(KEY_PREFIX + key)
 
+    async def delete(self, key: str) -> None:
+        """Discard an unusable response without touching the durable job ledger."""
+        await self.redis.delete(KEY_PREFIX + key)
+
     async def put(
         self,
         key: str,

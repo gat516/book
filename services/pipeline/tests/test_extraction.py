@@ -5,8 +5,8 @@ Two properties matter here and neither is about happy-path JSON:
 - The prompt is **templated on the ontology** (§0.4). Nothing genre-specific may be
   baked into the code, so a different ontology must produce a visibly different prompt.
 - The parse is a **validating boundary**. Model output is untrusted input; it either
-  becomes a well-formed ``Extraction`` or it raises, never a half-populated object that
-  writes junk into an append-only graph.
+  discards explicitly unknown assertions, but rejects broken response contracts.
+  It never fills missing knowledge with invented strings to satisfy the graph schema.
 
 Pure — no DB, no network, no LLM.
 """
@@ -19,6 +19,7 @@ import pytest
 from pydantic import ValidationError
 
 from pipeline.extraction import (
+    Extraction,
     build_system_prompt,
     build_user_prompt,
     parse_extraction,
@@ -155,3 +156,57 @@ def test_confidence_is_clamped():
 def test_missing_required_field_raises():
     with pytest.raises(ValidationError):
         parse_extraction(_payload(facts=[{"entity": "A", "attribute": "status"}]))
+
+
+@pytest.mark.parametrize("unknown", [None, "", "  \n  "])
+def test_unknown_assertions_are_discarded_without_losing_valid_knowledge(unknown, caplog):
+    extraction = parse_extraction(_payload(
+        entities=[{"surface": "A", "kind": "character"}, {"surface": "B", "kind": "character"}],
+        facts=[
+            {"entity": "A", "attribute": "rank", "value": unknown},
+            {"entity": "A", "attribute": "status", "value": "alive"},
+            {"entity": "B", "attribute": unknown, "value": unknown},
+        ],
+        edges=[
+            {"src": "A", "dst": "B", "rel_type": unknown},
+            {"src": "A", "dst": "B", "rel_type": "ally"},
+        ],
+        events=[{"summary": "A meets B.", "entities": ["A", "B"]}],
+    ))
+    assert [(f.attribute, f.value) for f in extraction.facts] == [("status", "alive")]
+    assert [e.rel_type for e in extraction.edges] == ["ally"]
+    assert len(extraction.entities) == 2 and len(extraction.events) == 1
+    assert extraction.discarded_rows == {"facts": 2, "edges": 1}
+    assert "null/blank fields" in caplog.text
+
+
+@pytest.mark.parametrize("payload", [
+    [], {"facts": None}, {"facts": {}}, {"facts": ["not an object"]},
+    {"text": "a response using the wrong envelope must not become an empty graph"},
+    {"facts": [{"entity": "A", "attribute": "rank", "value": []}]},
+    {"facts": [{"entity": "A", "value": None}]},  # missing attribute is not an unknown
+    {"facts": [{"entity": "A", "attribute": "rank", "value": None, "confidence": "bad"}]},
+    {"events": [{"summary": "A leaves.", "entities": [None]}]},
+])
+def test_malformed_responses_are_not_silently_discarded(payload):
+    with pytest.raises(ValidationError):
+        parse_extraction(json.dumps(payload))
+
+
+def test_native_schema_rejects_null_and_empty_values_but_allows_unknown_story_time():
+    for value in (None, "", " "):
+        with pytest.raises(ValidationError):
+            Extraction.model_validate_json(_payload(
+                facts=[{"entity": "A", "attribute": "rank", "value": value}],
+            ))
+    valid = Extraction.model_validate_json(_payload(
+        facts=[{"entity": "A", "attribute": "rank", "value": "novice", "valid_from_chapter": None}],
+    ))
+    assert valid.facts[0].valid_from_chapter is None
+
+
+def test_prompt_explains_unknown_values_are_omitted_not_filled():
+    prompt = build_system_prompt(XIANXIA)
+    assert "OMIT that" in prompt
+    assert "no rank fact" in prompt
+    assert "Only valid_from_chapter may be null" in prompt

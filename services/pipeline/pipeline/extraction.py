@@ -22,9 +22,13 @@ text first silently ~10x's the input bill and no error is raised.
 from __future__ import annotations
 
 import json
-from typing import Any
+import logging
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, StringConstraints, ValidationError, field_validator
+
+log = logging.getLogger(__name__)
+NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 # ---------------------------------------------------------------------------
 # What we accept back
@@ -36,8 +40,8 @@ class ExtractedEntity(BaseModel):
     source text; binding it to a real ``entity.id`` is resolution's job, not the
     extractor's (§5 "retrieve-then-resolve")."""
 
-    surface: str
-    kind: str
+    surface: NonEmptyText
+    kind: NonEmptyText
 
 
 class ExtractedFact(BaseModel):
@@ -50,9 +54,9 @@ class ExtractedFact(BaseModel):
     processed — the model is not asked for it and could not be trusted with it (§0.2).
     """
 
-    entity: str
-    attribute: str
-    value: str
+    entity: NonEmptyText
+    attribute: NonEmptyText
+    value: NonEmptyText
     valid_from_chapter: int | None = None
     confidence: float = 1.0
 
@@ -65,27 +69,35 @@ class ExtractedFact(BaseModel):
 class ExtractedEdge(BaseModel):
     """A relation between two entities, from the ontology's ``relations`` list."""
 
-    src: str
-    dst: str
-    rel_type: str
+    src: NonEmptyText
+    dst: NonEmptyText
+    rel_type: NonEmptyText
     valid_from_chapter: int | None = None
 
 
 class ExtractedEvent(BaseModel):
     """A timeline row. ``entities`` are surfaces, resolved like everything else."""
 
-    summary: str
-    entities: list[str] = Field(default_factory=list)
+    summary: NonEmptyText
+    entities: list[NonEmptyText] = Field(default_factory=list)
 
 
 class Extraction(BaseModel):
     """The whole response object. Every list defaults empty: a chapter of pure scenery
     legitimately yields nothing, and that must not look like a parse failure."""
 
+    model_config = ConfigDict(extra="forbid")
+
     entities: list[ExtractedEntity] = Field(default_factory=list)
     facts: list[ExtractedFact] = Field(default_factory=list)
     edges: list[ExtractedEdge] = Field(default_factory=list)
     events: list[ExtractedEvent] = Field(default_factory=list)
+    # Diagnostics are not model-authored fields and never enter the output schema.
+    _discarded_rows: dict[str, int] = PrivateAttr(default_factory=dict)
+
+    @property
+    def discarded_rows(self) -> dict[str, int]:
+        return dict(self._discarded_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +134,13 @@ Return a single JSON object, and nothing else, with this shape:
 }}
 
 Rules:
+- Extract assertions supported by this chapter, not a checklist of every attribute
+  for every entity. If a value or relationship is unknown or unstated, OMIT that
+  entire fact or edge. Never fill it with null, an empty string, or a guess.
+- All names, kinds, attributes, values, relation types and event summaries must be
+  non-empty strings. Only valid_from_chapter may be null. An entity may have no facts.
+- Example: if a character acts but their rank is not stated, list the character and
+  the supported event, with no rank fact. An empty facts list is correct.
 - Every surface named in facts, edges or events MUST also appear in "entities". Entries
   referencing an undeclared surface are discarded.
 - Use only the kinds, attributes and relation types listed above. If something important
@@ -188,12 +207,48 @@ def parse_extraction(text: str) -> Extraction:
 
     Tolerates a markdown fence around the JSON — the single most common deviation from
     "return JSON and nothing else", and cheap to absorb here rather than losing a whole
-    chapter's extraction to three backticks. Anything else raises, and the caller treats
-    that as a stage failure (retryable) rather than writing junk to the graph.
+    chapter's extraction to three backticks. Explicit null/blank text is an unknown
+    assertion: discard that individual row and report it, never invent its value.
+    Missing keys, wrong types/containers and malformed JSON still fail the response.
     """
     stripped = text.strip()
     if stripped.startswith("```"):
         stripped = stripped.split("\n", 1)[-1] if "\n" in stripped else ""
         if stripped.rstrip().endswith("```"):
             stripped = stripped.rstrip()[: -len("```")]
-    return Extraction.model_validate(json.loads(stripped))
+    payload = json.loads(stripped)
+    discarded: dict[str, int] = {}
+    if isinstance(payload, dict):
+        for section, row_type in (
+            ("entities", ExtractedEntity), ("facts", ExtractedFact),
+            ("edges", ExtractedEdge), ("events", ExtractedEvent),
+        ):
+            rows = payload.get(section)
+            if not isinstance(rows, list):
+                continue  # Let the response model reject wrong-shaped containers.
+            kept = []
+            for index, row in enumerate(rows):
+                try:
+                    kept.append(row_type.model_validate(row))
+                except ValidationError as exc:
+                    errors = exc.errors()
+                    # Only explicit unknown text in a row's scalar field is recoverable.
+                    # A missing key or an invalid nested reference is a contract error.
+                    if not all(
+                        len(e["loc"]) == 1
+                        and e["type"] in {"string_type", "string_too_short"}
+                        and (e.get("input") is None or (
+                            isinstance(e.get("input"), str) and not e["input"].strip()
+                        ))
+                        for e in errors
+                    ):
+                        raise
+                    discarded[section] = discarded.get(section, 0) + 1
+                    log.warning(
+                        "discarding extraction %s[%d]: null/blank fields %s",
+                        section, index, [e["loc"][0] for e in errors],
+                    )
+            payload[section] = kept
+    extraction = Extraction.model_validate(payload)
+    extraction._discarded_rows = discarded
+    return extraction

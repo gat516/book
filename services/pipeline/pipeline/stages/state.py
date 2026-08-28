@@ -27,10 +27,11 @@ it (cache.py).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 
 from pipeline.context import PipelineState, StageContext
-from pipeline.extraction import build_system_prompt, build_user_prompt, parse_extraction
+from pipeline.extraction import Extraction, build_system_prompt, build_user_prompt, parse_extraction
 from pipeline.jobs import (
     idempotency_key,
     insert_job,
@@ -43,6 +44,15 @@ from pipeline.llm.provider import BatchRequest
 log = logging.getLogger(__name__)
 
 STAGE = "state"
+
+
+def response_cache_key(job_key: str) -> str:
+    """Version prompt/schema results without replaying committed append-only facts.
+
+    The durable job key still guards the graph write (§0.2, §6.1). Only unfinished
+    work gets the new prompt; changing its result-cache key must not undo that guard.
+    """
+    return hashlib.sha256(f"{job_key}\x1fstate-response-v2".encode()).hexdigest()
 
 
 class StateStage:
@@ -77,11 +87,24 @@ class StateStage:
             key=key,
         )
 
-        cached = await ctx.cache.get(key)
+        cache_key = response_cache_key(key)
+        cached = await ctx.cache.get(cache_key)
         if cached is not None:
-            log.info("stage %s chapter=%d cache hit", self.name, envelope.chapter_index)
-            raw = cached
-        else:
+            try:
+                extraction = parse_extraction(cached)
+            except ValueError:
+                # Older workers cached before validation. A retry must not replay
+                # the same invalid response for the cache's entire 14-day TTL (§6.1).
+                await ctx.cache.delete(cache_key)
+                log.warning(
+                    "stage %s chapter=%d discarded invalid cached extraction",
+                    self.name,
+                    envelope.chapter_index,
+                )
+                cached = None
+            else:
+                log.info("stage %s chapter=%d cache hit", self.name, envelope.chapter_index)
+        if cached is None:
             # An AdmissionRejected from here propagates untouched: it is backpressure,
             # not failure, and the retry/attempts policy that must not conflate them
             # lives with the job runner (§6.2, §14.3), not in stage code.
@@ -90,14 +113,17 @@ class StateStage:
                 "prompt": build_user_prompt(envelope.raw_text),
                 "system": build_system_prompt(ctx.novel.ontology),
                 "json_mode": True,
+                "json_schema": Extraction.model_json_schema(),
                 "model": model_for_stage(STAGE, ctx.cfg),
             }
             batch_id = await ctx.batch_manager.batch_submit([request])
             results = await ctx.batch_manager.batch_poll(batch_id)
             result = ctx.batch_manager.require_single_result(key, results)
             raw = result["output"]
+            # Invalid structured output is a failed attempt, never a reusable result.
+            extraction = parse_extraction(raw)
             await ctx.cache.put(
-                key,
+                cache_key,
                 raw,
                 requested_model_id=model_id_for_stage(STAGE, ctx.cfg),
                 served_provider=result["served_provider"],
@@ -105,16 +131,16 @@ class StateStage:
                 stage=STAGE,
             )
 
-        extraction = parse_extraction(raw)
         state.extraction = extraction
         state.state_job_key = key
 
         log.info(
-            "stage %s chapter=%d entities=%d facts=%d edges=%d events=%d",
+            "stage %s chapter=%d entities=%d facts=%d edges=%d events=%d discarded=%s",
             self.name,
             envelope.chapter_index,
             len(extraction.entities),
             len(extraction.facts),
             len(extraction.edges),
             len(extraction.events),
+            extraction.discarded_rows,
         )

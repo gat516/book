@@ -35,8 +35,9 @@ from pipeline.batch import BatchManager
 from pipeline.cache import LLMCache
 from pipeline.context import NovelMeta, PipelineState, StageContext, language_profile_for
 from pipeline.envelope import ChapterEnvelope, SourceMeta
+from pipeline.jobs import idempotency_key
 from pipeline.stages.graph_write import GraphWriteStage
-from pipeline.stages.state import StateStage
+from pipeline.stages.state import StateStage, response_cache_key
 
 pytestmark = pytest.mark.db
 
@@ -175,6 +176,7 @@ async def test_stage_asks_for_json_at_batch_priority(db_conn, novel):
     await _run(_ctx(db_conn, novel, provider, LLMCache(FakeRedis())))
     call = provider.calls[0]
     assert call["json_mode"] is True
+    assert call["json_schema"]["$defs"]["ExtractedFact"]["properties"]["value"]["minLength"] == 1
     assert call["cls"] is Class.BATCH
     assert len(provider.batch_requests) == 1
     assert len(provider.batch_polls) == 1
@@ -229,6 +231,81 @@ async def test_crash_before_write_reuses_the_cached_response(db_conn, novel):
     state = await _run(ctx, resolutions=resolutions)
     assert len(provider.calls) == 1, "cache hit must not re-call the model"
     assert state.extraction is not None
+    assert (await _counts(db_conn, novel))["fact"] == 1
+
+
+@pytest.mark.parametrize("invalid", [
+    "not JSON",
+    json.dumps({"facts": [{"entity": "Li Xiaoyao", "attribute": "rank", "value": []}]}),
+])
+async def test_invalid_response_is_not_cached_and_retry_can_recover(db_conn, novel, invalid):
+    provider = FakeProvider(invalid)
+    cache = LLMCache(FakeRedis())
+    ctx = _ctx(db_conn, novel, provider, cache)
+    key = response_cache_key(idempotency_key("state", RAW_HASH, ctx.cfg, ontology=ctx.novel.ontology))
+
+    with pytest.raises(ValueError):
+        await _run(ctx, stages=(StateStage(),))
+    assert await cache.get(key) is None
+
+    provider.response = RESPONSE
+    state = await _run(ctx, stages=(StateStage(),))
+    assert state.extraction is not None
+    assert len(provider.calls) == 2
+    assert await cache.get(key) == RESPONSE
+
+
+@pytest.mark.parametrize("fresh", [RESPONSE, "still invalid"])
+async def test_invalid_cache_is_evicted_before_retry(db_conn, novel, fresh):
+    provider = FakeProvider(fresh)
+    cache = LLMCache(FakeRedis())
+    ctx = _ctx(db_conn, novel, provider, cache)
+    key = response_cache_key(idempotency_key("state", RAW_HASH, ctx.cfg, ontology=ctx.novel.ontology))
+    await cache.put(
+        key, '{"facts": [{"entity": "Li Xiaoyao", "attribute": "rank", "value": []}]}',
+        requested_model_id="ollama:qwen2.5:14b", served_provider="ollama",
+        served_model="qwen2.5:14b", stage="state",
+    )
+
+    if fresh == RESPONSE:
+        state = await _run(ctx, stages=(StateStage(),))
+        assert state.extraction is not None
+        assert await cache.get(key) == RESPONSE
+    else:
+        with pytest.raises(ValueError):
+            await _run(ctx, stages=(StateStage(),))
+        assert await cache.get(key) is None
+    assert len(provider.calls) == 1
+
+
+async def test_old_prompt_cache_is_bypassed_but_completed_graph_is_not_replayed(db_conn, novel):
+    provider = FakeProvider(RESPONSE)
+    cache = LLMCache(FakeRedis())
+    ctx = _ctx(db_conn, novel, provider, cache)
+    key = idempotency_key("state", RAW_HASH, ctx.cfg, ontology=ctx.novel.ontology)
+    await cache.put(key, '{}', requested_model_id="ollama:qwen2.5:14b",
+                    served_provider="ollama", served_model="qwen2.5:14b", stage="state")
+    await _run(ctx)
+    assert len(provider.calls) == 1, "unfinished work needs the new prompt/schema"
+    # Simulate a cache flush or further response-version change after committing.
+    await cache.delete(response_cache_key(key))
+    state = await _run(ctx)
+    assert state.extraction is None
+    assert len(provider.calls) == 1, "response changes must not replay committed graph writes"
+
+
+async def test_incomplete_assertions_do_not_abort_valid_graph_writes(db_conn, novel):
+    response = json.loads(RESPONSE)
+    response["facts"].append({"entity": "Li Xiaoyao", "attribute": "status", "value": None})
+    response["edges"].append({"src": "Li Xiaoyao", "dst": "Azure Cloud Sect", "rel_type": ""})
+    provider = FakeProvider(json.dumps(response))
+    ctx = _ctx(db_conn, novel, provider, LLMCache(FakeRedis()))
+    resolutions = await seed_entities(db_conn, novel, CAST)
+    state = await _run(ctx, resolutions=resolutions)
+    assert state.extraction.discarded_rows == {"facts": 1, "edges": 1}
+    assert await _counts(db_conn, novel) == {"entity": 2, "fact": 1, "edge": 1, "event": 1}
+    await _run(ctx, resolutions=resolutions)
+    assert len(provider.calls) == 1
     assert (await _counts(db_conn, novel))["fact"] == 1
 
 

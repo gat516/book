@@ -69,6 +69,10 @@ class FakeRedis:
         self.store[key] = value
         self.ttls[key] = ex
 
+    async def delete(self, key: str) -> None:
+        self.store.pop(key, None)
+        self.ttls.pop(key, None)
+
 
 class FakeProvider(SequentialBatchMixin):
     """An LLMProvider that returns canned text and counts calls.
