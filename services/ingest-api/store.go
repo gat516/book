@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minio/minio-go/v7"
 	"github.com/redis/go-redis/v9"
@@ -33,7 +34,7 @@ type Store struct {
 // config is worse than failing novel creation entirely.
 func (s *Store) insertNovel(
 	ctx context.Context, title, sourceLang, targetLang, genre string, ont Ontology,
-	providerConfig *ProviderConfigInput,
+	providerConfig *ProviderConfigInput, ingestLookahead, translateLookahead *int,
 ) (string, error) {
 	ontJSON, err := json.Marshal(ont)
 	if err != nil {
@@ -61,6 +62,13 @@ func (s *Store) insertNovel(
 		return "", fmt.Errorf("insert novel: %w", err)
 	}
 
+	// Applied as an update rather than in the INSERT above so an unspecified window keeps
+	// the schema's own default — restating those defaults here would be a second place for
+	// them to drift from the migration.
+	if err := applyNovelSettings(ctx, tx, id, ingestLookahead, translateLookahead); err != nil {
+		return "", err
+	}
+
 	if providerConfig != nil {
 		if err := insertProviderConfig(ctx, tx, id, *providerConfig); err != nil {
 			return "", fmt.Errorf("insert provider config: %w", err)
@@ -71,6 +79,30 @@ func (s *Store) insertNovel(
 		return "", fmt.Errorf("commit: %w", err)
 	}
 	return id, nil
+}
+
+// applyNovelSettings writes whichever work windows the caller specified, leaving the rest
+// untouched. Takes a querier so it can run inside novel creation's transaction or on its
+// own from the settings endpoint. Nil for both is a no-op, not an error.
+func applyNovelSettings(
+	ctx context.Context, q interface {
+		Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	}, novelID string, ingestLookahead, translateLookahead *int,
+) error {
+	// COALESCE($n, column) is what makes an omitted field a no-op rather than a reset.
+	if ingestLookahead == nil && translateLookahead == nil {
+		return nil
+	}
+	if _, err := q.Exec(ctx,
+		`UPDATE novel
+		 SET ingest_lookahead    = COALESCE($2, ingest_lookahead),
+		     translate_lookahead = COALESCE($3, translate_lookahead)
+		 WHERE id = $1`,
+		novelID, ingestLookahead, translateLookahead,
+	); err != nil {
+		return fmt.Errorf("apply novel settings: %w", err)
+	}
+	return nil
 }
 
 // getNovelSourceLang returns the novel's source language, used to fill the envelope.
@@ -162,6 +194,19 @@ func (s *Store) queueTranslationRange(ctx context.Context, novelID string, from,
 		}
 	}
 	return queued, nil
+}
+
+// furthestReaderPosition is the highest chapter any reader of this novel has reached, or 0
+// if nobody has opened it. MAX across readers rather than per reader: the translate window
+// is shared work, so one reader lagging shouldn't drag it backwards for another who is
+// further along.
+func (s *Store) furthestReaderPosition(ctx context.Context, novelID string) (int, error) {
+	var reached int
+	err := s.db.QueryRow(ctx,
+		`SELECT COALESCE(MAX(current_chapter), 0) FROM reader_progress WHERE novel_id = $1`,
+		novelID,
+	).Scan(&reached)
+	return reached, err
 }
 
 // novelLookahead returns how many chapters past the reader this novel keeps translated.

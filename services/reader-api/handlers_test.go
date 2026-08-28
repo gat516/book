@@ -102,6 +102,11 @@ func (f *fakeIngestClient) TranslateAhead(_ context.Context, _ string, body json
 	return f.response, f.status, f.err
 }
 
+func (f *fakeIngestClient) UpdateNovelSettings(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
+}
+
 type fakeAskClient struct {
 	response json.RawMessage
 	err      error

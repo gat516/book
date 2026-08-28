@@ -37,6 +37,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/progress", a.getProgress)
 	mux.HandleFunc("GET /novels/{id}/pipeline", a.getPipelineStatus)
 	mux.HandleFunc("POST /novels/{id}/translate-ahead", a.postTranslateAhead)
+	mux.HandleFunc("PATCH /novels/{id}/settings", a.patchNovelSettings)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}/preview", a.getChapterPreview)
 	mux.HandleFunc("GET /novels/{id}/translation-health", a.getTranslationHealth)
 	mux.HandleFunc("POST /novels/{id}/ask", a.postAsk)
@@ -421,6 +422,32 @@ func (a *API) getChapterPreview(w http.ResponseWriter, r *http.Request) {
 		Text:         text,
 		Status:       status,
 	})
+}
+
+// patchNovelSettings proxies a work-window change to ingest-api, which owns novel writes.
+// Ungated like the other novel-administration routes: it tunes how much work the system
+// does for a novel, and exposes no chapter content.
+func (a *API) patchNovelSettings(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read request body")
+		return
+	}
+	result, status, err := a.ingest.UpdateNovelSettings(r.Context(), novelID, body)
+	if err != nil {
+		log.Printf("update novel settings: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
 }
 
 // getTranslationHealth reports whether this novel's terminology is being translated

@@ -34,6 +34,32 @@ type pasteChapterRequest struct {
 	Enqueue bool `json:"enqueue"`
 }
 
+// TranslateAhead asks ingest-api to top up this novel's translate window. Sends no
+// position: the server places the window just past the furthest reader (or at chapter 1
+// for a novel nobody has opened), which the scraper has no way to know.
+//
+// Bounded by the novel's translate_lookahead and idempotent — a full window queues
+// nothing — so calling it as chapters arrive keeps translation following ingestion without
+// reintroducing the flood that queueing every fetched chapter caused.
+func (c *ingestClient) TranslateAhead(ctx context.Context, novelID string) error {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s/novels/%s/translate-ahead", c.baseURL, novelID),
+		strings.NewReader("{}"))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("ingest-api returned %d for translate-ahead", resp.StatusCode)
+	}
+	return nil
+}
+
 type pasteChapterResponse struct {
 	ChapterIndex int  `json:"chapter_index"`
 	Duplicate    bool `json:"duplicate"`

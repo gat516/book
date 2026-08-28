@@ -31,6 +31,20 @@ type createNovelReq struct {
 	// key, encrypted at rest, overriding LLM_PROVIDER for this novel only. Omit entirely
 	// to use the process-wide default.
 	ProviderConfig *providerConfigReq `json:"provider_config,omitempty"`
+
+	// The two work windows, both optional (nil keeps the schema default). Separate because
+	// the work behind them differs by orders of magnitude — fetching is one HTTP request,
+	// translating is a dozen-plus sequential LLM calls — so a novel usually wants a wide
+	// ingest window over a narrow translate one. 0 means unlimited.
+	IngestLookahead    *int `json:"ingest_lookahead,omitempty"`    // chapters to FETCH ahead (0018)
+	TranslateLookahead *int `json:"translate_lookahead,omitempty"` // chapters to TRANSLATE ahead (0015)
+}
+
+// novelSettingsReq changes the work windows after creation. Both optional; omitted fields
+// are left as they are rather than reset.
+type novelSettingsReq struct {
+	IngestLookahead    *int `json:"ingest_lookahead,omitempty"`
+	TranslateLookahead *int `json:"translate_lookahead,omitempty"`
 }
 
 type providerConfigReq struct {
@@ -129,7 +143,8 @@ func (a *API) createNovel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ont := ontologyForGenre(req.Genre)
-	id, err := a.store.insertNovel(r.Context(), req.Title, req.SourceLang, req.TargetLang, req.Genre, ont, providerConfig)
+	id, err := a.store.insertNovel(r.Context(), req.Title, req.SourceLang, req.TargetLang, req.Genre, ont,
+		providerConfig, req.IngestLookahead, req.TranslateLookahead)
 	if err != nil {
 		log.Printf("createNovel: %v", err)
 		writeErr(w, http.StatusInternalServerError, "could not create novel")
@@ -341,11 +356,62 @@ func (a *API) pasteChapter(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// patchNovelSettings changes a novel's work windows after creation, so the ingest and
+// translate depths can be tuned against how a particular book actually behaves rather than
+// being fixed at creation.
+func (a *API) patchNovelSettings(w http.ResponseWriter, r *http.Request) {
+	novelID := r.PathValue("id")
+
+	var req novelSettingsReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	// Negative is meaningless for a window; 0 legitimately means "unlimited".
+	if (req.IngestLookahead != nil && *req.IngestLookahead < 0) ||
+		(req.TranslateLookahead != nil && *req.TranslateLookahead < 0) {
+		writeErr(w, http.StatusBadRequest, "lookahead values must be >= 0 (0 means unlimited)")
+		return
+	}
+
+	if err := applyNovelSettings(r.Context(), a.store.db, novelID, req.IngestLookahead, req.TranslateLookahead); err != nil {
+		log.Printf("patchNovelSettings: %v", err)
+		writeErr(w, http.StatusInternalServerError, "could not update novel settings")
+		return
+	}
+
+	var settings novelSettingsResp
+	if err := a.store.db.QueryRow(r.Context(),
+		`SELECT ingest_lookahead, translate_lookahead FROM novel WHERE id = $1`, novelID,
+	).Scan(&settings.IngestLookahead, &settings.TranslateLookahead); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "novel not found")
+			return
+		}
+		log.Printf("patchNovelSettings readback: %v", err)
+		writeErr(w, http.StatusInternalServerError, "saved but readback failed")
+		return
+	}
+	settings.NovelID = novelID
+	writeJSON(w, http.StatusOK, settings)
+}
+
+type novelSettingsResp struct {
+	NovelID            string `json:"novel_id"`
+	IngestLookahead    int    `json:"ingest_lookahead"`
+	TranslateLookahead int    `json:"translate_lookahead"`
+}
+
 type translateAheadReq struct {
 	// From is the first chapter index to consider; Count how many to look at from there.
 	// Count omitted (or 0) uses the novel's own translate_lookahead (migration 0015).
-	From  int `json:"from"`
-	Count int `json:"count,omitempty"`
+	//
+	// From omitted means "wherever the reader is": the window is placed just past the
+	// furthest point any reader has reached, or at chapter 1 for a novel nobody has opened
+	// yet. That lets a caller with no reader context — the scraper — keep the window
+	// topped up without having to know or guess a position.
+	From  *int `json:"from,omitempty"`
+	Count int  `json:"count,omitempty"`
 }
 
 type translateAheadResp struct {
@@ -367,9 +433,24 @@ func (a *API) translateAhead(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if req.From < 0 {
+	if req.From != nil && *req.From < 0 {
 		writeErr(w, http.StatusBadRequest, "from must be >= 0")
 		return
+	}
+	from := 1
+	if req.From != nil {
+		from = *req.From
+	} else {
+		// No position given: place the window just past the furthest reader. This is the
+		// path the scraper uses — it has no reader context, and asking it to guess would
+		// either re-queue already-translated chapters or leave a gap.
+		reached, err := a.store.furthestReaderPosition(r.Context(), novelID)
+		if err != nil {
+			log.Printf("translateAhead reader position: %v", err)
+			writeErr(w, http.StatusInternalServerError, "lookup failed")
+			return
+		}
+		from = reached + 1
 	}
 
 	count := req.Count
@@ -387,7 +468,7 @@ func (a *API) translateAhead(w http.ResponseWriter, r *http.Request) {
 		count = lookahead
 	}
 
-	queued, err := a.store.queueTranslationRange(r.Context(), novelID, req.From, count)
+	queued, err := a.store.queueTranslationRange(r.Context(), novelID, from, count)
 	if err != nil {
 		log.Printf("translateAhead: %v", err)
 		writeErr(w, http.StatusInternalServerError, "could not queue translation")

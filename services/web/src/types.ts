@@ -19,6 +19,25 @@ export interface CreateNovelRequest {
   source_lang?: string;
   target_lang?: string;
   genre?: string;
+  // This novel's own LLM provider, overriding the process-wide default. The key is
+  // encrypted server-side and never read back — reads report only whether one is set.
+  provider_config?: {
+    provider: "anthropic" | "deepseek" | "ollama";
+    model?: string;
+    base_url?: string;
+    api_key?: string;
+  };
+  // Work windows. Separate because the work differs by orders of magnitude: fetching a
+  // chapter is one request, translating it is a dozen-plus sequential LLM calls. 0 =
+  // unlimited; omitted keeps the server default.
+  ingest_lookahead?: number;
+  translate_lookahead?: number;
+}
+
+export interface NovelSettings {
+  novel_id: string;
+  ingest_lookahead: number;
+  translate_lookahead: number;
 }
 
 // ingest-api's createNovelResp, proxied verbatim by reader-api's POST /novels — NOT a

@@ -113,13 +113,39 @@ func (w *Worker) loadJob(ctx context.Context, jobID int64) (jobRow, error) {
 // source site is hammered for content nothing can use yet.
 //
 // A depth of 0 disables the limit (fetch as fast as politeness allows).
-func (w *Worker) waitForCapacity(jobID int64, limit int) func(context.Context) error {
+//
+// ingestLookahead bounds how far AHEAD OF THE READER this novel may be fetched, which is
+// the limit that actually bites: since the scraper stopped queueing translation for what
+// it ingests, the pipeline queue sits near empty and the depth check below almost never
+// fires. The depth check is kept as a safety net for whenever something else is filling
+// that queue. 0 disables either limit independently.
+func (w *Worker) waitForCapacity(
+	jobID int64, novelID string, limit, ingestLookahead int,
+) func(context.Context) error {
 	return func(ctx context.Context) error {
-		if limit <= 0 {
+		if limit <= 0 && ingestLookahead <= 0 {
 			return nil
 		}
 		logged := false
 		for {
+			ahead, err := w.chaptersAheadOfReader(ctx, novelID)
+			if err != nil {
+				log.Printf("scrape job %d: reader-window check failed, continuing: %v", jobID, err)
+			} else if ingestLookahead > 0 && ahead >= ingestLookahead {
+				if !logged {
+					log.Printf("scrape job %d: pausing, %d chapters ahead of the reader (limit %d)",
+						jobID, ahead, ingestLookahead)
+					logged = true
+				}
+				if err := w.pauseUntilNextCheck(ctx, jobID); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if limit <= 0 {
+				return nil
+			}
 			depth, err := w.redis.LLen(ctx, pipelinePendingQueue).Result()
 			if err != nil {
 				// Don't strand a scrape on a transient Redis blip: the limit is a
@@ -147,6 +173,46 @@ func (w *Worker) waitForCapacity(jobID int64, limit int) func(context.Context) e
 			}
 		}
 	}
+}
+
+// chaptersAheadOfReader is how many chapters this novel holds beyond the furthest point
+// any reader has reached. Uses MAX(current_chapter) across readers so one reader lagging
+// doesn't stall fetching for another who is further along; a novel nobody has opened
+// reports its full chapter count, which is what makes the very first scrape stop at the
+// lookahead rather than pulling the whole serial down.
+func (w *Worker) chaptersAheadOfReader(ctx context.Context, novelID string) (int, error) {
+	var ahead int
+	err := w.db.QueryRow(ctx,
+		`SELECT COALESCE((SELECT MAX(chapter_index) FROM chapter WHERE novel_id = $1), 0)
+		      - COALESCE((SELECT MAX(current_chapter) FROM reader_progress WHERE novel_id = $1), 0)`,
+		novelID,
+	).Scan(&ahead)
+	return ahead, err
+}
+
+// pauseUntilNextCheck waits before re-evaluating a limit, while still honouring
+// cancellation — otherwise a cancel wouldn't take effect until the window reopened.
+func (w *Worker) pauseUntilNextCheck(ctx context.Context, jobID int64) error {
+	cancelled, err := w.cancelRequested(ctx, jobID)
+	if err == nil && cancelled {
+		return nil // the walk loop's own shouldStop observes it and stops cleanly
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(5 * time.Second):
+		return nil
+	}
+}
+
+// novelIngestLookahead reads how far ahead of the reader this novel may be fetched
+// (migration 0018).
+func (w *Worker) novelIngestLookahead(ctx context.Context, novelID string) (int, error) {
+	var lookahead int
+	err := w.db.QueryRow(ctx,
+		`SELECT ingest_lookahead FROM novel WHERE id = $1`, novelID,
+	).Scan(&lookahead)
+	return lookahead, err
 }
 
 func (w *Worker) setStatus(ctx context.Context, jobID int64, status, lastError string) error {
@@ -242,6 +308,18 @@ func (w *Worker) handle(ctx context.Context, jobID int64) error {
 			return nil
 		}
 		nextIndex++
+
+		// Keep translation following ingestion. Bounded by the novel's translate_lookahead
+		// and idempotent, so this tops the window up rather than queueing everything
+		// fetched — without it a freshly scraped novel sits at zero translated until a
+		// reader happens to open a chapter.
+		//
+		// Best-effort: failing to queue means translation lags, not that the chapter
+		// failed to ingest, so it must never fail the scrape.
+		if err := w.ingest.TranslateAhead(ctx, job.novelID); err != nil {
+			log.Printf("scrape job %d: could not top up translate window: %v", jobID, err)
+		}
+
 		_, err = w.db.Exec(ctx,
 			`UPDATE scrape_job SET chapters_fetched = chapters_fetched + 1, updated_at = now() WHERE id = $1`,
 			jobID,
@@ -258,9 +336,13 @@ func (w *Worker) handle(ctx context.Context, jobID int64) error {
 	if job.maxQueueDepth != nil {
 		queueLimit = *job.maxQueueDepth
 	}
+	ingestLookahead, err := w.novelIngestLookahead(ctx, job.novelID)
+	if err != nil {
+		return w.fail(ctx, jobID, err.Error())
+	}
 
 	stopReason, walkErr := walk(ctx, w.client, site, job.startURL, onChapter, shouldStop,
-		w.waitForCapacity(jobID, queueLimit), w.contentLenFloor)
+		w.waitForCapacity(jobID, job.novelID, queueLimit, ingestLookahead), w.contentLenFloor)
 	if walkErr != nil {
 		return w.fail(ctx, jobID, walkErr.Error())
 	}
