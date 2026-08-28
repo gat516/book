@@ -48,7 +48,7 @@ class DisplayScanStage:
 
         rows = await (
             await ctx.db.execute(
-                "SELECT entity_id, target_term FROM glossary WHERE novel_id = %s",
+                "SELECT entity_id, target_term FROM glossary WHERE novel_id = %s AND NOT deleted",
                 (ctx.novel.id,),
             )
         ).fetchall()

@@ -454,3 +454,9 @@ body {
 .novel-create-form select {
   padding: 0.3rem;
 }
+
+/* Glossary management stays usable before the first chapter is ready. */
+.glossary-add { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: end; margin: 1rem 0; }
+.glossary-add label { display: flex; flex-direction: column; gap: 0.3rem; flex: 1 1 12rem; }
+.glossary-table-wrap { overflow-x: auto; }
+.glossary-view td button { margin: 0.2rem; }

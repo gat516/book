@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"testing"
@@ -230,5 +232,44 @@ func TestBootstrapGlossaryTermConflictsOnDifferentTarget(t *testing.T) {
 	_, err := store.BootstrapGlossaryTerm(ctx, novelID, "青云宗", "Different Name")
 	if !errors.Is(err, ErrGlossaryTermConflict) {
 		t.Fatalf("err = %v, want ErrGlossaryTermConflict", err)
+	}
+}
+
+func TestDeleteGlossaryPreservesVersionAuditAndAllowsRecreation(t *testing.T) {
+	store := integrationStore(t)
+	ctx := context.Background()
+	novelID := seedNovelWithGlossary(t, store, nil)
+	if version, err := store.BootstrapGlossaryTerm(ctx, novelID, "凌峰", "Ling Feng"); err != nil || version != 1 {
+		t.Fatalf("create: version=%d err=%v", version, err)
+	}
+	version, err := store.DeleteGlossaryTerm(ctx, novelID, "凌峰", 2)
+	if err != nil || version != 2 {
+		t.Fatalf("delete: version=%d err=%v", version, err)
+	}
+	var deleted bool
+	var storedVersion int
+	if err := store.db.QueryRow(ctx, `SELECT deleted, version FROM glossary WHERE novel_id=$1 AND source_term='凌峰'`, novelID).Scan(&deleted, &storedVersion); err != nil || !deleted || storedVersion != 2 {
+		t.Fatalf("tombstone: deleted=%v version=%d err=%v", deleted, storedVersion, err)
+	}
+	var oldTarget, newTarget, prevHash, rowHash string
+	if err := store.db.QueryRow(ctx, `SELECT old_target, new_target, prev_hash, row_hash FROM glossary_changelog WHERE novel_id=$1 AND seq=2`, novelID).Scan(&oldTarget, &newTarget, &prevHash, &rowHash); err != nil {
+		t.Fatal(err)
+	}
+	expected := sha256.Sum256([]byte(prevHash + pythonJSONArray(novelID, 2, "凌峰", "Ling Feng", "", 2, prevHash)))
+	if oldTarget != "Ling Feng" || newTarget != "" || rowHash != hex.EncodeToString(expected[:]) {
+		t.Fatal("delete audit chain is invalid")
+	}
+	if _, err := store.CorrectGlossaryTerm(ctx, novelID, "凌峰", "Different", 2); !errors.Is(err, ErrGlossaryTermNotFound) {
+		t.Fatalf("editing a deleted term: %v", err)
+	}
+	// Deletion releases the target, but its version stays in the novel-wide counter.
+	if version, err := store.BootstrapGlossaryTerm(ctx, novelID, "另一人", "Ling Feng"); err != nil || version != 3 {
+		t.Fatalf("reuse target: %d %v", version, err)
+	}
+	if version, err := store.BootstrapGlossaryTerm(ctx, novelID, "凌峰", "Lingfeng"); err != nil || version != 4 {
+		t.Fatalf("recreate: %d %v", version, err)
+	}
+	if err := store.db.QueryRow(ctx, `SELECT deleted FROM glossary WHERE novel_id=$1 AND source_term='凌峰'`, novelID).Scan(&deleted); err != nil || deleted {
+		t.Fatalf("restore: %v %v", deleted, err)
 	}
 }

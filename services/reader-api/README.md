@@ -115,3 +115,17 @@ READER_TEST_DATABASE_URL=postgres://engine:engine@localhost:5432/novel_engine \
 ```
 
 Without `READER_TEST_DATABASE_URL`, database-backed tests skip cleanly.
+
+### Glossary management
+
+The web glossary is available from the reader, chapter list, and pending view.
+It supports create (bootstrap), read, edit, and confirmed deletion. DELETE is
+proxied to ingest-api with the same `X-Reader-ID` requirement as corrections.
+Before a reader has progress, GET glossary returns only chapter-zero seed terms;
+otherwise the existing `locked_at_chapter <= min(progress, at)` gate remains.
+Deleted terms are hidden. Changes affect future translation work, not stored prose.
+
+Glossary rows may include `entity_id` for the clickable reader inspector. This is
+optional: unbound seeds omit it, and a seed linked to a future entity also omits it
+until `entity.first_seen_chapter <= at`. A left join under the reader role preserves
+the visible glossary seed without exposing a future entity identifier.

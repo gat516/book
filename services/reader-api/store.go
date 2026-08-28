@@ -349,7 +349,7 @@ func (s *Store) TranslationHealth(ctx context.Context, novelID string) (Translat
 	// early on, so they belong in the denominator.
 	if err := s.readerDB.QueryRow(ctx,
 		`SELECT
-		   (SELECT count(*) FROM glossary WHERE novel_id = $1),
+		   (SELECT count(*) FROM glossary WHERE novel_id = $1 AND NOT deleted),
 		   (SELECT count(*) FROM (
 		      SELECT source_term FROM glossary_candidate
 		      WHERE novel_id = $1
@@ -520,13 +520,17 @@ func (s *Store) ListWiki(ctx context.Context, novelID string, at int) ([]EntityS
 // only; still routed through withReaderTx for the same connection/role discipline as
 // everything else, even though there's no inner RLS layer to back it up for this table.
 func (s *Store) ListGlossary(ctx context.Context, novelID string, at int) ([]GlossaryTermView, error) {
+	// A seed term can be linked to an entity discovered later. Only expose that ID
+	// once the entity is authorized too; LEFT JOIN preserves the visible seed (§0.3).
 	terms := []GlossaryTermView{}
 	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT source_term, target_term, version, locked_at_chapter
-			 FROM glossary
-			 WHERE novel_id = $1 AND locked_at_chapter <= $2
-			 ORDER BY source_term`, novelID, at)
+			`SELECT g.source_term, g.target_term, g.version, g.locked_at_chapter, e.id::text
+			 FROM glossary g
+			 LEFT JOIN entity e ON e.id = g.entity_id AND e.novel_id = g.novel_id
+			   AND e.first_seen_chapter <= $2
+			 WHERE g.novel_id = $1 AND g.locked_at_chapter <= $2 AND NOT g.deleted
+			 ORDER BY g.source_term`, novelID, at)
 		if err != nil {
 			return err
 		}
@@ -535,6 +539,7 @@ func (s *Store) ListGlossary(ctx context.Context, novelID string, at int) ([]Glo
 			var term GlossaryTermView
 			if err := rows.Scan(
 				&term.SourceTerm, &term.TargetTerm, &term.Version, &term.LockedAtChapter,
+				&term.EntityID,
 			); err != nil {
 				return err
 			}

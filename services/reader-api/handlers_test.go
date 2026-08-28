@@ -83,6 +83,11 @@ func (f *fakeIngestClient) CorrectGlossaryTerm(_ context.Context, _, _ string, b
 	return f.response, f.status, f.err
 }
 
+func (f *fakeIngestClient) DeleteGlossaryTerm(_ context.Context, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
+}
+
 func (f *fakeIngestClient) GetProviderConfig(_ context.Context, _ string) (json.RawMessage, int, error) {
 	return f.response, f.status, f.err
 }
@@ -714,5 +719,31 @@ func TestHealthChecksBothPoolsThroughStore(t *testing.T) {
 	response = request(t, &API{store: store}, http.MethodGet, "/healthz", "", "")
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("unhealthy status = %d", response.Code)
+	}
+}
+
+func TestGlossaryBeforeReadingExposesOnlyChapterZero(t *testing.T) {
+	store := readyFake()
+	store.progressErr = ErrNotFound
+	response := request(t, &API{store: store}, http.MethodGet, "/novels/"+testNovelID+"/glossary?at=999", "", "new-reader")
+	var body GlossaryResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || body.At != 0 {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestDeleteGlossaryRequiresPrincipalAndProxiesBody(t *testing.T) {
+	ingest := &fakeIngestClient{response: json.RawMessage(`{"deleted":true,"version":3}`), status: http.StatusOK}
+	api := &API{store: readyFake(), ingest: ingest}
+	path := "/novels/" + testNovelID + "/glossary/%E5%87%8C%E5%B3%B0"
+	if response := request(t, api, http.MethodDelete, path, `{"at_chapter":2}`, ""); response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated delete: %d", response.Code)
+	}
+	response := request(t, api, http.MethodDelete, path, `{"at_chapter":2}`, "reader-a")
+	if response.Code != http.StatusOK || string(ingest.lastBody) != `{"at_chapter":2}` {
+		t.Fatalf("delete response: %d %s", response.Code, response.Body.String())
 	}
 }

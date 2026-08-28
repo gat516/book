@@ -423,3 +423,37 @@ func TestDatabaseRolesAreLeastPrivilege(t *testing.T) {
 		t.Fatal("reader_progress_writer unexpectedly read fact")
 	}
 }
+
+func TestGlossaryEntityLinksRespectKnowledgeTime(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	ctx := context.Background()
+	novelID, visibleID, futureID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	if _, err := admin.Exec(ctx, `INSERT INTO novel(id,title,source_lang,target_lang,ontology) VALUES ($1,'Entity glossary test','zh','en','{}')`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		admin.Exec(ctx, `DELETE FROM glossary WHERE novel_id=$1`, novelID)
+		admin.Exec(ctx, `DELETE FROM entity WHERE novel_id=$1`, novelID)
+		admin.Exec(ctx, `DELETE FROM novel WHERE id=$1`, novelID)
+	})
+	if _, err := admin.Exec(ctx, `INSERT INTO entity(id,novel_id,canonical,kind,first_seen_chapter) VALUES ($1,$3,'visible','character',1), ($2,$3,'future','character',10)`, visibleID, futureID, novelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO glossary(novel_id,source_term,target_term,entity_id,version,locked_at_chapter) VALUES ($1,'known-seed','Known',$2,1,0),($1,'later-seed','Later',$3,2,0),($1,'manual','Manual',NULL,3,0)`, novelID, visibleID, futureID); err != nil {
+		t.Fatal(err)
+	}
+	terms, err := store.ListGlossary(ctx, novelID, 1)
+	if err != nil || len(terms) != 3 {
+		t.Fatalf("terms: %v %v", terms, err)
+	}
+	if terms[0].EntityID == nil || *terms[0].EntityID != visibleID {
+		t.Fatal("visible entity link missing")
+	}
+	if terms[1].EntityID != nil || terms[2].EntityID != nil {
+		t.Fatal("future entity ID leaked or unbound seed invented a link")
+	}
+	terms, err = store.ListGlossary(ctx, novelID, 10)
+	if err != nil || terms[1].EntityID == nil || *terms[1].EntityID != futureID {
+		t.Fatalf("later entity link: %v %v", terms, err)
+	}
+}

@@ -238,3 +238,21 @@ async def test_bootstrapped_chapter_skips_translation_entirely(db_conn):
         assert job_count == (0,)
     finally:
         await delete_novel(db_conn, novel_id)
+
+
+async def test_deleted_glossary_terms_are_not_constraints_but_advance_cache_version(db_conn):
+    from pipeline.stages.translate import _glossary
+    novel_id = await make_novel(db_conn)
+    try:
+        await db_conn.execute(
+            "INSERT INTO glossary (novel_id, source_term, target_term, version, locked_at_chapter, deleted) "
+            "VALUES (%s, 'gone', 'Removed', 5, 0, true)", (novel_id,),
+        )
+        assert await _glossary(db_conn, novel_id) == (5, [])
+        await db_conn.execute(
+            "INSERT INTO glossary (novel_id, source_term, target_term, version, locked_at_chapter) "
+            "VALUES (%s, 'kept', 'Retained', 4, 0)", (novel_id,),
+        )
+        assert await _glossary(db_conn, novel_id) == (5, [('kept', 'Retained')])
+    finally:
+        await delete_novel(db_conn, novel_id)

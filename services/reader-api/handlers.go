@@ -50,6 +50,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("POST /novels/{id}/scrape/cancel", a.postScrapeCancel)
 	mux.HandleFunc("GET /novels/{id}/glossary", a.getGlossary)
 	mux.HandleFunc("PATCH /novels/{id}/glossary/{term}", a.patchGlossaryTerm)
+	mux.HandleFunc("DELETE /novels/{id}/glossary/{term}", a.patchGlossaryTerm)
 	mux.HandleFunc("POST /novels/{id}/glossary/bootstrap", a.postBootstrapGlossary)
 	mux.HandleFunc("GET /novels/{id}/provider-config", a.getProviderConfig)
 	mux.HandleFunc("PATCH /novels/{id}/provider-config", a.putProviderConfig)
@@ -704,9 +705,34 @@ func (a *API) postScrapeCancel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) getGlossary(w http.ResponseWriter, r *http.Request) {
-	_, novelID, at, ok := a.gate(w, r)
+	prepareReaderResponse(w)
+	reader, ok := readerID(r)
 	if !ok {
+		writeError(w, http.StatusUnauthorized, "X-Reader-ID is required")
 		return
+	}
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	requested, err := requestedAt(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	progress, err := a.store.GetProgress(r.Context(), reader, novelID)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, "could not resolve reader progress")
+		return
+	}
+	// Before the first readable chapter, expose only manually seeded terms (chapter 0).
+	at := 0
+	if err == nil {
+		at = progress.CurrentChapter
+	}
+	if requested != nil {
+		at = min(at, *requested)
 	}
 	terms, err := a.store.ListGlossary(r.Context(), novelID, at)
 	if err != nil {
@@ -737,7 +763,13 @@ func (a *API) patchGlossaryTerm(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "could not read request body")
 		return
 	}
-	result, status, err := a.ingest.CorrectGlossaryTerm(r.Context(), novelID, r.PathValue("term"), body)
+	var result json.RawMessage
+	var status int
+	if r.Method == http.MethodDelete {
+		result, status, err = a.ingest.DeleteGlossaryTerm(r.Context(), novelID, r.PathValue("term"), body)
+	} else {
+		result, status, err = a.ingest.CorrectGlossaryTerm(r.Context(), novelID, r.PathValue("term"), body)
+	}
 	if err != nil {
 		log.Printf("correct glossary term: %v", err)
 		writeError(w, http.StatusBadGateway, "ingest-api unavailable")

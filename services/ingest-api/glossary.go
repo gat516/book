@@ -54,6 +54,14 @@ var ErrGlossaryTermConflict = errors.New("glossary term already locked to a diff
 //     guarantee the two languages hash identically. See glossary_hash_test.go for the
 //     cross-language guard.
 func (s *Store) CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm, newTarget string, atChapter int) (int, error) {
+	return s.changeGlossaryTerm(ctx, novelID, sourceTerm, newTarget, atChapter, false)
+}
+
+func (s *Store) DeleteGlossaryTerm(ctx context.Context, novelID, sourceTerm string, atChapter int) (int, error) {
+	return s.changeGlossaryTerm(ctx, novelID, sourceTerm, "", atChapter, true)
+}
+
+func (s *Store) changeGlossaryTerm(ctx context.Context, novelID, sourceTerm, newTarget string, atChapter int, deleted bool) (int, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return 0, err
@@ -69,7 +77,7 @@ func (s *Store) CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm, ne
 
 	var oldTarget string
 	err = tx.QueryRow(ctx,
-		"SELECT target_term FROM glossary WHERE novel_id = $1 AND source_term = $2 FOR UPDATE",
+		"SELECT target_term FROM glossary WHERE novel_id = $1 AND source_term = $2 AND NOT deleted FOR UPDATE",
 		novelID, sourceTerm,
 	).Scan(&oldTarget)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -88,8 +96,8 @@ func (s *Store) CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm, ne
 	newVersion := maxVersion + 1
 
 	if _, err := tx.Exec(ctx,
-		"UPDATE glossary SET target_term = $1, version = $2 WHERE novel_id = $3 AND source_term = $4",
-		newTarget, newVersion, novelID, sourceTerm,
+		"UPDATE glossary SET target_term = CASE WHEN $5 THEN target_term ELSE $1 END, version = $2, deleted = $5 WHERE novel_id = $3 AND source_term = $4",
+		newTarget, newVersion, novelID, sourceTerm, deleted,
 	); err != nil {
 		if isDuplicateTargetTerm(err) {
 			return 0, fmt.Errorf("%w: %q is already the target of another source term",
@@ -175,7 +183,10 @@ func (s *Store) BootstrapGlossaryTerm(ctx context.Context, novelID, sourceTerm, 
 	err = tx.QueryRow(ctx,
 		`INSERT INTO glossary (novel_id, source_term, target_term, version, locked_at_chapter)
 		 VALUES ($1, $2, $3, $4, 0)
-		 ON CONFLICT (novel_id, source_term) DO NOTHING
+		 ON CONFLICT (novel_id, source_term) DO UPDATE
+		 SET target_term = EXCLUDED.target_term, version = EXCLUDED.version,
+		     deleted = false, entity_id = NULL, locked_at_chapter = 0
+		 WHERE glossary.deleted
 		 RETURNING true`,
 		novelID, sourceTerm, targetTerm, newVersion,
 	).Scan(&inserted)

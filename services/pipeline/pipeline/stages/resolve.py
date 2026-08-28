@@ -97,7 +97,7 @@ async def _target_term_owner(db, novel_id: str, target_term: str) -> str | None:
     """Which source term already claims this target in this novel, if any."""
     row = await (
         await db.execute(
-            "SELECT source_term FROM glossary WHERE novel_id = %s AND target_term = %s",
+            "SELECT source_term FROM glossary WHERE novel_id = %s AND target_term = %s AND NOT deleted",
             (novel_id, target_term),
         )
     ).fetchone()
@@ -173,6 +173,14 @@ async def _lock_glossary(
             return None
 
     await db.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (novel_id,))
+
+    # A human deletion is authoritative until they explicitly add the term again.
+    tombstone = await (await db.execute(
+        "SELECT 1 FROM glossary WHERE novel_id = %s AND source_term = %s AND deleted",
+        (novel_id, source_term),
+    )).fetchone()
+    if tombstone:
+        return None
 
     # Guard 1 (migration 0016): one target term per novel. A model that returns the same
     # invented name for several distinct entities is the exact failure that made a novel
@@ -299,7 +307,7 @@ async def _locked_target(db, novel_id: str, source_term: str) -> str | None:
     _lock_glossary's NULL-entity_id backfill path, which this pairs with)."""
     row = await (
         await db.execute(
-            "SELECT target_term FROM glossary WHERE novel_id = %s AND source_term = %s",
+            "SELECT target_term FROM glossary WHERE novel_id = %s AND source_term = %s AND NOT deleted",
             (novel_id, source_term),
         )
     ).fetchone()

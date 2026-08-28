@@ -39,6 +39,7 @@ func main() {
 	mux.Handle("POST /novels", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.createNovel)))
 	mux.HandleFunc("POST /novels/{id}/chapters", api.pasteChapter)
 	mux.HandleFunc("PATCH /novels/{id}/glossary/{term}", api.correctGlossaryTerm)
+	mux.HandleFunc("DELETE /novels/{id}/glossary/{term}", api.deleteGlossaryTerm)
 	mux.HandleFunc("POST /novels/{id}/glossary/bootstrap", api.bootstrapGlossary)
 	mux.HandleFunc("POST /novels/{id}/translate-ahead", api.translateAhead)
 	mux.HandleFunc("PATCH /novels/{id}/settings", api.patchNovelSettings)

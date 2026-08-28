@@ -82,6 +82,8 @@ export interface ScrapeJobView {
 }
 
 export interface GlossaryTermView {
+  // Present only when the linked entity is visible at the reader's chapter gate.
+  entity_id?: string;
   source_term: string;
   target_term: string;
   version: number;

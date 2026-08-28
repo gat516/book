@@ -73,10 +73,11 @@ type RelationshipsResponse struct {
 }
 
 type GlossaryTermView struct {
-	SourceTerm      string `json:"source_term"`
-	TargetTerm      string `json:"target_term"`
-	Version         int    `json:"version"`
-	LockedAtChapter int    `json:"locked_at_chapter"`
+	EntityID        *string `json:"entity_id,omitempty"`
+	SourceTerm      string  `json:"source_term"`
+	TargetTerm      string  `json:"target_term"`
+	Version         int     `json:"version"`
+	LockedAtChapter int     `json:"locked_at_chapter"`
 }
 
 type GlossaryResponse struct {

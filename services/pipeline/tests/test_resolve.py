@@ -623,3 +623,25 @@ async def test_chapter_text_stays_out_of_the_cacheable_prefix(db_conn, novel):
     assert text in proposal["prompt"]
     assert text not in proposal["system"]
     assert "character" in proposal["system"]  # the ontology IS in the stable prefix
+
+
+async def test_human_deleted_term_cannot_be_automatically_relocked(db_conn):
+    from pipeline.stages.resolve import _locked_target, _target_term_owner
+    novel_id = await make_novel(db_conn)
+    try:
+        await db_conn.execute(
+            "INSERT INTO glossary (novel_id, source_term, target_term, version, locked_at_chapter, deleted) "
+            "VALUES (%s, '凌峰', 'Ling Feng', 3, 0, true)", (novel_id,),
+        )
+        assert await _locked_target(db_conn, novel_id, '凌峰') is None
+        assert await _target_term_owner(db_conn, novel_id, 'Ling Feng') is None
+        async with db_conn.transaction():
+            assert await _lock_glossary(db_conn, novel_id=novel_id, source_term='凌峰',
+                                       target_term='Ling Feng', entity_id=None, chapter=4,
+                                       require_corroboration=False) is None
+        row = await (await db_conn.execute(
+            'SELECT version, deleted FROM glossary WHERE novel_id=%s', (novel_id,),
+        )).fetchone()
+        assert row == (3, True)
+    finally:
+        await delete_novel(db_conn, novel_id)

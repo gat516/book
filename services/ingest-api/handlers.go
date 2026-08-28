@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -503,6 +504,7 @@ func (a *API) correctGlossaryTerm(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+	req.TargetTerm = strings.TrimSpace(req.TargetTerm)
 	if req.TargetTerm == "" {
 		writeErr(w, http.StatusBadRequest, "target_term is required")
 		return
@@ -513,6 +515,10 @@ func (a *API) correctGlossaryTerm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	version, err := a.store.CorrectGlossaryTerm(r.Context(), novelID, sourceTerm, req.TargetTerm, req.AtChapter)
+	if errors.Is(err, ErrGlossaryTermConflict) {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
 	if errors.Is(err, ErrGlossaryTermNotFound) {
 		writeErr(w, http.StatusNotFound, "no such glossary term")
 		return
@@ -525,6 +531,27 @@ func (a *API) correctGlossaryTerm(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, correctGlossaryTermResp{
 		NovelID: novelID, SourceTerm: sourceTerm, TargetTerm: req.TargetTerm, Version: version,
 	})
+}
+
+func (a *API) deleteGlossaryTerm(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		AtChapter int `json:"at_chapter"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AtChapter < 0 {
+		writeErr(w, http.StatusBadRequest, "a nonnegative at_chapter is required")
+		return
+	}
+	version, err := a.store.DeleteGlossaryTerm(r.Context(), r.PathValue("id"), r.PathValue("term"), req.AtChapter)
+	if errors.Is(err, ErrGlossaryTermNotFound) {
+		writeErr(w, http.StatusNotFound, "no such glossary term")
+		return
+	}
+	if err != nil {
+		log.Printf("delete glossary: %v", err)
+		writeErr(w, http.StatusInternalServerError, "could not delete glossary term")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "version": version})
 }
 
 type bootstrapGlossaryReq struct {
@@ -568,6 +595,8 @@ func (a *API) bootstrapGlossary(w http.ResponseWriter, r *http.Request) {
 
 	results := make([]correctGlossaryTermResp, 0, len(req.Terms))
 	for _, term := range req.Terms {
+		term.SourceTerm = strings.TrimSpace(term.SourceTerm)
+		term.TargetTerm = strings.TrimSpace(term.TargetTerm)
 		if term.SourceTerm == "" || term.TargetTerm == "" {
 			writeErr(w, http.StatusBadRequest, "source_term and target_term are required for every entry")
 			return

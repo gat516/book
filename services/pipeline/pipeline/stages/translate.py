@@ -41,12 +41,13 @@ async def _chapter_row(db, novel_id: str, chapter: int):
 async def _glossary(db, novel_id: str) -> tuple[int, list[tuple[str, str]]]:
     rows = await (
         await db.execute(
-            "SELECT source_term, target_term, version FROM glossary "
+            "SELECT source_term, target_term, version, deleted FROM glossary "
             "WHERE novel_id = %s ORDER BY source_term",
             (novel_id,),
         )
     ).fetchall()
-    return (max((r[2] for r in rows), default=0), [(r[0], r[1]) for r in rows])
+    # Tombstones still advance the cache version, including deletion of the last term.
+    return (max((r[2] for r in rows), default=0), [(r[0], r[1]) for r in rows if not r[3]])
 
 
 def _read_object(objects, bucket: str, key: str) -> str:

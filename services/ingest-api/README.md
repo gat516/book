@@ -94,3 +94,14 @@ Without `INGEST_TEST_DATABASE_URL`, the database-backed tests skip cleanly.
 | `store.go` | pg / redis / minio data-access helpers |
 | `handlers.go` | HTTP handlers + validation |
 | `glossary.go` | glossary correction — Go port of `resolve.py`'s hash-chain audit trail |
+
+### Glossary deletion
+
+Migration `0019_glossary_deletion.sql` adds glossary tombstones. Apply it before
+starting the updated APIs/pipeline. `DELETE /novels/{id}/glossary/{term}` accepts
+`{"at_chapter": 12}`. It removes the term from active translation constraints,
+advances the novel-wide version, and appends a hash-chained audit entry whose
+`new_target` is `""` (the deletion marker). Existing translations and graph facts
+are unchanged. RESOLVE will not promote a deleted source again; explicitly adding
+it via `/glossary/bootstrap` restores it with a fresh version. Deleted targets
+can be reused. Create/correct requests trim terms and reject blank values.

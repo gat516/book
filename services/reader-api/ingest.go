@@ -22,6 +22,7 @@ type IngestClient interface {
 	CreateNovel(ctx context.Context, body json.RawMessage) (json.RawMessage, int, error)
 	PasteChapter(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
+	DeleteGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
 	GetProviderConfig(ctx context.Context, novelID string) (json.RawMessage, int, error)
 	PutProviderConfig(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	BootstrapGlossary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
@@ -78,6 +79,10 @@ func (c *ingestHTTPClient) PasteChapter(ctx context.Context, novelID string, bod
 func (c *ingestHTTPClient) CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error) {
 	path := "/novels/" + novelID + "/glossary/" + url.PathEscape(sourceTerm)
 	return c.send(ctx, http.MethodPatch, path, body, false)
+}
+
+func (c *ingestHTTPClient) DeleteGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodDelete, "/novels/"+novelID+"/glossary/"+url.PathEscape(sourceTerm), body, false)
 }
 
 func (c *ingestHTTPClient) GetProviderConfig(ctx context.Context, novelID string) (json.RawMessage, int, error) {
