@@ -116,6 +116,7 @@ class FakeProvider(SequentialBatchMixin):
         cls: Class = Class.BATCH,
         pin_model: bool = False,
         model: str | None = None,
+        json_schema: dict | None = None,
     ) -> Completion:
         self.calls.append(
             {
@@ -125,6 +126,7 @@ class FakeProvider(SequentialBatchMixin):
                 "cls": cls,
                 "pin_model": pin_model,
                 "model": model,
+                "json_schema": json_schema,
             }
         )
         text = self.response(prompt, system) if callable(self.response) else self.response

@@ -33,13 +33,16 @@ class OllamaProvider(SequentialBatchMixin):
 
     async def complete(self, prompt: str, *, system: str = "", json_mode: bool = False,
                        cls: Class = Class.BATCH, pin_model: bool = False,
-                       model: str | None = None) -> Completion:
+                       model: str | None = None, json_schema: dict | None = None) -> Completion:
         use_model = model or self._model
         messages = ([{"role": "system", "content": system}] if system else [])
         messages.append({"role": "user", "content": prompt})
         sink = self.stream_sink
         payload: dict = {"model": use_model, "messages": messages, "stream": sink is not None}
-        if json_mode:
+        if json_schema is not None:
+            payload["format"] = json_schema
+            payload["options"] = {"temperature": 0}
+        elif json_mode:
             payload["format"] = "json"
         if sink is None:
             resp = await self._client.post("/api/chat", json=payload)

@@ -78,6 +78,7 @@ async def test_batch_forwards_completion_options_at_batch_priority():
             cls: Class = Class.BATCH,
             pin_model: bool = False,
             model: str | None = None,
+            json_schema: dict | None = None,
         ) -> Completion:
             self.call = {
                 "prompt": prompt,
@@ -86,6 +87,7 @@ async def test_batch_forwards_completion_options_at_batch_priority():
                 "cls": cls,
                 "pin_model": pin_model,
                 "model": model,
+                "json_schema": json_schema,
             }
             return Completion(text="ok", served_provider="fake", served_model=model or "")
 
@@ -99,6 +101,7 @@ async def test_batch_forwards_completion_options_at_batch_priority():
                 "json_mode": True,
                 "pin_model": True,
                 "model": "snapshot",
+                "json_schema": {"type": "object"},
             }
         ]
     )
@@ -110,6 +113,7 @@ async def test_batch_forwards_completion_options_at_batch_priority():
         "cls": Class.BATCH,
         "pin_model": True,
         "model": "snapshot",
+        "json_schema": {"type": "object"},
     }
 
 

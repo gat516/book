@@ -9,7 +9,7 @@ import os
 
 import httpx
 
-from novel_llm.provider import Class, Completion, SequentialBatchMixin
+from novel_llm.provider import Class, Completion, SequentialBatchMixin, system_with_schema
 
 
 class DeepSeekProvider(SequentialBatchMixin):
@@ -33,12 +33,13 @@ class DeepSeekProvider(SequentialBatchMixin):
 
     async def complete(self, prompt: str, *, system: str = "", json_mode: bool = False,
                        cls: Class = Class.BATCH, pin_model: bool = False,
-                       model: str | None = None) -> Completion:
+                       model: str | None = None, json_schema: dict | None = None) -> Completion:
+        system = system_with_schema(system, json_schema)
         use_model = model or self._model
         messages = ([{"role": "system", "content": system}] if system else [])
         messages.append({"role": "user", "content": prompt})
         payload: dict = {"model": use_model, "messages": messages}
-        if json_mode:
+        if json_mode or json_schema is not None:
             payload["response_format"] = {"type": "json_object"}
         resp = await self._client.post("/chat/completions", json=payload)
         resp.raise_for_status()

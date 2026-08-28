@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import anthropic
 
-from novel_llm.provider import Class, Completion, SequentialBatchMixin
+from novel_llm.provider import Class, Completion, SequentialBatchMixin, system_with_schema
 
 
 class AnthropicProvider(SequentialBatchMixin):
@@ -19,7 +19,8 @@ class AnthropicProvider(SequentialBatchMixin):
 
     async def complete(self, prompt: str, *, system: str = "", json_mode: bool = False,
                        cls: Class = Class.BATCH, pin_model: bool = False,
-                       model: str | None = None) -> Completion:
+                       model: str | None = None, json_schema: dict | None = None) -> Completion:
+        system = system_with_schema(system, json_schema)
         use_model = model or self._model
         kwargs: dict = {"model": use_model, "max_tokens": self._max_tokens,
                         "messages": [{"role": "user", "content": prompt}]}
