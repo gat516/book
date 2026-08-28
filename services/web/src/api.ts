@@ -188,3 +188,9 @@ export function deleteGlossaryTerm(novelId: string, sourceTerm: string, at: numb
     method: "DELETE", body: JSON.stringify({ at_chapter: at }),
   });
 }
+
+export function prioritizeChapter(novelId: string, chapter: number): Promise<{ prioritized: boolean }> {
+  return request(`/novels/${novelId}/translate-ahead`, {
+    method: "POST", body: JSON.stringify({ from: chapter, count: 1, priority: true }),
+  });
+}

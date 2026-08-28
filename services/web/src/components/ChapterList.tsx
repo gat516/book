@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { listChapters } from "../api";
-import type { ChapterListItem } from "../types";
+import type { ChapterListItem, PipelineStatusResponse } from "../types";
 import { PipelineStatus } from "./PipelineStatus";
 
 interface Props {
@@ -19,10 +19,8 @@ const PAGE_SIZE = 25;
 // server-side (never fetching the whole list) and offers a jump-to box — paging one screen
 // at a time is unusable at that scale.
 //
-// `status` comes straight from the pipeline: "done" is readable, "ingested" means the
-// worker hasn't finished translating it yet, "error" means it failed. Showing it here is
-// the whole point — without it there's no way to tell an untranslated chapter from a
-// missing one.
+// Durable chapter state and live worker claims are separate: "ingested" means
+// not queued, and only a live claim is evidence of processing.
 export function ChapterList({ novelId, currentChapter, onOpen, onClose }: Props) {
   const [chapters, setChapters] = useState<ChapterListItem[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -33,6 +31,11 @@ export function ChapterList({ novelId, currentChapter, onOpen, onClose }: Props)
   // page, so a novel with hundreds of chapters shouldn't render one just because you
   // opened the view.
   const [expanded, setExpanded] = useState(false);
+  const [processing, setProcessing] = useState<number[]>([]);
+  const receiveStatus = useCallback((status: PipelineStatusResponse | null) => {
+    const next = status?.in_flight.map((c) => c.chapter_index) ?? [];
+    setProcessing((previous) => previous.join(",") === next.join(",") ? previous : next);
+  }, []);
 
   const load = useCallback(() => {
     // While collapsed only the total is displayed, so ask for a single row rather than a
@@ -71,7 +74,7 @@ export function ChapterList({ novelId, currentChapter, onOpen, onClose }: Props)
       {/* One timer for the page: PipelineStatus is already polling, so the list reloads
           when it reports the worker actually moved on — instead of running a second
           interval that re-rendered the whole table on a fixed beat. */}
-      <PipelineStatus novelId={novelId} onProgress={load} />
+      <PipelineStatus novelId={novelId} onProgress={load} onStatus={receiveStatus} />
 
       <div className="chapter-list-summary">
         <span>{total} chapter(s)</span>
@@ -147,9 +150,18 @@ export function ChapterList({ novelId, currentChapter, onOpen, onClose }: Props)
                 <td>
                   {chapter.status === "done"
                     ? "Ready"
-                    : chapter.status === "ingested"
-                      ? "Translating…"
-                      : chapter.status}
+                    : processing.includes(chapter.chapter_index)
+                      ? "Processing"
+                      : chapter.status === "ingested"
+                        ? "Not queued"
+                        : chapter.status === "queued"
+                          ? "Queued"
+                          : chapter.status === "error"
+                            ? "Failed"
+                            : chapter.status}
+                  {chapter.status === "done" && chapter.graph_status && chapter.graph_status !== "done" && (
+                    <small> · {chapter.graph_status === "error" ? "Facts unavailable" : "Facts pending"}</small>
+                  )}
                 </td>
                 <td>
                   <button onClick={() => onOpen(chapter)}>

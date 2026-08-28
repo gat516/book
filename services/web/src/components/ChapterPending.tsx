@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getChapterPreview, putProgress, translateAhead } from "../api";
+import { getChapterPreview, prioritizeChapter, putProgress, translateAhead } from "../api";
 import { usePolling } from "../usePolling";
 import { PipelineStatus } from "./PipelineStatus";
 
@@ -15,12 +15,6 @@ interface Props {
 // Rather than dumping a raw 404/409, this holds the reader here and polls until the
 // chapter becomes readable, then hands off.
 //
-// Readiness is probed with putProgress rather than getChapter: advancing progress only
-// succeeds against a chapter with status='done' (reader-api's AdvanceProgress), so a 409
-// means "still translating" unambiguously — whereas getChapter would 404 for a chapter
-// that merely sits above stored progress, indistinguishable from one that doesn't exist.
-// It's also the call we'd have to make anyway to read the chapter, and it never moves
-// progress backward (GREATEST), so polling it is safe.
 export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, onBack }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [checks, setChecks] = useState(0);
@@ -30,13 +24,20 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
   const [requestingMore, setRequestingMore] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
 
-  // Translation follows the reader (novel.translate_lookahead), so a chapter reached by
-  // jumping — past the end of that window — is not queued at all and would never arrive.
-  // Requesting exactly this chapter on arrival is what makes waiting here terminate.
+  const [priorityNotice, setPriorityNotice] = useState("");
+  const [initialRequestDone, setInitialRequestDone] = useState(false);
+
+  // An explicit reader request takes precedence over background lookahead. An active
+  // chapter is left alone; neither its model call nor other pending jobs are cancelled.
   useEffect(() => {
-    translateAhead(novelId, chapterIndex, 1).catch(() => {
-      /* best effort: the poll below still reports the real state */
-    });
+    let active = true;
+    prioritizeChapter(novelId, chapterIndex).then((result) => {
+      if (active) {
+        setPriorityNotice(result.prioritized ? "Requested next after the current chapter finishes." : "Already processing or ready.");
+        setInitialRequestDone(true);
+      }
+    }).catch((err) => { if (active) setError(String(err)); });
+    return () => { active = false; };
   }, [novelId, chapterIndex]);
 
   // ONE poll answers everything this view needs: how far the translation has got, and
@@ -46,6 +47,7 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
   const poll = useCallback(async () => {
     try {
       const latest = await getChapterPreview(novelId, chapterIndex);
+      setError(null);
       setPreview(latest.available ? (latest.text ?? "") : null);
       setStatus(latest.status);
       setChecks((n) => n + 1);
@@ -63,20 +65,30 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
   }, [novelId, chapterIndex]);
 
   useEffect(() => {
-    poll();
-  }, [poll]);
+    if (initialRequestDone) void poll();
+  }, [poll, initialRequestDone]);
 
   // Fast only while text is actually arriving — that's the only time a quick cadence buys
   // anything. Waiting through the earlier stages, which take minutes and show nothing,
   // polls slowly. Stops entirely once readable or failed.
   const streaming = preview !== null && status !== "done";
   const settled = ready || status === "error" || error !== null;
-  usePolling(poll, streaming ? 2000 : 6000, !settled);
+  usePolling(poll, streaming ? 2000 : 6000, initialRequestDone && !settled && !requestingMore);
 
-  async function requestMore() {
+  async function requestMore(priority = false) {
     setRequestingMore(true);
+    setError(null);
     try {
-      await translateAhead(novelId, chapterIndex, 10);
+      if (priority) {
+        const result = await prioritizeChapter(novelId, chapterIndex);
+        setPriorityNotice(result.prioritized ? "Requested next after the current chapter finishes." : "Already processing or ready.");
+      } else {
+        await translateAhead(novelId, chapterIndex, 10);
+      }
+      setStatus("queued");
+      setInitialRequestDone(true);
+      setReady(false);
+      await poll();
     } catch (err) {
       setError(String(err));
     } finally {
@@ -94,12 +106,13 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
         // Previously this view waited forever on a chapter that had already failed: the
         // old readiness probe couldn't tell "not ready yet" from "will never be ready".
         <p className="chapter-pending-error">
-          Translation failed for this chapter. Requeue it below to try again — if it keeps
-          failing, the model is likely rejecting it rather than the pipeline being stuck.
+          This chapter failed during processing. Retry it with priority below. If it fails
+          again, check the pipeline error; failures can come from the model or a service.
         </p>
       ) : (
-        <p>This chapter is still being translated. It will open automatically when it's ready.</p>
+        <p>This chapter is waiting for processing to finish. It will open automatically when it's ready.</p>
       )}
+      {priorityNotice && <p role="status">{priorityNotice}</p>}
       <PipelineStatus novelId={novelId} />
 
       {/* Only shown while the TRANSLATE stage is actually streaming. Earlier stages emit
@@ -121,7 +134,10 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
       {error && <p className="chapter-pending-error">{error}</p>}
       <div className="chapter-pending-actions">
         <button onClick={onBack}>← Back to chapters</button>
-        <button onClick={requestMore} disabled={requestingMore}>
+        <button onClick={() => requestMore(true)} disabled={requestingMore}>
+          {requestingMore ? "Requesting…" : status === "error" || error ? "Retry this chapter with priority" : "Prioritize this chapter"}
+        </button>
+        <button onClick={() => requestMore()} disabled={requestingMore}>
           {requestingMore ? "Queueing…" : "Translate 10 more from here"}
         </button>
       </div>

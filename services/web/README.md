@@ -33,3 +33,29 @@ update both.
 npx tsc -b   # typecheck
 npm run build
 ```
+
+### Clickable entity mode
+
+Open **Reading settings → Clickable entities** to turn highlighted names into
+buttons. The setting is off by default and saved in this browser; when disabled,
+the existing hover cards remain. Clicking a linked mention opens an entity dialog
+with its canonical name, aliases, known facts, and source chapters. **Edit glossary
+terms** expands the existing CRUD controls inside the dialog, initially filtered
+to related entries. **Show all visible glossary terms** broadens that list without
+changing the reader's spoiler boundary. New-term fields are suggestions only;
+check the original source spelling before saving. Changes do not rename entities,
+edit facts, or rewrite already-translated text.
+
+Only pipeline-recorded `mention_span` links are clickable. Chapters without linked
+mentions show an explanation when the setting is enabled. The dialog and glossary
+use the chapter response's server-authorized `at`; caches are separated by novel,
+chapter, and clearance. Optional glossary `entity_id` values are also gated by the
+linked entity's first-seen chapter. Human seeds without an ID can appear in the
+related list by a known source name, but this does not bind graph identities.
+
+## Reading and enrichment status
+
+The chapter table distinguishes Not queued, Queued, Processing, Ready and Failed.
+Ready means validated prose can be read; Facts pending/unavailable reports graph work
+separately. The processing timer is total chapter time, not current-stage duration.
+A failed extraction never revokes a saved translation. Unknown facts remain absent.

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ApiError, getProgress, listChapters, putProgress } from "./api";
+import { ApiError, getChapterPreview, getProgress, listChapters, putProgress } from "./api";
 import { AddChapterForm } from "./components/AddChapterForm";
 import { AskBox } from "./components/AskBox";
 import { ChapterList } from "./components/ChapterList";
@@ -36,6 +36,13 @@ interface PendingChapter {
   siteChapterNo?: string;
 }
 
+const CLICKABLE_ENTITIES_KEY = "reader-clickable-entities";
+
+function savedClickableEntities(): boolean {
+  try { return localStorage.getItem(CLICKABLE_ENTITIES_KEY) === "true"; }
+  catch { return false; }
+}
+
 export default function App() {
   const [novelId, setNovelId] = useState(novelIdFromLocation);
   const [creating, setCreating] = useState(false);
@@ -65,6 +72,13 @@ export default function App() {
   const [pending, setPending] = useState<PendingChapter | null>(null);
   const [showGlossary, setShowGlossary] = useState(false);
   const [showChapters, setShowChapters] = useState(false);
+  const [clickableEntities, setClickableEntities] = useState(savedClickableEntities);
+
+  function changeClickableEntities(enabled: boolean) {
+    setClickableEntities(enabled);
+    try { localStorage.setItem(CLICKABLE_ENTITIES_KEY, String(enabled)); }
+    catch { /* The control still works when browser storage is unavailable. */ }
+  }
 
   // Reopen the novel where this reader left off. A reader who has never opened it has no
   // progress row (404) — that's the normal first-visit path, not an error, so fall back
@@ -159,8 +173,24 @@ export default function App() {
     setPending(null); // confirmed readable
   }
 
+  async function navigateChapter(index: number) {
+    const latest = await getChapterPreview(novelId!, index);
+    if (!latest.status) throw new Error("This chapter has not been ingested yet.");
+    if (latest.status !== "done") {
+      setChapter(null);
+      setPending({ index });
+      setChapterIndex(index);
+      setShowChapters(false);
+      setShowGlossary(false);
+      return;
+    }
+    await putProgress(novelId!, index);
+    goToChapter(index);
+  }
+
   async function openChapter(item: ChapterListItem) {
     if (item.status !== "done") {
+      setChapter(null);
       setPending({ index: item.chapter_index, siteChapterNo: item.site_chapter_no });
       setChapterIndex(item.chapter_index);
       setShowChapters(false);
@@ -189,88 +219,93 @@ export default function App() {
         ← All novels
       </button>
 
-      {addingChapter ? (
-        <AddChapterForm
-          novelId={novelId}
-          nextChapterIndex={chapterIndex}
-          onAdded={chapterAdded}
-          onCancel={() => setAddingChapter(false)}
-        />
-      ) : showChapters ? (
-        <ChapterList
-          novelId={novelId}
-          currentChapter={chapterIndex}
-          onOpen={openChapter}
-          onClose={() => setShowChapters(false)}
-        />
-      ) : pending ? (
-        <ChapterPending
-          novelId={novelId}
-          chapterIndex={pending.index}
-          siteChapterNo={pending.siteChapterNo}
-          onReady={() => goToChapter(pending.index)}
-          onBack={() => {
-            setPending(null);
-            setShowChapters(true);
-          }}
-        />
-      ) : noChapter && hasChapters ? (
-        /* Chapters exist, just none finished translating. The list is the only useful view
-           here — from it, opening a chapter queues it and shows it arriving. Rendering the
-           add form instead (what this used to do) was a dead end on a novel that already
-           held 177 chapters. Kept as its own branch rather than relying on showChapters so
-           closing the list can't drop the reader back into that dead end. */
-        <ChapterList
-          novelId={novelId}
-          currentChapter={chapterIndex}
-          onOpen={openChapter}
-          onClose={backToNovels}
-        />
-      ) : noChapter ? (
-        <AddChapterForm
-          novelId={novelId}
-          nextChapterIndex={chapterIndex}
-          onAdded={chapterAdded}
-          onCancel={backToNovels}
-        />
-      ) : !progressLoaded ? (
-        <p>Loading…</p>
-      ) : (
-        <>
-          {/* ReaderPane stays mounted (just hidden) rather than unmounting behind the
-              glossary toggle, so switching back doesn't re-fetch/re-bootstrap progress. */}
-          <div style={{ display: showGlossary ? "none" : "block" }}>
-            {/* Above the text rather than over it: a caveat about the translation should
-                be visible before reading, without interrupting it. */}
-            <TranslationNotice novelId={novelId} />
-            <ReaderPane
-              novelId={novelId}
-              chapterIndex={chapterIndex}
-              onChapterLoaded={chapterLoaded}
-              onNoChapter={handleNoChapter}
-            />
-          </div>
-          {showGlossary && chapter && <GlossaryView novelId={novelId} at={chapter.at} />}
-          <ProgressControls
+      <button className="app-toggle-glossary" onClick={() => setShowGlossary((v) => !v)}>
+        {showGlossary ? "← Close glossary" : "Glossary"}
+      </button>
+      <details className="reader-settings">
+        <summary>Reading settings</summary>
+        <label><input type="checkbox" checked={clickableEntities} onChange={(event) => changeClickableEntities(event.target.checked)} /> Clickable entities</label>
+        <p>Click highlighted names to inspect their information and edit glossary terms. Saved in this browser. When off, hover cards remain available.</p>
+      </details>
+      {showGlossary && <GlossaryView key={novelId} novelId={novelId} at={chapter?.at} />}
+      <div hidden={showGlossary}>
+        {addingChapter ? (
+          <AddChapterForm
             novelId={novelId}
-            chapterIndex={chapterIndex}
-            hasNext={chapter?.has_next ?? false}
-            onNavigate={goToChapter}
+            nextChapterIndex={chapterIndex}
+            onAdded={chapterAdded}
+            onCancel={() => setAddingChapter(false)}
           />
-          <button className="app-chapters" onClick={() => setShowChapters(true)}>
-            All chapters
-          </button>
-          <button className="app-add-chapter" onClick={() => setAddingChapter(true)}>
-            + Add chapter
-          </button>
-          {chapter && (
-            <button className="app-toggle-glossary" onClick={() => setShowGlossary((v) => !v)}>
-              {showGlossary ? "← Back to reading" : "Glossary"}
+        ) : showChapters ? (
+          <ChapterList
+            novelId={novelId}
+            currentChapter={chapterIndex}
+            onOpen={openChapter}
+            onClose={() => setShowChapters(false)}
+          />
+        ) : pending ? (
+          <ChapterPending
+            key={`${novelId}:${pending.index}`}
+            novelId={novelId}
+            chapterIndex={pending.index}
+            siteChapterNo={pending.siteChapterNo}
+            onReady={() => goToChapter(pending.index)}
+            onBack={() => {
+              setPending(null);
+              setShowChapters(true);
+            }}
+          />
+        ) : noChapter && hasChapters ? (
+          /* Chapters exist, just none finished translating. The list is the only useful view
+             here — from it, opening a chapter queues it and shows it arriving. Rendering the
+             add form instead (what this used to do) was a dead end on a novel that already
+             held 177 chapters. Kept as its own branch rather than relying on showChapters so
+             closing the list can't drop the reader back into that dead end. */
+          <ChapterList
+            novelId={novelId}
+            currentChapter={chapterIndex}
+            onOpen={openChapter}
+            onClose={backToNovels}
+          />
+        ) : noChapter ? (
+          <AddChapterForm
+            novelId={novelId}
+            nextChapterIndex={chapterIndex}
+            onAdded={chapterAdded}
+            onCancel={backToNovels}
+          />
+        ) : !progressLoaded ? (
+          <p>Loading…</p>
+        ) : (
+          <>
+            {/* The outer hidden container keeps the reader mounted while editing terms. */}
+            <div>
+              {/* Above the text rather than over it: a caveat about the translation should
+                  be visible before reading, without interrupting it. */}
+              <TranslationNotice novelId={novelId} />
+              <ReaderPane
+                novelId={novelId}
+                chapterIndex={chapterIndex}
+                clickableEntities={clickableEntities}
+                onChapterLoaded={chapterLoaded}
+                onNoChapter={handleNoChapter}
+              />
+            </div>
+            <ProgressControls
+              chapterIndex={chapterIndex}
+              hasNext={chapter?.has_next ?? false}
+              onNavigate={navigateChapter}
+            />
+            <button className="app-chapters" onClick={() => setShowChapters(true)}>
+              All chapters
             </button>
-          )}
-          {chapter && !showGlossary && <AskBox novelId={novelId} at={chapter.at} />}
-        </>
-      )}
+            <button className="app-add-chapter" onClick={() => setAddingChapter(true)}>
+              + Add chapter
+            </button>
+            {chapter && !showGlossary && <AskBox novelId={novelId} at={chapter.at} />}
+          </>
+        )}
+      </div>
     </main>
   );
 }

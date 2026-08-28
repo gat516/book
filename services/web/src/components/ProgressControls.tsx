@@ -1,26 +1,20 @@
 import { useState } from "react";
-import { putProgress } from "../api";
 
 interface Props {
-  novelId: string;
   chapterIndex: number;
   hasNext: boolean;
-  onNavigate: (chapterIndex: number) => void;
+  onNavigate: (chapterIndex: number) => Promise<void>;
 }
 
-export function ProgressControls({ novelId, chapterIndex, hasNext, onNavigate }: Props) {
+export function ProgressControls({ chapterIndex, hasNext, onNavigate }: Props) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function next() {
+  async function navigate(index: number) {
     setPending(true);
     setError(null);
     try {
-      // Finishing this chapter advances progress to (at least) it; everything re-gates
-      // from here (PLAN.md §5.5). `has_next` is an existence check decoupled from
-      // progress, not "chapterIndex+1 <= progress" — see reader-api's GetChapter.
-      await putProgress(novelId, chapterIndex);
-      onNavigate(chapterIndex + 1);
+      await onNavigate(index);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -30,11 +24,11 @@ export function ProgressControls({ novelId, chapterIndex, hasNext, onNavigate }:
 
   return (
     <div className="progress-controls">
-      <button disabled={chapterIndex <= 0} onClick={() => onNavigate(chapterIndex - 1)}>
+      <button disabled={chapterIndex <= 1 || pending} onClick={() => navigate(chapterIndex - 1)}>
         Prev
       </button>
       <span>Chapter {chapterIndex}</span>
-      <button disabled={!hasNext || pending} onClick={next}>
+      <button disabled={!hasNext || pending} onClick={() => navigate(chapterIndex + 1)}>
         {pending ? "…" : "Next"}
       </button>
       {error && <p className="progress-controls-error">{error}</p>}

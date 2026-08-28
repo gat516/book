@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { ApiError, getChapter, putProgress } from "../api";
 import type { ChapterResponse, EntityView } from "../types";
 import { HoverCard } from "./HoverCard";
+import { EntityInspector } from "./EntityInspector";
 
 interface Props {
   novelId: string;
   chapterIndex: number;
+  clickableEntities: boolean;
   onChapterLoaded: (chapter: ChapterResponse) => void;
   // Called instead of rendering an error when the requested chapter (and typically every
   // chapter — a brand-new novel) doesn't exist yet, so the caller can offer to add one
@@ -41,16 +43,20 @@ function segment(text: string, spans: { char_start: number; char_end: number; en
   return segments;
 }
 
-export function ReaderPane({ novelId, chapterIndex, onChapterLoaded, onNoChapter }: Props) {
+export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapterLoaded, onNoChapter }: Props) {
   const [chapter, setChapter] = useState<ChapterResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
+  const [selected, setSelected] = useState<{ id: string; mention: string } | null>(null);
 
-  // A fresh Map whenever (novelId, at) changes IS the hover-card cache key discipline —
-  // see HoverCard.tsx. `at` isn't known until the chapter loads, so key on chapterIndex
-  // as a stand-in for "this load"; a re-fetch of the same chapter gets a fresh cache too,
-  // which is the safe direction (an extra fetch, never a stale cross-progress leak).
-  const cache = useMemo(() => new Map<string, EntityView>(), [novelId, chapterIndex]);
+  // Both hover and click views share only the exact novel/chapter/clearance cache.
+  // The server's `at` becomes known on load; changing it discards earlier entity data.
+  const cache = useMemo(() => new Map<string, EntityView>(), [novelId, chapterIndex, chapter?.at]);
+
+  useEffect(() => {
+    setSelected(null);
+    setHovered(null);
+  }, [novelId, chapterIndex, clickableEntities]);
 
   useEffect(() => {
     let cancelled = false;
@@ -125,8 +131,19 @@ export function ReaderPane({ novelId, chapterIndex, onChapterLoaded, onNoChapter
           </span>
         )}
       </p>
+      {clickableEntities && chapter.spans.length === 0 && <p className="reader-entity-hint">
+        No linked entities in this chapter yet. Names become clickable when the pipeline records their mentions.
+      </p>}
       {segments.map((piece, index) =>
         piece.entityId ? (
+          clickableEntities ? <button
+            key={index}
+            type="button"
+            className="mention mention-button"
+            aria-haspopup="dialog"
+            aria-label={`Inspect ${piece.text}`}
+            onClick={() => setSelected({ id: piece.entityId!, mention: piece.text })}
+          >{piece.text}</button> :
           <mark
             key={index}
             className="mention"
@@ -148,6 +165,15 @@ export function ReaderPane({ novelId, chapterIndex, onChapterLoaded, onNoChapter
           <span key={index}>{piece.text}</span>
         ),
       )}
+      {clickableEntities && selected && <EntityInspector
+        key={`${novelId}:${chapterIndex}:${chapter.at}:${selected.id}`}
+        novelId={novelId}
+        entityId={selected.id}
+        mention={selected.mention}
+        at={chapter.at}
+        cache={cache}
+        onClose={() => setSelected(null)}
+      />}
     </div>
   );
 }

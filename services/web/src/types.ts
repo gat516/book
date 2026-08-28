@@ -132,6 +132,7 @@ export interface BootstrapGlossaryResponse {
 // only (never chapter text), which is why it is ungated: the spoiler gate that matters
 // still lives in GET /chapter/{n}.
 export interface ChapterListItem {
+  graph_status?: "pending" | "done" | "error";
   chapter_index: number;
   site_chapter_no?: string;
   // Which piece of a multi-page source chapter this is (1-based; 1 when not paginated).

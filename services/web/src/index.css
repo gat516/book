@@ -460,3 +460,22 @@ body {
 .glossary-add label { display: flex; flex-direction: column; gap: 0.3rem; flex: 1 1 12rem; }
 .glossary-table-wrap { overflow-x: auto; }
 .glossary-view td button { margin: 0.2rem; }
+
+.reader-settings { margin: 0.75rem 0 1.25rem; font-size: 0.9rem; }
+.reader-settings summary { cursor: pointer; }
+.reader-settings label { display: block; margin-top: 0.5rem; }
+.reader-settings p, .reader-entity-hint { color: #666; font-size: 0.85rem; }
+.mention-button { border: 0; border-radius: 2px; font: inherit; color: inherit; display: inline; text-align: inherit; }
+.mention-button:hover { background: #ffe581; }
+.mention-button:focus-visible { outline: 2px solid #775600; outline-offset: 2px; }
+.entity-inspector { width: min(720px, calc(100vw - 3rem)); max-height: calc(100dvh - 3rem); box-sizing: border-box; padding: 1.25rem; border: 1px solid #ccc; border-radius: 10px; background: white; color: #222; white-space: normal; font-size: 1rem; overflow-y: auto; }
+.entity-inspector::backdrop { background: rgb(0 0 0 / 35%); }
+.entity-inspector-header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
+.entity-inspector-header h2 { margin: 0; overflow-wrap: anywhere; }
+.entity-inspector-context { color: #666; font-size: 0.85rem; margin-top: 0.25rem; }
+.entity-facts-wrap { overflow-x: auto; }
+.entity-facts { border-collapse: collapse; width: 100%; text-align: left; }
+.entity-facts th, .entity-facts td { padding: 0.4rem; border-bottom: 1px solid #eee; vertical-align: top; }
+.entity-inspector-edit { margin: 1rem 0; }
+.entity-inspector .glossary-view { border-top: 1px solid #ddd; }
+.entity-inspector input:not([type="checkbox"]) { box-sizing: border-box; max-width: 100%; }

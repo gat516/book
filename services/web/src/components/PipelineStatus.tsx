@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getPipelineStatus } from "../api";
 import type { PipelineStatusResponse } from "../types";
 import { usePolling } from "../usePolling";
@@ -8,6 +8,7 @@ interface Props {
   // Fired whenever the set of in-flight chapters changes, so a parent can refresh itself
   // on real pipeline progress instead of running a second timer of its own.
   onProgress?: () => void;
+  onStatus?: (status: PipelineStatusResponse | null) => void;
 }
 
 // 3s was needlessly aggressive for work that takes minutes per chapter, and it was one of
@@ -46,29 +47,32 @@ function elapsed(seconds: number): string {
 // unreadable for many minutes with no outward sign: a single TRANSLATE call against a
 // local model is one long HTTP request, and chapter.status stays "ingested" until every
 // stage has finished — so "still working" and "worker is dead" look identical without it.
-export function PipelineStatus({ novelId, onProgress }: Props) {
+export function PipelineStatus({ novelId, onProgress, onStatus }: Props) {
   const [status, setStatus] = useState<PipelineStatusResponse | null>(null);
   const [unreachable, setUnreachable] = useState(false);
+  const previous = useRef<string | null>(null);
+  const callbacks = useRef({ onProgress, onStatus });
+  useEffect(() => { callbacks.current = { onProgress, onStatus }; }, [onProgress, onStatus]);
 
   const poll = useCallback(async () => {
     try {
       const latest = await getPipelineStatus(novelId);
-      setStatus((previous) => {
-        // Only notify on an actual change in what's being worked on. Firing every tick
-        // would make the parent re-fetch on a timer again, which is the pattern this is
-        // meant to replace.
-        const before = previous?.in_flight.map((c) => c.chapter_index).join(",") ?? "";
-        const after = latest.in_flight.map((c) => c.chapter_index).join(",");
-        if (previous !== null && before !== after) onProgress?.();
-        return latest;
-      });
+      const signature = JSON.stringify([latest.pending, latest.in_flight.map((c) => [c.chapter_index, c.stage])]);
+      if (previous.current !== null && previous.current !== signature) callbacks.current.onProgress?.();
+      previous.current = signature;
+      setStatus(latest);
+      callbacks.current.onStatus?.(latest);
       setUnreachable(false);
     } catch {
       setUnreachable(true);
+      callbacks.current.onStatus?.(null);
     }
-  }, [novelId, onProgress]);
+  }, [novelId]);
 
   useEffect(() => {
+    previous.current = null;
+    setStatus(null);
+    callbacks.current.onStatus?.(null);
     poll();
   }, [poll]);
 
@@ -87,20 +91,19 @@ export function PipelineStatus({ novelId, onProgress }: Props) {
       {working ? (
         status.in_flight.map((item) => (
           <p key={item.chapter_index}>
-            <strong>Chapter {item.chapter_index}:</strong> {describe(item.stage)} — {elapsed(item.elapsed_secs)} so far
+            <strong>Chapter {item.chapter_index}:</strong> {describe(item.stage)} — {elapsed(item.elapsed_secs)} total processing time
           </p>
         ))
       ) : (
         <p>
           {status.pending > 0
-            ? // Queued but nothing claimed almost always means the worker isn't running —
-              // the queue does not drain itself, and this is the exact state that looked
-              // like a silent failure before this view existed.
-              `${status.pending} chapter(s) queued, but the pipeline worker isn't processing anything. Is it running? (see CLAUDE.md)`
+            ? // Pending is library-wide, while in_flight is scoped to this novel.
+              // Another novel may be active: absence here does not prove a dead worker.
+              `No chapter from this novel is processing. ${status.pending} job(s) queued across the library.`
             : "Pipeline idle — nothing queued."}
         </p>
       )}
-      {working && status.pending > 0 && <p className="pipeline-status-queue">{status.pending} more queued.</p>}
+      {working && status.pending > 0 && <p className="pipeline-status-queue">{status.pending} more queued across the library.</p>}
     </div>
   );
 }
