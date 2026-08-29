@@ -143,7 +143,10 @@ export interface ChapterListItem {
   // "error". This is what lets the UI say "still being translated" up front instead of
   // bouncing off the chapter endpoint.
   status: string;
+  translation_warning: TranslationWarning | null;
 }
+
+export interface TranslationWarning { code: "locked_terms_missing"; term_count: number; }
 
 export interface ChapterListResponse {
   novel_id: string;
@@ -178,17 +181,28 @@ export interface TranslationHealth {
   locked_terms: number;
   unstable_terms: number;
   failed_chapters: number;
+  warning_chapters: number;
   warn: boolean;
   reason?: string;
 }
 
+export interface KnowledgeStatus { revision_id: string; version: number; trusted: boolean; status: string; }
+export interface Evidence { id: string; chapter: number; quote: string; source_hash: string; char_start: number; char_end: number; }
+export interface Relationship { id: number; relation: string; direction: string; entity: EntitySummary; source_chapter: number; evidence?: Evidence | null; }
 export interface SpanView {
-  entity_id: string;
+  mention_id?: string;
+  source_mention_id?: string | null;
+  evidence?: Evidence | null;
+  known_from_chapter?: number | null;
+  enrichment_status?: string;
+  // A literal named mention can have a card before its identity is linked.
+  entity_id: string | null;
   char_start: number;
   char_end: number;
 }
 
 export interface ChapterResponse {
+  knowledge: KnowledgeStatus;
   novel_id: string;
   chapter_index: number;
   // The reader's STORED PROGRESS (not chapter_index) — see HoverCard.tsx for why this
@@ -197,7 +211,11 @@ export interface ChapterResponse {
   at: number;
   text: string;
   spans: SpanView[];
+  // Facts whose source_chapter is exactly this chapter — what the reader learns HERE.
+  // Everything learned earlier stays on the entity card, fetched on demand.
+  new_facts: ChapterFactView[];
   has_next: boolean;
+  translation_warning: TranslationWarning | null;
   // The source site's own printed chapter label (e.g. "第4610章"), when this chapter came
   // from a scrape — NOT the same number as chapter_index, which is our own sequential
   // counter for this ingestion batch. Absent for a plain paste with no site of origin.
@@ -206,7 +224,19 @@ export interface ChapterResponse {
   part: number;
 }
 
+// One fact introduced by this chapter, keyed to the entity it describes. Served on the
+// chapter response so the reader pane can badge a mention without a round trip per span.
+export interface ChapterFactView {
+  entity_id: string;
+  attribute: string;
+  value: string;
+  valid_from_chapter: number;
+  source_chapter: number;
+  confidence: number;
+}
+
 export interface FactView {
+  evidence?: Evidence | null;
   attribute: string;
   value: string;
   valid_from_chapter: number;
@@ -222,6 +252,7 @@ export interface EntitySummary {
 }
 
 export interface EntityView extends EntitySummary {
+  knowledge: KnowledgeStatus;
   aliases: string[];
   facts: FactView[];
 }

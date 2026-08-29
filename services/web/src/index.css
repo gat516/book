@@ -328,12 +328,35 @@ body {
   font-size: 0.9rem;
 }
 
-.chapter-list-jump,
-.chapter-list-pager {
+.chapter-range-tabs {
   display: flex;
-  align-items: flex-end;
+  flex-wrap: wrap;
   gap: 0.5rem;
-  margin: 0.5rem 0;
+  margin: 1rem 0;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #ddd;
+}
+
+.chapter-range-tabs button {
+  padding: 0.5rem 0.85rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  color: #444;
+  font: inherit;
+  cursor: pointer;
+}
+
+.chapter-range-tabs button[aria-selected="true"] {
+  background: #fff3b0;
+  border-color: #9a7b16;
+  color: #493900;
+  font-weight: 600;
+}
+
+.chapter-range-tabs button:focus-visible {
+  outline: 2px solid #775600;
+  outline-offset: 2px;
 }
 
 .chapter-list-error,
@@ -377,11 +400,6 @@ body {
   justify-content: space-between;
   gap: 1rem;
   margin: 0.75rem 0;
-}
-
-.chapter-list-collapsed-hint {
-  color: #666;
-  font-size: 0.9rem;
 }
 
 .chapter-pending-actions {
@@ -465,6 +483,7 @@ body {
 .reader-settings summary { cursor: pointer; }
 .reader-settings label { display: block; margin-top: 0.5rem; }
 .reader-settings p, .reader-entity-hint { color: #666; font-size: 0.85rem; }
+.reader-translation-warning { color: #715a24; background: #fff8df; border-left: 3px solid #c7a54a; padding: .55rem .75rem; }
 .mention-button { border: 0; border-radius: 2px; font: inherit; color: inherit; display: inline; text-align: inherit; }
 .mention-button:hover { background: #ffe581; }
 .mention-button:focus-visible { outline: 2px solid #775600; outline-offset: 2px; }
@@ -479,3 +498,21 @@ body {
 .entity-inspector-edit { margin: 1rem 0; }
 .entity-inspector .glossary-view { border-top: 1px solid #ddd; }
 .entity-inspector input:not([type="checkbox"]) { box-sizing: border-box; max-width: 100%; }
+.mention-anchor { position: relative; }
+.mention-unlinked { text-decoration: underline dotted; text-underline-offset: 3px; }
+
+/* A mention that introduced a fact in this chapter. The underline marks the anchor itself
+   so it still reads as one continuous highlight; the chip carries what was learned. */
+.mention-has-new-fact { box-shadow: inset 0 -2px 0 #775600; }
+.mention-new-fact {
+  display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem;
+  margin-left: 0.35rem; padding: 0.1rem 0.4rem; border: 1px solid #e0c65a;
+  border-radius: 6px; background: #fffaf0; font-size: 0.78rem; line-height: 1.5;
+  white-space: normal;
+}
+.mention-new-fact-label {
+  text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.66rem;
+  font-weight: 600; color: #775600;
+}
+.mention-new-fact-item { color: #333; }
+.mention-new-fact-item + .mention-new-fact-item { border-left: 1px solid #e0c65a; padding-left: 0.35rem; }

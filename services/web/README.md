@@ -36,9 +36,10 @@ npm run build
 
 ### Clickable entity mode
 
-Open **Reading settings → Clickable entities** to turn highlighted names into
-buttons. The setting is off by default and saved in this browser; when disabled,
-the existing hover cards remain. Clicking a linked mention opens an entity dialog
+Highlighted names are always buttons, even without recorded facts. **Reading settings
+→ Show hover previews** adds previews on hover; turning it off keeps clicking available.
+The setting is saved in this browser (existing click-only preferences are retained).
+Clicking a linked mention opens an entity dialog
 with its canonical name, aliases, known facts, and source chapters. **Edit glossary
 terms** expands the existing CRUD controls inside the dialog, initially filtered
 to related entries. **Show all visible glossary terms** broadens that list without
@@ -46,14 +47,32 @@ changing the reader's spoiler boundary. New-term fields are suggestions only;
 check the original source spelling before saving. Changes do not rename entities,
 edit facts, or rewrite already-translated text.
 
-Only pipeline-recorded `mention_span` links are clickable. Chapters without linked
-mentions show an explanation when the setting is enabled. The dialog and glossary
+Pipeline-recorded named mentions with no entity ID open an empty card: **No linked
+information yet**. They have a dotted underline, make no entity API request, and cannot
+edit an invented identity. Names are extracted from the saved chapter text by an offline
+model pass, not by capitalization rules; their offsets are checked against exact text.
+Existing verified links take precedence. Detection can still miss or misclassify a phrase,
+but it cannot invent facts or merge identities. Chapters not yet indexed show an explanation.
+The dialog and glossary
 use the chapter response's server-authorized `at`; caches are separated by novel,
 chapter, and clearance. Optional glossary `entity_id` values are also gated by the
 linked entity's first-seen chapter. Human seeds without an ID can appear in the
 related list by a known source name, but this does not bind graph identities.
 
+Run `npm test` for mention segmentation tests and `npm run build` for the production check.
+
 ## Reading and enrichment status
+
+Opening a novel (including its direct URL) lands on **All chapters**, with the range
+containing the saved reading position selected. Tabs show 100 chapters at a time:
+**1–100**, **101–200**, and so on; only the active range is fetched and rendered.
+Arrow keys, Home, and End navigate the range tabs. Browsing the list does not advance
+reading progress or request translation. Empty novels offer **Add chapter**.
+
+Selecting a chapter replaces the list with the reader or its pending preview.
+Next/Prev keep the list out of the reading view. Choose **All chapters** to browse
+again, then **Back to reading** to return to the selected chapter. There is no
+separate show/hide chapter-table toggle.
 
 The chapter table distinguishes Not queued, Queued, Processing, Ready and Failed.
 Ready means validated prose can be read; Facts pending/unavailable reports graph work

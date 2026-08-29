@@ -194,3 +194,10 @@ export function prioritizeChapter(novelId: string, chapter: number): Promise<{ p
     method: "POST", body: JSON.stringify({ from: chapter, count: 1, priority: true }),
   });
 }
+
+export function getKnowledgeStatus(novelId: string, chapter: number): Promise<import('./types').KnowledgeStatus> {
+  return request(`/novels/${novelId}/knowledge-status?chapter=${chapter}`);
+}
+export function getRelationships(novelId: string, entityId: string, at: number): Promise<{relationships: import('./types').Relationship[]}> {
+  return request(`/novels/${novelId}/relationships/${entityId}?at=${at}`);
+}

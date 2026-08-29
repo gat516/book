@@ -4,7 +4,9 @@ import type { EntityView } from "../types";
 
 interface Props {
   novelId: string;
-  entityId: string;
+  entityId: string | null;
+  status?: string;
+  mention: string;
   at: number;
   // Keyed by entityId only, because the Map itself is recreated whenever (novelId, at)
   // changes (see ReaderPane's `useMemo(() => new Map(), [novelId, at])`) — that recreation
@@ -15,11 +17,12 @@ interface Props {
   onClose: () => void;
 }
 
-export function HoverCard({ novelId, entityId, at, cache, onClose }: Props) {
-  const [entity, setEntity] = useState<EntityView | null>(cache.get(entityId) ?? null);
+export function HoverCard({ novelId, entityId, status, mention, at, cache, onClose }: Props) {
+  const [entity, setEntity] = useState<EntityView | null>(entityId ? cache.get(entityId) ?? null : null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!entityId) { setEntity(null); return; }
     const cached = cache.get(entityId);
     if (cached) {
       setEntity(cached);
@@ -43,7 +46,8 @@ export function HoverCard({ novelId, entityId, at, cache, onClose }: Props) {
   return (
     <div className="hover-card" onMouseLeave={onClose}>
       {error && <p className="hover-card-error">{error}</p>}
-      {!error && !entity && <p>Loading…</p>}
+      {!entityId && <><h3>{mention}</h3><p>{status === "repair" ? "Identity unresolved — knowledge is under repair." : status === "failed" ? "Knowledge processing failed." : status === "processing" || status === "pending" ? "Knowledge processing is pending." : "Identity unresolved. Click to open its card."}</p></>}
+      {entityId && !error && !entity && <p>Loading…</p>}
       {entity && (
         <>
           <h3>{entity.canonical}</h3>
@@ -51,12 +55,13 @@ export function HoverCard({ novelId, entityId, at, cache, onClose }: Props) {
           {entity.aliases.length > 0 && (
             <p className="hover-card-aliases">Also known as: {entity.aliases.join(", ")}</p>
           )}
+          {entity.facts.length === 0 && <p>Identity linked. No supported facts yet.</p>}
           <table className="hover-card-facts">
             <tbody>
               {entity.facts.map((fact) => (
                 <tr key={fact.attribute}>
                   <td>{fact.attribute}</td>
-                  <td>{fact.value}</td>
+                  <td>{fact.value} <small>Chapter {fact.source_chapter}</small></td>
                 </tr>
               ))}
             </tbody>
