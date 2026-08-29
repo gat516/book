@@ -548,6 +548,21 @@ async def test_term_locks_only_after_a_second_chapter_agrees(db_conn):
         await delete_novel(db_conn, novel_id)
 
 
+async def test_managed_glossary_lock_keeps_global_entity_null(db_conn):
+    novel_id=await make_novel(db_conn,source_lang="zh",target_lang="en",ontology=json.dumps(ONTOLOGY))
+    try:
+        kwargs=dict(novel_id=novel_id,source_term="九神殿",target_term="Dream Palace",
+                    entity_id=None,target_lang="en",min_proposals=2)
+        async with db_conn.transaction():
+            assert await _lock_glossary(db_conn,chapter=1,**kwargs) is None
+        async with db_conn.transaction():
+            assert await _lock_glossary(db_conn,chapter=2,**kwargs)==1
+        assert await (await db_conn.execute("""SELECT target_term,entity_id,locked_at_chapter
+            FROM glossary WHERE novel_id=%s AND source_term='九神殿'""",(novel_id,))).fetchone()==("Dream Palace",None,2)
+    finally:
+        await delete_novel(db_conn,novel_id)
+
+
 async def test_entity_created_earlier_in_a_chapter_is_visible_later_in_it(db_conn, novel):
     """Entities are inserted per decision, not batched at end-of-chapter. Batching would
     mean a chapter introducing a character under two names creates two entities — the
@@ -656,5 +671,48 @@ async def test_human_deleted_term_cannot_be_automatically_relocked(db_conn):
             'SELECT version, deleted FROM glossary WHERE novel_id=%s', (novel_id,),
         )).fetchone()
         assert row == (3, True)
+    finally:
+        await delete_novel(db_conn, novel_id)
+
+
+def test_source_term_problem_rejects_surfaces_that_cannot_be_substituted():
+    """Guard on the SOURCE side, the twin of _target_term_problem.
+
+    Locked terms are substituted into the chapter before translation
+    (translation.prime_glossary_terms), and CJK has no word delimiters, so an unusable
+    surface here corrupts the text being translated rather than merely costing a
+    constraint. The prose cases are real rows from this repo's own alias table.
+    """
+    from pipeline.stages.resolve import _source_term_problem
+
+    assert _source_term_problem("九神殿") is None
+    assert _source_term_problem("青云宗") is None
+    assert _source_term_problem("Azure Cloud Sect") is None
+    # An ASCII period is legitimate inside a name and must not read as sentence punctuation.
+    assert _source_term_problem("St. Mary") is None
+    assert _source_term_problem("  九神殿  ") is None
+
+    # One character is a morpheme, not a name: locking 神 rewrites 精神 into "精God".
+    assert "too short" in _source_term_problem("神")
+    assert "too short" in _source_term_problem("A")
+    assert "prose" in _source_term_problem("神职细分为四个层次：主宰，一级神职。")
+    assert "prose" in _source_term_problem("九神殿的大门打开了。")
+    assert "prose" in _source_term_problem("two\nlines")
+    assert "prose" in _source_term_problem("x" * 90)
+
+
+async def test_lock_glossary_declines_a_single_character_source_term(db_conn):
+    """Declining is safe; locking is not. The surface simply gets no locked term."""
+    novel_id = await make_novel(db_conn)
+    try:
+        async with db_conn.transaction():
+            assert await _lock_glossary(
+                db_conn, novel_id=novel_id, source_term="神", target_term="God",
+                entity_id=None, chapter=1, require_corroboration=False,
+            ) is None
+        count = await (await db_conn.execute(
+            "SELECT count(*) FROM glossary WHERE novel_id = %s", (novel_id,),
+        )).fetchone()
+        assert count[0] == 0
     finally:
         await delete_novel(db_conn, novel_id)

@@ -25,6 +25,45 @@ func isDuplicateTargetTerm(err error) bool {
 
 var ErrGlossaryTermNotFound = errors.New("no such glossary term")
 
+// ErrGlossaryTermInvalid is returned when a caller supplies a source_term that cannot
+// safely be locked. Declining is the safe outcome: the surface simply gets no locked term,
+// which costs a translation constraint rather than correctness.
+var ErrGlossaryTermInvalid = errors.New("glossary source term is not a usable surface")
+
+// Kept in lockstep with resolve.py's MIN/MAX_SOURCE_TERM_CHARS. A term one side accepts
+// and the other would refuse means the pipeline and the human endpoints disagree about
+// what is lockable, which is exactly the divergence this repo ports invariants to avoid.
+const (
+	minSourceTermChars = 2
+	maxSourceTermChars = 80
+)
+
+// proseMarkers mirrors resolve.py's _PROSE_MARKERS. An ASCII period is deliberately absent:
+// it is legitimate inside a name ("St. Mary") and is not sentence punctuation on its own.
+const proseMarkers = "\n\r。！？；：，、"
+
+// sourceTermProblem is the Go port of resolve.py's _source_term_problem — it returns why
+// sourceTerm is unusable as a locked surface, or "" if it looks like a name.
+//
+// Load-bearing, not cosmetic: a locked source term is substituted directly into every later
+// chapter before the model sees it (translation.prime_glossary_terms), and CJK has no word
+// delimiters, so locking 神 rewrites 精神 into "精God". Counting runes rather than bytes is
+// what makes the limits mean the same thing they mean in Python.
+func sourceTermProblem(sourceTerm string) string {
+	source := strings.TrimSpace(sourceTerm)
+	length := len([]rune(source))
+	if length < minSourceTermChars {
+		return fmt.Sprintf("too short to substitute safely (%d chars)", length)
+	}
+	if length > maxSourceTermChars {
+		return fmt.Sprintf("looks like prose, not a name (%d chars)", length)
+	}
+	if strings.ContainsAny(source, proseMarkers) {
+		return "contains sentence punctuation, so it is prose rather than a name"
+	}
+	return ""
+}
+
 // ErrGlossaryTermConflict is returned by BootstrapGlossaryTerm when the caller supplies a
 // (source_term, target_term) pair that collides with an already-locked source_term whose
 // target_term differs — the same "already locked, target mismatches" case
@@ -158,6 +197,13 @@ func (s *Store) changeGlossaryTerm(ctx context.Context, novelID, sourceTerm, new
 // not a silent overwrite (correcting an existing term is CorrectGlossaryTerm's job, not
 // this one's).
 func (s *Store) BootstrapGlossaryTerm(ctx context.Context, novelID, sourceTerm, targetTerm string) (int, error) {
+	// Shape-check before anything permanent happens, exactly where _lock_glossary does it.
+	// A human seeding a term is still seeding one that every later chapter is rewritten
+	// against, so "a person typed it" is not on its own a reason to skip the guard.
+	if problem := sourceTermProblem(sourceTerm); problem != "" {
+		return 0, fmt.Errorf("%w: %s", ErrGlossaryTermInvalid, problem)
+	}
+
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return 0, err

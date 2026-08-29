@@ -623,6 +623,12 @@ func (a *API) bootstrapGlossary(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		version, err := a.store.BootstrapGlossaryTerm(r.Context(), novelID, term.SourceTerm, term.TargetTerm)
+		// A surface that cannot be locked safely is the caller's input problem, not a
+		// server fault: say so as a 400 with the reason, rather than a bare 500.
+		if errors.Is(err, ErrGlossaryTermInvalid) {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if err != nil && !errors.Is(err, ErrGlossaryTermConflict) {
 			log.Printf("bootstrapGlossary: %v", err)
 			writeErr(w, http.StatusInternalServerError, "could not seed glossary term "+term.SourceTerm)
