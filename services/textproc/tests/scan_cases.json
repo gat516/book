@@ -27,8 +27,6 @@
     "aliases": [["emoji", "😀"], ["supplementary", "𐐷"], ["hero", "Hero"]],
     "spans": [
       ["emoji", 0, 4, 0, 1],
-      ["supplementary", 4, 8, 1, 2],
-      ["hero", 8, 12, 2, 6],
       ["emoji", 12, 16, 6, 7]
     ]
   },

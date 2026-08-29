@@ -18,6 +18,7 @@ const MAX_ALIASES: usize = 100_000;
 struct Matcher {
     automaton: AhoCorasick,
     alias_ids: Vec<Vec<String>>,
+    surfaces: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -64,6 +65,7 @@ impl TextProcService {
         }
 
         let patterns: Vec<String> = surfaces.keys().cloned().collect();
+        let matcher_surfaces = patterns.clone();
         let alias_ids: Vec<Vec<String>> = surfaces.into_values().collect();
         let matcher = task::spawn_blocking(move || {
             AhoCorasickBuilder::new()
@@ -73,6 +75,7 @@ impl TextProcService {
                     Arc::new(Matcher {
                         automaton,
                         alias_ids,
+                        surfaces: matcher_surfaces,
                     })
                 })
         })
@@ -101,6 +104,19 @@ fn char_offsets(text: &str) -> Vec<u32> {
     }
     offsets[text.len()] = text.chars().count() as u32;
     offsets
+}
+
+fn whole_name(text: &str, start: usize, end: usize, surface: &str, language: &str) -> bool {
+    if matches!(language.split('-').next(), Some("zh" | "ja" | "ko")) {
+        return true;
+    }
+    let word = |ch: char| ch.is_alphanumeric() || ch == '_';
+    let first = surface.chars().next();
+    let last = surface.chars().next_back();
+    let left = text[..start].chars().next_back();
+    let right = text[end..].chars().next();
+    !matches!((first, left), (Some(a), Some(b)) if word(a) && word(b))
+        && !matches!((last, right), (Some(a), Some(b)) if word(a) && word(b))
 }
 
 fn normalized(text: &str) -> String {
@@ -168,7 +184,17 @@ impl TextProc for TextProcService {
         for found in matcher.automaton.find_iter(&request.text) {
             let start = found.start();
             let end = found.end();
-            for alias_id in &matcher.alias_ids[found.pattern().as_usize()] {
+            let pattern = found.pattern().as_usize();
+            if !whole_name(
+                &request.text,
+                start,
+                end,
+                &matcher.surfaces[pattern],
+                &request.lang,
+            ) {
+                continue;
+            }
+            for alias_id in &matcher.alias_ids[pattern] {
                 spans.push(Span {
                     alias_id: alias_id.clone(),
                     byte_start: start as u32,

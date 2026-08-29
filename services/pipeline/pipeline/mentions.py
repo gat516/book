@@ -58,6 +58,17 @@ class MentionScanResponse(BaseModel):
     spans: list[Span] = Field(default_factory=list)
 
 
+def whole_name(text: str, span: Span, lang: str) -> bool:
+    """Reject Latin substring hits; CJK exact spans require contextual resolution."""
+    if lang.split("-")[0] in {"zh", "ja", "ko"}:
+        return True
+    start,end=span.char_start,span.char_end
+    surface=text[start:end]
+    word=lambda ch: ch.isalnum() or ch=="_"
+    return not ((surface and word(surface[0]) and start>0 and word(text[start-1]))
+                or (surface and word(surface[-1]) and end<len(text) and word(text[end])))
+
+
 def _byte_offsets(text: str) -> list[int]:
     """Cumulative byte offset of each character index, plus a final total.
 
@@ -115,4 +126,4 @@ def scan_mentions(request: MentionScanRequest) -> MentionScanResponse:
             )
             for alias_id in alias_ids
         )
-    return MentionScanResponse(spans=spans)
+    return MentionScanResponse(spans=[span for span in spans if whole_name(request.text,span,request.lang)])
