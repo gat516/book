@@ -157,19 +157,25 @@ async def insert_job(
     stage: str,
     key: str,
 ) -> None:
-    """Insert a job row, idempotent on the UNIQUE(idempotency_key) constraint
-    (0001_init.sql:136). Re-processing the same input is a no-op on the row."""
+    """Insert a chapter-owned job row idempotently.
+
+    The response fingerprint may intentionally be shared by equal inputs, but durable
+    completion may not: writing one novel's graph never completes another novel's
+    chapter (migration 0029).
+    """
     await conn.execute(
         """
         INSERT INTO job (novel_id, chapter_index, stage, idempotency_key)
         VALUES (%s, %s, %s, %s)
-        ON CONFLICT (idempotency_key) DO NOTHING
+        ON CONFLICT (novel_id, chapter_index, stage, idempotency_key) DO NOTHING
         """,
         (novel_id, chapter_index, stage, key),
     )
 
 
-async def job_is_done(conn, key: str) -> bool:
+async def job_is_done(
+    conn, *, novel_id: str, chapter_index: int, stage: str, key: str
+) -> bool:
     """Has this exact work already been written to the graph?
 
     The durable half of the §6.1 cache, and the one that protects correctness rather
@@ -179,17 +185,24 @@ async def job_is_done(conn, key: str) -> bool:
     model said", not "we already stored it". See cache.py.
     """
     row = await (
-        await conn.execute("SELECT state FROM job WHERE idempotency_key = %s", (key,))
+        await conn.execute(
+            "SELECT state FROM job WHERE novel_id=%s AND chapter_index=%s "
+            "AND stage=%s AND idempotency_key=%s",
+            (novel_id, chapter_index, stage, key),
+        )
     ).fetchone()
     return row is not None and row[0] == "done"
 
 
-async def mark_job_done(conn, key: str) -> None:
+async def mark_job_done(
+    conn, *, novel_id: str, chapter_index: int, stage: str, key: str
+) -> None:
     """Flip a job to ``done``. Call this INSIDE the transaction that writes the graph
     rows, never after it — a crash in the gap would leave the rows written and the job
     still ``pending``, and the retry would duplicate them (the exact failure ``job_is_done``
     exists to prevent)."""
     await conn.execute(
-        "UPDATE job SET state = 'done', updated_at = now() WHERE idempotency_key = %s",
-        (key,),
+        "UPDATE job SET state = 'done', updated_at = now() "
+        "WHERE novel_id=%s AND chapter_index=%s AND stage=%s AND idempotency_key=%s",
+        (novel_id, chapter_index, stage, key),
     )
