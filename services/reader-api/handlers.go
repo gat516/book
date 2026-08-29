@@ -45,6 +45,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels", a.getNovels)
 	mux.HandleFunc("GET /novels/{id}", a.getNovel)
 	mux.HandleFunc("POST /novels", a.postNovel)
+	mux.HandleFunc("DELETE /novels/{id}", a.deleteNovel)
 	mux.HandleFunc("POST /novels/{id}/chapters", a.postChapter)
 	mux.HandleFunc("POST /novels/{id}/scrape", a.postScrape)
 	mux.HandleFunc("GET /novels/{id}/scrape/status", a.getScrapeStatus)
@@ -616,6 +617,26 @@ func (a *API) postNovel(w http.ResponseWriter, r *http.Request) {
 	result, status, err := a.ingest.CreateNovel(r.Context(), body)
 	if err != nil {
 		log.Printf("create novel: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
+}
+
+// deleteNovel proxies novel deletion to ingest-api, which owns the cascade (migration
+// 0030). Irreversible: it removes the novel's chapters, graph, glossary and queued work.
+func (a *API) deleteNovel(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	result, status, err := a.ingest.DeleteNovel(r.Context(), novelID)
+	if err != nil {
+		log.Printf("delete novel: %v", err)
 		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
 		return
 	}

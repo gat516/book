@@ -34,9 +34,9 @@ Config is read from the environment with localhost defaults matching the compose
 
 ## Endpoints
 
-`POST /novels` is the one route with any auth: it requires
+`POST /novels` and `DELETE /novels/{id}` are the routes with any auth: they require
 `Authorization: Bearer $INGEST_INTERNAL_TOKEN`, since `reader-api` is the only intended
-caller (it proxies novel creation for the browser — see `services/reader-api/ingest.go`).
+caller (it proxies the novel lifecycle for the browser — see `services/reader-api/ingest.go`).
 Every other route is unauthenticated, per this service's "no auth/gate here" design.
 
 ```bash
@@ -50,6 +50,12 @@ curl -sX POST localhost:8080/novels \
 curl -sX POST localhost:8080/novels/<uuid>/chapters \
   -d '{"chapter_index":1,"raw_text":"Once upon a time..."}'
 # → 202 {"novel_id":...,"chapter_index":1,"raw_hash":"sha256:...","status":"ingested"}
+
+# delete a novel and everything derived from it — chapters, graph, glossary, queued work
+# and its object-store bodies. Irreversible; migration 0030 owns the cascade.
+curl -sX DELETE localhost:8080/novels/<uuid> \
+  -H "Authorization: Bearer $INGEST_INTERNAL_TOKEN"
+# → {"deleted":true}   (404 {"error":"no such novel"} if it was already gone)
 
 curl -s localhost:8080/healthz    # → {"status":"ok"} (pings pg + redis)
 

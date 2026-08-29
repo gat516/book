@@ -20,6 +20,7 @@ var ErrIngestUnavailable = errors.New("ingest-api unavailable")
 // rather than inventing a second proxy pattern.
 type IngestClient interface {
 	CreateNovel(ctx context.Context, body json.RawMessage) (json.RawMessage, int, error)
+	DeleteNovel(ctx context.Context, novelID string) (json.RawMessage, int, error)
 	PasteChapter(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
 	DeleteGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
@@ -70,6 +71,12 @@ func (c *ingestHTTPClient) send(ctx context.Context, method, path string, body j
 
 func (c *ingestHTTPClient) CreateNovel(ctx context.Context, body json.RawMessage) (json.RawMessage, int, error) {
 	return c.send(ctx, http.MethodPost, "/novels", body, true)
+}
+
+// DeleteNovel is token-gated on ingest-api's side, like CreateNovel — the two
+// novel-lifecycle routes, one of them irreversible.
+func (c *ingestHTTPClient) DeleteNovel(ctx context.Context, novelID string) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodDelete, "/novels/"+novelID, nil, true)
 }
 
 func (c *ingestHTTPClient) PasteChapter(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {

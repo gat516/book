@@ -73,6 +73,10 @@ func (f *fakeIngestClient) CreateNovel(_ context.Context, body json.RawMessage) 
 	return f.response, f.status, f.err
 }
 
+func (f *fakeIngestClient) DeleteNovel(_ context.Context, _ string) (json.RawMessage, int, error) {
+	return f.response, f.status, f.err
+}
+
 func (f *fakeIngestClient) PasteChapter(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
 	return f.response, f.status, f.err
@@ -621,6 +625,26 @@ func TestPostNovelMapsIngestUnavailable(t *testing.T) {
 	response := request(t, api, http.MethodPost, "/novels", `{"title":"New Novel"}`, "")
 	if response.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestDeleteNovelProxiesToIngestClient(t *testing.T) {
+	ingest := &fakeIngestClient{response: json.RawMessage(`{"deleted":true}`), status: http.StatusOK}
+	api := &API{store: readyFake(), ingest: ingest}
+	response := request(t, api, http.MethodDelete, "/novels/"+testNovelID, "", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"deleted":true`) {
+		t.Fatalf("response body = %s", response.Body.String())
+	}
+}
+
+func TestDeleteNovelRejectsBadID(t *testing.T) {
+	api := &API{store: readyFake(), ingest: &fakeIngestClient{}}
+	response := request(t, api, http.MethodDelete, "/novels/not-a-uuid", "", "")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
 	}
 }
 

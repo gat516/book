@@ -122,6 +122,18 @@ body {
   cursor: pointer;
 }
 
+.novel-picker-delete {
+  color: #b00020;
+}
+
+.novel-picker-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: 0.5rem;
+  font-size: 0.9rem;
+}
+
 .novel-picker-langs {
   color: #666;
   font-size: 0.9rem;

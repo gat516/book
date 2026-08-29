@@ -68,6 +68,12 @@ export function createNovel(body: CreateNovelRequest): Promise<CreateNovelRespon
   return request(`/novels`, { method: "POST", body: JSON.stringify(body) });
 }
 
+// Irreversible: ingest-api cascades this to the novel's chapters, graph, glossary and
+// queued work (migration 0030). The caller is responsible for confirming with the user.
+export function deleteNovel(novelId: string): Promise<{ deleted: boolean }> {
+  return request(`/novels/${novelId}`, { method: "DELETE" });
+}
+
 export function pasteChapter(novelId: string, body: PasteChapterRequest): Promise<PasteChapterResponse> {
   return request(`/novels/${novelId}/chapters`, { method: "POST", body: JSON.stringify(body) });
 }
