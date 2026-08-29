@@ -2,18 +2,18 @@
 
 Produces the mention spans the reader UI highlights. These are a **separate** pass from
 the extraction-time scan (``ScanStage``, step 2): that pass finds aliases in the SOURCE
-text so RESOLVE can bind them; this one finds the LOCKED GLOSSARY TERMS in the DISPLAY
-text so the web client can highlight them. When the novel is translated, the two texts
-are different strings in different scripts — source-text offsets do not slice the
+text so RESOLVE can bind them; this one finds locked glossary links in the DISPLAY
+text and independently discovers named mentions that have no identity yet. For translated
+novels, these are different strings in different scripts — source-text offsets do not slice the
 translated text (§0.5, §5 step 6), so reusing ``state.mentions`` there would highlight
 nonsense ranges.
 
-``glossary.target_term`` (not ``entity``/``alias``) is the alias set here, because it is
+``glossary.target_term`` (not ``entity``/``alias``) is the linked alias set here, because it is
 exactly "the locked English surface forms" — the same discipline TRANSLATE relies on to
 keep terms stable chapter to chapter. Rows are keyed by ``entity_id`` for the same reason
 ``ScanStage`` keys by it (§4: alias has no surrogate key); a glossary row with a NULL
-entity_id would mean RESOLVE never bound it, which both of ``resolve.py``'s glossary-lock
-call sites prevent by construction, so it is filtered defensively rather than assumed.
+entity_id cannot assert an identity. Independent name discovery may still produce an
+unlinked card for that literal name, without pretending the glossary has approved it.
 
 No chapter gate on the glossary query, for the same reason ``ScanStage`` has none:
 ingestion is not a read path (§0.3 governs reads, not writes).
@@ -24,6 +24,8 @@ from __future__ import annotations
 import logging
 
 from pipeline.context import PipelineState, StageContext
+from pipeline.display_names import discover_names, merge_names
+from pipeline.graph import GraphWriter
 from pipeline.mentions import Alias, MentionScanRequest, scan_mentions
 
 log = logging.getLogger(__name__)
@@ -33,6 +35,23 @@ class DisplayScanStage:
     name = "display_scan"
 
     async def run(self, ctx: StageContext, state: PipelineState) -> None:
+        await self._linked_mentions(ctx, state)
+        text = state.translation if state.translation is not None else state.envelope.raw_text
+        if ctx.novel.source_lang != ctx.novel.target_lang and state.translation is None:
+            return
+        state.display_spans = merge_names(state.display_spans, await discover_names(ctx, text))
+        # Cards are derived from readable prose, not gated on fact extraction completing.
+        # Publish atomically here; graph-write may idempotently replace the same spans.
+        async with ctx.db.transaction():
+            await GraphWriter(ctx.db).replace_mention_spans(
+                ctx.novel.id, state.envelope.chapter_index, state.display_spans
+            )
+        log.info("stage %s chapter=%d linked=%d unlinked=%d", self.name,
+                 state.envelope.chapter_index,
+                 sum(bool(span.alias_id) for span in state.display_spans),
+                 sum(not span.alias_id for span in state.display_spans))
+
+    async def _linked_mentions(self, ctx: StageContext, state: PipelineState) -> None:
         if ctx.novel.source_lang == ctx.novel.target_lang:
             # Displayed text IS the source text, unchanged — the step-2 scan already
             # computed correct offsets against it. Re-scanning would be redundant work
