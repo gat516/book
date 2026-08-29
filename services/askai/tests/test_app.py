@@ -82,3 +82,19 @@ async def test_empty_retrieval_does_not_complete(monkeypatch) -> None:
     assert response.answer == INSUFFICIENT
     assert provider.completed == 0
     assert provider.classes == [Class.INTERACTIVE]
+
+
+@pytest.mark.asyncio
+async def test_startup_retries_temporary_runtime_reservation(monkeypatch):
+    from unittest.mock import AsyncMock
+    from novel_llm import AdmissionRejected
+    provider=FakeProvider()
+    provider.embed=AsyncMock(side_effect=[AdmissionRejected(retry_after_s=5),[[0.0,0.0]]])
+    service=Service(config(),provider)
+    service.pool.open=AsyncMock()
+    sleep=AsyncMock()
+    monkeypatch.setattr('askai.app.asyncio.sleep',sleep)
+    await service.start()
+    assert provider.embed.await_count==2
+    sleep.assert_awaited_once_with(5)
+    service.pool.open.assert_awaited_once()

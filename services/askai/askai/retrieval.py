@@ -11,6 +11,7 @@ class Source:
     id: int
     chapter: int
     text: str
+    evidence: dict | None = None
 
 
 def vector_literal(vector: list[float]) -> str:
@@ -22,14 +23,14 @@ async def retrieve(conn: AsyncConnection, novel_id: str, at: int, embedding: lis
     async with conn.cursor() as cur:
         await cur.execute("SELECT id, chapter_index, text FROM chunk WHERE novel_id = %s AND chapter_index <= %s ORDER BY embedding <=> %s::vector, id LIMIT %s", (novel_id, at, vector, max_chunks))
         chunks = [Source("chunk", row[0], row[1], row[2]) for row in await cur.fetchall()]
-        await cur.execute("SELECT id::text FROM entity WHERE novel_id = %s AND first_seen_chapter <= %s AND embedding IS NOT NULL ORDER BY embedding <=> %s::vector, id LIMIT %s", (novel_id, at, vector, max_entities))
+        await cur.execute("SELECT id::text FROM entity WHERE novel_id = %s AND revision_id=reader_graph_revision() AND first_seen_chapter <= %s AND embedding IS NOT NULL ORDER BY embedding <=> %s::vector, id LIMIT %s", (novel_id, at, vector, max_entities))
         entity_ids = [row[0] for row in await cur.fetchall()]
         if not entity_ids:
             return chunks
-        await cur.execute("""WITH visible AS (SELECT f.* FROM fact f WHERE f.novel_id = %s AND f.entity_id = ANY(%s::uuid[]) AND f.source_chapter <= %s AND f.valid_from_chapter <= %s), current_facts AS (SELECT DISTINCT ON (entity_id, attribute) * FROM visible f WHERE f.kind <> 'retraction' AND NOT EXISTS (SELECT 1 FROM visible successor WHERE successor.supersedes = f.id) ORDER BY entity_id, attribute, valid_from_chapter DESC, source_chapter DESC, confidence DESC, id DESC) SELECT id, source_chapter, e.canonical || ': ' || attribute || ' = ' || value FROM current_facts cf JOIN entity e ON e.id = cf.entity_id ORDER BY source_chapter DESC, id DESC LIMIT %s""", (novel_id, entity_ids, at, at, max_facts))
-        facts = [Source("fact", row[0], row[1], row[2]) for row in await cur.fetchall()]
-        await cur.execute("""SELECT ed.id, ed.source_chapter, src.canonical || ' --' || ed.rel_type || '--> ' || dst.canonical FROM edge ed JOIN entity src ON src.id = ed.src_id JOIN entity dst ON dst.id = ed.dst_id WHERE ed.novel_id = %s AND (ed.src_id = ANY(%s::uuid[]) OR ed.dst_id = ANY(%s::uuid[])) AND ed.source_chapter <= %s AND ed.valid_from_chapter <= %s AND (ed.valid_to_chapter IS NULL OR ed.valid_to_chapter > %s) ORDER BY ed.source_chapter DESC, ed.id DESC LIMIT %s""", (novel_id, entity_ids, entity_ids, at, at, at, max_edges))
-        edges = [Source("edge", row[0], row[1], row[2]) for row in await cur.fetchall()]
+        await cur.execute("""WITH visible AS (SELECT f.* FROM fact f WHERE f.novel_id = %s AND f.entity_id = ANY(%s::uuid[]) AND f.source_chapter <= %s AND f.valid_from_chapter <= %s), current_facts AS (SELECT DISTINCT ON (entity_id, attribute) * FROM visible f WHERE f.kind <> 'retraction' AND NOT EXISTS (SELECT 1 FROM visible successor WHERE successor.supersedes = f.id) ORDER BY entity_id, attribute, valid_from_chapter DESC, source_chapter DESC, confidence DESC, id DESC) SELECT cf.id, cf.source_chapter, e.canonical || ': ' || attribute || ' = ' || value, (SELECT jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash) FROM graph_evidence v WHERE v.id=cf.evidence_id) FROM current_facts cf JOIN entity e ON e.id = cf.entity_id ORDER BY source_chapter DESC, id DESC LIMIT %s""", (novel_id, entity_ids, at, at, max_facts))
+        facts = [Source("fact", row[0], row[1], row[2], row[3]) for row in await cur.fetchall()]
+        await cur.execute("""SELECT ed.id, ed.source_chapter, src.canonical || ' --' || ed.rel_type || '--> ' || dst.canonical, (SELECT jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash) FROM graph_evidence v WHERE v.id=ed.evidence_id) FROM edge ed JOIN entity src ON src.id = ed.src_id JOIN entity dst ON dst.id = ed.dst_id WHERE ed.novel_id = %s AND (ed.src_id = ANY(%s::uuid[]) OR ed.dst_id = ANY(%s::uuid[])) AND ed.source_chapter <= %s AND ed.valid_from_chapter <= %s AND (ed.valid_to_chapter IS NULL OR ed.valid_to_chapter > %s) ORDER BY ed.source_chapter DESC, ed.id DESC LIMIT %s""", (novel_id, entity_ids, entity_ids, at, at, at, max_edges))
+        edges = [Source("edge", row[0], row[1], row[2], row[3]) for row in await cur.fetchall()]
     return chunks + facts + edges
 
 
@@ -42,6 +43,6 @@ def build_context(sources: list[Source], max_chars: int) -> tuple[str, list[dict
         if total + len(item) > max_chars:
             continue
         parts.append(item)
-        used.append({"kind": source.kind, "id": source.id, "chapter": source.chapter})
+        used.append({"kind": source.kind, "id": source.id, "chapter": source.chapter, **({"evidence":source.evidence} if source.evidence else {})})
         total += len(item)
     return "\n".join(parts), used

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Annotated
@@ -31,8 +32,9 @@ class AskRequest(BaseModel):
 class AskResponse(BaseModel):
     answer: str
     at: int
-    retrieved_sources: list[dict[str, int | str]]
+    retrieved_sources: list[dict]
     served_by: dict[str, str] | None
+    knowledge: dict = Field(default_factory=dict)
 
 
 class Service:
@@ -58,10 +60,17 @@ class Service:
     async def start(self) -> None:
         if not self.config.internal_token or not self.config.model:
             raise RuntimeError("ASKAI_INTERNAL_TOKEN and LLM_MODEL_ASK (or LLM_MODEL_EXTRACT) are required")
-        await self.pool.open()
-        dimensions = await self.embed_provider.embed(["embedding dimension check"], cls=Class.INTERACTIVE)
+        # Startup may overlap a Book benchmark/translation reservation. Keep readiness
+        # pending instead of treating temporary admission backpressure as a crash.
+        while True:
+            try:
+                dimensions = await self.embed_provider.embed(["embedding dimension check"], cls=Class.INTERACTIVE)
+                break
+            except AdmissionRejected as exc:
+                await asyncio.sleep(max(exc.retry_after_s, 0.25))
         if len(dimensions) != 1 or len(dimensions[0]) != self.config.embed_dim:
             raise RuntimeError("embedding dimension does not match EMBED_DIM")
+        await self.pool.open()
 
     async def close(self) -> None:
         await self.pool.close()
@@ -104,16 +113,27 @@ class Service:
             raise RuntimeError("embedding provider returned an unexpected dimension")
         async with self.pool.connection() as conn:
             async with conn.transaction():
+                await conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
                 await conn.execute("SELECT set_config('app.novel_id', %s, true)", (request.novel_id,))
                 await conn.execute("SELECT set_config('app.current_chapter', %s, true)", (str(request.at),))
+                k = await (await conn.execute("SELECT revision_id::text,version,trusted,status FROM reader_knowledge_status(%s)",(request.at,))).fetchone()
+                knowledge = dict(zip(["revision_id","version","trusted","status"],k)) if k else {}
                 provider = gateway_provider or await self._provider_for_novel(conn, request.novel_id)
                 sources = await retrieve(conn, request.novel_id, request.at, vectors[0], max_chunks=self.config.max_chunks, max_entities=self.config.max_entities, max_facts=self.config.max_facts, max_edges=self.config.max_edges)
         context, used = build_context(sources, self.config.max_context_chars)
         if not used:
-            return AskResponse(answer=INSUFFICIENT, at=request.at, retrieved_sources=[], served_by=None)
+            return AskResponse(answer=INSUFFICIENT, at=request.at, retrieved_sources=[], served_by=None, knowledge=knowledge)
         completion = await provider.complete(f"Question:\n{request.question}\n\nRetrieved context:\n{context}", system=SYSTEM, cls=Class.INTERACTIVE, model=self.config.model)
+        # A cutover/quarantine during slow inference invalidates the old answer too.
+        async with self.pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute("SELECT set_config('app.novel_id', %s, true)",(request.novel_id,))
+                await conn.execute("SELECT set_config('app.current_chapter', %s, true)",(str(request.at),))
+                current=await (await conn.execute("SELECT revision_id::text,version,trusted,status FROM reader_knowledge_status(%s)",(request.at,))).fetchone()
+        if current and (current[0]!=knowledge.get('revision_id') or current[1]!=knowledge.get('version')):
+            return AskResponse(answer="Knowledge changed while answering. Please ask again.",at=request.at,retrieved_sources=[],served_by=None,knowledge=dict(zip(["revision_id","version","trusted","status"],current)))
         log.info("ask completed novel=%s at=%s sources=%s", request.novel_id, request.at, used)
-        return AskResponse(answer=completion.text, at=request.at, retrieved_sources=used, served_by={"provider": completion.served_provider, "model": completion.served_model})
+        return AskResponse(answer=completion.text, at=request.at, retrieved_sources=used, knowledge=knowledge, served_by={"provider": completion.served_provider, "model": completion.served_model})
 
 
 def create_app(service: Service) -> FastAPI:
