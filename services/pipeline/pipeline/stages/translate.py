@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
+import json
 import logging
 from contextlib import asynccontextmanager
 
@@ -18,8 +20,12 @@ from pipeline.jobs import (
 from pipeline.llm.provider import BatchRequest
 from pipeline.stages.chunk import chunk_text
 from pipeline.translation import (
+    GlossaryViolation,
     build_system_prompt,
     build_user_prompt,
+    prime_glossary_terms,
+    protect_glossary_terms,
+    strip_locked_term_tags,
     validate_glossary_constraints,
 )
 
@@ -48,6 +54,20 @@ async def _glossary(db, novel_id: str) -> tuple[int, list[tuple[str, str]]]:
     ).fetchall()
     # Tombstones still advance the cache version, including deletion of the last term.
     return (max((r[2] for r in rows), default=0), [(r[0], r[1]) for r in rows if not r[3]])
+
+
+def _translation_fingerprint(ctx: StageContext, glossary: list[tuple[str, str]]) -> str:
+    """Hash every stable input included in the translation system prompt."""
+    payload = [
+        "translation-input-v2",
+        ctx.novel.source_lang,
+        ctx.novel.target_lang,
+        ctx.novel.ontology,
+        glossary,
+    ]
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def _read_object(objects, bucket: str, key: str) -> str:
@@ -129,6 +149,7 @@ class TranslateStage:
         chapter = state.envelope.chapter_index
         raw_hash = state.envelope.source_meta.raw_hash
         glossary_version, glossary = await _glossary(ctx.db, ctx.novel.id)
+        translation_fingerprint = _translation_fingerprint(ctx, glossary)
         # The provider actually resolved for this novel this chapter (PLAN.md Phase N4:
         # its own novel_provider_config.provider if it has one, else the process-wide
         # cfg.llm_provider) — NOT ctx.cfg.llm_provider directly, which would ignore a
@@ -154,16 +175,21 @@ class TranslateStage:
             STAGE,
             raw_hash,
             ctx.cfg,
-            glossary_version=glossary_version,
+            glossary_version=translation_fingerprint,
             model_id=requested_id,
         )
 
         row = await _chapter_row(ctx.db, ctx.novel.id, chapter)
-        if await job_is_done(ctx.db, key) and row and row[0]:
+        if await job_is_done(
+            ctx.db,
+            novel_id=ctx.novel.id,
+            chapter_index=chapter,
+            stage=STAGE,
+            key=key,
+        ) and row and row[0]:
             translated = await asyncio.to_thread(
                 _read_object, ctx.objects, ctx.cfg.object_bucket, row[0]
             )
-            validate_glossary_constraints(state.envelope.raw_text, translated, glossary)
             self._set_chunks(ctx, state, translated)
             state.translation = translated
             return
@@ -174,9 +200,14 @@ class TranslateStage:
             served_provider = requested_provider
             served_model = requested_model
         else:
+            # Locked terms are substituted into the source before the model sees it, so
+            # terminology is carried through rather than recalled. validate_glossary_
+            # constraints below still checks the ORIGINAL raw_text: what a term is
+            # required by is the chapter as written, not the primed copy we sent.
+            primed = prime_glossary_terms(state.envelope.raw_text, glossary)
             request: BatchRequest = {
                 "id": key,
-                "prompt": build_user_prompt(state.envelope.raw_text),
+                "prompt": build_user_prompt(primed),
                 "system": build_system_prompt(
                     source_lang=ctx.novel.source_lang,
                     target_lang=ctx.novel.target_lang,
@@ -205,15 +236,60 @@ class TranslateStage:
                 STAGE,
                 raw_hash,
                 ctx.cfg,
-                glossary_version=glossary_version,
+                glossary_version=translation_fingerprint,
                 model_id=translated_by,
             )
 
-        validate_glossary_constraints(state.envelope.raw_text, translated, glossary)
+        warning_count = 0
+        try:
+            validate_glossary_constraints(state.envelope.raw_text, translated, glossary)
+        except GlossaryViolation as first_violation:
+            if cached is not None:
+                await ctx.cache.delete(key)
+            if not first_violation.recoverable:
+                raise
+            protected_key = hashlib.sha256(f"{key}\x1fprotected-term-retry-v1".encode()).hexdigest()
+            protected_request: BatchRequest = {
+                "id": protected_key,
+                "prompt": build_user_prompt(
+                    protect_glossary_terms(state.envelope.raw_text, glossary)
+                ),
+                "system": build_system_prompt(
+                    source_lang=ctx.novel.source_lang,
+                    target_lang=ctx.novel.target_lang,
+                    ontology=ctx.novel.ontology,
+                    glossary=glossary,
+                ) + "\nPreserve every <locked-term> element and its inner text exactly.",
+                "pin_model": True,
+                "model": requested_model,
+            }
+            retry_batch = await ctx.batch_manager.batch_submit([protected_request])
+            retry_results = await ctx.batch_manager.batch_poll(retry_batch)
+            retry = ctx.batch_manager.require_single_result(protected_key, retry_results)
+            retry_identity = f"{retry['served_provider']}:{retry['served_model']}"
+            if retry_identity != translated_by:
+                raise RuntimeError(
+                    f"protected translation retry changed serving identity from "
+                    f"{translated_by!r} to {retry_identity!r}"
+                )
+            protected_translation = strip_locked_term_tags(retry["output"])
+            try:
+                validate_glossary_constraints(
+                    state.envelope.raw_text, protected_translation, glossary
+                )
+            except GlossaryViolation as retry_violation:
+                if not retry_violation.recoverable:
+                    raise
+                # The ordinary completion is readable and contains no protection markup.
+                # Preserve it, report only an operational count, and let enrichment run.
+                warning_count = max(first_violation.term_count, retry_violation.term_count, 1)
+            else:
+                translated = protected_translation
+
         await insert_job(
             ctx.db, novel_id=ctx.novel.id, chapter_index=chapter, stage=STAGE, key=key
         )
-        if cached is None:
+        if cached is None and warning_count == 0:
             await ctx.cache.put(
                 key,
                 translated,
@@ -235,11 +311,26 @@ class TranslateStage:
                     (translated_by, ctx.novel.id),
                 )
             await ctx.db.execute(
-                "UPDATE chapter SET translated_uri = %s, translated_by = %s, glossary_version = %s "
+                "UPDATE chapter SET translated_uri = %s, translated_by = %s, glossary_version = %s, "
+                "translation_warning_code = %s, translation_warning_count = %s "
                 "WHERE novel_id = %s AND chapter_index = %s",
-                (uri, translated_by, glossary_version, ctx.novel.id, chapter),
+                (
+                    uri,
+                    translated_by,
+                    glossary_version,
+                    "locked_terms_missing" if warning_count else None,
+                    warning_count,
+                    ctx.novel.id,
+                    chapter,
+                ),
             )
-            await mark_job_done(ctx.db, key)
+            await mark_job_done(
+                ctx.db,
+                novel_id=ctx.novel.id,
+                chapter_index=chapter,
+                stage=STAGE,
+                key=key,
+            )
 
         state.translation = translated
         self._set_chunks(ctx, state, translated)
