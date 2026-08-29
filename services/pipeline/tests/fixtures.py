@@ -178,6 +178,8 @@ async def make_novel(
 async def delete_novel(conn, novel_id: str) -> None:
     """Manual cascade — 0001 declares FKs without ON DELETE CASCADE. ``job`` has no FK
     at all (0001), so it is cleaned by novel_id like the rest rather than by cascade."""
+    for table in ("display_mention", "mention_binding", "source_mention", "glossary_binding", "glossary_proposal_chapter", "graph_job", "graph_completion"):
+        await conn.execute(f"DELETE FROM {table} WHERE revision_id IN (SELECT id FROM graph_revision WHERE novel_id=%s)", (novel_id,))
     for table in (
         "fact",
         "edge",
@@ -187,6 +189,7 @@ async def delete_novel(conn, novel_id: str) -> None:
         "alias",
         "glossary_changelog",
         "glossary_candidate",
+        "glossary_candidate_chapter",
         "glossary",
         "entity",
         "job",
@@ -199,6 +202,10 @@ async def delete_novel(conn, novel_id: str) -> None:
                 (novel_id,),
             )
         elif table == "novel":
+            await conn.execute("DELETE FROM graph_evidence WHERE novel_id=%s",(novel_id,))
+            await conn.execute("DELETE FROM graph_audit WHERE novel_id=%s",(novel_id,))
+            await conn.execute("UPDATE novel SET active_graph_revision=NULL WHERE id=%s",(novel_id,))
+            await conn.execute("DELETE FROM graph_revision WHERE novel_id=%s",(novel_id,))
             await conn.execute("DELETE FROM novel WHERE id = %s", (novel_id,))
         else:
             await conn.execute(f"DELETE FROM {table} WHERE novel_id = %s", (novel_id,))

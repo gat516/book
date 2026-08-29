@@ -117,9 +117,11 @@ class PipelineState:
     # display-scan stage (Phase 5.2): mentions against the DISPLAY text (translated, or
     # source if untranslated), for the reader UI's highlighting. Offsets here are NOT
     # comparable to `mentions` above when the novel is translated — different text.
+    # An empty alias_id denotes a literal named mention with no entity binding; the
+    # database stores it as NULL. Never use these spans to bind graph facts.
     display_spans: "list[Span]" = field(default_factory=list)
 
-    # resolve stage (1.6): the AUTHORITATIVE surface -> entity_id map. Every stage that
+    # resolve stage (1.6): the AUTHORITATIVE occurrence-ID -> entity_id map (revision pipeline). Every stage that
     # needs to turn a name into an id reads this and nothing else — a surface absent from
     # it is an unresolved mention, not an invitation to bind by exact match (that was the
     # 1.5 placeholder, and exact matching is the entity-drift bug §12 risk #2 describes).

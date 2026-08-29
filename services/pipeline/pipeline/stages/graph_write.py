@@ -76,7 +76,13 @@ class GraphWriteStage:
                     ctx, writer, state.extraction, chapter_index, state.resolutions
                 )
                 if state.state_job_key is not None:
-                    await mark_job_done(ctx.db, state.state_job_key)
+                    await mark_job_done(
+                        ctx.db,
+                        novel_id=ctx.novel.id,
+                        chapter_index=chapter_index,
+                        stage="state",
+                        key=state.state_job_key,
+                    )
 
         log.info(
             "stage %s chapter=%d chunks=%d facts=%d edges=%d events=%d unresolved=%d",
@@ -94,28 +100,52 @@ class GraphWriteStage:
         chapter_index: int,
         bound: dict[str, str],
     ) -> tuple[int, int, int, int]:
-        # ``bound`` is RESOLVE's surface -> entity_id map, and it is the ONLY way a name
-        # becomes an id here (1.6). A surface missing from it is an unresolved mention:
-        # the row is dropped, not bound by exact match. That subsumes the older
-        # "declared in extraction.entities" check — binding can no longer invent an
-        # entity, so a surface the extractor failed to declare simply never resolves.
-        #
-        # Dropping is the right trade against binding to a guess: an invented entity
-        # pollutes the resolver's candidate set for every later chapter, permanently and
-        # silently, while a dropped fact shows up as the unresolved count this returns —
-        # which is the drift signal the eval set measures (workstream A).
-        unresolved: set[str] = set()
+        allowed_kinds=set(ctx.novel.ontology.get("kinds",[]))
+        declared: dict[str,str] = {}
+        conflicting=set()
+        for entity in extraction.entities:
+            if entity.kind not in allowed_kinds:
+                log.warning("dropping declaration %r: invalid ontology kind %r",entity.surface,entity.kind)
+                conflicting.add(entity.surface);continue
+            if entity.surface in declared and declared[entity.surface]!=entity.kind:
+                conflicting.add(entity.surface);declared.pop(entity.surface,None);continue
+            declared[entity.surface]=entity.kind
+        invalid=0
 
         def resolved(*surfaces: str) -> bool:
-            missing = [s for s in surfaces if s not in bound]
-            unresolved.update(missing)
+            nonlocal invalid
+            missing=[s for s in surfaces if s in conflicting or s not in declared or s not in bound]
             if missing:
-                log.warning("dropping extraction row: unresolved %s", missing)
+                invalid+=1;log.warning("dropping extraction row: undeclared or unresolved %s",missing)
             return not missing
 
-        facts = [f for f in extraction.facts if resolved(f.entity)]
-        edges = [e for e in extraction.edges if resolved(e.src, e.dst)]
-        events = [(ev, [s for s in ev.entities if s in bound]) for ev in extraction.events]
+        attributes={}
+        for attr in ctx.novel.ontology.get("attributes",[]):
+            if isinstance(attr,str):
+                attributes[attr]=allowed_kinds
+            elif attr.get("name"):
+                attributes[attr["name"]]=set(attr.get("kinds") or allowed_kinds)
+        facts=[]
+        for fact in extraction.facts:
+            if (not resolved(fact.entity) or fact.attribute not in attributes
+                or declared.get(fact.entity) not in attributes.get(fact.attribute,set())):
+                if fact.entity in declared and fact.entity in bound:
+                    invalid+=1;log.warning("dropping fact %r.%r: ontology-invalid attribute",fact.entity,fact.attribute)
+                continue
+            facts.append(fact)
+        relations=set(ctx.novel.ontology.get("relations",[]))
+        edges=[]
+        for edge in extraction.edges:
+            if not resolved(edge.src,edge.dst) or edge.rel_type not in relations:
+                if edge.src in declared and edge.dst in declared and edge.src in bound and edge.dst in bound:
+                    invalid+=1;log.warning("dropping edge %r -> %r: invalid relation %r",edge.src,edge.dst,edge.rel_type)
+                continue
+            edges.append(edge)
+        events=[]
+        for event in extraction.events:
+            if not resolved(*event.entities):
+                continue
+            events.append((event,event.entities))
 
         fact_rows = [
             FactRow(
@@ -160,4 +190,4 @@ class GraphWriteStage:
         await writer.insert_facts(fact_rows)
         await writer.insert_edges(edge_rows)
         await writer.insert_events(event_rows)
-        return len(fact_rows), len(edge_rows), len(event_rows), len(unresolved)
+        return len(fact_rows), len(edge_rows), len(event_rows), invalid

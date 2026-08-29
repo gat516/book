@@ -445,6 +445,24 @@ async def test_fact_about_an_undeclared_surface_is_dropped(db_conn, novel):
     assert counts["entity"] == 1
 
 
+async def test_ontology_invalid_rows_and_partial_events_fail_closed_but_valid_rows_survive(db_conn,novel):
+    response=json.dumps({
+        "entities":[{"surface":"Li Xiaoyao","kind":"character"},
+                    {"surface":"Azure Cloud Sect","kind":"sect"},
+                    {"surface":"Ghost","kind":"invented-kind"}],
+        "facts":[{"entity":"Li Xiaoyao","attribute":"rank","value":"Qi Refining"},
+                 {"entity":"Azure Cloud Sect","attribute":"rank","value":"invalid kind"},
+                 {"entity":"Li Xiaoyao","attribute":"invented","value":"invalid attr"}],
+        "edges":[{"src":"Li Xiaoyao","dst":"Azure Cloud Sect","rel_type":"member_of"},
+                 {"src":"Li Xiaoyao","dst":"Azure Cloud Sect","rel_type":"invented"}],
+        "events":[{"summary":"valid","entities":["Li Xiaoyao"]},
+                  {"summary":"must be discarded whole","entities":["Li Xiaoyao","Undeclared"]}]})
+    resolutions=await seed_entities(db_conn,novel,{"Li Xiaoyao":"character","Azure Cloud Sect":"sect","Ghost":"character"})
+    await _run(_ctx(db_conn,novel,FakeProvider(response),LLMCache(FakeRedis())),resolutions=resolutions)
+    counts=await _counts(db_conn,novel)
+    assert counts["fact"]==1 and counts["edge"]==1 and counts["event"]==1
+
+
 async def test_failover_result_is_used_but_not_cached(db_conn, novel):
     """§12 / §14.3 at the stage level: a response served by another model is still valid
     output to write, but it must not be stored under this key. The next run therefore

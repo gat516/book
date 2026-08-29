@@ -213,7 +213,7 @@ class GraphWriter:
                 [(r.novel_id, r.chapter_index, r.summary, r.entity_ids) for r in rows],
             )
 
-    async def exact_matches(self, novel_id: str, surface: str) -> list[CandidateRow]:
+    async def exact_matches(self, novel_id: str, surface: str, *, kind: str | None = None) -> list[CandidateRow]:
         """Entities whose canonical name or one of whose aliases IS this surface.
 
         The cheap, certain half of retrieve-then-resolve. A hit here still goes to the
@@ -229,14 +229,15 @@ class GraphWriter:
                 FROM entity e
                 LEFT JOIN alias a ON a.entity_id = e.id
                 WHERE e.novel_id = %s AND (a.surface = %s OR e.canonical = %s)
+                  AND (%s::text IS NULL OR e.kind = %s::text)
                 """,
-                (novel_id, surface, surface),
+                (novel_id, surface, surface, kind, kind),
             )
         ).fetchall()
         return [CandidateRow(id=str(r[0]), canonical=r[1], kind=r[2]) for r in rows]
 
     async def similar_entities(
-        self, novel_id: str, embedding: list[float], *, k: int = 5
+        self, novel_id: str, embedding: list[float], *, k: int = 5, kind: str | None = None
     ) -> list[CandidateRow]:
         """Nearest entities by cosine distance over ``entity.embedding`` (pgvector).
 
@@ -255,6 +256,7 @@ class GraphWriter:
                 SELECT e.id, e.canonical, e.kind
                 FROM entity e
                 WHERE e.novel_id = %s AND e.embedding IS NOT NULL
+                  AND (%s::text IS NULL OR e.kind = %s::text)
                 ORDER BY e.embedding <=> %s
                 LIMIT %s
                 """,
@@ -264,7 +266,7 @@ class GraphWriter:
                 # and `vector <=> double precision[]` does not exist. The asymmetry is
                 # easy to "simplify" away and the result is a hard error, not a silent
                 # one — so this stays explicit.
-                (novel_id, Vector(embedding), k),
+                (novel_id, kind, kind, Vector(embedding), k),
             )
         ).fetchall()
         return [CandidateRow(id=str(r[0]), canonical=r[1], kind=r[2]) for r in rows]
@@ -326,7 +328,7 @@ class GraphWriter:
                     VALUES (%s, %s, %s, %s, %s)
                     """,
                     [
-                        (novel_id, chapter_index, s.alias_id, s.char_start, s.char_end)
+                        (novel_id, chapter_index, s.alias_id or None, s.char_start, s.char_end)
                         for s in spans
                     ],
                 )

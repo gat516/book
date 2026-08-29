@@ -67,7 +67,13 @@ class StateStage:
             ontology=ctx.novel.ontology,
         )
 
-        if await job_is_done(ctx.db, key):
+        if await job_is_done(
+            ctx.db,
+            novel_id=envelope.novel_id,
+            chapter_index=envelope.chapter_index,
+            stage=STAGE,
+            key=key,
+        ):
             # Already written to the graph. Leaving ``state.extraction`` as None is what
             # tells graph-write to write nothing — re-inserting would duplicate every
             # fact, because the knowledge tables are append-only (§0.2).

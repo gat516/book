@@ -70,6 +70,17 @@ GLOSSARY_MIN_PROPOSALS = 2
 
 # A name should not run to a sentence; a model that returns one has misunderstood the ask.
 MAX_TARGET_TERM_CHARS = 80
+MAX_SOURCE_TERM_CHARS = 80
+
+# A source term is SUBSTITUTED INTO the chapter before translation
+# (translation.prime_glossary_terms), and CJK has no word delimiters, so a one-character
+# term rewrites every compound that merely contains it: locking 神 turns 精神 into "精God".
+# Two characters is the shortest surface that is a name rather than a morpheme.
+MIN_SOURCE_TERM_CHARS = 2
+
+# Sentence punctuation (or a line break) means the model handed back prose, not a surface.
+# Observed for real: alias rows in this repo's own corpus hold whole sentences.
+_PROSE_MARKERS = re.compile(r"[\n\r。！？；：，、]")
 
 _CJK_RANGE = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
 _CJK_LANGS = frozenset({"zh", "ja"})
@@ -93,6 +104,25 @@ def _target_term_problem(target_term: str, target_lang: str) -> str | None:
     return None
 
 
+def _source_term_problem(source_term: str) -> str | None:
+    """Return why this source term is unusable as a locked surface, or None if it looks
+    like a name.
+
+    The target-side twin of ``_target_term_problem``, and load-bearing for the same reason:
+    a locked term is immutable and is now substituted directly into every later chapter
+    before the model sees it, so garbage here corrupts the text being translated rather
+    than merely costing a constraint. Declining to lock stays the safe outcome.
+    """
+    source = source_term.strip()
+    if len(source) < MIN_SOURCE_TERM_CHARS:
+        return f"too short to substitute safely ({len(source)} chars)"
+    if len(source) > MAX_SOURCE_TERM_CHARS:
+        return f"looks like prose, not a name ({len(source)} chars)"
+    if _PROSE_MARKERS.search(source):
+        return "contains sentence punctuation, so it is prose rather than a name"
+    return None
+
+
 async def _target_term_owner(db, novel_id: str, target_term: str) -> str | None:
     """Which source term already claims this target in this novel, if any."""
     row = await (
@@ -113,22 +143,15 @@ async def _record_candidate(
     re-running a single chapter can never corroborate its own suggestion — "independent"
     has to mean independent for this guard to be worth anything.
     """
-    row = await (
-        await db.execute(
-            """
-            INSERT INTO glossary_candidate
-              (novel_id, source_term, target_term, proposals, first_seen_chapter, last_seen_chapter)
-            VALUES (%s, %s, %s, 1, %s, %s)
-            ON CONFLICT (novel_id, source_term, target_term) DO UPDATE
-            SET proposals = glossary_candidate.proposals
-                  + CASE WHEN glossary_candidate.last_seen_chapter = EXCLUDED.last_seen_chapter
-                         THEN 0 ELSE 1 END,
-                last_seen_chapter = EXCLUDED.last_seen_chapter
-            RETURNING proposals
-            """,
-            (novel_id, source_term, target_term, chapter, chapter),
-        )
-    ).fetchone()
+    await db.execute("""INSERT INTO glossary_candidate_chapter VALUES(%s,%s,%s,%s)
+        ON CONFLICT DO NOTHING""",(novel_id,source_term,target_term,chapter))
+    row = await (await db.execute("""
+        INSERT INTO glossary_candidate(novel_id,source_term,target_term,proposals,first_seen_chapter,last_seen_chapter)
+        SELECT %s,%s,%s,count(*),min(chapter_index),max(chapter_index)
+        FROM glossary_candidate_chapter WHERE novel_id=%s AND source_term=%s AND target_term=%s
+        ON CONFLICT(novel_id,source_term,target_term) DO UPDATE SET
+        proposals=EXCLUDED.proposals,last_seen_chapter=EXCLUDED.last_seen_chapter RETURNING proposals
+        """,(novel_id,source_term,target_term,novel_id,source_term,target_term))).fetchone()
     return row[0]
 
 
@@ -138,7 +161,7 @@ async def _lock_glossary(
     novel_id: str,
     source_term: str,
     target_term: str,
-    entity_id: str,
+    entity_id: str | None,
     chapter: int,
     target_lang: str = "",
     require_corroboration: bool = True,
@@ -164,6 +187,13 @@ async def _lock_glossary(
     # Guard 2 (migration 0016): shape-check before anything permanent happens. Declining to
     # lock is safe — the surface simply has no locked term, which costs a translation
     # constraint, not correctness. Locking garbage is what is unrecoverable.
+    problem = _source_term_problem(source_term)
+    if problem is not None:
+        log.warning(
+            "resolve: refusing glossary term %r => %r (source: %s)",
+            source_term, target_term, problem,
+        )
+        return None
     if target_lang:
         problem = _target_term_problem(target_term, target_lang)
         if problem is not None:
@@ -182,12 +212,31 @@ async def _lock_glossary(
     if tombstone:
         return None
 
+    existing = await (await db.execute(
+        "SELECT target_term,entity_id,version FROM glossary WHERE novel_id=%s AND source_term=%s AND NOT deleted",
+        (novel_id,source_term))).fetchone()
+    if existing:
+        existing_target,existing_entity,existing_version=existing
+        if existing_target!=target_term:
+            log.warning("resolve: preserving existing glossary wording %r => %r; automatic proposal %r remains unapplied",
+                        source_term,existing_target,target_term)
+            return None
+        if entity_id is not None and existing_entity is None:
+            await db.execute("UPDATE glossary SET entity_id=%s WHERE novel_id=%s AND source_term=%s",
+                             (entity_id,novel_id,source_term))
+        elif entity_id is not None and str(existing_entity)!=entity_id:
+            log.warning("resolve: preserving existing entity binding for glossary term %r",source_term)
+            return None
+        return existing_version
+
     # Guard 1 (migration 0016): one target term per novel. A model that returns the same
     # invented name for several distinct entities is the exact failure that made a novel
     # permanently untranslatable — every later translation had to contain that one name
     # once per entity claiming it. First claim wins; later collisions are declined.
     owner = await _target_term_owner(db, novel_id, target_term)
     if owner is not None and owner != source_term:
+        if require_corroboration:
+            await _record_candidate(db,novel_id,source_term,target_term,chapter)
         log.warning(
             "resolve: refusing glossary term %r => %r (target already locked to %r)",
             source_term,
@@ -237,21 +286,18 @@ async def _lock_glossary(
         )
     ).fetchone()
     if inserted is None:
-        existing = await (
-            await db.execute(
-                "SELECT target_term, entity_id, version FROM glossary "
-                "WHERE novel_id = %s AND source_term = %s",
-                (novel_id, source_term),
-            )
-        ).fetchone()
+        existing = await (await db.execute(
+            "SELECT target_term, entity_id, version FROM glossary WHERE novel_id=%s AND source_term=%s",
+            (novel_id,source_term))).fetchone()
         if existing is None:
             raise RuntimeError("glossary conflict reported but the existing row disappeared")
         existing_target, existing_entity, existing_version = existing
         if existing_target != target_term:
-            raise ValueError(
-                f"glossary term {source_term!r} is already locked to "
-                f"{existing_target!r}/{existing_entity}, not {target_term!r}/{entity_id}"
-            )
+            return None
+        if entity_id is None:
+            # Managed graph identity is revision-scoped. Global wording stays detached
+            # and glossary_binding carries the current revision's entity.
+            return existing_version
         if existing_entity is None:
             # PLAN.md Phase N6: a glossary-bootstrap term locked before any entity for it
             # existed (locked_at_chapter=0, entity_id NULL). This is the first time RESOLVE
@@ -264,10 +310,7 @@ async def _lock_glossary(
             )
             return existing_version
         if str(existing_entity) != entity_id:
-            raise ValueError(
-                f"glossary term {source_term!r} is already locked to "
-                f"{existing_target!r}/{existing_entity}, not {target_term!r}/{entity_id}"
-            )
+            return None
         return existing_version
     previous = await (
         await db.execute(
@@ -327,6 +370,21 @@ def _context_around(text: str, surface: str, *, window: int = CONTEXT_WINDOW) ->
     return text[max(0, at - window) : at + len(surface) + window].strip()
 
 
+def _contexts_around(text: str, surface: str, *, window: int = CONTEXT_WINDOW) -> list[str]:
+    return [text[max(0,m.start()-window):min(len(text),m.end()+window)].strip()
+            for m in re.finditer(re.escape(surface),text)]
+
+
+def _valid_surface(text: str, surface: str, lang: str) -> bool:
+    if not surface or surface != surface.strip() or surface not in text:
+        return False
+    if lang.split("-")[0] in {"zh","ja","ko"}:
+        return True
+    return any(not ((m.start()>0 and (text[m.start()-1].isalnum() or text[m.start()-1]=="_"))
+                    or (m.end()<len(text) and (text[m.end()].isalnum() or text[m.end()]=="_")))
+               for m in re.finditer(re.escape(surface),text))
+
+
 class ResolveStage:
     name = STAGE
 
@@ -349,13 +407,26 @@ class ResolveStage:
 
         # --- pass 1: scanned exact hits ------------------------------------
         scanned: dict[str, set[str]] = {}
+        occurrences: dict[str,set[tuple[int,int]]] = {}
         for span in state.mentions:
-            scanned.setdefault(text[span.char_start : span.char_end], set()).add(span.alias_id)
+            surface=text[span.char_start : span.char_end]
+            scanned.setdefault(surface, set()).add(span.alias_id)
+            occurrences.setdefault(surface,set()).add((span.char_start,span.char_end))
 
         ambiguous: list[str] = []
         for surface, entity_ids in scanned.items():
-            if len(entity_ids) == 1:
-                resolutions[surface] = next(iter(entity_ids))
+            one_char_cjk=(envelope.source_lang.split("-")[0] in {"zh","ja","ko"} and len(surface)==1)
+            if len(entity_ids) == 1 and not one_char_cjk and len(occurrences[surface])==1:
+                entity_id=next(iter(entity_ids));resolutions[surface] = entity_id
+                # Seeing a known translated alias in a later chapter is independent
+                # corroboration; retries in one chapter remain one ledger vote.
+                if ctx.novel.source_lang != ctx.novel.target_lang:
+                    row=await (await ctx.db.execute("SELECT canonical FROM entity WHERE id=%s",(entity_id,))).fetchone()
+                    if row:
+                        async with ctx.db.transaction():
+                            await _lock_glossary(ctx.db,novel_id=ctx.novel.id,source_term=surface,
+                                target_term=row[0],entity_id=entity_id,chapter=envelope.chapter_index,
+                                target_lang=ctx.novel.target_lang,min_proposals=ctx.cfg.glossary_min_proposals)
             else:
                 # Two entities share this surface. That is not scanner noise — it is a
                 # real ambiguity, and choosing between them is exactly this stage's job.
@@ -370,10 +441,16 @@ class ResolveStage:
             model=model_for_stage(STAGE, ctx.cfg),
         )
         proposal = parse_proposal(completion.text)
-        kinds = {m.surface: m.kind for m in proposal.mentions}
+        allowed_kinds=set(ctx.novel.ontology.get("kinds",[]))
+        proposed=[m for m in proposal.mentions
+                  if m.kind in allowed_kinds and _valid_surface(text,m.surface,envelope.source_lang)]
+        for mention in proposal.mentions:
+            if mention not in proposed:
+                log.warning("resolve: dropping invalid proposed surface/kind %r/%r",mention.surface,mention.kind)
+        kinds = {m.surface: m.kind for m in proposed}
 
         unresolved = ambiguous + [
-            m.surface for m in proposal.mentions if m.surface not in resolutions
+            m.surface for m in proposed if m.surface not in resolutions
         ]
         # Drop blank surfaces before they can reach _lock_glossary. The proposal pass is
         # the one generative step here, and a model that returns an empty (or whitespace)
@@ -392,14 +469,25 @@ class ResolveStage:
         # the stored embedding if the surface turns out to be a new entity — so a new
         # entity is searchable by the very next chapter.
         vectors = await ctx.embed_provider.embed(unresolved, cls=Class.BATCH) if unresolved else []
+        if len(vectors)!=len(unresolved):
+            raise ValueError("embedding provider returned a mismatched vector count")
 
         created = 0
         for surface, vector in zip(unresolved, vectors):
-            candidates = await self._candidates(writer, ctx.novel.id, surface, vector)
-            entity_id, _target_term = await self._decide(
-                ctx, writer, surface, candidates, vector, text=text, chapter=envelope.chapter_index,
-                kind=kinds.get(surface) or self._kind_of(candidates) or UNKNOWN_KIND,
-            )
+            proposed_kind=kinds.get(surface)
+            candidates = await self._candidates(writer, ctx.novel.id, surface, vector,kind=proposed_kind)
+            kind=proposed_kind or self._kind_of(candidates) or UNKNOWN_KIND
+            contexts=_contexts_around(text,surface)
+            separately=len(contexts)>1 and bool(candidates)
+            decisions=[]
+            for context in contexts if separately else [(_context_around(text,surface))]:
+                current=await self._candidates(writer,ctx.novel.id,surface,vector,kind=proposed_kind)
+                decisions.append(await self._decide(ctx,writer,surface,current,vector,text=text,
+                    chapter=envelope.chapter_index,kind=kind,context=context))
+            ids={decision[0] for decision in decisions}
+            entity_id=next(iter(ids)) if len(ids)==1 else None
+            if len(ids)>1:
+                log.warning("resolve: repeated occurrences of %r disagree; leaving surface unbound",surface)
             if entity_id is None:
                 continue
             if not any(c.entity_id == entity_id for c in candidates):
@@ -409,19 +497,25 @@ class ResolveStage:
         state.resolutions = resolutions
         # Tracking only: RESOLVE must still run on retries against the live alias
         # index (§3.5). Its writes have completed before this success marker.
-        await mark_job_done(ctx.db, key)
+        await mark_job_done(
+            ctx.db,
+            novel_id=envelope.novel_id,
+            chapter_index=envelope.chapter_index,
+            stage=STAGE,
+            key=key,
+        )
         log.info(
             "stage %s chapter=%d scanned=%d proposed=%d resolved=%d created=%d",
             self.name,
             envelope.chapter_index,
             len(scanned),
-            len(proposal.mentions),
+            len(proposed),
             len(resolutions),
             created,
         )
 
     async def _candidates(
-        self, writer: GraphWriter, novel_id: str, surface: str, vector: list[float]
+        self, writer: GraphWriter, novel_id: str, surface: str, vector: list[float], *, kind: str | None
     ) -> list[Candidate]:
         """Exact matches first, then nearest neighbours, deduped.
 
@@ -429,9 +523,10 @@ class ResolveStage:
         acceptable here precisely because a candidate it misses is still caught by the
         exact lookup in the same step.
         """
-        rows: list[CandidateRow] = await writer.exact_matches(novel_id, surface)
+        rows: list[CandidateRow] = await writer.exact_matches(novel_id, surface,kind=kind)
         seen = {r.id for r in rows}
-        for row in await writer.similar_entities(novel_id, vector, k=CANDIDATE_K):
+        dense=await writer.similar_entities(novel_id, vector, k=CANDIDATE_K,kind=kind) if kind else []
+        for row in dense:
             if row.id not in seen:
                 seen.add(row.id)
                 rows.append(row)
@@ -452,6 +547,7 @@ class ResolveStage:
         text: str,
         chapter: int,
         kind: str,
+        context: str | None = None,
     ) -> tuple[str | None, str | None]:
         """Confirm a candidate or create a new entity. ``None`` means unresolved."""
         locked_target: str | None = None
@@ -460,7 +556,7 @@ class ResolveStage:
 
         completion = await ctx.provider.complete(
             build_disambiguation_user_prompt(
-                surface, candidates, context=_context_around(text, surface), locked_target=locked_target
+                surface, candidates, context=context or _context_around(text, surface), locked_target=locked_target
             ),
             system=build_disambiguation_system_prompt(
                 source_lang=ctx.novel.source_lang,
