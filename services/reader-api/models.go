@@ -1,6 +1,7 @@
 package main
 
 import "time"
+import "encoding/json"
 
 type Progress struct {
 	NovelID        string    `json:"novel_id"`
@@ -17,20 +18,23 @@ type EntitySummary struct {
 }
 
 type FactView struct {
-	Attribute        string  `json:"attribute"`
-	Value            string  `json:"value"`
-	ValidFromChapter int     `json:"valid_from_chapter"`
-	SourceChapter    int     `json:"source_chapter"`
-	Confidence       float32 `json:"confidence"`
+	Evidence         json.RawMessage `json:"evidence"`
+	Attribute        string          `json:"attribute"`
+	Value            string          `json:"value"`
+	ValidFromChapter int             `json:"valid_from_chapter"`
+	SourceChapter    int             `json:"source_chapter"`
+	Confidence       float32         `json:"confidence"`
 }
 
 type EntityView struct {
+	Knowledge KnowledgeStatus `json:"knowledge"`
 	EntitySummary
 	Aliases []string   `json:"aliases"`
 	Facts   []FactView `json:"facts"`
 }
 
 type EventView struct {
+	Evidence     json.RawMessage `json:"evidence"`
 	ID           int64           `json:"id"`
 	ChapterIndex int             `json:"chapter_index"`
 	Summary      string          `json:"summary"`
@@ -38,34 +42,39 @@ type EventView struct {
 }
 
 type RelationshipView struct {
-	ID               int64         `json:"id"`
-	Relation         string        `json:"relation"`
-	Direction        string        `json:"direction"`
-	Entity           EntitySummary `json:"entity"`
-	ValidFromChapter int           `json:"valid_from_chapter"`
-	ValidToChapter   *int          `json:"valid_to_chapter"`
-	SourceChapter    int           `json:"source_chapter"`
+	Evidence         json.RawMessage `json:"evidence"`
+	ID               int64           `json:"id"`
+	Relation         string          `json:"relation"`
+	Direction        string          `json:"direction"`
+	Entity           EntitySummary   `json:"entity"`
+	ValidFromChapter int             `json:"valid_from_chapter"`
+	ValidToChapter   *int            `json:"valid_to_chapter"`
+	SourceChapter    int             `json:"source_chapter"`
 }
 
 type EntityResponse struct {
-	NovelID string     `json:"novel_id"`
-	At      int        `json:"at"`
-	Entity  EntityView `json:"entity"`
+	Knowledge KnowledgeStatus `json:"knowledge"`
+	NovelID   string          `json:"novel_id"`
+	At        int             `json:"at"`
+	Entity    EntityView      `json:"entity"`
 }
 
 type WikiResponse struct {
-	NovelID  string          `json:"novel_id"`
-	At       int             `json:"at"`
-	Entities []EntitySummary `json:"entities"`
+	Knowledge KnowledgeStatus `json:"knowledge"`
+	NovelID   string          `json:"novel_id"`
+	At        int             `json:"at"`
+	Entities  []EntitySummary `json:"entities"`
 }
 
 type TimelineResponse struct {
-	NovelID string      `json:"novel_id"`
-	At      int         `json:"at"`
-	Events  []EventView `json:"events"`
+	Knowledge KnowledgeStatus `json:"knowledge"`
+	NovelID   string          `json:"novel_id"`
+	At        int             `json:"at"`
+	Events    []EventView     `json:"events"`
 }
 
 type RelationshipsResponse struct {
+	Knowledge     KnowledgeStatus    `json:"knowledge"`
 	NovelID       string             `json:"novel_id"`
 	At            int                `json:"at"`
 	EntityID      string             `json:"entity_id"`
@@ -81,9 +90,10 @@ type GlossaryTermView struct {
 }
 
 type GlossaryResponse struct {
-	NovelID string             `json:"novel_id"`
-	At      int                `json:"at"`
-	Terms   []GlossaryTermView `json:"terms"`
+	Knowledge KnowledgeStatus    `json:"knowledge"`
+	NovelID   string             `json:"novel_id"`
+	At        int                `json:"at"`
+	Terms     []GlossaryTermView `json:"terms"`
 }
 
 type ScrapeJobView struct {
@@ -113,9 +123,15 @@ type NovelListResponse struct {
 }
 
 type SpanView struct {
-	EntityID  string `json:"entity_id"`
-	CharStart int    `json:"char_start"`
-	CharEnd   int    `json:"char_end"`
+	SourceMentionID  *string         `json:"source_mention_id"`
+	Evidence         json.RawMessage `json:"evidence"`
+	MentionID        string          `json:"mention_id"`
+	KnownFromChapter *int            `json:"known_from_chapter"`
+	EnrichmentStatus string          `json:"enrichment_status"`
+	// NULL is a named mention whose identity is not yet linked; it still gets a card.
+	EntityID  *string `json:"entity_id"`
+	CharStart int     `json:"char_start"`
+	CharEnd   int     `json:"char_end"`
 }
 
 // ChapterListItem is one row of the chapter index — navigation/ingestion metadata only,
@@ -128,9 +144,15 @@ type ChapterListItem struct {
 	// Part of a multi-page source chapter (1-based; 1 for an ordinary chapter). Sites that
 	// paginate a chapter produce several rows sharing one SiteChapterNo, distinguished
 	// only by this.
-	Part        int    `json:"part"`
-	Status      string `json:"status"`
-	GraphStatus string `json:"graph_status,omitempty"`
+	Part               int                 `json:"part"`
+	Status             string              `json:"status"`
+	GraphStatus        string              `json:"graph_status,omitempty"`
+	TranslationWarning *TranslationWarning `json:"translation_warning"`
+}
+
+type TranslationWarning struct {
+	Code      string `json:"code"`
+	TermCount int    `json:"term_count"`
 }
 
 // ChapterListResponse pages the index: a scraped novel can hold thousands of chapters, so
@@ -206,7 +228,8 @@ type TranslationHealth struct {
 	ProvisionalTerms int `json:"provisional_terms"`
 	// FailedChapters were rejected by glossary validation, usually the same underlying
 	// cause seen from the other end.
-	FailedChapters int `json:"failed_chapters"`
+	FailedChapters  int `json:"failed_chapters"`
+	WarningChapters int `json:"warning_chapters"`
 	// Warn is the server's judgement, so every client applies the same threshold rather
 	// than each inventing one. Reason is empty when Warn is false.
 	Warn   bool   `json:"warn"`
@@ -215,17 +238,39 @@ type TranslationHealth struct {
 
 // ChapterView is what the store hands back; ChapterResponse is what the handler sends.
 // Kept separate so the store layer doesn't know about JSON tags.
+// ChapterFactView is one fact the reader learns IN this chapter — a fact whose
+// source_chapter is exactly this chapter index. It rides along on the chapter response so
+// the reader UI can mark the mention where a thing was last named as the place something
+// new was learned, without a per-entity round trip for every span on the page.
+//
+// Knowledge-time, not story-time (instructions.md §0.1): source_chapter is when the reader
+// LEARNS the fact, which is what "new in this chapter" means. ValidFromChapter is carried
+// for display only — it is when the fact became true in-story and says nothing about who
+// may see it.
+type ChapterFactView struct {
+	EntityID         string  `json:"entity_id"`
+	Attribute        string  `json:"attribute"`
+	Value            string  `json:"value"`
+	ValidFromChapter int     `json:"valid_from_chapter"`
+	SourceChapter    int     `json:"source_chapter"`
+	Confidence       float64 `json:"confidence"`
+}
+
 type ChapterView struct {
-	Text          string
-	Spans         []SpanView
-	HasNext       bool
-	SiteChapterNo string // "" when this chapter has none (a plain paste, not a scrape)
-	Part          int    // 1-based; 1 for an ordinary (non-paginated) chapter
+	Knowledge          KnowledgeStatus
+	Text               string
+	Spans              []SpanView
+	NewFacts           []ChapterFactView
+	HasNext            bool
+	SiteChapterNo      string // "" when this chapter has none (a plain paste, not a scrape)
+	Part               int    // 1-based; 1 for an ordinary (non-paginated) chapter
+	TranslationWarning *TranslationWarning
 }
 
 type ChapterResponse struct {
-	NovelID      string `json:"novel_id"`
-	ChapterIndex int    `json:"chapter_index"`
+	Knowledge    KnowledgeStatus `json:"knowledge"`
+	NovelID      string          `json:"novel_id"`
+	ChapterIndex int             `json:"chapter_index"`
 	// SiteChapterNo is the source site's own printed chapter label (e.g. "第4610章"),
 	// distinct from ChapterIndex — our own sequential counter for THIS ingestion batch,
 	// not the novel's overall chapter number (instructions.md §3.1: chapter_index is the
@@ -240,8 +285,13 @@ type ChapterResponse struct {
 	// gate protects against learning the future relative to what's been read, not against
 	// carrying already-learned knowledge backward. This is also the exact value the client
 	// must use as the hover-card cache key's `at` (PLAN.md §5.3/§6.1).
-	At      int        `json:"at"`
-	Text    string     `json:"text"`
-	Spans   []SpanView `json:"spans"`
-	HasNext bool       `json:"has_next"`
+	At    int        `json:"at"`
+	Text  string     `json:"text"`
+	Spans []SpanView `json:"spans"`
+	// NewFacts holds only facts first learned in THIS chapter, so the UI can badge the
+	// mention that introduced them. Facts learned earlier stay where they always were —
+	// on the entity card, fetched on demand.
+	NewFacts           []ChapterFactView   `json:"new_facts"`
+	HasNext            bool                `json:"has_next"`
+	TranslationWarning *TranslationWarning `json:"translation_warning"`
 }

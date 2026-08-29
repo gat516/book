@@ -196,7 +196,7 @@ func (f *fakeStore) ListGlossary(_ context.Context, _ string, at int) ([]Glossar
 }
 
 func (f *fakeStore) GetChapter(
-	_ context.Context, _ string, n int,
+	_ context.Context, _ string, n, at int,
 ) (ChapterView, error) {
 	f.lastChapterArg = n
 	return f.chapter, f.chapterErr
@@ -235,6 +235,7 @@ func request(t *testing.T, api *API, method, target, body, reader string) *httpt
 }
 
 func readyFake() *fakeStore {
+	entityID := testEntityID
 	return &fakeStore{
 		progress: Progress{
 			NovelID: testNovelID, ReaderID: "reader-a", CurrentChapter: 5, UpdatedAt: time.Now(),
@@ -253,7 +254,7 @@ func readyFake() *fakeStore {
 		relationships: []RelationshipView{},
 		chapter: ChapterView{
 			Text:    "chapter text",
-			Spans:   []SpanView{{EntityID: testEntityID, CharStart: 0, CharEnd: 7}},
+			Spans:   []SpanView{{EntityID: &entityID, CharStart: 0, CharEnd: 7}},
 			HasNext: true,
 		},
 		novels: []NovelSummary{{ID: testNovelID, Title: "Test Novel", SourceLang: "zh", TargetLang: "en"}},
@@ -459,6 +460,40 @@ func TestGetChapterBeyondProgressIsNotFound(t *testing.T) {
 		"/novels/"+testNovelID+"/chapter/6", "", "reader-a")
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestGetChapterIncludesUnlinkedMentions(t *testing.T) {
+	store := readyFake()
+	store.chapter.Spans = append(store.chapter.Spans, SpanView{CharStart: 8, CharEnd: 12})
+	api := &API{store: store}
+	response := request(t, api, http.MethodGet, "/novels/"+testNovelID+"/chapter/3", "", "reader-a")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
+	}
+	var body ChapterResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Spans) != 2 || body.Spans[1].EntityID != nil || body.Spans[0].EntityID == nil {
+		t.Fatalf("linked and unlinked mentions must both survive: %#v", body.Spans)
+	}
+}
+
+func TestGetChapterIncludesReadableTranslationWarning(t *testing.T) {
+	store := readyFake()
+	store.chapter.TranslationWarning = &TranslationWarning{Code: "locked_terms_missing", TermCount: 2}
+	response := request(t, &API{store: store}, http.MethodGet,
+		"/novels/"+testNovelID+"/chapter/3", "", "reader-a")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body ChapterResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.TranslationWarning == nil || body.TranslationWarning.TermCount != 2 {
+		t.Fatalf("warning=%#v", body.TranslationWarning)
 	}
 }
 
@@ -745,5 +780,25 @@ func TestDeleteGlossaryRequiresPrincipalAndProxiesBody(t *testing.T) {
 	response := request(t, api, http.MethodDelete, path, `{"at_chapter":2}`, "reader-a")
 	if response.Code != http.StatusOK || string(ingest.lastBody) != `{"at_chapter":2}` {
 		t.Fatalf("delete response: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func (f *fakeStore) KnowledgeStatus(context.Context, string, int, int) (KnowledgeStatus, error) {
+	return KnowledgeStatus{RevisionID: "test", Version: 1, Trusted: true, Status: "done"}, nil
+}
+
+func TestKnowledgeStatusUsesStoredProgress(t *testing.T) {
+	api := &API{store: readyFake()}
+	for _, tc := range []struct {
+		chapter string
+		status  int
+	}{{"2", 200}, {"5", 200}, {"6", 404}, {"-1", 400}, {"bad", 400}} {
+		response := request(t, api, http.MethodGet, "/novels/"+testNovelID+"/knowledge-status?chapter="+tc.chapter, "", "reader-a")
+		if response.Code != tc.status {
+			t.Fatalf("chapter=%s status=%d body=%s", tc.chapter, response.Code, response.Body.String())
+		}
+		if tc.status == 200 && !strings.Contains(response.Body.String(), `"revision_id":"test"`) {
+			t.Fatal("missing revision metadata")
+		}
 	}
 }

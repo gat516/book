@@ -35,6 +35,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}", a.getChapter)
 	mux.HandleFunc("GET /novels/{id}/chapters", a.getChapters)
 	mux.HandleFunc("GET /novels/{id}/progress", a.getProgress)
+	mux.HandleFunc("GET /novels/{id}/knowledge-status", a.getKnowledgeStatus)
 	mux.HandleFunc("GET /novels/{id}/pipeline", a.getPipelineStatus)
 	mux.HandleFunc("POST /novels/{id}/translate-ahead", a.postTranslateAhead)
 	mux.HandleFunc("PATCH /novels/{id}/settings", a.patchNovelSettings)
@@ -231,12 +232,17 @@ func (a *API) getEntity(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load entity")
 		return
 	}
-	writeJSON(w, http.StatusOK, EntityResponse{NovelID: novelID, At: at, Entity: entity})
+	writeJSON(w, http.StatusOK, EntityResponse{Knowledge: entity.Knowledge, NovelID: novelID, At: at, Entity: entity})
 }
 
 func (a *API) getWiki(w http.ResponseWriter, r *http.Request) {
 	_, novelID, at, ok := a.gate(w, r)
 	if !ok {
+		return
+	}
+	knowledge, knowledgeErr := a.store.KnowledgeStatus(r.Context(), novelID, at, at)
+	if knowledgeErr != nil {
+		writeError(w, http.StatusInternalServerError, "could not load knowledge status")
 		return
 	}
 	entities, err := a.store.ListWiki(r.Context(), novelID, at)
@@ -245,12 +251,20 @@ func (a *API) getWiki(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load wiki")
 		return
 	}
-	writeJSON(w, http.StatusOK, WikiResponse{NovelID: novelID, At: at, Entities: entities})
+	if !a.knowledgeUnchanged(w, r, novelID, at, knowledge) {
+		return
+	}
+	writeJSON(w, http.StatusOK, WikiResponse{Knowledge: knowledge, NovelID: novelID, At: at, Entities: entities})
 }
 
 func (a *API) getTimeline(w http.ResponseWriter, r *http.Request) {
 	_, novelID, at, ok := a.gate(w, r)
 	if !ok {
+		return
+	}
+	knowledge, knowledgeErr := a.store.KnowledgeStatus(r.Context(), novelID, at, at)
+	if knowledgeErr != nil {
+		writeError(w, http.StatusInternalServerError, "could not load knowledge status")
 		return
 	}
 	events, err := a.store.ListTimeline(r.Context(), novelID, at)
@@ -259,7 +273,10 @@ func (a *API) getTimeline(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load timeline")
 		return
 	}
-	writeJSON(w, http.StatusOK, TimelineResponse{NovelID: novelID, At: at, Events: events})
+	if !a.knowledgeUnchanged(w, r, novelID, at, knowledge) {
+		return
+	}
+	writeJSON(w, http.StatusOK, TimelineResponse{Knowledge: knowledge, NovelID: novelID, At: at, Events: events})
 }
 
 func (a *API) getRelationships(w http.ResponseWriter, r *http.Request) {
@@ -272,6 +289,11 @@ func (a *API) getRelationships(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid entity id")
 		return
 	}
+	knowledge, knowledgeErr := a.store.KnowledgeStatus(r.Context(), novelID, at, at)
+	if knowledgeErr != nil {
+		writeError(w, http.StatusInternalServerError, "could not load knowledge status")
+		return
+	}
 	relationships, err := a.store.ListRelationships(r.Context(), novelID, entityID, at)
 	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "entity not found")
@@ -282,7 +304,10 @@ func (a *API) getRelationships(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load relationships")
 		return
 	}
-	writeJSON(w, http.StatusOK, RelationshipsResponse{
+	if !a.knowledgeUnchanged(w, r, novelID, at, knowledge) {
+		return
+	}
+	writeJSON(w, http.StatusOK, RelationshipsResponse{Knowledge: knowledge,
 		NovelID: novelID, At: at, EntityID: entityID, Relationships: relationships,
 	})
 }
@@ -308,7 +333,7 @@ func (a *API) getChapter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chapter, err := a.store.GetChapter(r.Context(), novelID, n)
+	chapter, err := a.store.GetChapter(r.Context(), novelID, n, progress)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		writeError(w, http.StatusNotFound, "chapter not found")
@@ -319,14 +344,17 @@ func (a *API) getChapter(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load chapter")
 	default:
 		writeJSON(w, http.StatusOK, ChapterResponse{
-			NovelID:       novelID,
-			ChapterIndex:  n,
-			At:            progress,
-			Text:          chapter.Text,
-			Spans:         chapter.Spans,
-			HasNext:       chapter.HasNext,
-			SiteChapterNo: chapter.SiteChapterNo,
-			Part:          chapter.Part,
+			Knowledge:          chapter.Knowledge,
+			NovelID:            novelID,
+			ChapterIndex:       n,
+			At:                 progress,
+			Text:               chapter.Text,
+			Spans:              chapter.Spans,
+			NewFacts:           chapter.NewFacts,
+			HasNext:            chapter.HasNext,
+			SiteChapterNo:      chapter.SiteChapterNo,
+			Part:               chapter.Part,
+			TranslationWarning: chapter.TranslationWarning,
 		})
 	}
 }
@@ -734,13 +762,21 @@ func (a *API) getGlossary(w http.ResponseWriter, r *http.Request) {
 	if requested != nil {
 		at = min(at, *requested)
 	}
+	knowledge, knowledgeErr := a.store.KnowledgeStatus(r.Context(), novelID, at, at)
+	if knowledgeErr != nil {
+		writeError(w, http.StatusInternalServerError, "could not load knowledge status")
+		return
+	}
 	terms, err := a.store.ListGlossary(r.Context(), novelID, at)
 	if err != nil {
 		log.Printf("list glossary: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load glossary")
 		return
 	}
-	writeJSON(w, http.StatusOK, GlossaryResponse{NovelID: novelID, At: at, Terms: terms})
+	if !a.knowledgeUnchanged(w, r, novelID, at, knowledge) {
+		return
+	}
+	writeJSON(w, http.StatusOK, GlossaryResponse{Knowledge: knowledge, NovelID: novelID, At: at, Terms: terms})
 }
 
 // patchGlossaryTerm proxies a human correction to ingest-api (see ingest.go). Gated with

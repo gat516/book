@@ -196,11 +196,15 @@ func seedIntegrationFixture(t *testing.T, admin *pgxpool.Pool) integrationFixtur
 			`DELETE FROM alias WHERE entity_id IN (SELECT id FROM entity WHERE novel_id = $1)`,
 			`DELETE FROM entity WHERE novel_id = $1`,
 			`DELETE FROM chapter WHERE novel_id = $1`,
+			`UPDATE novel SET active_graph_revision=NULL WHERE id=$1`,
+			`DELETE FROM graph_revision WHERE novel_id=$1`,
 			`DELETE FROM novel WHERE id = $1`,
 		} {
 			_, _ = admin.Exec(context.Background(), statement, fixture.novelID)
 		}
 		_, _ = admin.Exec(context.Background(), `DELETE FROM entity WHERE novel_id = $1`, fixture.otherNovelID)
+		_, _ = admin.Exec(context.Background(), `UPDATE novel SET active_graph_revision=NULL WHERE id=$1`, fixture.otherNovelID)
+		_, _ = admin.Exec(context.Background(), `DELETE FROM graph_revision WHERE novel_id=$1`, fixture.otherNovelID)
 		_, _ = admin.Exec(context.Background(), `DELETE FROM novel WHERE id = $1`, fixture.otherNovelID)
 	})
 	return fixture
@@ -246,7 +250,7 @@ func TestSpoilerGateEndToEnd(t *testing.T) {
 		},
 		{
 			name: "timeline", target: "/novels/" + fixture.novelID + "/timeline?at=220",
-			visible: "A visible event", forbidden: []string{"A future event", "Future Identity"},
+			visible: `"events":[]`, forbidden: []string{"A visible event", "A future event", "Future Identity"},
 		},
 		{
 			name: "relationships", target: "/novels/" + fixture.novelID + "/relationships/" + fixture.heroID + "?at=220",
@@ -296,7 +300,7 @@ func TestSpoilerGateEndToEnd(t *testing.T) {
 	}
 
 	events, err := store.ListTimeline(ctx, fixture.novelID, 220)
-	if err != nil || len(events) != 1 || len(events[0].Entities) != 1 || events[0].Entities[0].ID != fixture.heroID {
+	if err != nil || len(events) != 0 {
 		t.Fatalf("timeline filtering wrong: %#v %v", events, err)
 	}
 	relationships, err := store.ListRelationships(ctx, fixture.novelID, fixture.heroID, 220)
@@ -434,6 +438,8 @@ func TestNextExistsRegardlessOfTranslationStatusAndGlossaryDeletionIsHidden(t *t
 	t.Cleanup(func() {
 		admin.Exec(ctx, `DELETE FROM glossary WHERE novel_id=$1`, novelID)
 		admin.Exec(ctx, `DELETE FROM chapter WHERE novel_id=$1`, novelID)
+		admin.Exec(ctx, `UPDATE novel SET active_graph_revision=NULL WHERE id=$1`, novelID)
+		admin.Exec(ctx, `DELETE FROM graph_revision WHERE novel_id=$1`, novelID)
 		admin.Exec(ctx, `DELETE FROM novel WHERE id=$1`, novelID)
 	})
 	if _, err := admin.Exec(ctx, `INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status) VALUES ($1,2,'nav-test','test','{}','ingested')`, novelID); err != nil {
@@ -469,6 +475,8 @@ func TestReadableTranslationSurvivesGraphFailure(t *testing.T) {
 	t.Cleanup(func() {
 		admin.Exec(ctx, `DELETE FROM reader_progress WHERE novel_id=$1`, novelID)
 		admin.Exec(ctx, `DELETE FROM chapter WHERE novel_id=$1`, novelID)
+		admin.Exec(ctx, `UPDATE novel SET active_graph_revision=NULL WHERE id=$1`, novelID)
+		admin.Exec(ctx, `DELETE FROM graph_revision WHERE novel_id=$1`, novelID)
 		admin.Exec(ctx, `DELETE FROM novel WHERE id=$1`, novelID)
 	})
 	if _, err := admin.Exec(ctx, `INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status,translation_ready) VALUES ($1,1,'ready','raw','{}','error',true),($1,2,'failed','raw','{}','error',false)`, novelID); err != nil {
@@ -501,6 +509,8 @@ func TestGlossaryEntityLinksRespectKnowledgeTime(t *testing.T) {
 	t.Cleanup(func() {
 		admin.Exec(ctx, `DELETE FROM glossary WHERE novel_id=$1`, novelID)
 		admin.Exec(ctx, `DELETE FROM entity WHERE novel_id=$1`, novelID)
+		admin.Exec(ctx, `UPDATE novel SET active_graph_revision=NULL WHERE id=$1`, novelID)
+		admin.Exec(ctx, `DELETE FROM graph_revision WHERE novel_id=$1`, novelID)
 		admin.Exec(ctx, `DELETE FROM novel WHERE id=$1`, novelID)
 	})
 	if _, err := admin.Exec(ctx, `INSERT INTO entity(id,novel_id,canonical,kind,first_seen_chapter) VALUES ($1,$3,'visible','character',1), ($2,$3,'future','character',10)`, visibleID, futureID, novelID); err != nil {

@@ -35,7 +35,8 @@ type ReaderStore interface {
 	ListWiki(context.Context, string, int) ([]EntitySummary, error)
 	ListTimeline(context.Context, string, int) ([]EventView, error)
 	ListRelationships(context.Context, string, string, int) ([]RelationshipView, error)
-	GetChapter(context.Context, string, int) (ChapterView, error)
+	GetChapter(context.Context, string, int, int) (ChapterView, error)
+	KnowledgeStatus(context.Context, string, int, int) (KnowledgeStatus, error)
 	ListChapters(context.Context, string, int, int) ([]ChapterListItem, int, error)
 	PipelineStatus(context.Context, string) (PipelineStatusResponse, error)
 	TranslationPreview(context.Context, string, int) (string, bool, string, error)
@@ -223,7 +224,8 @@ func (s *Store) ListChapters(ctx context.Context, novelID string, limit, offset 
 		`SELECT chapter_index, source_meta->>'site_chapter_no',
 		        COALESCE((source_meta->>'part')::int, 1),
 		        CASE WHEN translation_ready THEN 'done' ELSE status END,
-		        CASE WHEN status='done' THEN 'done' WHEN status='error' THEN 'error' ELSE 'pending' END
+		        CASE WHEN status='done' THEN 'done' WHEN status='error' THEN 'error' ELSE 'pending' END,
+		        translation_warning_code,translation_warning_count
 		 FROM chapter WHERE novel_id = $1
 		 ORDER BY chapter_index
 		 LIMIT $2 OFFSET $3`,
@@ -237,11 +239,16 @@ func (s *Store) ListChapters(ctx context.Context, novelID string, limit, offset 
 	for rows.Next() {
 		var item ChapterListItem
 		var siteChapterNo *string
-		if err := rows.Scan(&item.ChapterIndex, &siteChapterNo, &item.Part, &item.Status, &item.GraphStatus); err != nil {
+		var warningCode *string
+		var warningCount int
+		if err := rows.Scan(&item.ChapterIndex, &siteChapterNo, &item.Part, &item.Status, &item.GraphStatus, &warningCode, &warningCount); err != nil {
 			return nil, 0, err
 		}
 		if siteChapterNo != nil {
 			item.SiteChapterNo = *siteChapterNo
+		}
+		if warningCode != nil {
+			item.TranslationWarning = &TranslationWarning{Code: *warningCode, TermCount: warningCount}
 		}
 		chapters = append(chapters, item)
 	}
@@ -369,8 +376,10 @@ func (s *Store) TranslationHealth(ctx context.Context, novelID string) (Translat
 
 	// chapter lives on the progress pool, same as everywhere else that reads it.
 	if err := s.progressDB.QueryRow(ctx,
-		`SELECT count(*) FROM chapter WHERE novel_id = $1 AND status = 'error'`, novelID,
-	).Scan(&health.FailedChapters); err != nil {
+		`SELECT count(*) FILTER (WHERE status = 'error' AND NOT translation_ready),
+		        count(*) FILTER (WHERE translation_warning_code IS NOT NULL)
+		 FROM chapter WHERE novel_id = $1`, novelID,
+	).Scan(&health.FailedChapters, &health.WarningChapters); err != nil {
 		return TranslationHealth{}, fmt.Errorf("count failed chapters: %w", err)
 	}
 
@@ -380,6 +389,9 @@ func (s *Store) TranslationHealth(ctx context.Context, novelID string) (Translat
 	case health.FailedChapters >= healthFailedChapters:
 		health.Warn = true
 		health.Reason = "several chapters were rejected because the translation didn't use the locked names consistently"
+	case health.WarningChapters > 0:
+		health.Warn = true
+		health.Reason = "some readable chapters could not preserve every locked name"
 	case observed >= healthMinTermsObserved &&
 		float64(health.UnstableTerms) >= float64(observed)*healthUnstableFraction:
 		health.Warn = true
@@ -403,7 +415,7 @@ func (s *Store) GetNovel(ctx context.Context, novelID string) (NovelSummary, err
 func (s *Store) withReaderTx(
 	ctx context.Context, novelID string, at int, operation func(pgx.Tx) error,
 ) error {
-	tx, err := s.readerDB.Begin(ctx)
+	tx, err := s.readerDB.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
 		return err
 	}
@@ -427,6 +439,11 @@ func (s *Store) GetEntity(
 ) (EntityView, error) {
 	view := EntityView{Aliases: []string{}, Facts: []FactView{}}
 	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
+		var err error
+		view.Knowledge, err = knowledgeInTx(ctx, tx, at)
+		if err != nil {
+			return err
+		}
 		if err := tx.QueryRow(ctx,
 			`SELECT id::text, canonical, kind, first_seen_chapter
 			 FROM entity
@@ -461,13 +478,13 @@ func (s *Store) GetEntity(
 		factRows, err := tx.Query(ctx,
 			`WITH visible AS (
 			   SELECT id, attribute, value, kind, supersedes, valid_from_chapter,
-			          source_chapter, confidence
+			          source_chapter, confidence, evidence_id
 			   FROM fact
 			   WHERE novel_id = $1 AND entity_id = $2
 			     AND source_chapter <= $3 AND valid_from_chapter <= $3
 			 )
 			 SELECT DISTINCT ON (f.attribute)
-			        f.attribute, f.value, f.valid_from_chapter, f.source_chapter, f.confidence
+			        f.attribute, f.value, f.valid_from_chapter, f.source_chapter, f.confidence, COALESCE((SELECT jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash,'char_start',v.char_start,'char_end',v.char_end) FROM graph_evidence v WHERE v.id=f.evidence_id),'null'::jsonb)
 			 FROM visible f
 			 WHERE f.kind <> 'retraction'
 			   AND NOT EXISTS (SELECT 1 FROM visible successor WHERE successor.supersedes = f.id)
@@ -481,7 +498,7 @@ func (s *Store) GetEntity(
 			var fact FactView
 			if err := factRows.Scan(
 				&fact.Attribute, &fact.Value, &fact.ValidFromChapter,
-				&fact.SourceChapter, &fact.Confidence,
+				&fact.SourceChapter, &fact.Confidence, &fact.Evidence,
 			); err != nil {
 				return err
 			}
@@ -532,7 +549,8 @@ func (s *Store) ListGlossary(ctx context.Context, novelID string, at int) ([]Glo
 		rows, err := tx.Query(ctx,
 			`SELECT g.source_term, g.target_term, g.version, g.locked_at_chapter, e.id::text
 			 FROM glossary g
-			 LEFT JOIN entity e ON e.id = g.entity_id AND e.novel_id = g.novel_id
+			 LEFT JOIN glossary_binding gb ON gb.novel_id=g.novel_id AND gb.source_term=g.source_term
+             LEFT JOIN entity e ON e.id = COALESCE(gb.entity_id,g.entity_id) AND e.novel_id = g.novel_id
 			   AND e.first_seen_chapter <= $2
 			 WHERE g.novel_id = $1 AND g.locked_at_chapter <= $2 AND NOT g.deleted
 			 ORDER BY g.source_term`, novelID, at)
@@ -559,7 +577,7 @@ func (s *Store) ListTimeline(ctx context.Context, novelID string, at int) ([]Eve
 	events := []EventView{}
 	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT id, chapter_index, summary, entity_ids
+			`SELECT id, chapter_index, summary, entity_ids, COALESCE((SELECT jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash) FROM graph_evidence v WHERE v.id=event.evidence_id),'null'::jsonb)
 			 FROM event
 			 WHERE novel_id = $1 AND chapter_index <= $2
 			 ORDER BY chapter_index, id`, novelID, at)
@@ -574,7 +592,7 @@ func (s *Store) ListTimeline(ctx context.Context, novelID string, at int) ([]Eve
 		for rows.Next() {
 			row := eventRow{event: EventView{Entities: []EntitySummary{}}}
 			if err := rows.Scan(
-				&row.event.ID, &row.event.ChapterIndex, &row.event.Summary, &row.ids,
+				&row.event.ID, &row.event.ChapterIndex, &row.event.Summary, &row.ids, &row.event.Evidence,
 			); err != nil {
 				rows.Close()
 				return err
@@ -641,7 +659,7 @@ func (s *Store) ListRelationships(
 			`SELECT edge.id, edge.rel_type,
 			        CASE WHEN edge.src_id = $2 THEN 'outgoing' ELSE 'incoming' END,
 			        other.id::text, other.canonical, other.kind, other.first_seen_chapter,
-			        edge.valid_from_chapter, edge.valid_to_chapter, edge.source_chapter
+			        edge.valid_from_chapter, edge.valid_to_chapter, edge.source_chapter, COALESCE((SELECT jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash,'char_start',v.char_start,'char_end',v.char_end) FROM graph_evidence v WHERE v.id=edge.evidence_id),'null'::jsonb)
 			 FROM edge
 			 JOIN entity other ON other.id = CASE
 			   WHEN edge.src_id = $2 THEN edge.dst_id ELSE edge.src_id END
@@ -663,7 +681,7 @@ func (s *Store) ListRelationships(
 				&relationship.Entity.ID, &relationship.Entity.Canonical,
 				&relationship.Entity.Kind, &relationship.Entity.FirstSeenChapter,
 				&relationship.ValidFromChapter, &relationship.ValidToChapter,
-				&relationship.SourceChapter,
+				&relationship.SourceChapter, &relationship.Evidence,
 			); err != nil {
 				return err
 			}
@@ -687,20 +705,70 @@ func (s *Store) readObject(ctx context.Context, key string) (string, error) {
 	return string(body), nil
 }
 
+// newFactsInTx loads the facts whose source_chapter is exactly this chapter — what the
+// reader learns HERE, as opposed to everything they now know. It runs inside
+// withReaderTx so the visible set is gated on reader_chapter() like every other read path
+// (§0.2): being allowed to read chapter n is not on its own permission to see a fact
+// carrying a later source_chapter, and this must not become the one path that assumes it.
+//
+// Gating is on source_chapter (knowledge-time). valid_from_chapter appears in the visible
+// set only to match the entity card's display semantics — story-time never authorizes.
+//
+// Supersession and retraction are applied exactly as GetEntity applies them, so a fact
+// introduced here but already overturned by a chapter the reader has since passed does not
+// resurface as news. The alternative — badging it anyway — would contradict the entity
+// card the badge links to.
+func newFactsInTx(ctx context.Context, tx pgx.Tx, novelID string, n int, view *ChapterView) error {
+	rows, err := tx.Query(ctx,
+		`WITH visible AS (
+		   SELECT id, entity_id, attribute, value, kind, supersedes,
+		          valid_from_chapter, source_chapter, confidence
+		   FROM fact
+		   WHERE novel_id = $1
+		     AND source_chapter <= reader_chapter() AND valid_from_chapter <= reader_chapter()
+		 )
+		 SELECT DISTINCT ON (f.entity_id, f.attribute)
+		        f.entity_id::text, f.attribute, f.value, f.valid_from_chapter,
+		        f.source_chapter, f.confidence
+		 FROM visible f
+		 WHERE f.source_chapter = $2
+		   AND f.entity_id IS NOT NULL
+		   AND f.kind <> 'retraction'
+		   AND NOT EXISTS (SELECT 1 FROM visible successor WHERE successor.supersedes = f.id)
+		 ORDER BY f.entity_id, f.attribute, f.valid_from_chapter DESC,
+		          f.source_chapter DESC, f.confidence DESC, f.id DESC`,
+		novelID, n)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var fact ChapterFactView
+		if err := rows.Scan(&fact.EntityID, &fact.Attribute, &fact.Value,
+			&fact.ValidFromChapter, &fact.SourceChapter, &fact.Confidence); err != nil {
+			return err
+		}
+		view.NewFacts = append(view.NewFacts, fact)
+	}
+	return rows.Err()
+}
+
 // GetChapter serves the chapter body + display spans for the reader pane. The novel-id/
 // progress cap is enforced by the caller (handler) before this is invoked; the span
 // query below is additionally RLS-gated (novel_id/chapter_index <= reader_chapter())
 // via withReaderTx, same defense-in-depth every other read gets.
-func (s *Store) GetChapter(ctx context.Context, novelID string, n int) (ChapterView, error) {
+func (s *Store) GetChapter(ctx context.Context, novelID string, n, at int) (ChapterView, error) {
 	var rawURI, translatedURI, siteChapterNo *string
 	var status string
+	var warningCode *string
+	var warningCount int
 	var part int
 	err := s.progressDB.QueryRow(ctx,
 		`SELECT raw_uri, translated_uri, CASE WHEN translation_ready THEN 'done' ELSE status END, source_meta->>'site_chapter_no',
-		        COALESCE((source_meta->>'part')::int, 1)
+		        COALESCE((source_meta->>'part')::int, 1),translation_warning_code,translation_warning_count
 		 FROM chapter WHERE novel_id = $1 AND chapter_index = $2`,
 		novelID, n,
-	).Scan(&rawURI, &translatedURI, &status, &siteChapterNo, &part)
+	).Scan(&rawURI, &translatedURI, &status, &siteChapterNo, &part, &warningCode, &warningCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ChapterView{}, ErrNotFound
 	}
@@ -724,14 +792,33 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n int) (ChapterV
 		return ChapterView{}, err
 	}
 
-	view := ChapterView{Text: text, Spans: []SpanView{}, Part: part}
+	view := ChapterView{Text: text, Spans: []SpanView{}, NewFacts: []ChapterFactView{}, Part: part}
+	if warningCode != nil {
+		view.TranslationWarning = &TranslationWarning{Code: *warningCode, TermCount: warningCount}
+	}
 	if siteChapterNo != nil {
 		view.SiteChapterNo = *siteChapterNo
 	}
-	if err := s.withReaderTx(ctx, novelID, n, func(tx pgx.Tx) error {
+	if err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
+		var err error
+		view.Knowledge, err = knowledgeInTx(ctx, tx, n)
+		if err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx,
-			`SELECT entity_id::text, char_start, char_end FROM mention_span
-			 WHERE novel_id = $1 AND chapter_index = $2 ORDER BY char_start`,
+			`SELECT d.id::text, e.id::text,d.char_start,d.char_end,b.known_from_chapter,d.mention_id::text, COALESCE((SELECT jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash) FROM graph_evidence v WHERE v.id=COALESCE(b.evidence_id,d.evidence_id)),'null'::jsonb)
+             FROM display_mention d
+             LEFT JOIN LATERAL (SELECT entity_id,known_from_chapter,evidence_id FROM mention_binding
+               WHERE revision_id=d.revision_id AND mention_id=d.mention_id
+               AND known_from_chapter<=reader_chapter() ORDER BY known_from_chapter DESC LIMIT 1) b ON true
+             LEFT JOIN entity e ON e.id=b.entity_id
+             WHERE d.novel_id=$1 AND d.chapter_index=$2
+             UNION ALL
+             SELECT 'legacy:'||m.id::text,e.id::text,m.char_start,m.char_end,NULL::int,NULL::text,'null'::jsonb
+             FROM mention_span m LEFT JOIN entity e ON e.id=m.entity_id
+             WHERE m.novel_id=$1 AND m.chapter_index=$2
+               AND NOT EXISTS(SELECT 1 FROM display_mention d WHERE d.novel_id=$1 AND d.chapter_index=$2)
+             ORDER BY 3`,
 			novelID, n)
 		if err != nil {
 			return err
@@ -739,12 +826,23 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n int) (ChapterV
 		defer rows.Close()
 		for rows.Next() {
 			var span SpanView
-			if err := rows.Scan(&span.EntityID, &span.CharStart, &span.CharEnd); err != nil {
+			if err := rows.Scan(&span.MentionID, &span.EntityID, &span.CharStart, &span.CharEnd, &span.KnownFromChapter, &span.SourceMentionID, &span.Evidence); err != nil {
 				return err
+			}
+			span.EnrichmentStatus = view.Knowledge.Status
+			if span.EnrichmentStatus == "done" || span.EnrichmentStatus == "ready" {
+				if span.EntityID == nil {
+					span.EnrichmentStatus = "unresolved"
+				} else {
+					span.EnrichmentStatus = "linked"
+				}
 			}
 			view.Spans = append(view.Spans, span)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return newFactsInTx(ctx, tx, novelID, n, &view)
 	}); err != nil {
 		return ChapterView{}, err
 	}
