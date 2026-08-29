@@ -1,0 +1,193 @@
+{
+  "revision": "69b05c2a-d282-4a86-9a30-338a83c1170f",
+  "generation": 1,
+  "version": 2,
+  "model": {
+    "name": "qwen2.5:7b-instruct",
+    "digest": "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
+    "num_ctx": 16384,
+    "runtime": {
+      "stream": true,
+      "version": "stream-admission-v1",
+      "idle_timeout_seconds": 900.0,
+      "total_timeout_seconds": 1800.0
+    },
+    "provider": "ollama",
+    "num_predict": 4096
+  },
+  "ontology": {
+    "kinds": [
+      "character",
+      "sect",
+      "realm",
+      "technique",
+      "artifact",
+      "beast",
+      "place",
+      "group"
+    ],
+    "relations": [
+      "member_of",
+      "ally",
+      "enemy",
+      "mentor",
+      "family",
+      "located_in"
+    ],
+    "attributes": [
+      {
+        "name": "rank",
+        "kinds": [
+          "character"
+        ]
+      },
+      {
+        "name": "status",
+        "kinds": [
+          "character"
+        ]
+      },
+      {
+        "name": "affiliation",
+        "kinds": [
+          "character"
+        ]
+      },
+      {
+        "name": "state",
+        "kinds": [
+          "sect"
+        ]
+      },
+      {
+        "name": "description",
+        "kinds": [
+          "character",
+          "sect",
+          "realm",
+          "technique",
+          "artifact",
+          "beast",
+          "place",
+          "group"
+        ]
+      }
+    ]
+  },
+  "evaluation": {
+    "failures": [
+      "Early stop: even perfect remaining links cannot reach 90% unambiguous recall."
+    ],
+    "reviewed": true,
+    "latency_note": "Resume/cache wall time; not a cold model latency comparison.",
+    "tested_facts": 0,
+    "benchmark_key": "1365016e20caceb4d499227c1cd187bfa36e6c5000631c202e9bbeb401fedac9",
+    "early_stopped": true,
+    "runtime_calls": [
+      {
+        "cache_key": "473c3d160f47098ec1f9c4251d4f9a344ed8eb2b259fe34309197ce61aa489ae",
+        "eval_seconds": 142.681246,
+        "input_tokens": 1635,
+        "load_seconds": 10.971719239,
+        "output_tokens": 477,
+        "total_seconds": 412.8700292,
+        "request_seconds": 412.8745305119992,
+        "first_token_seconds": 270.19394821600144,
+        "prompt_eval_seconds": 259.187453,
+        "admission_wait_seconds": 0.0
+      }
+    ],
+    "evidence_valid": false,
+    "fact_precision": null,
+    "link_precision": null,
+    "reviewed_facts": 30,
+    "tested_mentions": 34,
+    "run_wall_seconds": 413.1638739310001,
+    "merge_regressions": 0,
+    "reviewed_mentions": 64,
+    "recall_upper_bound": 0.4603174603174603,
+    "unambiguous_recall": 0.0,
+    "model_inference_seconds": 412.8763530769975,
+    "fact_verification_status": "skipped after identity failure",
+    "publication_review_complete": false
+  },
+  "saved_prose_unchanged": true,
+  "completed": 1,
+  "total_jobs": 4,
+  "mention_coverage": {
+    "total": 0,
+    "linked": 0,
+    "unresolved": 0
+  },
+  "claims": [],
+  "failures": [
+    {
+      "chapter": 2,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 3,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 4,
+      "state": "pending",
+      "error": null
+    }
+  ],
+  "rejected": [
+    {
+      "chapter": 1,
+      "proposals": {
+        "names": [
+          {
+            "kind": "character",
+            "named": true,
+            "quote": "\"嘶！你小子命可真大！\" 黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂龇牙咧嘴，\"快走快走！老子宁愿再打十场群架，也不想再继续呆这儿了！真特娘的要命！\"",
+            "surface": "黄少天"
+          },
+          {
+            "kind": "character",
+            "named": true,
+            "quote": "\"嗯。\" 凌峰眸中阴阳鱼浮动，\"我已察觉到了！是啸牙冒险团和裁决学院的人！我们没必要介入，绕过去！\"",
+            "surface": "凌峰"
+          },
+          {
+            "kind": "character",
+            "named": true,
+            "quote": "\"按照这个速度，不出意外的话，或许我们今天日落前就能进入九神廷！\" 姜梦月眸中闪过一丝激动之色。",
+            "surface": "姜梦月"
+          },
+          {
+            "kind": "character",
+            "named": true,
+            "quote": "“君主大人，前方似乎有两股势力在交战！” 阿采手中那眼球锁链忽然轻轻颤动起来，她目光一凝，沉声道。",
+            "surface": "阿采"
+          },
+          {
+            "kind": "character",
+            "named": true,
+            "quote": "“噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！” 诺顿·威尔森苍老的声音通过扩音装置传来。",
+            "surface": "诺顿·威尔森"
+          },
+          {
+            "kind": "character",
+            "named": true,
+            "quote": "一个阴冷的笑声传来，却见啸牙冒险团之中，那为首者摘下兽牙面具，露出满是缝合线的脸。此人，正是啸牙冒险团团长，\"缝尸鬼\"莫雷。",
+            "surface": "莫雷"
+          }
+        ]
+      },
+      "rejection": "No source-valid named mentions; no identity or fact publication attempted."
+    }
+  ],
+  "identity_changes": [],
+  "glossary_unchanged": true,
+  "progress_matches_snapshot": true,
+  "progress_note": "Repair never writes reading progress; ordinary reading may advance it during rebuild.",
+  "evidence_valid": true,
+  "activation_eligible": false,
+  "review_hash": "e6a3630d7044d25e59a50c6abd01b2dd887b218a672cc0a9cc82b46199142d14"
+}

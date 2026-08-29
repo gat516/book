@@ -1,0 +1,49 @@
+{
+  "note": "Diagnostic normalization only; no evidence acceptance, graph bindings or publications were changed.",
+  "proposals": [
+    {
+      "surface": "黄少天",
+      "quote_exact": false,
+      "matches_after_whitespace_and_quote_normalization": true
+    },
+    {
+      "surface": "凌峰",
+      "quote_exact": false,
+      "matches_after_whitespace_and_quote_normalization": true
+    },
+    {
+      "surface": "姜梦月",
+      "quote_exact": false,
+      "matches_after_whitespace_and_quote_normalization": true
+    },
+    {
+      "surface": "阿采",
+      "quote_exact": false,
+      "matches_after_whitespace_and_quote_normalization": false
+    },
+    {
+      "surface": "诺顿·威尔森",
+      "quote_exact": false,
+      "matches_after_whitespace_and_quote_normalization": false
+    },
+    {
+      "surface": "莫雷",
+      "quote_exact": false,
+      "matches_after_whitespace_and_quote_normalization": true
+    }
+  ],
+  "reviewed_chapter_one_mentions": 34,
+  "cases_with_proposed_surface": 13,
+  "missing_reviewed_surfaces": [
+    "九神廷",
+    "啸牙冒险团",
+    "噬梦冒险团",
+    "威尔森家族",
+    "恐惧神殿",
+    "梦魇神殿",
+    "裁决学院",
+    "诺顿",
+    "阴山",
+    "陨落狱"
+  ]
+}

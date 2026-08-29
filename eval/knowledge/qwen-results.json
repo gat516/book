@@ -1,0 +1,614 @@
+{
+  "revision": "a74d1460-c6da-4ad1-a101-1d39801a14af",
+  "model": {
+    "provider": "ollama",
+    "name": "qwen2.5:7b-instruct",
+    "digest": "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
+    "num_ctx": 16384,
+    "num_predict": 4096
+  },
+  "metrics": {
+    "benchmark_key": "f90f4fecb1321e8948e2dd1dfc28237dd061476a6d70e3cb00e4f7d55c00198b",
+    "reviewed": true,
+    "reviewed_mentions": 64,
+    "reviewed_facts": 30,
+    "tested_mentions": 0,
+    "tested_facts": 0,
+    "link_precision": null,
+    "unambiguous_recall": 0.0,
+    "fact_precision": null,
+    "merge_regressions": 0,
+    "evidence_valid": false,
+    "publication_review_complete": false,
+    "failures": [
+      "ReadTimeout: "
+    ],
+    "early_stopped": true,
+    "fact_verification_status": "skipped after identity failure",
+    "run_wall_seconds": 300.2597524390003,
+    "model_inference_seconds": null,
+    "latency_note": "Llama resumed cached discovery; Qwen request timed out at 300 seconds. Neither is a comparable completed cold inference measurement.",
+    "recall_upper_bound": 1.0,
+    "prompt_version": "evidence-v2"
+  },
+  "mentions": [
+    {
+      "tested": false,
+      "id": "b27b0484-d49f-5381-9f65-2ebe921c3223",
+      "chapter": 1,
+      "surface": "黄少天",
+      "expected": "黄少天",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "50f8a56d-0c15-5a37-82d1-a61fc66108e0",
+      "chapter": 1,
+      "surface": "凌峰",
+      "expected": "凌峰",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "6c457b1d-f889-5165-bc26-10dbf264b044",
+      "chapter": 1,
+      "surface": "噬梦冒险团",
+      "expected": "噬梦冒险团",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "73bbd03b-581b-597a-a233-d02f58ae1ca1",
+      "chapter": 1,
+      "surface": "九神廷",
+      "expected": "九神廷",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "5666bf3a-e9e4-5714-bc51-3216cb69daf7",
+      "chapter": 1,
+      "surface": "姜梦月",
+      "expected": "姜梦月",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "060ac9d4-053c-54ff-99b7-c76fe1a0b4fb",
+      "chapter": 1,
+      "surface": "陨落狱",
+      "expected": "陨落狱",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "419c5b72-69be-5bd9-9d21-cd8bb568fd0b",
+      "chapter": 1,
+      "surface": "梦魇神殿",
+      "expected": "梦魇神殿",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "1609456f-d770-58f7-a55d-888003fc3ebf",
+      "chapter": 1,
+      "surface": "阿采",
+      "expected": "阿采",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "b2d12732-e7c4-5df6-9bc4-3720f459f05a",
+      "chapter": 1,
+      "surface": "凌峰",
+      "expected": "凌峰",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "70539f19-c033-5abd-a054-cee76bb2b1f6",
+      "chapter": 1,
+      "surface": "啸牙冒险团",
+      "expected": "啸牙冒险团",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "3e07a52b-2e86-5d25-87dc-0041730eb499",
+      "chapter": 1,
+      "surface": "裁决学院",
+      "expected": "裁决学院",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "164d6ca2-0eff-5313-be4f-4b4a272cd38b",
+      "chapter": 1,
+      "surface": "凌峰",
+      "expected": "凌峰",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "5b0a66d8-1cf0-5c13-adf8-e2374859bbbf",
+      "chapter": 1,
+      "surface": "姜梦月",
+      "expected": "姜梦月",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "a557ba19-661f-50d6-9045-51ea2e132dc2",
+      "chapter": 1,
+      "surface": "黄少天",
+      "expected": "黄少天",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "36e421c8-c6ea-54a6-8fb5-f36b5b5677f0",
+      "chapter": 1,
+      "surface": "威尔森家族",
+      "expected": "威尔森家族",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "799f9e08-cd7f-5a85-9629-f3b623fa4625",
+      "chapter": 1,
+      "surface": "裁决学院",
+      "expected": "裁决学院",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "bff80841-707e-5f7f-a5c6-ce36e3975f95",
+      "chapter": 1,
+      "surface": "姜梦月",
+      "expected": "姜梦月",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "02a43d04-3db1-506c-a765-277eb75524b8",
+      "chapter": 1,
+      "surface": "诺顿",
+      "expected": "诺顿",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "87a6c69e-5d71-5a53-bebd-b559054ebf88",
+      "chapter": 1,
+      "surface": "啸牙冒险团",
+      "expected": "啸牙冒险团",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "0a023d26-a5af-578c-87ca-e9a1719a0fd1",
+      "chapter": 1,
+      "surface": "恐惧神殿",
+      "expected": "恐惧神殿",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "5d8009bc-c0d1-5d87-bfd6-7164fe80bde0",
+      "chapter": 1,
+      "surface": "黄少天",
+      "expected": "黄少天",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "abcaac48-78c5-5951-a609-f174ac1c28d2",
+      "chapter": 1,
+      "surface": "裁决学院",
+      "expected": "裁决学院",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "0210c36a-1a73-53c8-9b6c-be8ee310d081",
+      "chapter": 1,
+      "surface": "诺顿",
+      "expected": "诺顿",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "6b95ac70-a8dc-5ead-af39-842f365c7ab3",
+      "chapter": 1,
+      "surface": "啸牙冒险团",
+      "expected": "啸牙冒险团",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "a92c72cb-503c-599c-a081-2c80b1918f04",
+      "chapter": 1,
+      "surface": "阴山",
+      "expected": "阴山",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "37d2e4f6-71d1-5f38-807a-1ac19b901a95",
+      "chapter": 1,
+      "surface": "阿采",
+      "expected": "阿采",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "4f07b045-a89c-5e91-8b17-985baa70c6cc",
+      "chapter": 1,
+      "surface": "噬梦冒险团",
+      "expected": "噬梦冒险团",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "588b0ae8-e26a-521c-9488-00d0b6e003d1",
+      "chapter": 1,
+      "surface": "诺顿",
+      "expected": "诺顿",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "f529e55b-dd65-541a-85dc-3c379c2dd8e6",
+      "chapter": 1,
+      "surface": "噬梦冒险团",
+      "expected": "噬梦冒险团",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "c8c8bf3e-b2b9-59a1-b25f-fe876447bcb3",
+      "chapter": 1,
+      "surface": "威尔森家族",
+      "expected": "威尔森家族",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "c4eeed9e-212b-5a28-b302-689cb0f7a0d6",
+      "chapter": 1,
+      "surface": "威尔森家族",
+      "expected": "威尔森家族",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "72f38558-0c82-5f4d-ab00-ab77a70359e9",
+      "chapter": 1,
+      "surface": "莫雷",
+      "expected": "莫雷",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "3f78e266-c90c-54fb-9bba-2215c2075114",
+      "chapter": 1,
+      "surface": "莫雷",
+      "expected": "莫雷",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "1ebb2ecc-5126-59ae-8711-1fe37b409276",
+      "chapter": 1,
+      "surface": "梦魇神殿",
+      "expected": "梦魇神殿",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "257c95f2-b7d3-59a5-b355-30f90e221444",
+      "chapter": 2,
+      "surface": "姜梦月",
+      "expected": "姜梦月",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "e115c21a-c8d9-5879-aa50-5043610adc12",
+      "chapter": 2,
+      "surface": "裁决学院",
+      "expected": "裁决学院",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "bd4963ee-778e-50e1-ada2-f5ec0cfeb23a",
+      "chapter": 2,
+      "surface": "诺顿",
+      "expected": "诺顿",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "4239e7e0-57aa-5651-b23b-1dbe82f218b5",
+      "chapter": 2,
+      "surface": "莫雷",
+      "expected": "莫雷",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "e59f6cd6-75e9-5dcc-a05e-bc8f2ea79e17",
+      "chapter": 2,
+      "surface": "凌峰",
+      "expected": "凌峰",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "5663f455-cc7f-5fa3-8326-afd7e7f62543",
+      "chapter": 2,
+      "surface": "啸牙冒险团",
+      "expected": "啸牙冒险团",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "62171f7f-bdf2-54ba-a6e3-491d9fae6b02",
+      "chapter": 2,
+      "surface": "噬梦冒险团",
+      "expected": "噬梦冒险团",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "02a249f6-f1ed-5636-a6cb-993ae7133fc3",
+      "chapter": 3,
+      "surface": "噬梦冒险团",
+      "expected": "噬梦冒险团",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "ed7b7b2b-090a-5322-91c8-c05a79acb8f0",
+      "chapter": 3,
+      "surface": "凌峰",
+      "expected": "凌峰",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "a57cd2fa-19b1-5d1b-9a52-42c29ecfe9e8",
+      "chapter": 3,
+      "surface": "诺顿",
+      "expected": "诺顿",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "194be29e-83d1-5eae-91d3-2999f4b58320",
+      "chapter": 3,
+      "surface": "裁决学院",
+      "expected": "裁决学院",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "ce2d39cf-11ee-5ee0-b87b-4c8b22425942",
+      "chapter": 3,
+      "surface": "啸牙冒险团",
+      "expected": "啸牙冒险团",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "3d77df5a-7bb4-5ab8-be61-371fb118b036",
+      "chapter": 3,
+      "surface": "梦魇神殿",
+      "expected": "梦魇神殿",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "3959c7e9-2a15-57af-b62f-b3204fbd2a5c",
+      "chapter": 3,
+      "surface": "恐惧神殿",
+      "expected": "恐惧神殿",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "8297d6ce-df7d-521e-913a-1504c57f3cbf",
+      "chapter": 3,
+      "surface": "莫雷",
+      "expected": "莫雷",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "4498a534-a9c1-582f-86e6-f91cd33d5046",
+      "chapter": 3,
+      "surface": "九神廷",
+      "expected": "九神廷",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "ace8df3d-fcb3-5dec-8d38-451f880242f1",
+      "chapter": 4,
+      "surface": "噬梦冒险团",
+      "expected": "噬梦冒险团",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "2619348a-8984-55f4-aea0-bcc74fdbf9b5",
+      "chapter": 4,
+      "surface": "凌峰",
+      "expected": "凌峰",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "5a982062-ad52-53a1-a493-41f50b4178d7",
+      "chapter": 4,
+      "surface": "啸牙冒险团",
+      "expected": "啸牙冒险团",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "9130cdb4-6e00-563f-bd5a-1ae6706897b1",
+      "chapter": 4,
+      "surface": "裁决学院",
+      "expected": "裁决学院",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "15bc8c50-7831-5110-b8e7-92e3d69fca48",
+      "chapter": 4,
+      "surface": "姜梦月",
+      "expected": "姜梦月",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "b5ac0fe6-c815-5ef6-a5d3-80c9a944216d",
+      "chapter": 4,
+      "surface": "莫雷",
+      "expected": "莫雷",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "8b2e4072-ee8b-5581-819c-bb09bb013b98",
+      "chapter": 4,
+      "surface": "陨落狱",
+      "expected": "陨落狱",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "355fcdd6-bda9-5fd3-b9fb-a53d36824223",
+      "chapter": 4,
+      "surface": "九神殿",
+      "expected": null,
+      "entity_id": null,
+      "correct": true
+    },
+    {
+      "tested": false,
+      "id": "c59b5400-41f2-5be6-8f90-c3ee688ae0e9",
+      "chapter": 4,
+      "surface": "神骸荒原",
+      "expected": "神骸荒原",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "62487442-1027-59c5-8ef7-1b30a095a318",
+      "chapter": 4,
+      "surface": "梦魇神殿",
+      "expected": "梦魇神殿",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "b039e848-5d3d-5b6f-93c3-17cf4de9c50c",
+      "chapter": 4,
+      "surface": "九神廷",
+      "expected": "九神廷",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "0f1f2fe3-e036-5212-82f2-b718de667247",
+      "chapter": 4,
+      "surface": "黄少天",
+      "expected": "黄少天",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "130d0ce9-1332-5ac9-9253-1fb988c95f4e",
+      "chapter": 4,
+      "surface": "阴山",
+      "expected": "阴山",
+      "entity_id": null,
+      "correct": false
+    },
+    {
+      "tested": false,
+      "id": "2017b7f4-6d89-54a3-a25e-e2dffc2df3e6",
+      "chapter": 4,
+      "surface": "毁灭神殿",
+      "expected": "毁灭神殿",
+      "entity_id": null,
+      "correct": false
+    }
+  ],
+  "facts": [],
+  "qualification": "incomplete: local request timeout"
+}

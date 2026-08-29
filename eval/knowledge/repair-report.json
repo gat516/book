@@ -1,0 +1,270 @@
+{
+  "revision": "19a5265f-7b98-4df6-a500-13432f05d0c8",
+  "generation": 1,
+  "version": 1,
+  "model": {
+    "name": "llama3.2:3b",
+    "digest": "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72",
+    "provider": "ollama"
+  },
+  "ontology": {
+    "kinds": [
+      "character",
+      "sect",
+      "realm",
+      "technique",
+      "artifact",
+      "beast",
+      "place",
+      "group"
+    ],
+    "relations": [
+      "member_of",
+      "ally",
+      "enemy",
+      "mentor",
+      "family",
+      "located_in"
+    ],
+    "attributes": [
+      {
+        "name": "rank",
+        "kinds": [
+          "character"
+        ]
+      },
+      {
+        "name": "status",
+        "kinds": [
+          "character"
+        ]
+      },
+      {
+        "name": "affiliation",
+        "kinds": [
+          "character"
+        ]
+      },
+      {
+        "name": "state",
+        "kinds": [
+          "sect"
+        ]
+      },
+      {
+        "name": "description",
+        "kinds": [
+          "character",
+          "sect",
+          "realm",
+          "technique",
+          "artifact",
+          "beast",
+          "place",
+          "group"
+        ]
+      }
+    ]
+  },
+  "evaluation": {},
+  "saved_prose_unchanged": true,
+  "completed": 0,
+  "total_jobs": 22,
+  "mention_coverage": {
+    "total": 0,
+    "linked": 0,
+    "unresolved": 0
+  },
+  "claims": [],
+  "failures": [
+    {
+      "chapter": 1,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 2,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 3,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 4,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 5,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 6,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 7,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 8,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 9,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 10,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 11,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 12,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 13,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 14,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 15,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 16,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 17,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 18,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 19,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 20,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 21,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 23,
+      "state": "pending",
+      "error": null
+    }
+  ],
+  "rejected": [],
+  "identity_changes": [],
+  "glossary_unchanged": true,
+  "progress_matches_snapshot": true,
+  "progress_note": "Repair never writes reading progress; ordinary reading may advance it during rebuild.",
+  "evidence_valid": true,
+  "activation_eligible": false,
+  "review_hash": "942f1d46b5c3e3e44f382a5225aa6ce0cff34d7f691e54311dce6827a6a6b6f7",
+  "model_reports": [
+    {
+      "model": {
+        "provider": "ollama",
+        "name": "llama3.2:3b",
+        "digest": "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72",
+        "num_ctx": 16384,
+        "num_predict": 4096
+      },
+      "qualification": "failed",
+      "metrics": {
+        "benchmark_key": "041e6f51a69b9c3a07d85b2a4d26e9b5d068bf80009a5432f735a8a3d6c5b4b9",
+        "reviewed": true,
+        "reviewed_mentions": 64,
+        "reviewed_facts": 30,
+        "tested_mentions": 34,
+        "tested_facts": 0,
+        "link_precision": null,
+        "unambiguous_recall": 0.0,
+        "fact_precision": null,
+        "merge_regressions": 0,
+        "evidence_valid": false,
+        "publication_review_complete": false,
+        "failures": [
+          "Early stop: even perfect remaining links cannot reach 90% unambiguous recall."
+        ],
+        "early_stopped": true,
+        "fact_verification_status": "skipped after identity failure",
+        "run_wall_seconds": 0.15659493500061217,
+        "model_inference_seconds": null,
+        "latency_note": "Llama resumed cached discovery; Qwen request timed out at 300 seconds. Neither is a comparable completed cold inference measurement.",
+        "recall_upper_bound": 0.4603174603174603,
+        "prompt_version": "evidence-v2"
+      }
+    },
+    {
+      "model": {
+        "provider": "ollama",
+        "name": "qwen2.5:7b-instruct",
+        "digest": "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
+        "num_ctx": 16384,
+        "num_predict": 4096
+      },
+      "qualification": "incomplete: local request timeout",
+      "metrics": {
+        "benchmark_key": "f90f4fecb1321e8948e2dd1dfc28237dd061476a6d70e3cb00e4f7d55c00198b",
+        "reviewed": true,
+        "reviewed_mentions": 64,
+        "reviewed_facts": 30,
+        "tested_mentions": 0,
+        "tested_facts": 0,
+        "link_precision": null,
+        "unambiguous_recall": 0.0,
+        "fact_precision": null,
+        "merge_regressions": 0,
+        "evidence_valid": false,
+        "publication_review_complete": false,
+        "failures": [
+          "ReadTimeout: "
+        ],
+        "early_stopped": true,
+        "fact_verification_status": "skipped after identity failure",
+        "run_wall_seconds": 300.2597524390003,
+        "model_inference_seconds": null,
+        "latency_note": "Llama resumed cached discovery; Qwen request timed out at 300 seconds. Neither is a comparable completed cold inference measurement.",
+        "recall_upper_bound": 1.0,
+        "prompt_version": "evidence-v2"
+      }
+    }
+  ],
+  "selected_model": null
+}

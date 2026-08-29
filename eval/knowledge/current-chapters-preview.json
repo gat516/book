@@ -1,0 +1,212 @@
+{
+  "revision": "979dc113-3f62-4f99-b064-613ac84f45d4",
+  "generation": 1,
+  "version": 1,
+  "model": {
+    "name": "qwen2.5:7b-instruct",
+    "digest": "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
+    "num_ctx": 16384,
+    "runtime": {
+      "stream": true,
+      "version": "stream-admission-v1",
+      "idle_timeout_seconds": 900.0,
+      "total_timeout_seconds": 1800.0
+    },
+    "provider": "ollama",
+    "num_predict": 4096
+  },
+  "ontology": {
+    "kinds": [
+      "character",
+      "sect",
+      "realm",
+      "technique",
+      "artifact",
+      "beast",
+      "place",
+      "group"
+    ],
+    "relations": [
+      "member_of",
+      "ally",
+      "enemy",
+      "mentor",
+      "family",
+      "located_in"
+    ],
+    "attributes": [
+      {
+        "name": "rank",
+        "kinds": [
+          "character"
+        ]
+      },
+      {
+        "name": "status",
+        "kinds": [
+          "character"
+        ]
+      },
+      {
+        "name": "affiliation",
+        "kinds": [
+          "character"
+        ]
+      },
+      {
+        "name": "state",
+        "kinds": [
+          "sect"
+        ]
+      },
+      {
+        "name": "description",
+        "kinds": [
+          "character",
+          "sect",
+          "realm",
+          "technique",
+          "artifact",
+          "beast",
+          "place",
+          "group"
+        ]
+      }
+    ]
+  },
+  "evaluation": {},
+  "saved_prose_unchanged": true,
+  "completed": 0,
+  "total_jobs": 23,
+  "mention_coverage": {
+    "total": 0,
+    "linked": 0,
+    "unresolved": 0
+  },
+  "claims": [],
+  "failures": [
+    {
+      "chapter": 1,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 2,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 3,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 4,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 5,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 6,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 7,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 8,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 9,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 10,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 11,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 12,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 13,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 14,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 15,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 16,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 17,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 18,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 19,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 20,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 21,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 23,
+      "state": "pending",
+      "error": null
+    },
+    {
+      "chapter": 24,
+      "state": "pending",
+      "error": null
+    }
+  ],
+  "rejected": [],
+  "identity_changes": [],
+  "glossary_unchanged": true,
+  "progress_matches_snapshot": true,
+  "progress_note": "Repair never writes reading progress; ordinary reading may advance it during rebuild.",
+  "evidence_valid": true,
+  "activation_eligible": false,
+  "review_hash": "0a8789c30c5b7ff43235d10383a59f4a99dd424e0a397f0bc7b21f6970507da0"
+}

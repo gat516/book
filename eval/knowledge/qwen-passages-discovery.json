@@ -1,0 +1,185 @@
+{
+  "revision": "75cf0548-a79e-4062-b98e-bb4179ea9440",
+  "model": {
+    "provider": "ollama",
+    "name": "qwen2.5:7b-instruct",
+    "digest": "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
+    "num_ctx": 16384,
+    "num_predict": 4096,
+    "runtime": {
+      "version": "stream-admission-v1",
+      "stream": true,
+      "idle_timeout_seconds": 900.0,
+      "total_timeout_seconds": 1800.0
+    }
+  },
+  "prompt_version": "evidence-v3-passages",
+  "chapter": 1,
+  "scope": "name discovery only; no identity resolution, claim extraction, alignment or qualification",
+  "publication_review_complete": false,
+  "activation_eligible": false,
+  "wall_seconds": 1113.4065072340018,
+  "status": "completed",
+  "names": {
+    "names": [
+      {
+        "quote": "黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂龇牙咧嘴，“快走快走！老子宁愿再打十场群架，也不想再继续呆这儿了！真特娘的要命！”",
+        "evidence_start": 14,
+        "surface": "黄少天",
+        "kind": "character",
+        "named": true
+      },
+      {
+        "quote": "凌峰摇头笑笑，也不多言，带领着噬梦冒险团一众成员继续前行。",
+        "evidence_start": 78,
+        "surface": "凌峰",
+        "kind": "character",
+        "named": true
+      },
+      {
+        "quote": "诺顿·威尔森苍老的声音通过扩音装置传来：“噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！”",
+        "evidence_start": 769,
+        "surface": "诺顿·威尔森",
+        "kind": "character",
+        "named": true
+      },
+      {
+        "quote": "此人，正是啸牙冒险团团长，“缝尸鬼”莫雷。",
+        "evidence_start": 1635,
+        "surface": "莫雷",
+        "kind": "character",
+        "named": true
+      },
+      {
+        "quote": "而那机械蜘蛛的腹部，还刻着威尔森家族徽记，虽然已经被劈成两半，但八只复眼却还在疯狂扫描周围的一切。",
+        "evidence_start": 639,
+        "surface": "机械蜘蛛",
+        "kind": "beast",
+        "named": true
+      },
+      {
+        "quote": "凌峰微微点头，正准备动身，荒原地面突然隆起数十个鼓包。",
+        "evidence_start": 540,
+        "surface": "荒原",
+        "kind": "place",
+        "named": true
+      },
+      {
+        "quote": "陨落狱开启才只是第一天，想来大部分势力应该都还在最外层的陨落回廊之中徘徊。",
+        "evidence_start": 244,
+        "surface": "陨落狱",
+        "kind": "place",
+        "named": true
+      },
+      {
+        "quote": "阴山的古尸挡在最前，剩余七名噬梦团员背靠背组成防御圈。",
+        "evidence_start": 1178,
+        "surface": "阴山的古尸",
+        "kind": "group",
+        "named": true
+      }
+    ],
+    "reviewed_kinds": [
+      "character",
+      "sect",
+      "realm",
+      "technique",
+      "artifact",
+      "beast",
+      "place",
+      "group"
+    ],
+    "rejected": [
+      {
+        "kind": "character",
+        "surface": "姜梦月",
+        "passage_id": "pc1_63af5b6e2231",
+        "rejection": "unknown passage or surface absent from cited passage"
+      },
+      {
+        "kind": "character",
+        "surface": "阿采",
+        "passage_id": "p11b_63af5b6e2231",
+        "rejection": "unknown passage or surface absent from cited passage"
+      },
+      {
+        "kind": "sect",
+        "surface": "噬梦冒险团",
+        "passage_id": "p49a_63af5b6e2231",
+        "rejection": "unknown passage or surface absent from cited passage"
+      },
+      {
+        "kind": "sect",
+        "surface": "啸牙冒险团",
+        "passage_id": "p38b_63af5b6e2231",
+        "rejection": "unknown passage or surface absent from cited passage"
+      },
+      {
+        "kind": "sect",
+        "surface": "裁决学院",
+        "passage_id": "p406_63af5b6e2231",
+        "rejection": "unknown passage or surface absent from cited passage"
+      },
+      {
+        "kind": "group",
+        "surface": "裁决学院探索队",
+        "passage_id": "p38b_63af5b6e2231",
+        "rejection": "unknown passage or surface absent from cited passage"
+      }
+    ]
+  },
+  "coverage_by_kind": {
+    "character": {
+      "proposed_surfaces": 4,
+      "source_occurrences": 18
+    },
+    "sect": {
+      "proposed_surfaces": 0,
+      "source_occurrences": 0
+    },
+    "realm": {
+      "proposed_surfaces": 0,
+      "source_occurrences": 0
+    },
+    "technique": {
+      "proposed_surfaces": 0,
+      "source_occurrences": 0
+    },
+    "artifact": {
+      "proposed_surfaces": 0,
+      "source_occurrences": 0
+    },
+    "beast": {
+      "proposed_surfaces": 1,
+      "source_occurrences": 3
+    },
+    "place": {
+      "proposed_surfaces": 2,
+      "source_occurrences": 4
+    },
+    "group": {
+      "proposed_surfaces": 1,
+      "source_occurrences": 1
+    }
+  },
+  "source_occurrences": 26,
+  "reviewed_unambiguous_occurrences": 34,
+  "detected_reviewed_occurrences": 9,
+  "discovery_recall": 0.2647058823529412,
+  "correctly_typed_reviewed_occurrences": 9,
+  "typed_discovery_recall": 0.2647058823529412,
+  "kind_mismatches": [],
+  "missing_reviewed_surfaces": [
+    "九神廷",
+    "啸牙冒险团",
+    "噬梦冒险团",
+    "姜梦月",
+    "威尔森家族",
+    "恐惧神殿",
+    "梦魇神殿",
+    "裁决学院",
+    "诺顿",
+    "阴山",
+    "阿采"
+  ]
+}
