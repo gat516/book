@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import NotRequired, Protocol, TypedDict, runtime_checkable
 
@@ -23,6 +23,8 @@ class Completion:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    # Optional backend runtime diagnostics; never contain prompt/source text.
+    timings: dict[str, float] = field(default_factory=dict)
 
 
 class BatchRequest(TypedDict):

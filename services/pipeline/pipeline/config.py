@@ -8,6 +8,7 @@ the same ``.env.example`` block ingest-api and the spec (§10) share.
 from __future__ import annotations
 
 import os
+import math
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -72,6 +73,10 @@ class Config:
     gateway_backend: str = "local_gpu"
     gateway_provider: str = "ollama"
     gateway_max_output_tokens: int = 8192
+    graph_ollama_timeout_seconds: float | None = None
+    graph_ollama_total_timeout_seconds: float = 1800
+    graph_ollama_num_ctx: int = 16384
+    graph_ollama_num_predict: int = 4096
 
     @classmethod
     def load(cls) -> "Config":
@@ -103,6 +108,10 @@ class Config:
             # an HTTP client timeout (one call), that's a crash-recovery window (whole
             # chapter, several calls).
             ollama_timeout_seconds=float(_getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
+            graph_ollama_timeout_seconds=float(_getenv("GRAPH_OLLAMA_TIMEOUT_SECONDS", _getenv("OLLAMA_TIMEOUT_SECONDS", "120"))),
+            graph_ollama_total_timeout_seconds=float(_getenv("GRAPH_OLLAMA_TOTAL_TIMEOUT_SECONDS", "1800")),
+            graph_ollama_num_ctx=int(_getenv("GRAPH_OLLAMA_NUM_CTX", "16384")),
+            graph_ollama_num_predict=int(_getenv("GRAPH_OLLAMA_NUM_PREDICT", "4096")),
             deepseek_api_key=_getenv("DEEPSEEK_API_KEY", ""),
             deepseek_base_url=_getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
             gateway_addr=_getenv("LLM_GATEWAY_ADDR", "localhost:8081"),
@@ -119,3 +128,17 @@ class Config:
             textproc_grpc_addr=_getenv("TEXTPROC_GRPC_ADDR", "localhost:50051"),
             textproc_timeout_seconds=float(_getenv("TEXTPROC_TIMEOUT_SECONDS", "10")),
         )
+
+
+def graph_runtime(cfg: Config) -> dict:
+    """Snapshot actual bounded runtime settings, separate from prompt versions."""
+    idle = cfg.graph_ollama_timeout_seconds
+    idle = cfg.ollama_timeout_seconds if idle is None else idle
+    total = cfg.graph_ollama_total_timeout_seconds
+    if not all(math.isfinite(v) and v > 0 for v in (idle, total)) or total < idle:
+        raise ValueError('graph timeouts must be finite, positive, and total >= idle')
+    if not 0 < cfg.graph_ollama_num_predict < cfg.graph_ollama_num_ctx:
+        raise ValueError('graph output budget must be positive and smaller than context')
+    return dict(num_ctx=cfg.graph_ollama_num_ctx, num_predict=cfg.graph_ollama_num_predict,
+                runtime=dict(version='stream-admission-v1', stream=True,
+                             idle_timeout_seconds=idle, total_timeout_seconds=total))
