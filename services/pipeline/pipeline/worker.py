@@ -128,7 +128,14 @@ class Worker:
             )
 
     async def start(self) -> None:
-        await self._assert_embed_dim()
+        while not self.stopping.is_set():
+            try:
+                await self._assert_embed_dim()
+                break
+            except AdmissionRejected as exc:
+                await self._idle(max(exc.retry_after_s, 0.25))
+        if self.stopping.is_set():
+            return
         # autocommit for chapter-status updates outside graph-write; graph-write itself
         # (1.4) opens its own explicit transaction per chapter via GraphWriter.
         self.db = await psycopg.AsyncConnection.connect(
@@ -146,6 +153,13 @@ class Worker:
             claimed_at = str(time.time())
             raw = await self.redis.eval(queue.CLAIM, len(queue.KEYS), *queue.KEYS, claimed_at)
             if raw is None:
+                from pipeline.graph_rebuild import drain_active
+                try:
+                    await drain_active(self.cfg)
+                except AdmissionRejected as exc:
+                    await self._idle(max(exc.retry_after_s, 0.25))
+                except Exception:
+                    log.exception("revision enrichment failed; retained for explicit resume")
                 await self._idle(min(max(self.cfg.queue_timeout, 0.1), 1))
                 continue
             heartbeat = asyncio.create_task(self._renew_claim(raw, claimed_at))
@@ -157,7 +171,7 @@ class Worker:
                 # during the requested delay, then place it back on the pending queue.
                 await asyncio.sleep(max(exc.retry_after_s, 0.25))
                 disposition = "retry"
-                log.info("gateway admission deferred chapter for %.3fs", exc.retry_after_s)
+                log.info("model admission deferred chapter for %.3fs", exc.retry_after_s)
             except ChapterFailed:
                 # The outcome is recorded on the chapter row, so this job is not lost and
                 # must not be resurrected: drop the claim outright. Leaving it made failed
@@ -249,13 +263,13 @@ class Worker:
             return
 
         novel = await self._fetch_one(
-            "SELECT source_lang, target_lang, ontology FROM novel WHERE id = %s",
+            "SELECT source_lang, target_lang, ontology, EXISTS(SELECT 1 FROM graph_revision r WHERE r.id=novel.active_graph_revision AND (NOT r.legacy OR NOT r.trusted)) FROM novel WHERE id = %s",
             (msg.novel_id,),
         )
         if novel is None:
             log.warning("no novel row for %s; dropping", msg.novel_id)
             return
-        source_lang, target_lang, ontology = novel
+        source_lang, target_lang, ontology, managed_graph = novel
         provider, batch_manager, provider_id = await self._provider_for_novel(msg.novel_id)
 
         raw_text = await asyncio.to_thread(self._get_object, raw_uri)
@@ -296,7 +310,9 @@ class Worker:
 
         try:
             for stage in DEFAULT_STAGES:
-                if enrichment_error and stage.name in {"display_scan", "state", "graph_write"}:
+                if managed_graph and stage.name in {"scan", "resolve", "display_scan", "state", "graph_write"}:
+                    continue
+                if enrichment_error and stage.name in {"state", "graph_write"}:
                     continue
                 # Publish the stage before running it, so an observer sees the stage that
                 # is currently blocking rather than the last one that finished — the whole
@@ -339,6 +355,20 @@ class Worker:
                 finally:
                     if streaming:
                         _set_stream_sink(provider, None)
+            if managed_graph:
+                # Graph repair is independent of translation. Keep shared RAG chunks and
+                # empty presentation cards, but never run the legacy identity writer.
+                from pipeline.graph import GraphWriter
+                from pipeline.display_names import discover_names
+                writer=GraphWriter(self.db)
+                await writer.ready()
+                embeddings=await ctx.embed_provider.embed([c.text for c in state.chunks]) if state.chunks else []
+                names=await discover_names(ctx,state.translation or raw_text)
+                async with self.db.transaction():
+                    await writer.replace_chunks(msg.novel_id,msg.chapter_index,state.chunks,embeddings)
+                    await writer.replace_mention_spans(msg.novel_id,msg.chapter_index,names)
+                from pipeline.graph_rebuild import enqueue_completed
+                await enqueue_completed(self.db,self.cfg,msg.novel_id)
             if enrichment_error:
                 raise enrichment_error[1]
         except AdmissionRejected:

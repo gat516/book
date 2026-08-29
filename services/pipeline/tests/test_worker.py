@@ -145,6 +145,24 @@ async def test_completed_pointer_does_not_repeat_any_model_work():
     worker._fetch_one.assert_awaited_once()
 
 
+async def test_runtime_reservation_requeues_without_losing_chapter(scheduled):
+    from novel_llm import AdmissionRejected
+    client,keys=scheduled
+    worker=Worker.__new__(Worker)
+    worker.redis=client
+    worker.stopping=asyncio.Event()
+    worker.cfg=SimpleNamespace(queue_timeout=1,visibility_timeout=300)
+    async def handle(raw):
+        worker.request_stop()
+        raise AdmissionRejected(retry_after_s=0)
+    worker._handle=handle
+    await client.lpush(keys[0],message(2),message(3))
+    await worker._loop()
+    assert set(await client.lrange(keys[0],0,-1))=={message(2),message(3)}
+    assert await client.llen(keys[1])==0
+    assert await client.hlen(keys[4])==0
+
+
 def test_failure_categories_do_not_include_exception_payload():
     assert error_code(httpx.ReadTimeout("private URL")) == "provider_timeout"
     assert error_code(httpx.ConnectError("credentials")) == "provider_connection"
@@ -191,7 +209,7 @@ async def test_enrichment_failure_cannot_hide_valid_translation(db_conn, monkeyp
             if self.name in {"state", "graph_write"}:
                 row = await (await db_conn.execute("SELECT translation_ready FROM chapter WHERE novel_id=%s", (novel,))).fetchone()
                 assert row[0] is True  # readable BEFORE optional work completes
-    monkeypatch.setattr(module, "DEFAULT_STAGES", [Stage(n) for n in ("resolve", "translate", "state", "graph_write")])
+    monkeypatch.setattr(module, "DEFAULT_STAGES", [Stage(n) for n in ("resolve", "translate", "display_scan", "state", "graph_write")])
     try:
         await db_conn.execute("INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status) VALUES (%s,1,'test','raw','{}','queued')", (novel,))
         with pytest.raises(ChapterFailed):
@@ -202,7 +220,7 @@ async def test_enrichment_failure_cannot_hide_valid_translation(db_conn, monkeyp
         failure = await (await db_conn.execute("SELECT stage FROM chapter_failure WHERE novel_id=%s", (novel,))).fetchone()
         assert failure[0] == failed_stage
         if failed_stage == "resolve":
-            assert calls == ["resolve", "translate"]  # no partially bound graph writes
+            assert calls == ["resolve", "translate", "display_scan"]  # names need no identity; no partially bound graph writes
         else:
             # Graph retries retain the saved text, even if terminology has since changed.
             class SuccessfulStage(Stage):
