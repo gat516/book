@@ -67,6 +67,15 @@ def test_glossary_validation_rejects_missing_target():
         )
 
 
+def test_character_name_violation_is_hard_and_literal_translation_is_rejected():
+    with pytest.raises(GlossaryViolation) as caught:
+        validate_glossary_constraints(
+            "水寒走了。", "Water Cold left.", [("水寒", "Shuihan", "character_name")]
+        )
+    assert caught.value.hard is True
+    assert caught.value.missing_targets == ("Shuihan",)
+
+
 def test_glossary_validation_allows_pronouns_for_repeated_mentions():
     """At-least-once, not occurrence parity.
 

@@ -40,3 +40,6 @@ class QueueMessage(BaseModel):
     chapter_index: int
     priority: bool = False
     enrichment: bool = False
+    # Re-run translation even when a readable version already exists. The old object
+    # remains active until the replacement passes every hard character-name check.
+    retranslate: bool = False

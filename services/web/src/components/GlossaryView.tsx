@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { bootstrapGlossary, correctGlossaryTerm, deleteGlossaryTerm, getGlossary } from "../api";
 import type { EntityView, GlossaryResponse, GlossaryTermView } from "../types";
+import { NameReviewPanel } from "./NameReviewPanel";
 
 interface Props {
   novelId: string;
@@ -74,6 +75,7 @@ export function GlossaryView({ novelId, at, entity, suggestedTarget }: Props) {
         translation work; existing chapter text and highlights are not rewritten.
         Deleted terms stay removed until you add them again.
       </p>
+      {!entity && <NameReviewPanel novelId={novelId} onApproved={() => void load()} />}
       {entity && <>
         <p className="glossary-note">Check the source spelling before adding. These controls edit translation terms, not the entity's facts or identity.</p>
         <label><input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> Show all visible glossary terms</label>

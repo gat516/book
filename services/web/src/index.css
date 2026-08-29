@@ -490,6 +490,12 @@ body {
 .glossary-add label { display: flex; flex-direction: column; gap: 0.3rem; flex: 1 1 12rem; }
 .glossary-table-wrap { overflow-x: auto; }
 .glossary-view td button { margin: 0.2rem; }
+.name-review { margin: 1rem 0; padding: 1rem; border: 1px solid #d9c27a; border-radius: 6px; background: #fffaf0; }
+.name-review fieldset { margin: 0.75rem 0; border: 1px solid #e2d7b2; }
+.name-review blockquote { margin: 0.6rem 0; padding-left: 0.75rem; border-left: 3px solid #c7a54a; }
+.name-review-choice { display: flex; align-items: baseline; gap: 0.5rem; margin: 0.4rem 0; }
+.name-review-choice span { color: #666; font-size: 0.85rem; }
+.name-review label:not(.name-review-choice) { display: flex; flex-direction: column; gap: 0.3rem; margin: 0.6rem 0; }
 
 .reader-settings { margin: 0.75rem 0 1.25rem; font-size: 0.9rem; }
 .reader-settings summary { cursor: pointer; }

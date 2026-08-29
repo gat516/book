@@ -13,7 +13,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 
-PROMPT_VERSION = 'evidence-v4-bounded-candidates'
+PROMPT_VERSION = 'evidence-v5-source-name-authority'
 
 
 def digest(value) -> str:

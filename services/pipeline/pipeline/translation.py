@@ -17,11 +17,13 @@ class GlossaryViolation(ValueError):
         missing_targets: tuple[str, ...] = (),
         untranslated_sources: tuple[str, ...] = (),
         recoverable: bool = True,
+        hard: bool = False,
     ) -> None:
         super().__init__(message)
         self.missing_targets = missing_targets
         self.untranslated_sources = untranslated_sources
         self.recoverable = recoverable
+        self.hard = hard
 
     @property
     def term_count(self) -> int:
@@ -46,12 +48,21 @@ Locked glossary:
 """
 
 
+def _term_rows(glossary):
+    """Yield source, target, class while accepting legacy two-column test callers."""
+    for row in glossary:
+        yield row[0], row[1], row[2] if len(row) > 2 else "semantic_term"
+
+
 def build_system_prompt(
-    *, source_lang: str, target_lang: str, ontology: dict[str, Any], glossary: list[tuple[str, str]]
+    *, source_lang: str, target_lang: str, ontology: dict[str, Any], glossary
 ) -> str:
     import json
 
-    listed = "\n".join(f"- {source} => {target}" for source, target in glossary)
+    listed = "\n".join(
+        f"- {source} => {target}" + (" [CHARACTER NAME: exact spelling required]" if kind == "character_name" else "")
+        for source, target, kind in _term_rows(glossary)
+    )
     return _SYSTEM.format(
         source_lang=source_lang,
         target_lang=target_lang,
@@ -64,7 +75,7 @@ def build_user_prompt(raw_text: str) -> str:
     return f"<chapter>\n{raw_text}\n</chapter>"
 
 
-def prime_glossary_terms(source_text: str, glossary: list[tuple[str, str]]) -> str:
+def prime_glossary_terms(source_text: str, glossary) -> str:
     """Substitute every locked source term with its locked target *before* the model runs.
 
     Terminology stability is structural here, not prompted — the same discipline §0 applies
@@ -85,7 +96,7 @@ def prime_glossary_terms(source_text: str, glossary: list[tuple[str, str]]) -> s
     grammar and articles right, and small models do not mangle it the way they mangle
     bracket glyphs.
     """
-    usable = [(source, target) for source, target in glossary if source.strip() and target.strip()]
+    usable = [(source, target) for source, target, _ in _term_rows(glossary) if source.strip() and target.strip()]
     if not usable:
         return source_text
     # Longest source first: a novel holding both 九神殿 and 九神殿主 must not have the
@@ -102,9 +113,9 @@ def prime_glossary_terms(source_text: str, glossary: list[tuple[str, str]]) -> s
 _LOCKED_TAG = re.compile(r'<locked-term data-id="t\d+">(.*?)</locked-term>', re.DOTALL)
 
 
-def protect_glossary_terms(source_text: str, glossary: list[tuple[str, str]]) -> str:
+def protect_glossary_terms(source_text: str, glossary) -> str:
     """Second-attempt input that makes every locked target an explicit copy span."""
-    usable = [(source, target) for source, target in glossary if source.strip() and target.strip()]
+    usable = [(source, target) for source, target, _ in _term_rows(glossary) if source.strip() and target.strip()]
     usable.sort(key=lambda pair: len(pair[0]), reverse=True)
     if not usable:
         return source_text
@@ -129,7 +140,7 @@ def strip_locked_term_tags(text: str) -> str:
 def validate_glossary_constraints(
     source_text: str,
     translated_text: str,
-    glossary: list[tuple[str, str]],
+    glossary,
 ) -> None:
     """Reject a completion that silently ignores a locked term used by this chapter.
 
@@ -146,7 +157,8 @@ def validate_glossary_constraints(
 
     missing: list[str] = []
     untranslated: list[str] = []
-    for source, target in glossary:
+    hard_violation = False
+    for source, target, kind in _term_rows(glossary):
         # A blank source term makes this check nonsensical rather than strict:
         # "text".count("") is len(text) + 1, so an empty locked term would demand its
         # target appear ~2000 times in a chapter and fail EVERY translation of this novel
@@ -159,8 +171,10 @@ def validate_glossary_constraints(
             continue
         if target not in translated_text:
             missing.append(target)
+            hard_violation = hard_violation or kind == "character_name"
         if source not in target and source in translated_text:
             untranslated.append(source)
+            hard_violation = hard_violation or kind == "character_name"
 
     if missing or untranslated:
         details = []
@@ -172,4 +186,5 @@ def validate_glossary_constraints(
             "; ".join(details),
             missing_targets=tuple(missing),
             untranslated_sources=tuple(untranslated),
+            hard=hard_violation,
         )

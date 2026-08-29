@@ -106,6 +106,11 @@ func (f *fakeIngestClient) BootstrapGlossary(_ context.Context, _ string, body j
 	return f.response, f.status, f.err
 }
 
+func (f *fakeIngestClient) ApproveCharacterName(_ context.Context, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
+}
+
 func (f *fakeIngestClient) TranslateAhead(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
 	return f.response, f.status, f.err
@@ -197,6 +202,10 @@ func (f *fakeStore) RequestScrapeCancel(context.Context, string) error {
 func (f *fakeStore) ListGlossary(_ context.Context, _ string, at int) ([]GlossaryTermView, error) {
 	f.lastAt = at
 	return f.glossary, f.glossaryErr
+}
+
+func (f *fakeStore) ListNameReviews(context.Context, string, *int) ([]CharacterNameReview, error) {
+	return []CharacterNameReview{}, nil
 }
 
 func (f *fakeStore) GetChapter(

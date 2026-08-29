@@ -25,6 +25,7 @@ const IDLE_POLL_INTERVAL_MS = 20000;
 // are internal jargon; "resolve" means nothing to someone waiting on a chapter.
 const STAGE_LABELS: Record<string, string> = {
   chunk: "Splitting into chunks",
+  character_names: "Checking character names",
   scan: "Scanning for known names",
   resolve: "Identifying characters and places",
   translate: "Translating",

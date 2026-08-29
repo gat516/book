@@ -96,6 +96,25 @@ export interface GlossaryResponse {
   terms: GlossaryTermView[];
 }
 
+export interface CharacterNameCandidate {
+  target_term: string;
+  pronunciation: string[];
+  segmentation: string;
+}
+
+export interface CharacterNameReview {
+  source_term: string;
+  first_seen_chapter: number;
+  quote: string;
+  reason: string;
+  candidates: CharacterNameCandidate[];
+}
+
+export interface CharacterNameReviewsResponse {
+  novel_id: string;
+  reviews: CharacterNameReview[];
+}
+
 // ingest-api's correctGlossaryTermReq/Resp, proxied verbatim by reader-api's
 // PATCH /novels/{id}/glossary/{term}.
 export interface CorrectGlossaryTermRequest {

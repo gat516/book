@@ -51,7 +51,7 @@ class KnowledgeEngine:
     async def call(self, stage: str, schema, payload: dict):
         instructions = {
             'names': 'Inventory explicitly named subjects in the source passages. Return reviewed with EVERY supplied ontology kind set to true, and a single flat names list. Include named locations, buildings, organizations, factions, schools and other named things, not only people. A name mentioned once still counts. Use the most appropriate offered kind. Include explicitly used short names as separate surface proposals, without asserting aliases. Each entry contains ONLY the EXACT source spelling, ontology kind, and ID of a passage containing it. Do not copy or rewrite quotations. Do not translate names. Exclude generic titles, pronouns and unnamed categories. An empty names list is correct; never invent names.',
-            'propose': 'Resolve ONLY the occurrence IDs listed in resolve_only, independently. Existing targets MUST be in that occurrence\'s candidate list and have the same kind; spelling or vector similarity alone is not identity evidence. New targets MUST be an offered representative mention ID from this batch for that same identifiable named subject. If uncertain use unresolved and null target. Never merge distinct people, places or groups. Extract only explicitly supported short facts/descriptions, relationships and events; reference offered mention IDs and supporting passage IDs. No inferred biographies. Values should use target language. Do not treat candidate facts as evidence for a new assertion.',
+            'propose': 'Obey the input contract. For contract=identity, return decisions for ONLY resolve_only and an empty claims array. For contract=claims, return an empty decisions array and extract claims using ONLY verified_occurrence_ids. Existing identity targets MUST be in that occurrence\'s candidate list and have the same kind; spelling or vector similarity alone is not identity evidence. New targets MUST be an offered representative mention ID from this batch for that same identifiable named subject. If uncertain use unresolved and null target. Never merge distinct people, places or groups. Claims must be explicitly supported short facts/descriptions, relationships or events with offered mention IDs and passage IDs. No inferred biographies. Values should use target language. Do not treat candidate facts as evidence for a new assertion.',
             'align': 'Align the saved translation to the offered SOURCE OCCURRENCES. Return exact displayed named phrases, their zero-based occurrence number in the translation, and the matching source mention ID plus supporting passage ID. Different translated spellings can name the same source subject; identical spellings may name different subjects. Include unaligned displayed names with null mention_id and null passage_id. Never infer identity from capitalization alone. Do not rewrite the translation.',
             'verify': 'Independently check EACH proposed item against the provided source and offered context. Return its ID and supported=true ONLY if the evidence explicitly establishes the identity, assertion, or source-to-translation alignment. Same spelling, vector proximity, plausibility and prior mistaken labels are NOT identity evidence. Check occurrence identity and entity kind. Different new names may share a representative ID only with explicit evidence of coreference. Unsupported or uncertain -> false. Quotes alone are not proof that an assertion follows from them.',
         }
@@ -120,13 +120,21 @@ class KnowledgeEngine:
         if len(vectors)!=len(mentions) or any(len(v)!=self.cfg.embed_dim for v in vectors):
             raise ValueError('unexpected entity embedding count or dimension')
         result={}
+        novel_id = self.revision.get('novel_id')
+        if not novel_id:
+            novel_id = (await (await self.db.execute(
+                'SELECT novel_id::text FROM graph_revision WHERE id=%s',(self.revision['id'],)
+            )).fetchone())[0]
+        source_lang = (await (await self.db.execute(
+            'SELECT source_lang FROM novel WHERE id=%s',(novel_id,)
+        )).fetchone())[0]
         for mention,vector in zip(mentions,vectors):
             exact=await (await self.db.execute('''SELECT DISTINCT e.id::text AS entity_id,e.kind,e.canonical
-                FROM entity e LEFT JOIN alias a ON a.entity_id=e.id AND a.revision_id=e.revision_id
+                FROM entity e JOIN alias a ON a.entity_id=e.id AND a.revision_id=e.revision_id
                 WHERE e.revision_id=%s AND e.kind=%s AND e.first_seen_chapter<%s
-                AND (e.canonical=%s OR (a.surface=%s AND a.first_seen_chapter<%s))
+                AND a.surface=%s AND a.lang=%s AND a.first_seen_chapter<%s
                 ORDER BY entity_id LIMIT %s''',(self.revision['id'],mention['kind'],chapter,
-                    mention['surface'],mention['surface'],chapter,CANDIDATE_LIMIT))).fetchall()
+                    mention['surface'],source_lang,chapter,CANDIDATE_LIMIT))).fetchall()
             dense=await (await self.db.execute('''SELECT e.id::text,e.kind,e.canonical
                 FROM entity e WHERE e.revision_id=%s AND e.kind=%s AND e.first_seen_chapter<%s
                 AND e.embedding IS NOT NULL ORDER BY e.embedding <=> %s LIMIT %s''',
@@ -165,18 +173,55 @@ class KnowledgeEngine:
                 name_coverage=coverage,rejected=names.rejected+[dict(rejection='No source-valid named mentions; no identity or fact publication attempted.',proposals=names.model_dump())],
                 source_hash=digest(source),display_hash=digest(display))
         candidates,mention_vectors = await self.candidates_for(chapter,mentions)
-        all_decisions,all_claims=[],[]
+        all_decisions=[]
         for start in range(0,len(mentions),12):
             batch=mentions[start:start+12]
             ids={m['id'] for m in batch}
             proposed=await self.call('propose',Proposals,dict(source=source,mentions=batch,
                 candidates={mid:candidates[mid] for mid in ids},ontology=ontology,target_language=target,
-                resolve_only=list(ids),_passage_ids=self._mention_passages(source,batch)))
+                contract='identity',resolve_only=list(ids),_passage_ids=self._mention_passages(source,batch)))
             all_decisions.extend(d for d in proposed.decisions if d.mention_id in {m['id'] for m in batch})
-            all_claims.extend(proposed.claims)
-        proposals=Proposals(decisions=all_decisions,claims=all_claims)
-        items,rejected = validate_proposals(source,mentions,candidates,proposals,ontology)
-        rejected=names.rejected+rejected
+        identity_items,rejected = validate_proposals(
+            source,mentions,candidates,Proposals(decisions=all_decisions,claims=[]),ontology)
+        identity_verdicts=Verification(verdicts=[])
+        for start in range(0,len(identity_items),12):
+            batch=identity_items[start:start+12]
+            starts={i.get('evidence_start') for i in batch if i.get('evidence_start') is not None}
+            passage_ids=[p['id'] for p in PassageContract(source).passages
+                         if any(p['char_start']<=offset<p['char_end'] for offset in starts)]
+            checked=await self.call('verify',Verification,dict(source=source,items=batch,
+                contract='identity',display_contexts=[],_passage_ids=passage_ids))
+            identity_verdicts.verdicts.extend(checked.verdicts)
+        verified_identities,no=approved(identity_items,identity_verdicts)
+        rejected=names.rejected+rejected+no
+
+        # Claims cannot name an unverified occurrence. This prevents a failed identity
+        # batch from poisoning or erasing otherwise valid claim evidence.
+        verified_occurrence_ids={item['mention_id'] for item in verified_identities}
+        verified_mentions=[m for m in mentions if m['id'] in verified_occurrence_ids]
+        all_claims=[]
+        for start in range(0,len(verified_mentions),12):
+            batch=verified_mentions[start:start+12]
+            proposed=await self.call('propose',Proposals,dict(source=source,mentions=batch,
+                candidates={},ontology=ontology,target_language=target,contract='claims',
+                verified_occurrence_ids=[m['id'] for m in batch],resolve_only=[],
+                _passage_ids=self._mention_passages(source,batch)))
+            all_claims.extend(c for c in proposed.claims
+                              if all(mid in verified_occurrence_ids for mid in c.mention_ids))
+        claim_items,claim_rejected=validate_proposals(
+            source,mentions,candidates,Proposals(decisions=[],claims=all_claims),ontology)
+        rejected.extend(claim_rejected)
+        claim_verdicts=Verification(verdicts=[])
+        for start in range(0,len(claim_items),12):
+            batch=claim_items[start:start+12]
+            starts={i.get('evidence_start') for i in batch if i.get('evidence_start') is not None}
+            passage_ids=[p['id'] for p in PassageContract(source).passages
+                         if any(p['char_start']<=offset<p['char_end'] for offset in starts)]
+            checked=await self.call('verify',Verification,dict(source=source,items=batch,
+                contract='claims',display_contexts=[],_passage_ids=passage_ids))
+            claim_verdicts.verdicts.extend(checked.verdicts)
+        verified_claims,no=approved(claim_items,claim_verdicts)
+        rejected.extend(no)
         spans=[]
         # Bound both translated prose and source occurrences. Windows deliberately
         # fail closed at boundaries; they never manufacture a global offset.
@@ -200,25 +245,25 @@ class KnowledgeEngine:
             by_span[key]=span
         spans=sorted(by_span.values(),key=lambda s:s['char_start'])
         alignment_items = [dict(s,id='alignment:'+s['id'],type='alignment') for s in spans if s['mention_id']]
-        items += alignment_items
-        verdicts=Verification(verdicts=[])
-        for start in range(0,len(items),12):
-            batch=items[start:start+12]
+        alignment_verdicts=Verification(verdicts=[])
+        for start in range(0,len(alignment_items),12):
+            batch=alignment_items[start:start+12]
             starts={i.get('evidence_start') for i in batch if i.get('evidence_start') is not None}
             passage_ids=[p['id'] for p in PassageContract(source).passages
                          if any(p['char_start']<=offset<p['char_end'] for offset in starts)]
             display_contexts=[display[max(0,i['char_start']-120):min(len(display),i['char_end']+120)]
                               for i in batch if i.get('type')=='alignment']
             checked=await self.call('verify',Verification,dict(source=source,items=batch,
-                display_contexts=display_contexts,_passage_ids=passage_ids))
-            verdicts.verdicts.extend(checked.verdicts)
-        verified, no = approved(items,verdicts)
+                contract='alignment',display_contexts=display_contexts,_passage_ids=passage_ids))
+            alignment_verdicts.verdicts.extend(checked.verdicts)
+        verified_alignments, no = approved(alignment_items,alignment_verdicts)
         rejected += no
-        verified_ids = {i['id'] for i in verified}
+        verified_ids = {i['id'] for i in verified_alignments}
         for s in spans:
             if 'alignment:'+s['id'] not in verified_ids:
                 s['mention_id'] = s['quote'] = None
-        roots={i['target_id'] for i in verified if i['id'].startswith('identity:') and i['outcome']=='new'}
+        verified=verified_identities+verified_claims
+        roots={i['target_id'] for i in verified_identities if i['outcome']=='new'}
         representatives=[m for m in mentions if m['id'] in roots]
         vectors=[mention_vectors[m['id']] for m in representatives]
         output=dict(mentions=mentions,name_coverage=coverage,items=[i for i in verified if i.get('type')!='alignment'],
@@ -266,9 +311,18 @@ class KnowledgeEngine:
                     continue
                 entity_id = stable_id(revision,'entity',root['mention_id'])
                 m = mentions[root['mention_id']]
+                canonical = m['surface']
+                if m['kind'].lower() == 'character':
+                    approved = await (await self.db.execute('''SELECT target_term FROM glossary
+                        WHERE novel_id=%s AND source_term=%s AND constraint_class='character_name'
+                        AND NOT deleted''',(novel,m['surface']))).fetchone()
+                    if not approved:
+                        output['rejected'].append(dict(item=d,rejection='character name lacks an approved source-anchored spelling'))
+                        continue
+                    canonical = approved[0]
                 await self.db.execute('''INSERT INTO entity(id,novel_id,kind,canonical,first_seen_chapter,revision_id,embedding)
                     VALUES(%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING''',
-                    (entity_id,novel,m['kind'],m['surface'],chapter,revision,output.get('embeddings',{}).get(root['mention_id'])))
+                    (entity_id,novel,m['kind'],canonical,chapter,revision,output.get('embeddings',{}).get(root['mention_id'])))
             else:
                 entity_id = d['target_id']
             state.resolutions[mid] = entity_id

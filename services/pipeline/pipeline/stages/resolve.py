@@ -127,7 +127,8 @@ async def _target_term_owner(db, novel_id: str, target_term: str) -> str | None:
     """Which source term already claims this target in this novel, if any."""
     row = await (
         await db.execute(
-            "SELECT source_term FROM glossary WHERE novel_id = %s AND target_term = %s AND NOT deleted",
+            "SELECT source_term FROM glossary WHERE novel_id = %s AND target_term = %s "
+            "AND NOT deleted AND constraint_class='semantic_term'",
             (novel_id, target_term),
         )
     ).fetchone()
@@ -166,6 +167,7 @@ async def _lock_glossary(
     target_lang: str = "",
     require_corroboration: bool = True,
     min_proposals: int = GLOSSARY_MIN_PROPOSALS,
+    constraint_class: str = "semantic_term",
 ) -> int | None:
     """Insert one locked term and its tamper-evident audit row.
 
@@ -213,13 +215,17 @@ async def _lock_glossary(
         return None
 
     existing = await (await db.execute(
-        "SELECT target_term,entity_id,version FROM glossary WHERE novel_id=%s AND source_term=%s AND NOT deleted",
+        "SELECT target_term,entity_id,version,constraint_class FROM glossary "
+        "WHERE novel_id=%s AND source_term=%s AND NOT deleted",
         (novel_id,source_term))).fetchone()
     if existing:
-        existing_target,existing_entity,existing_version=existing
+        existing_target,existing_entity,existing_version,existing_class=existing
         if existing_target!=target_term:
             log.warning("resolve: preserving existing glossary wording %r => %r; automatic proposal %r remains unapplied",
                         source_term,existing_target,target_term)
+            return None
+        if existing_class != constraint_class:
+            log.warning("resolve: preserving existing glossary class %r for %r",existing_class,source_term)
             return None
         if entity_id is not None and existing_entity is None:
             await db.execute("UPDATE glossary SET entity_id=%s WHERE novel_id=%s AND source_term=%s",
@@ -233,7 +239,7 @@ async def _lock_glossary(
     # invented name for several distinct entities is the exact failure that made a novel
     # permanently untranslatable — every later translation had to contain that one name
     # once per entity claiming it. First claim wins; later collisions are declined.
-    owner = await _target_term_owner(db, novel_id, target_term)
+    owner = await _target_term_owner(db, novel_id, target_term) if constraint_class == "semantic_term" else None
     if owner is not None and owner != source_term:
         if require_corroboration:
             await _record_candidate(db,novel_id,source_term,target_term,chapter)
@@ -277,12 +283,13 @@ async def _lock_glossary(
         await db.execute(
             """
             INSERT INTO glossary
-              (novel_id, source_term, target_term, entity_id, version, locked_at_chapter)
-            VALUES (%s, %s, %s, %s, %s, %s)
+              (novel_id, source_term, target_term, entity_id, version, locked_at_chapter,
+               constraint_class)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (novel_id, source_term) DO NOTHING
             RETURNING version
             """,
-            (novel_id, source_term, target_term, entity_id, version, chapter),
+            (novel_id, source_term, target_term, entity_id, version, chapter, constraint_class),
         )
     ).fetchone()
     if inserted is None:

@@ -34,7 +34,7 @@ from pipeline.config import Config
 # LLM-bearing stages that get a job row (the job.stage enum, 0001_init.sql:130).
 # chunk/scan are not here: chunk is pure CPU (no LLM, no row); scan's LLM work is folded
 # into resolve.
-LLM_STAGES = ("extract", "resolve", "translate", "state")
+LLM_STAGES = ("extract", "character_names", "resolve", "translate", "state")
 
 _UNIT_SEPARATOR = "\x1f"
 

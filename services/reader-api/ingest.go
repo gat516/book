@@ -27,6 +27,7 @@ type IngestClient interface {
 	GetProviderConfig(ctx context.Context, novelID string) (json.RawMessage, int, error)
 	PutProviderConfig(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	BootstrapGlossary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
+	ApproveCharacterName(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
 	TranslateAhead(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	UpdateNovelSettings(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 }
@@ -102,6 +103,10 @@ func (c *ingestHTTPClient) PutProviderConfig(ctx context.Context, novelID string
 
 func (c *ingestHTTPClient) BootstrapGlossary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
 	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/glossary/bootstrap", body, false)
+}
+
+func (c *ingestHTTPClient) ApproveCharacterName(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/name-reviews/"+url.PathEscape(sourceTerm)+"/approve", body, false)
 }
 
 func (c *ingestHTTPClient) TranslateAhead(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {

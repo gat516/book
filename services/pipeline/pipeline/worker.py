@@ -29,6 +29,7 @@ from pipeline.provider_config import build_provider, load_provider_config
 from pipeline import queue
 from pipeline.failures import record_failure
 from pipeline.stages import DEFAULT_STAGES
+from pipeline.stages.character_names import NameReviewRequired
 from pipeline.stages.translate import TranslateStage
 from pipeline.textproc import textproc_from_config
 
@@ -166,6 +167,10 @@ class Worker:
             disposition = "done"
             try:
                 await self._handle(raw)
+            except NameReviewRequired as exc:
+                # This is an expected, durable pause. The chapter row records why it
+                # stopped and approval will enqueue a fresh pointer.
+                log.info("chapter paused for character-name review: %s", exc)
             except AdmissionRejected as exc:
                 # Backpressure is not a failed chapter. Keep the claim recoverable
                 # during the requested delay, then place it back on the pending queue.
@@ -258,7 +263,7 @@ class Worker:
             log.warning("no chapter row for %s/%s; dropping", msg.novel_id, msg.chapter_index)
             return
         raw_hash, raw_uri, source_meta, _status, readable, translated_uri = chapter
-        if _status == "done":
+        if _status == "done" and not msg.retranslate:
             log.info("chapter %s/%s already done; dropping stale pointer", msg.novel_id, msg.chapter_index)
             return
 
@@ -325,7 +330,7 @@ class Worker:
                 if streaming:
                     _set_stream_sink(provider, self._preview_sink(msg.novel_id, msg.chapter_index))
                 try:
-                    if stage.name == TRANSLATE_STAGE and readable:
+                    if stage.name == TRANSLATE_STAGE and readable and not msg.retranslate:
                         if translated_uri:
                             state.translation = await asyncio.to_thread(self._get_object, translated_uri)
                             TranslateStage._set_chunks(ctx, state, state.translation)
@@ -343,7 +348,7 @@ class Worker:
                                 log.exception("%s failed; translating with existing glossary", stage.name)
                                 continue
                             raise
-                    if stage.name == TRANSLATE_STAGE and not readable:
+                    if stage.name == TRANSLATE_STAGE and (not readable or msg.retranslate):
                         # The translation stage has validated and durably saved the text.
                         # Unknown facts and later enrichment errors cannot revoke it.
                         await self.db.execute(
@@ -374,11 +379,17 @@ class Worker:
         except AdmissionRejected:
             # The outer loop requeues without turning capacity pressure into a job error.
             raise
+        except NameReviewRequired:
+            # Do not record a pipeline failure or show an error. Approval is the only
+            # operation that may release this fail-closed translation gate.
+            await self._set_status(msg, "needs_name_review")
+            await self._clear_preview(msg.novel_id, msg.chapter_index)
+            raise
         except Exception as exc:
             async with self.db.transaction():
                 await record_failure(self.db, msg.novel_id, msg.chapter_index,
                                      enrichment_error[0] if enrichment_error and exc is enrichment_error[1] else stage.name, exc)
-                await self._set_status(msg, "error")
+                await self._set_status(msg, "name_repair_error" if msg.retranslate else "error")
                 if readable:
                     # Retry actual extraction failures, not unknown assertions. Bounded
                     # attempts prevent a malformed response from monopolizing the model.
@@ -403,12 +414,13 @@ class Worker:
         # Keep the due timestamp until the work succeeds. Queue insertion is atomic and
         # deduplicated; a crash between database inspection and enqueue cannot strand it.
         rows = await (await self.db.execute(
-            "SELECT novel_id::text, chapter_index FROM chapter WHERE translation_ready "
-            "AND status='error' AND enrichment_retry_at <= now() AND enrichment_attempts < 3 "
+            "SELECT novel_id::text, chapter_index, status FROM chapter WHERE translation_ready "
+            "AND status IN ('error','name_repair_error') AND enrichment_retry_at <= now() AND enrichment_attempts < 3 "
             "ORDER BY enrichment_retry_at LIMIT 20"
         )).fetchall()
-        for novel_id, chapter in rows:
-            msg = QueueMessage(novel_id=novel_id, chapter_index=chapter, enrichment=True)
+        for novel_id, chapter, status in rows:
+            msg = QueueMessage(novel_id=novel_id, chapter_index=chapter, enrichment=True,
+                               retranslate=status == "name_repair_error")
             await self.redis.eval(queue.ENQUEUE_ENRICHMENT, len(queue.KEYS), *queue.KEYS,
                                   novel_id, chapter, msg.model_dump_json())
 

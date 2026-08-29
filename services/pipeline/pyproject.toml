@@ -19,6 +19,8 @@ dependencies = [
     # Decrypts novel_provider_config.api_key_cipher (PLAN.md Phase N4) — AES-GCM,
     # matching services/ingest-api/crypto.go's stdlib crypto/aes+cipher encryption.
     "cryptography>=42",
+    # Deterministic Hanzi -> Hanyu Pinyin candidates for source-anchored character names.
+    "pypinyin>=0.54",
 ]
 
 [project.optional-dependencies]

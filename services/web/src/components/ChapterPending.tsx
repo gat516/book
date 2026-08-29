@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { getChapterPreview, prioritizeChapter, putProgress, translateAhead } from "../api";
 import { usePolling } from "../usePolling";
 import { PipelineStatus } from "./PipelineStatus";
+import { NameReviewPanel } from "./NameReviewPanel";
 
 interface Props {
   novelId: string;
@@ -72,7 +73,7 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
   // anything. Waiting through the earlier stages, which take minutes and show nothing,
   // polls slowly. Stops entirely once readable or failed.
   const streaming = preview !== null && status !== "done";
-  const settled = ready || status === "error" || error !== null;
+  const settled = ready || status === "error" || status === "needs_name_review" || error !== null;
   usePolling(poll, streaming ? 2000 : 6000, initialRequestDone && !settled && !requestingMore);
 
   async function requestMore(priority = false) {
@@ -102,7 +103,9 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
         Chapter {chapterIndex}
         {siteChapterNo && <span className="chapter-pending-site"> — {siteChapterNo}</span>}
       </h2>
-      {status === "error" ? (
+      {status === "needs_name_review" ? (
+        <p>This chapter is paused until a character-name spelling is approved below.</p>
+      ) : status === "error" ? (
         // Previously this view waited forever on a chapter that had already failed: the
         // old readiness probe couldn't tell "not ready yet" from "will never be ready".
         <p className="chapter-pending-error">
@@ -114,6 +117,11 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
       )}
       {priorityNotice && <p role="status">{priorityNotice}</p>}
       <PipelineStatus novelId={novelId} />
+      {status === "needs_name_review" && <NameReviewPanel novelId={novelId} chapter={chapterIndex} onApproved={() => {
+        setStatus("queued");
+        setReady(false);
+        void poll();
+      }} />}
 
       {/* Only shown while the TRANSLATE stage is actually streaming. Earlier stages emit
           JSON, not prose, so there is deliberately nothing to show during those — the

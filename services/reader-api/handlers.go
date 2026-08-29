@@ -54,9 +54,75 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("PATCH /novels/{id}/glossary/{term}", a.patchGlossaryTerm)
 	mux.HandleFunc("DELETE /novels/{id}/glossary/{term}", a.patchGlossaryTerm)
 	mux.HandleFunc("POST /novels/{id}/glossary/bootstrap", a.postBootstrapGlossary)
+	mux.HandleFunc("GET /novels/{id}/name-reviews", a.getCharacterNameReviews)
+	mux.HandleFunc("POST /novels/{id}/name-reviews/{term}/approve", a.approveCharacterName)
 	mux.HandleFunc("GET /novels/{id}/provider-config", a.getProviderConfig)
 	mux.HandleFunc("PATCH /novels/{id}/provider-config", a.putProviderConfig)
 	return mux
+}
+
+func (a *API) getCharacterNameReviews(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	if status := r.URL.Query().Get("status"); status != "" && status != "pending" {
+		writeError(w, http.StatusBadRequest, "only status=pending is supported")
+		return
+	}
+	var chapter *int
+	if raw := r.URL.Query().Get("chapter"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			writeError(w, http.StatusBadRequest, "chapter must be a nonnegative integer")
+			return
+		}
+		chapter = &value
+	}
+	reviews, err := a.store.ListNameReviews(r.Context(), novelID, chapter)
+	if err != nil {
+		log.Printf("list name reviews: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load name reviews")
+		return
+	}
+	writeJSON(w, http.StatusOK, CharacterNameReviewsResponse{NovelID: novelID, Reviews: reviews})
+}
+
+func (a *API) approveCharacterName(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	reviewer, ok := readerID(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "X-Reader-ID is required")
+		return
+	}
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read request body")
+		return
+	}
+	var value map[string]any
+	if err := json.Unmarshal(body, &value); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	value["reviewer"] = reviewer
+	body, _ = json.Marshal(value)
+	result, status, err := a.ingest.ApproveCharacterName(r.Context(), novelID, r.PathValue("term"), body)
+	if err != nil {
+		log.Printf("approve character name: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

@@ -16,6 +16,7 @@ so its position relative to state is free.
 """
 
 from pipeline.stages.chunk import ChunkStage
+from pipeline.stages.character_names import CharacterNamesStage
 from pipeline.stages.display_scan import DisplayScanStage
 from pipeline.stages.graph_write import GraphWriteStage
 from pipeline.stages.resolve import ResolveStage
@@ -26,6 +27,7 @@ from pipeline.stages.translate import TranslateStage
 # The pipeline in runtime order (§5).
 DEFAULT_STAGES = [
     ChunkStage(),
+    CharacterNamesStage(),
     ScanStage(),
     ResolveStage(),
     TranslateStage(),
@@ -36,6 +38,7 @@ DEFAULT_STAGES = [
 
 __all__ = [
     "ChunkStage",
+    "CharacterNamesStage",
     "ScanStage",
     "ResolveStage",
     "TranslateStage",

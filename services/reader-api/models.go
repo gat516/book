@@ -96,6 +96,25 @@ type GlossaryResponse struct {
 	Terms     []GlossaryTermView `json:"terms"`
 }
 
+type CharacterNameCandidate struct {
+	TargetTerm    string   `json:"target_term"`
+	Pronunciation []string `json:"pronunciation"`
+	Segmentation  string   `json:"segmentation"`
+}
+
+type CharacterNameReview struct {
+	SourceTerm       string                   `json:"source_term"`
+	FirstSeenChapter int                      `json:"first_seen_chapter"`
+	Quote            string                   `json:"quote"`
+	Reason           string                   `json:"reason"`
+	Candidates       []CharacterNameCandidate `json:"candidates"`
+}
+
+type CharacterNameReviewsResponse struct {
+	NovelID string                `json:"novel_id"`
+	Reviews []CharacterNameReview `json:"reviews"`
+}
+
 type ScrapeJobView struct {
 	ID              int64     `json:"id"`
 	NovelID         string    `json:"novel_id"`

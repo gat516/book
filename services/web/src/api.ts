@@ -4,6 +4,7 @@ import type {
   BootstrapGlossaryRequest,
   BootstrapGlossaryResponse,
   ChapterListResponse,
+  CharacterNameReviewsResponse,
   ChapterResponse,
   CorrectGlossaryTermRequest,
   CorrectGlossaryTermResponse,
@@ -141,6 +142,19 @@ export function bootstrapGlossary(
   return request(`/novels/${novelId}/glossary/bootstrap`, {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+export function getCharacterNameReviews(novelId: string, chapter?: number): Promise<CharacterNameReviewsResponse> {
+  const query = new URLSearchParams({ status: "pending" });
+  if (chapter !== undefined) query.set("chapter", String(chapter));
+  return request(`/novels/${novelId}/name-reviews?${query}`);
+}
+
+export function approveCharacterName(novelId: string, sourceTerm: string, targetTerm: string): Promise<unknown> {
+  return request(`/novels/${novelId}/name-reviews/${encodeURIComponent(sourceTerm)}/approve`, {
+    method: "POST",
+    body: JSON.stringify({ target_term: targetTerm }),
   });
 }
 

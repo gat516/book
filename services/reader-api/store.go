@@ -47,6 +47,32 @@ type ReaderStore interface {
 	LatestScrapeJob(context.Context, string) (ScrapeJobView, error)
 	RequestScrapeCancel(context.Context, string) error
 	ListGlossary(context.Context, string, int) ([]GlossaryTermView, error)
+	ListNameReviews(context.Context, string, *int) ([]CharacterNameReview, error)
+}
+
+func (s *Store) ListNameReviews(ctx context.Context, novelID string, chapter *int) ([]CharacterNameReview, error) {
+	rows, err := s.readerDB.Query(ctx, `SELECT r.source_term,r.first_seen_chapter,r.quote,r.reason,r.candidates
+		FROM character_name_review r WHERE r.novel_id=$1 AND r.status='pending'
+		AND ($2::int IS NULL OR EXISTS (SELECT 1 FROM character_name_occurrence o
+			WHERE o.novel_id=r.novel_id AND o.source_term=r.source_term AND o.chapter_index=$2))
+		ORDER BY r.first_seen_chapter,r.source_term`, novelID, chapter)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	reviews := []CharacterNameReview{}
+	for rows.Next() {
+		var review CharacterNameReview
+		var candidates []byte
+		if err := rows.Scan(&review.SourceTerm, &review.FirstSeenChapter, &review.Quote, &review.Reason, &candidates); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(candidates, &review.Candidates); err != nil {
+			return nil, err
+		}
+		reviews = append(reviews, review)
+	}
+	return reviews, rows.Err()
 }
 
 type Store struct {

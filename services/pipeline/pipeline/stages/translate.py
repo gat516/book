@@ -44,19 +44,19 @@ async def _chapter_row(db, novel_id: str, chapter: int):
     ).fetchone()
 
 
-async def _glossary(db, novel_id: str) -> tuple[int, list[tuple[str, str]]]:
+async def _glossary(db, novel_id: str) -> tuple[int, list[tuple[str, str, str]]]:
     rows = await (
         await db.execute(
-            "SELECT source_term, target_term, version, deleted FROM glossary "
+            "SELECT source_term, target_term, version, deleted, constraint_class FROM glossary "
             "WHERE novel_id = %s ORDER BY source_term",
             (novel_id,),
         )
     ).fetchall()
     # Tombstones still advance the cache version, including deletion of the last term.
-    return (max((r[2] for r in rows), default=0), [(r[0], r[1]) for r in rows if not r[3]])
+    return (max((r[2] for r in rows), default=0), [(r[0], r[1], r[4]) for r in rows if not r[3]])
 
 
-def _translation_fingerprint(ctx: StageContext, glossary: list[tuple[str, str]]) -> str:
+def _translation_fingerprint(ctx: StageContext, glossary) -> str:
     """Hash every stable input included in the translation system prompt."""
     payload = [
         "translation-input-v2",
@@ -280,6 +280,10 @@ class TranslateStage:
             except GlossaryViolation as retry_violation:
                 if not retry_violation.recoverable:
                     raise
+                if first_violation.hard or retry_violation.hard:
+                    # Character-name spellings are identity-bearing terminology. Never
+                    # publish a replacement that omits or retranslates one.
+                    raise retry_violation
                 # The ordinary completion is readable and contains no protection markup.
                 # Preserve it, report only an operational count, and let enrichment run.
                 warning_count = max(first_violation.term_count, retry_violation.term_count, 1)
@@ -310,6 +314,19 @@ class TranslateStage:
                     "WHERE id = %s AND translation_provider IS NULL",
                     (translated_by, ctx.novel.id),
                 )
+            next_version = await (await ctx.db.execute(
+                "SELECT COALESCE(MAX(version),0)+1 FROM chapter_translation_version "
+                "WHERE novel_id=%s AND chapter_index=%s",
+                (ctx.novel.id, chapter),
+            )).fetchone()
+            await ctx.db.execute(
+                "INSERT INTO chapter_translation_version "
+                "(novel_id,chapter_index,version,translated_uri,translated_by,glossary_version,translation_fingerprint,reason) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                (ctx.novel.id, chapter, next_version[0], uri, translated_by,
+                 glossary_version, translation_fingerprint,
+                 "name-repair" if next_version[0] > 1 else "initial"),
+            )
             await ctx.db.execute(
                 "UPDATE chapter SET translated_uri = %s, translated_by = %s, glossary_version = %s, "
                 "translation_warning_code = %s, translation_warning_count = %s "
