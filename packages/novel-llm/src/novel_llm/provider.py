@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import NotRequired, Protocol, TypedDict, runtime_checkable
+
+import httpx
+
+# Statuses that mean "ask again later", not "this request is wrong". 429 is a rate limit,
+# 5xx and 408 are the backend failing to serve a request that is itself valid.
+TRANSIENT_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 
 
 class Class(Enum):
@@ -122,3 +129,38 @@ def system_with_schema(system: str, schema: dict | None) -> str:
     if schema is None:
         return system
     return system + "\nReturn JSON matching this schema:\n" + json.dumps(schema, ensure_ascii=False)
+
+
+@contextlib.asynccontextmanager
+async def transient_as_backpressure(*, default_retry_s: float = 5.0):
+    """Re-raise transient transport failures as AdmissionRejected.
+
+    The distinction this draws is the one the worker already acts on. A malformed model
+    response is a property of THIS chapter and should fail it; a rate limit, a 503, or a
+    refused connection says nothing about the chapter at all, and failing it burns a retry
+    from a budget meant for real problems. AdmissionRejected is the existing name for that
+    second case ("retry without counting as failure"), so this maps onto it rather than
+    inventing a parallel error path.
+
+    Concretely: when Ollama was OOM-killed mid-run, five chapters died at once on
+    ConnectError. Under this they requeue instead.
+    """
+    try:
+        yield
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code not in TRANSIENT_STATUS:
+            raise
+        # Honour a server-supplied delay when there is one; a rate limiter knows better
+        # than any constant we would pick.
+        retry_after = exc.response.headers.get("retry-after", "")
+        try:
+            delay = float(retry_after)
+        except ValueError:
+            delay = default_retry_s
+        raise AdmissionRejected(
+            f"{exc.response.status_code} from provider", retry_after_s=max(delay, 0.0)
+        ) from exc
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
+            httpx.WriteTimeout, httpx.PoolTimeout, httpx.RemoteProtocolError) as exc:
+        raise AdmissionRejected(f"provider unreachable: {type(exc).__name__}",
+                                retry_after_s=default_retry_s) from exc

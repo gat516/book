@@ -23,6 +23,7 @@ from novel_llm import (
     Completion,
     DeepSeekProvider,
     GatewayProvider,
+    GeminiProvider,
     LLMProvider,
     OllamaProvider,
 )
@@ -48,6 +49,12 @@ def provider_from_env(cfg: Config, *, tenant: str = "default") -> LLMProvider:
                 model=cfg.llm_model_extract,
                 base_url=cfg.deepseek_base_url,
                 api_key=cfg.deepseek_api_key,
+            )
+        case "gemini":
+            return GeminiProvider(
+                model=cfg.llm_model_extract,
+                base_url=cfg.gemini_base_url,
+                api_key=cfg.gemini_api_key or None,
             )
         case "gateway":
             return GatewayProvider(address=cfg.gateway_addr, tenant=tenant,

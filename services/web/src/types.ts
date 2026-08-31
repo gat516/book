@@ -22,7 +22,7 @@ export interface CreateNovelRequest {
   // This novel's own LLM provider, overriding the process-wide default. The key is
   // encrypted server-side and never read back — reads report only whether one is set.
   provider_config?: {
-    provider: "anthropic" | "deepseek" | "ollama";
+    provider: "anthropic" | "deepseek" | "gemini" | "ollama";
     model?: string;
     base_url?: string;
     api_key?: string;

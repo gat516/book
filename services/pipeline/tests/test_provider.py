@@ -211,3 +211,58 @@ async def test_matching_served_model_is_cacheable():
         served_provider=result.served_provider,
         served_model=result.served_model,
     )
+
+
+# --- transient failure handling (graceful degradation) ----------------------------
+# The distinction under test: a malformed model response is a property of THIS chapter and
+# should fail it; a rate limit or a refused connection says nothing about the chapter and
+# must not burn a retry. AdmissionRejected is the worker's existing "requeue, don't count
+# it" signal, so transient transport failures map onto it.
+
+import httpx
+
+from novel_llm.provider import transient_as_backpressure
+
+
+def _status_error(code: int, headers: dict | None = None) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://example.invalid/chat/completions")
+    response = httpx.Response(code, headers=headers or {}, request=request)
+    return httpx.HTTPStatusError("boom", request=request, response=response)
+
+
+async def test_rate_limit_becomes_backpressure_honouring_retry_after():
+    """A rate limiter's own delay beats any constant we would invent."""
+    with pytest.raises(AdmissionRejected) as caught:
+        async with transient_as_backpressure():
+            raise _status_error(429, {"retry-after": "42"})
+    assert caught.value.retry_after_s == 42.0
+
+
+async def test_rate_limit_without_a_header_falls_back_to_the_default_delay():
+    with pytest.raises(AdmissionRejected) as caught:
+        async with transient_as_backpressure(default_retry_s=7.5):
+            raise _status_error(429)
+    assert caught.value.retry_after_s == 7.5
+
+
+async def test_unreachable_provider_becomes_backpressure():
+    """The Ollama OOM case: five chapters died at once on ConnectError because a dead
+    backend was recorded as five bad chapters."""
+    with pytest.raises(AdmissionRejected):
+        async with transient_as_backpressure():
+            raise httpx.ConnectError("all connection attempts failed")
+
+
+@pytest.mark.parametrize("code", [400, 401, 403, 404, 422])
+async def test_client_errors_are_not_backpressure(code):
+    """A bad request will fail identically forever; retrying it wastes the budget and
+    hides the real defect."""
+    with pytest.raises(httpx.HTTPStatusError):
+        async with transient_as_backpressure():
+            raise _status_error(code)
+
+
+async def test_success_path_is_transparent():
+    async with transient_as_backpressure():
+        value = 1
+    assert value == 1

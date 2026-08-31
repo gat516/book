@@ -11,6 +11,7 @@ interface Props {
 const DEFAULT_MODEL: Record<string, string> = {
   deepseek: "deepseek-chat",
   anthropic: "claude-haiku-4-5",
+  gemini: "gemini-3.5-flash",
   ollama: "",
 };
 
@@ -47,7 +48,7 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
         genre: genre || undefined,
         provider_config: provider
           ? {
-              provider: provider as "anthropic" | "deepseek" | "ollama",
+              provider: provider as "anthropic" | "deepseek" | "gemini" | "ollama",
               model: model.trim() || undefined,
               base_url: baseURL.trim() || undefined,
               api_key: apiKey.trim() || undefined,
@@ -94,6 +95,7 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
             <option value="">Server default</option>
             <option value="deepseek">DeepSeek</option>
             <option value="anthropic">Anthropic</option>
+            <option value="gemini">Gemini</option>
             <option value="ollama">Ollama (local)</option>
           </select>
         </label>

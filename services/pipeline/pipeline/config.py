@@ -83,6 +83,10 @@ class Config:
     gateway_backend: str = "local_gpu"
     gateway_provider: str = "ollama"
     gateway_max_output_tokens: int = 8192
+    # Gemini speaks the OpenAI chat dialect through Google's compatibility endpoint,
+    # so it needs only a key and a base -- no SDK, same shape as deepseek above.
+    gemini_api_key: str = ""
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     # Two distinct budgets, not one. graph_ollama_first_token_seconds bounds PREFILL —
     # Ollama's stream emits nothing at all while it processes the prompt, so this must
     # cover the whole prompt_eval phase. graph_ollama_timeout_seconds bounds the gap
@@ -152,6 +156,8 @@ class Config:
             gateway_backend=_getenv("LLM_GATEWAY_BACKEND", "local_gpu"),
             gateway_provider=_getenv("LLM_GATEWAY_PROVIDER", "ollama"),
             gateway_max_output_tokens=int(_getenv("LLM_GATEWAY_MAX_OUTPUT_TOKENS", "8192")),
+            gemini_api_key=_getenv("GEMINI_API_KEY", ""),
+            gemini_base_url=_getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
             glossary_min_proposals=int(_getenv("GLOSSARY_MIN_PROPOSALS", "2")),
             prompt_version=_getenv("PROMPT_VERSION", "1"),
             config_version=_getenv("CONFIG_VERSION", "1"),

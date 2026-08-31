@@ -9,7 +9,9 @@ from collections.abc import Awaitable, Callable
 
 import httpx
 
-from novel_llm.provider import Class, Completion, SequentialBatchMixin
+from novel_llm.provider import (
+    Class, Completion, SequentialBatchMixin, transient_as_backpressure,
+)
 from novel_llm.admission import ollama_session
 
 # Called with the text accumulated SO FAR (not the latest token), so a consumer can simply
@@ -91,8 +93,9 @@ class OllamaProvider(SequentialBatchMixin):
         if self._options and "options" not in payload:
             payload["options"] = dict(self._options)
         if not payload["stream"]:
-            resp = await self._client.post("/api/chat", json=payload)
-            resp.raise_for_status()
+            async with transient_as_backpressure():
+                resp = await self._client.post("/api/chat", json=payload)
+                resp.raise_for_status()
             body = resp.json()
             self._check_body(body)
             return Completion(text=body["message"]["content"], served_provider="ollama",
@@ -122,7 +125,14 @@ class OllamaProvider(SequentialBatchMixin):
         final = None
         started = time.monotonic()
         first_token = None
-        async with self._client.stream("POST", "/api/chat", json=payload) as resp:
+        # Covers the whole read loop on purpose: when llama-server is OOM-killed
+        # mid-generation the stream dies as a transport error, which is backpressure,
+        # not a bad chapter. The budget's own TimeoutError is a builtin and passes
+        # through untouched -- "too slow" stays a real failure.
+        async with (
+            transient_as_backpressure(),
+            self._client.stream("POST", "/api/chat", json=payload) as resp,
+        ):
             resp.raise_for_status()
             lines = resp.aiter_lines().__aiter__()
             while True:
@@ -171,8 +181,9 @@ class OllamaProvider(SequentialBatchMixin):
     async def embed(self, texts: list[str], *, cls: Class = Class.BATCH) -> list[list[float]]:
         async with ollama_session(self._host, timeout=0 if cls == Class.INTERACTIVE else 30):
             async with asyncio.timeout(self._total_timeout):
-                resp = await self._client.post("/api/embed", json={"model": self._model, "input": texts})
-                resp.raise_for_status()
+                async with transient_as_backpressure():
+                    resp = await self._client.post("/api/embed", json={"model": self._model, "input": texts})
+                    resp.raise_for_status()
                 return resp.json()["embeddings"]
 
     async def aclose(self) -> None:

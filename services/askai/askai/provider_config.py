@@ -19,7 +19,8 @@ from dataclasses import dataclass
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from novel_llm import AnthropicProvider, DeepSeekProvider, LLMProvider, OllamaProvider
+from novel_llm import AnthropicProvider, DeepSeekProvider, GeminiProvider, LLMProvider, OllamaProvider
+from novel_llm.gemini import DEFAULT_BASE_URL as GEMINI_BASE_URL
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,14 @@ def build_provider(row: ProviderConfigRow, *, default_model: str, ollama_host: s
             return OllamaProvider(host=row.base_url or ollama_host, model=row.model or default_model)
         case "anthropic":
             return AnthropicProvider(model=row.model or default_model, api_key=row.api_key)
+        case "gemini":
+            # No gemini_base_url parameter here: the endpoint is a fixed Google URL, so the
+            # provider's own default stands in rather than widening this signature.
+            return GeminiProvider(
+                model=row.model or default_model,
+                base_url=row.base_url or GEMINI_BASE_URL,
+                api_key=row.api_key,
+            )
         case "deepseek":
             return DeepSeekProvider(
                 model=row.model or default_model,

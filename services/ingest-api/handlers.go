@@ -159,9 +159,9 @@ func (a *API) createNovel(w http.ResponseWriter, r *http.Request) {
 // needs the key but the server has none configured.
 func (a *API) buildProviderConfigInput(req providerConfigReq) (ProviderConfigInput, error) {
 	switch req.Provider {
-	case "anthropic", "deepseek", "ollama":
+	case "anthropic", "deepseek", "gemini", "ollama":
 	default:
-		return ProviderConfigInput{}, fmt.Errorf("provider must be one of anthropic, deepseek, ollama")
+		return ProviderConfigInput{}, fmt.Errorf("provider must be one of anthropic, deepseek, gemini, ollama")
 	}
 
 	in := ProviderConfigInput{Provider: req.Provider, Model: req.Model, BaseURL: req.BaseURL}

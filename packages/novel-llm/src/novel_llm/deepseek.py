@@ -9,7 +9,9 @@ import os
 
 import httpx
 
-from novel_llm.provider import Class, Completion, SequentialBatchMixin, system_with_schema
+from novel_llm.provider import (
+    Class, Completion, SequentialBatchMixin, system_with_schema, transient_as_backpressure,
+)
 
 
 class DeepSeekProvider(SequentialBatchMixin):
@@ -41,8 +43,9 @@ class DeepSeekProvider(SequentialBatchMixin):
         payload: dict = {"model": use_model, "messages": messages}
         if json_mode or json_schema is not None:
             payload["response_format"] = {"type": "json_object"}
-        resp = await self._client.post("/chat/completions", json=payload)
-        resp.raise_for_status()
+        async with transient_as_backpressure():
+            resp = await self._client.post("/chat/completions", json=payload)
+            resp.raise_for_status()
         body = resp.json()
         usage = body.get("usage", {})
         return Completion(
