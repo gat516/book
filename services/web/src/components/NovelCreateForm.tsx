@@ -1,19 +1,11 @@
 import { useState } from "react";
 import { createNovel } from "../api";
+import { DEFAULT_MODEL } from "../providers";
 
 interface Props {
   onCreated: (novelId: string) => void;
   onCancel: () => void;
 }
-
-// Sensible per-provider defaults so choosing a provider doesn't also require knowing its
-// model names. Empty means "let the server decide".
-const DEFAULT_MODEL: Record<string, string> = {
-  deepseek: "deepseek-chat",
-  anthropic: "claude-haiku-4-5",
-  gemini: "gemini-3.5-flash",
-  ollama: "",
-};
 
 export function NovelCreateForm({ onCreated, onCancel }: Props) {
   const [title, setTitle] = useState("");

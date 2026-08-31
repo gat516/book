@@ -21,12 +21,7 @@ export interface CreateNovelRequest {
   genre?: string;
   // This novel's own LLM provider, overriding the process-wide default. The key is
   // encrypted server-side and never read back — reads report only whether one is set.
-  provider_config?: {
-    provider: "anthropic" | "deepseek" | "gemini" | "ollama";
-    model?: string;
-    base_url?: string;
-    api_key?: string;
-  };
+  provider_config?: SaveProviderConfigRequest;
   // Work windows. Separate because the work differs by orders of magnitude: fetching a
   // chapter is one request, translating it is a dozen-plus sequential LLM calls. 0 =
   // unlimited; omitted keeps the server default.
@@ -305,4 +300,25 @@ export interface Progress {
   reader_id: string;
   current_chapter: number;
   updated_at: string;
+}
+
+
+export type ProviderName = "anthropic" | "deepseek" | "gemini" | "ollama";
+
+// Write shape. api_key is plaintext in transit and encrypted (AES-GCM) before it reaches
+// Postgres; it is never stored or returned as such.
+export interface SaveProviderConfigRequest {
+  provider: ProviderName;
+  model?: string;
+  base_url?: string;
+  api_key?: string;
+}
+
+// Read shape (ingest-api's ProviderConfigView). Deliberately asymmetric with the write
+// shape: the key is never read back, only whether one exists.
+export interface ProviderConfigView {
+  provider: ProviderName;
+  model?: string;
+  base_url?: string;
+  api_key_set: boolean;
 }

@@ -10,6 +10,7 @@ import { NovelPicker } from "./components/NovelPicker";
 import { ProgressControls } from "./components/ProgressControls";
 import { ReaderPane } from "./components/ReaderPane";
 import { TranslationNotice } from "./components/TranslationNotice";
+import { ProviderConfigPanel } from "./components/ProviderConfigPanel";
 import { QueueControls } from "./components/QueueControls";
 import type { ChapterListItem, ChapterResponse } from "./types";
 
@@ -214,6 +215,7 @@ export default function App() {
         <label><input type="checkbox" checked={!clickableEntities} onChange={(event) => changeClickableEntities(!event.target.checked)} /> Show hover previews</label>
         <p>Highlighted names are always clickable, even when no information is linked yet. Enable previews to also see a card on hover. Saved in this browser.</p>
       </details>
+      <ProviderConfigPanel key={`provider-${novelId}`} novelId={novelId} />
       {showGlossary && <GlossaryView key={novelId} novelId={novelId} at={chapter?.at} />}
       <div hidden={showGlossary}>
         {navigationError && <p role="alert" className="chapter-list-error">{navigationError}</p>}

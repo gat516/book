@@ -49,7 +49,7 @@ type novelSettingsReq struct {
 }
 
 type providerConfigReq struct {
-	Provider string `json:"provider"` // anthropic|deepseek|ollama
+	Provider string `json:"provider"` // anthropic|deepseek|gemini|ollama
 	Model    string `json:"model,omitempty"`
 	BaseURL  string `json:"base_url,omitempty"`
 	APIKey   string `json:"api_key,omitempty"` // plaintext in the request; never stored as such

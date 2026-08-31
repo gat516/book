@@ -17,6 +17,8 @@ import type {
   PipelineStatusResponse,
   TranslationHealth,
   PasteChapterRequest,
+  ProviderConfigView,
+  SaveProviderConfigRequest,
   PasteChapterResponse,
   Progress,
   ScrapeJobView,
@@ -245,4 +247,26 @@ export function getKnowledgeStatus(novelId: string, chapter: number): Promise<im
 }
 export function getRelationships(novelId: string, entityId: string, at: number): Promise<{relationships: import('./types').Relationship[]}> {
   return request(`/novels/${novelId}/relationships/${entityId}?at=${at}`);
+}
+
+
+// null (not a thrown 404) when the novel has no provider_config row: "inheriting the
+// server default" is an ordinary state for a novel, not an error the caller must catch.
+export async function getProviderConfig(novelId: string): Promise<ProviderConfigView | null> {
+  try {
+    return await request<ProviderConfigView>(`/novels/${novelId}/provider-config`);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+export function saveProviderConfig(
+  novelId: string,
+  body: SaveProviderConfigRequest,
+): Promise<ProviderConfigView> {
+  return request(`/novels/${novelId}/provider-config`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
 }

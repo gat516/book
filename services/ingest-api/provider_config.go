@@ -104,8 +104,15 @@ func (s *Store) UpsertProviderConfig(ctx context.Context, novelID string, cfg Pr
 		   provider = EXCLUDED.provider,
 		   model = EXCLUDED.model,
 		   base_url = EXCLUDED.base_url,
-		   api_key_cipher = EXCLUDED.api_key_cipher,
-		   api_key_nonce = EXCLUDED.api_key_nonce,
+		   -- COALESCE, unlike the columns above, because the key is the one field a
+		   -- client CANNOT round-trip: reads return api_key_set, never the key itself
+		   -- (ProviderConfigView). Overwriting it with EXCLUDED meant any edit that
+		   -- omitted the key -- changing just the model, say -- silently destroyed it,
+		   -- leaving a provider row that can no longer authenticate. Model and base_url
+		   -- keep EXCLUDED semantics: a client can read those back and send them again,
+		   -- so clearing them is a legitimate thing to express.
+		   api_key_cipher = COALESCE(EXCLUDED.api_key_cipher, novel_provider_config.api_key_cipher),
+		   api_key_nonce = COALESCE(EXCLUDED.api_key_nonce, novel_provider_config.api_key_nonce),
 		   updated_at = now()`,
 		novelID, cfg.Provider, modelArg, baseURLArg, cipherArg, nonceArg,
 	)
