@@ -102,7 +102,7 @@ class SlowStream(httpx.AsyncByteStream):
 
 async def test_internal_streaming_without_preview_collects_metrics():
     provider=OllamaProvider(host='http://test',model='model',stream=True,timeout=900,total_timeout=1800)
-    assert provider._client.timeout.read==900
+    assert provider._client.timeout.read==1800
     assert provider._client.timeout.connect==10
     await provider._client.aclose()
     def handle(request):
@@ -120,6 +120,18 @@ async def test_internal_streaming_without_preview_collects_metrics():
         assert result.served_model=='actual' and result.input_tokens==10 and result.output_tokens==5
         assert result.timings['load_seconds']==1 and result.timings['eval_seconds']==6
         assert result.timings['first_token_seconds']>0
+    finally:
+        await provider.aclose()
+
+
+async def test_streaming_uses_a_separate_prefill_budget():
+    provider=OllamaProvider(host='http://test',model='model',stream=True,timeout=10,first_token_timeout=.01)
+    await provider._client.aclose()
+    provider._client=httpx.AsyncClient(base_url='http://test',transport=httpx.MockTransport(
+        lambda request:httpx.Response(200,stream=SlowStream([dict(message=dict(content='late'))],delay=.05))))
+    try:
+        with pytest.raises(TimeoutError,match='0.01s prefill budget'):
+            await provider.complete('source')
     finally:
         await provider.aclose()
 
@@ -211,7 +223,7 @@ async def test_real_http_idle_timeout_tracks_stream_activity(stall):
     provider=OllamaProvider(host=f'http://127.0.0.1:{port}',model='fake',stream=True,timeout=.2,total_timeout=3)
     try:
         if stall:
-            with pytest.raises(httpx.ReadTimeout):
+            with pytest.raises(TimeoutError,match='prefill budget'):
                 await provider.complete('test')
         else:
             result=await provider.complete('test')

@@ -20,17 +20,30 @@ StreamSink = Callable[[str], Awaitable[None]]
 class OllamaProvider(SequentialBatchMixin):
     def __init__(self, *, host: str, model: str, timeout: float = 120.0,
                  num_ctx: int | None = None, num_predict: int | None = None,
-                 stream: bool = False, total_timeout: float | None = None) -> None:
+                 stream: bool = False, total_timeout: float | None = None,
+                 first_token_timeout: float | None = None) -> None:
         super().__init__()
         self._host = host.rstrip("/")
         self._model = model
         self._options = {k:v for k,v in {"num_ctx":num_ctx,"num_predict":num_predict}.items() if v is not None}
         if timeout <= 0 or (total_timeout is not None and total_timeout <= 0):
             raise ValueError("Ollama timeouts must be positive")
+        if first_token_timeout is not None and first_token_timeout <= 0:
+            raise ValueError("Ollama timeouts must be positive")
         self._stream = stream
         self._total_timeout = total_timeout
+        # Prefill and inter-token stalls are different failures with different healthy
+        # durations. Ollama sends no bytes at all while processing the prompt, so a single
+        # read timeout covering both has to be sized for the slowest prefill — which makes
+        # it useless for catching a stream that dies mid-generation. Defaults to `timeout`
+        # so callers that never cared keep their existing single-budget behavior.
+        self._idle_timeout = timeout
+        self._first_token_timeout = timeout if first_token_timeout is None else first_token_timeout
+        # httpx no longer arbitrates read deadlines: the budgets below do, per chunk, so
+        # they can differ before and after the first token. Connect/pool stay short.
+        read_ceiling = total_timeout if total_timeout is not None else max(self._idle_timeout, self._first_token_timeout)
         self._client = httpx.AsyncClient(base_url=self._host,
-            timeout=httpx.Timeout(timeout, connect=min(timeout, 10), pool=min(timeout, 10)))
+            timeout=httpx.Timeout(read_ceiling, connect=min(timeout, 10), pool=min(timeout, 10)))
         # Optional observer for partial output. Set it to watch a long completion arrive
         # incrementally; leave it None and nothing about this provider changes.
         #
@@ -47,11 +60,17 @@ class OllamaProvider(SequentialBatchMixin):
                        model: str | None = None, json_schema: dict | None = None) -> Completion:
         async with ollama_session(self._host, timeout=0 if cls == Class.INTERACTIVE else 30) as waited:
             started = time.monotonic()
+            deadline = asyncio.timeout(self._total_timeout)
             try:
-                async with asyncio.timeout(self._total_timeout):
+                async with deadline:
                     result = await self._complete(prompt, system=system, json_mode=json_mode,
                                                   model=model, json_schema=json_schema)
             except TimeoutError as exc:
+                # Do not relabel an explicit prefill/idle timeout as the total deadline.
+                # asyncio.timeout(None) is deliberately a no-op deadline, but exceptions
+                # raised inside its body still reach this handler.
+                if not deadline.expired():
+                    raise
                 raise TimeoutError(f"Ollama {model or self._model} exceeded total inference deadline "
                                    f"of {self._total_timeout}s (admission wait {waited:.2f}s)") from exc
             result.timings.update(admission_wait_seconds=waited, request_seconds=time.monotonic() - started)
@@ -105,7 +124,22 @@ class OllamaProvider(SequentialBatchMixin):
         first_token = None
         async with self._client.stream("POST", "/api/chat", json=payload) as resp:
             resp.raise_for_status()
-            async for line in resp.aiter_lines():
+            lines = resp.aiter_lines().__aiter__()
+            while True:
+                # Arm the prefill budget until the model actually speaks, the idle budget
+                # after. Whichever expires names itself, so a stalled run is diagnosable
+                # from the failure alone.
+                phase = "generation" if first_token is not None else "prefill"
+                budget = self._idle_timeout if first_token is not None else self._first_token_timeout
+                try:
+                    line = await asyncio.wait_for(anext(lines), budget)
+                except StopAsyncIteration:
+                    break
+                except TimeoutError as exc:
+                    raise TimeoutError(
+                        f"Ollama {use_model} exceeded its {budget}s {phase} budget after "
+                        f"{time.monotonic() - started:.1f}s with {len(pieces)} tokens received"
+                    ) from exc
                 if not line.strip():
                     continue
                 body = json.loads(line)

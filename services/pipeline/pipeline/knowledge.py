@@ -41,10 +41,14 @@ class KnowledgeEngine:
         if revision['model']['provider'] != 'ollama':
             raise ValueError('graph repair does not permit hosted providers')
         self.runtime = graph_runtime(cfg)
-        limits = self.runtime['runtime']
+        # A revision pins output-affecting options. Deadline tuning remains live config:
+        # it changes whether a call gets to finish, not what a finished call contains.
+        identity = revision['model'].get('identity', self.runtime['identity'])
+        limits = self.runtime['limits']
         self.provider = OllamaProvider(host=cfg.ollama_host, model=self.model,
             timeout=limits['idle_timeout_seconds'], total_timeout=limits['total_timeout_seconds'],
-            num_ctx=self.runtime['num_ctx'], num_predict=self.runtime['num_predict'], stream=True)
+            first_token_timeout=limits['first_token_timeout_seconds'],
+            num_ctx=identity['num_ctx'], num_predict=identity['num_predict'], stream=True)
         self.embedder = OllamaProvider(host=cfg.ollama_host,model=cfg.embed_model,
             timeout=limits['idle_timeout_seconds'], total_timeout=limits['total_timeout_seconds'])
 
@@ -65,7 +69,7 @@ class KnowledgeEngine:
         # left-truncation path. A failed job is safer than verification without evidence.
         if len(prompt.encode()) > PROMPT_HARD_BYTES:
             raise ValueError('graph context exceeds hard local model budget; bounded caller contract regressed')
-        key = digest([self.revision['id'],self.revision['model'],self.runtime,PROMPT_VERSION,stage,prompt,wire_schema])
+        key = digest([self.revision['id'],self.revision['model'],self.runtime['identity'],PROMPT_VERSION,stage,prompt,wire_schema])
         row = await (await self.db.execute(
             'SELECT response FROM graph_completion WHERE revision_id=%s AND cache_key=%s AND served_provider=%s AND served_model=%s',
             (self.revision['id'],key,'ollama',self.model))).fetchone()

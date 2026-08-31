@@ -18,18 +18,19 @@ from tests.fixtures import make_novel
 ONTOLOGY=dict(kinds=['character','place','group'],relations=['member_of'],attributes=[dict(name='description',kinds=['character','place','group'])])
 
 
-async def test_graph_uses_configured_runtime_and_changes_cache_identity(monkeypatch):
+async def test_graph_uses_configured_runtime_and_keeps_deadlines_out_of_identity(monkeypatch):
     from dataclasses import replace
     from pipeline.config import Config, graph_runtime
-    monkeypatch.delenv('GRAPH_OLLAMA_TIMEOUT_SECONDS',raising=False)
-    monkeypatch.setenv('OLLAMA_TIMEOUT_SECONDS','900')
+    monkeypatch.setenv('GRAPH_OLLAMA_FIRST_TOKEN_SECONDS','900')
+    monkeypatch.setenv('GRAPH_OLLAMA_TIMEOUT_SECONDS','30')
     cfg=Config.load()
     runtime=graph_runtime(cfg)
     engine=KnowledgeEngine(None,cfg,dict(id='test',model=dict(provider='ollama',name='test')))
     try:
-        assert engine.provider._client.timeout.read==900
+        assert engine.provider._client.timeout.read==1800
+        assert engine.provider._first_token_timeout==900 and engine.provider._idle_timeout==30
         assert engine.provider._total_timeout==1800 and engine.provider._stream
-        assert runtime != graph_runtime(replace(cfg,graph_ollama_total_timeout_seconds=2400))
+        assert runtime['identity'] == graph_runtime(replace(cfg,graph_ollama_total_timeout_seconds=2400))['identity']
     finally:
         await engine.close()
     with pytest.raises(ValueError,match='timeouts'):

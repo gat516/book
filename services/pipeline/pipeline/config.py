@@ -19,6 +19,16 @@ def _getenv(key: str, fallback: str) -> str:
     return v if v else fallback
 
 
+def _optional_float(key: str) -> float | None:
+    """Like _getenv but with no fallback: unset stays None so the caller can refuse it.
+
+    Graph inference budgets get this treatment because a wrong-but-plausible default is
+    worse than no default — it fails minutes into a run, as an empty ReadTimeout.
+    """
+    v = os.getenv(key)
+    return float(v) if v else None
+
+
 @dataclass(frozen=True)
 class Config:
     # Infra
@@ -73,6 +83,14 @@ class Config:
     gateway_backend: str = "local_gpu"
     gateway_provider: str = "ollama"
     gateway_max_output_tokens: int = 8192
+    # Two distinct budgets, not one. graph_ollama_first_token_seconds bounds PREFILL —
+    # Ollama's stream emits nothing at all while it processes the prompt, so this must
+    # cover the whole prompt_eval phase. graph_ollama_timeout_seconds bounds the gap
+    # BETWEEN tokens once generation is underway. Measured on this CPU-only host for a
+    # 2656-token prompt: prefill 106s idle / 437s under load, inter-token gap ~0.3s.
+    # Both default to None so an unset variable fails loudly in graph_runtime() instead
+    # of inheriting a translate-sized timeout that has nothing to do with either phase.
+    graph_ollama_first_token_seconds: float | None = None
     graph_ollama_timeout_seconds: float | None = None
     graph_ollama_total_timeout_seconds: float = 1800
     graph_ollama_num_ctx: int = 16384
@@ -108,7 +126,8 @@ class Config:
             # an HTTP client timeout (one call), that's a crash-recovery window (whole
             # chapter, several calls).
             ollama_timeout_seconds=float(_getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
-            graph_ollama_timeout_seconds=float(_getenv("GRAPH_OLLAMA_TIMEOUT_SECONDS", _getenv("OLLAMA_TIMEOUT_SECONDS", "120"))),
+            graph_ollama_first_token_seconds=_optional_float("GRAPH_OLLAMA_FIRST_TOKEN_SECONDS"),
+            graph_ollama_timeout_seconds=_optional_float("GRAPH_OLLAMA_TIMEOUT_SECONDS"),
             graph_ollama_total_timeout_seconds=float(_getenv("GRAPH_OLLAMA_TOTAL_TIMEOUT_SECONDS", "1800")),
             graph_ollama_num_ctx=int(_getenv("GRAPH_OLLAMA_NUM_CTX", "16384")),
             graph_ollama_num_predict=int(_getenv("GRAPH_OLLAMA_NUM_PREDICT", "4096")),
@@ -131,14 +150,30 @@ class Config:
 
 
 def graph_runtime(cfg: Config) -> dict:
-    """Snapshot actual bounded runtime settings, separate from prompt versions."""
-    idle = cfg.graph_ollama_timeout_seconds
-    idle = cfg.ollama_timeout_seconds if idle is None else idle
+    """Bounded runtime settings for graph inference, split by whether they affect output.
+
+    ``identity`` changes what the model can produce and therefore belongs in the
+    completion cache key. ``limits`` are HTTP/deadline budgets that cannot change a
+    single generated token; folding them into cache identity would mean every timeout
+    adjustment discarded hours of cached work on this hardware.
+    """
+    missing = [name for name, value in (('GRAPH_OLLAMA_FIRST_TOKEN_SECONDS', cfg.graph_ollama_first_token_seconds),
+                                        ('GRAPH_OLLAMA_TIMEOUT_SECONDS', cfg.graph_ollama_timeout_seconds))
+               if value is None]
+    if missing:
+        raise ValueError(
+            f"graph inference budgets are unset: {', '.join(missing)}. Set them in .env and start "
+            'through scripts/with-env.sh (make worker / make benchmark); a bare python -m invocation '
+            'does not read .env. Prefill on CPU-only hardware here measured 106-437s for a '
+            '2656-token prompt, so an inherited 120s budget aborts before the first token.')
+    first_token, idle = cfg.graph_ollama_first_token_seconds, cfg.graph_ollama_timeout_seconds
     total = cfg.graph_ollama_total_timeout_seconds
-    if not all(math.isfinite(v) and v > 0 for v in (idle, total)) or total < idle:
-        raise ValueError('graph timeouts must be finite, positive, and total >= idle')
+    if not all(math.isfinite(v) and v > 0 for v in (first_token, idle, total)) or total < max(first_token, idle):
+        raise ValueError('graph timeouts must be finite, positive, and total >= first-token and idle')
     if not 0 < cfg.graph_ollama_num_predict < cfg.graph_ollama_num_ctx:
         raise ValueError('graph output budget must be positive and smaller than context')
-    return dict(num_ctx=cfg.graph_ollama_num_ctx, num_predict=cfg.graph_ollama_num_predict,
-                runtime=dict(version='stream-admission-v1', stream=True,
-                             idle_timeout_seconds=idle, total_timeout_seconds=total))
+    return dict(
+        identity=dict(version='stream-admission-v2', stream=True,
+                      num_ctx=cfg.graph_ollama_num_ctx, num_predict=cfg.graph_ollama_num_predict),
+        limits=dict(first_token_timeout_seconds=first_token, idle_timeout_seconds=idle,
+                    total_timeout_seconds=total))

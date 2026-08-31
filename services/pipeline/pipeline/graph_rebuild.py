@@ -73,7 +73,10 @@ async def local_model(cfg, name):
     if len(matches)!=1:
         raise ValueError('requested model is not installed; no automatic download or provider fallback')
     from pipeline.config import graph_runtime
-    return dict(provider='ollama',name=name,digest=matches[0]['digest'],**graph_runtime(cfg))
+    # Only generation-affecting settings identify a graph revision. Deadline budgets are
+    # operational controls and stay live in Config for resumable work.
+    return dict(provider='ollama',name=name,digest=matches[0]['digest'],
+                identity=graph_runtime(cfg)['identity'])
 
 
 def objects(cfg):
