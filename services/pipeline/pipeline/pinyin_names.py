@@ -59,12 +59,14 @@ class NameCandidate:
     target_term: str
     pronunciation: tuple[str, ...]
     segmentation: str
+    method: str = "pinyin"
 
     def as_dict(self) -> dict:
         return {
             "target_term": self.target_term,
             "pronunciation": list(self.pronunciation),
             "segmentation": self.segmentation,
+            "method": self.method,
         }
 
 

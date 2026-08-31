@@ -140,6 +140,12 @@ This novel is translated from {source_lang} to {target_lang}. When the decision 
 "new", also return "target_term": a concise canonical name in {target_lang}. It becomes
 a locked glossary term, so do not leave it blank and do not return the source-language
 surface unless that spelling is intentionally unchanged in {target_lang}.
+For ordinary Chinese personal names use pinyin, not their literal meaning. Restore
+foreign names transcribed in Chinese to conventional {target_lang} spellings. Translate
+meaningful titles, organizations, places, techniques, and artifacts by meaning, not
+pinyin (English examples: 劳伦斯 -> Lawrence; 天庭 -> Heavenly Court, not Tianting).
+These rendering rules never override an already locked target_term and never establish
+identity on their own.
 """
 
 

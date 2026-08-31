@@ -38,6 +38,12 @@ set of LOCKED TERM CONSTRAINTS, and every locked term has ALREADY been replaced 
 final {target_lang} form in the chapter below. Copy those forms through
 character-for-character. If a locked source term still appears, render it as its listed
 target. Never translate, paraphrase, inflect, or replace a locked target term.
+For UNLOCKED names, preserve ordinary Chinese personal names in pinyin, restore
+foreign names transcribed in Chinese to conventional {target_lang} spellings, and
+translate meaningful titles, organizations, places, techniques, and artifacts by
+meaning. For English, 劳伦斯 can be Lawrence, not Laolunsi; 天庭 is Heavenly Court,
+not Tianting. Do not translate an ordinary personal name's literal meaning.
+These defaults never override a locked glossary spelling.
 Preserve paragraph breaks and return only the translation.
 
 Ontology:

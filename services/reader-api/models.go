@@ -100,6 +100,7 @@ type CharacterNameCandidate struct {
 	TargetTerm    string   `json:"target_term"`
 	Pronunciation []string `json:"pronunciation"`
 	Segmentation  string   `json:"segmentation"`
+	Method        string   `json:"method,omitempty"`
 }
 
 type CharacterNameReview struct {

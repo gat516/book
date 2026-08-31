@@ -100,6 +100,7 @@ export interface CharacterNameCandidate {
   target_term: string;
   pronunciation: string[];
   segmentation: string;
+  method?: "pinyin" | "restored_name" | "translated_title";
 }
 
 export interface CharacterNameReview {

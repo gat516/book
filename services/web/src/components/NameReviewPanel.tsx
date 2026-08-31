@@ -50,7 +50,7 @@ export function NameReviewPanel({ novelId, chapter, onApproved }: Props) {
   if (!reviews.length && !error) return null;
   return <section className="name-review" aria-label="Character name spelling review">
     <h3>Character name spelling required</h3>
-    <p className="glossary-note">Approve the spelling used in translation. This controls terminology only; it does not merge identities or approve character facts.</p>
+    <p className="glossary-note">Choose the name used in translation. Chinese personal names use pinyin; foreign names use restored spellings; personal titles are translated by meaning. Suggested restorations and titles need your review. This controls terminology only; it does not merge identities or approve character facts.</p>
     {error && <p role="alert" className="chapter-pending-error">{error}</p>}
     {reviews.map((review) => <fieldset key={review.source_term} disabled={saving === review.source_term}>
       <legend><span lang="zh">{review.source_term}</span> · {review.reason.replaceAll("_", " ")}</legend>
@@ -60,7 +60,9 @@ export function NameReviewPanel({ novelId, chapter, onApproved }: Props) {
           checked={!custom[review.source_term] && choices[review.source_term] === candidate.target_term}
           onChange={() => { setCustom((old) => ({ ...old, [review.source_term]: "" })); setChoices((old) => ({ ...old, [review.source_term]: candidate.target_term })); }} />
         <strong>{candidate.target_term}</strong>
-        <span>{candidate.segmentation} · {candidate.pronunciation.join(" + ")}</span>
+        <span>{candidate.method === "restored_name" ? "Suggested restored name"
+          : candidate.method === "translated_title" ? "Suggested translated title"
+          : `Pinyin · ${candidate.segmentation} · ${candidate.pronunciation.join(" + ")}`}</span>
       </label>)}
       <label>Custom spelling
         <input value={custom[review.source_term] ?? ""} placeholder="Enter the correct spelling"

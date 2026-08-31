@@ -45,6 +45,21 @@ def test_translation_fingerprint_uses_complete_glossary_not_only_version():
     assert _translation_fingerprint(ctx,[("九神殿","Dream Palace")]) != _translation_fingerprint(ctx,[("九神殿","Nine Gods Hall")])
 
 
+def test_translation_fingerprint_includes_rendering_prompt(monkeypatch):
+    ctx = SimpleNamespace(novel=SimpleNamespace(source_lang="zh", target_lang="en", ontology={}))
+    before = _translation_fingerprint(ctx, [])
+    monkeypatch.setattr("pipeline.stages.translate.build_system_prompt", lambda **kwargs: "new policy")
+    assert before != _translation_fingerprint(ctx, [])
+
+
+def test_rendering_policy_preserves_locks_and_distinguishes_names_from_terms():
+    system = build_system_prompt(source_lang="zh", target_lang="en", ontology={}, glossary=[])
+    assert "Heavenly Court" in system
+    assert "Lawrence" in system
+    assert "ordinary Chinese personal names in pinyin" in system
+    assert "never override a locked glossary spelling" in system
+
+
 def test_translated_text_uses_target_language_chunk_profile():
     chunks = chunk_text("The Azure Cloud Sect opened its gates.", language_profile_for("en"))
     assert chunks[0].text == "The Azure Cloud Sect opened its gates."

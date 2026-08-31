@@ -59,7 +59,9 @@ async def _glossary(db, novel_id: str) -> tuple[int, list[tuple[str, str, str]]]
 def _translation_fingerprint(ctx: StageContext, glossary) -> str:
     """Hash every stable input included in the translation system prompt."""
     payload = [
-        "translation-input-v2",
+        "translation-input-v3",
+        build_system_prompt(source_lang=ctx.novel.source_lang, target_lang=ctx.novel.target_lang,
+                            ontology=ctx.novel.ontology, glossary=glossary),
         ctx.novel.source_lang,
         ctx.novel.target_lang,
         ctx.novel.ontology,

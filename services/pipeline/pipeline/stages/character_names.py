@@ -1,8 +1,8 @@
 """Pre-translation source authority for Chinese character names.
 
 This stage is intentionally independent of graph resolution.  It may discover exact
-source surfaces with an LLM, but target spellings come only from deterministic Pinyin or
-an explicit human review.
+source surfaces and propose restored foreign names or translated personal titles with
+an LLM. Only deterministic Pinyin may auto-lock; model suggestions need human approval.
 """
 from __future__ import annotations
 
@@ -16,8 +16,9 @@ from pipeline.context import PipelineState, StageContext
 from pipeline.evidence import digest, stable_id
 from pipeline.jobs import idempotency_key, insert_job, mark_job_done, model_for_stage
 from pipeline.llm.provider import Class
+from pipeline.name_renderings import conventional_english_names
 from pipeline.passages import source_passages
-from pipeline.pinyin_names import plan_character_name
+from pipeline.pinyin_names import GENERIC_TITLES, NameCandidate, NamePlan, plan_character_name
 from pipeline.stages.resolve import _lock_glossary
 
 log = logging.getLogger(__name__)
@@ -52,15 +53,44 @@ def _batches(source: str, *, byte_budget: int = 8000, max_passages: int = 20):
         yield current
 
 
-async def _discover(ctx: StageContext, source: str) -> set[str]:
-    found: set[str] = set()
+def _rendering_plan(surface: str, rendering: str, targets: list[str], target_lang: str = "en") -> NamePlan:
+    conventional = conventional_english_names(surface) if target_lang.split("-")[0] == "en" else ()
+    if conventional:
+        suggestions = tuple(targets) if rendering == "foreign_personal" else ()
+        candidates = tuple(NameCandidate(target, (), "", "restored_name")
+                           for target in dict.fromkeys(conventional + suggestions))[:8]
+        return NamePlan(candidates, None, "restored_name")
+    if rendering == "chinese_personal" or surface in GENERIC_TITLES:
+        # A Chinese personal name's literal meaning is NOT its display spelling.
+        return plan_character_name(surface)
+    method = {"foreign_personal": "restored_name", "titled_person": "translated_title"}[rendering]
+    candidates = tuple(NameCandidate(target, (), "", method) for target in dict.fromkeys(targets))
+    # Never auto-approve a model's restoration, even when it offers only one spelling.
+    return NamePlan(candidates, None, method)
+
+
+async def _discover(ctx: StageContext, source: str) -> dict[str, NamePlan]:
+    found: dict[str, NamePlan] = {}
     system = (
         "Inventory potentially named subjects in the offered Chinese novel passages and "
         "classify each as character or not_character. A character must be a person or "
         "person-like speaking/acting individual. Places, plants, artifacts, techniques, "
-        "numbered rules, body parts, groups, titles, and descriptions are not_character. "
-        "Return only exact source spellings; never translate, romanize, normalize, or include "
-        "pronouns. A name used once still counts. Cite the containing passage ID. "
+        "numbered rules, body parts, groups, generic titles, and descriptions are not_character. "
+        "A distinctive title used as an individual's name can be a character. "
+        "The surface must be the exact source spelling; never translate, romanize, normalize, "
+        "or include pronouns in surface. A name used once still counts. Cite the containing passage ID. "
+        "Separately classify rendering: chinese_personal for ordinary Chinese personal names, "
+        "foreign_personal for foreign names transcribed into Chinese (even without a middle dot), "
+        "titled_person for an individual's meaningful title/epithet, not_character otherwise. "
+        f"For foreign_personal propose 1-4 conventional restored spellings in {ctx.novel.target_lang}, "
+        "not pinyin of the Chinese transcription. For English, 劳伦斯 can be Lawrence or Laurence, "
+        "not Laolunsi; 芙蕾雅 can be Freya. Do not invent a full name or identity. "
+        f"For titled_person translate the title's meaning into {ctx.novel.target_lang}; "
+        "preserve any personal-name portion. For chinese_personal and not_character return targets=[]. "
+        "Do not translate ordinary personal names by meaning (水寒 must not become Water Cold). "
+        "Organizations/places such as 天庭 (Heavenly Court) are not_character, not personal names. "
+        "If restoration is uncertain, offer plausible alternatives or no targets, never invented certainty. "
+        "Suggestions control terminology only, never character identity or facts. "
         "Return JSON only and set reviewed=true after checking the whole batch."
     )
     for batch in _batches(source):
@@ -72,11 +102,15 @@ async def _discover(ctx: StageContext, source: str) -> set[str]:
                 "reviewed": {"type": "boolean", "const": True},
                 "names": {"type": "array", "maxItems": 64, "items": {
                     "type": "object", "additionalProperties": False,
-                    "required": ["surface", "kind", "passage_id"],
+                    "required": ["surface", "kind", "passage_id", "rendering", "targets"],
                     "properties": {
                         "surface": {"type": "string", "minLength": 1, "maxLength": 80},
                         "kind": {"type": "string", "enum": ["character", "not_character"]},
                         "passage_id": {"type": "string", "enum": ids},
+                        "rendering": {"type": "string", "enum": [
+                            "chinese_personal", "foreign_personal", "titled_person", "not_character"]},
+                        "targets": {"type": "array", "maxItems": 4, "items": {
+                            "type": "string", "minLength": 1, "maxLength": 160}},
                     },
                 }},
             },
@@ -90,17 +124,37 @@ async def _discover(ctx: StageContext, source: str) -> set[str]:
             model=model_for_stage(STAGE, ctx.cfg),
         )
         body = json.loads(_strip_fence(completion.text))
-        if set(body) != {"reviewed", "names"} or body["reviewed"] is not True or not isinstance(body["names"], list):
+        if (not isinstance(body, dict) or set(body) != {"reviewed", "names"}
+                or body["reviewed"] is not True or not isinstance(body["names"], list)
+                or len(body["names"]) > 64):
             raise ValueError("character-name discovery did not review the offered passage batch")
         offered = {p["id"]: p for p in batch}
         for item in body["names"]:
-            if not isinstance(item, dict) or set(item) != {"surface", "kind", "passage_id"}:
-                raise ValueError("character-name proposal must contain only surface, kind, and passage_id")
+            if not isinstance(item, dict) or set(item) != {"surface", "kind", "passage_id", "rendering", "targets"}:
+                raise ValueError("character-name proposal has invalid fields")
+            rendering, targets = item["rendering"], item["targets"]
+            if (rendering not in ("chinese_personal", "foreign_personal", "titled_person", "not_character")
+                    or item["kind"] not in ("character", "not_character")
+                    or (item["kind"] == "not_character") != (rendering == "not_character")
+                    or not isinstance(item["passage_id"], str)
+                    or not isinstance(targets, list) or len(targets) > 4
+                    or any(not isinstance(t, str) or not t.strip() or t != t.strip() or len(t) > 160
+                           or any(ord(c) < 32 for c in t)
+                           or (ctx.novel.target_lang.split("-")[0] == "en" and re.search(r"[\u3400-\u9fff]", t))
+                           for t in targets)):
+                raise ValueError("character-name proposal has invalid rendering or targets")
             passage = offered.get(item["passage_id"])
             surface = item["surface"]
             if (item["kind"] == "character" and passage and isinstance(surface, str)
-                    and surface.strip() == surface and surface in passage["text"]):
-                found.add(surface)
+                    and 0 < len(surface) <= 80 and surface.strip() == surface and surface in passage["text"]):
+                plan = _rendering_plan(surface, rendering, targets, ctx.novel.target_lang)
+                # Repeated mentions may offer alternative restorations. Preserve them
+                # rather than silently replacing the first passage's suggestions.
+                previous = found.get(surface)
+                if previous and previous != plan:
+                    candidates = tuple(dict.fromkeys(previous.candidates + plan.candidates))[:16]
+                    plan = NamePlan(candidates, None, "contextual_name_review")
+                found[surface] = plan
             elif item["kind"] == "character":
                 log.warning("character_names: rejected non-literal proposal %r", item)
     return found
@@ -113,7 +167,7 @@ def _evidence_for(source: str, start: int, end: int) -> str:
     return source[left:right]
 
 
-async def _record_surface(ctx: StageContext, state: PipelineState, surface: str) -> bool:
+async def _record_surface(ctx: StageContext, state: PipelineState, surface: str, plan: NamePlan | None = None) -> bool:
     source = state.envelope.raw_text
     chapter = state.envelope.chapter_index
     source_hash = digest(source)
@@ -122,7 +176,7 @@ async def _record_surface(ctx: StageContext, state: PipelineState, surface: str)
         return False
     first = matches[0]
     quote = _evidence_for(source, first.start(), first.end())
-    plan = plan_character_name(surface)
+    plan = plan or plan_character_name(surface)
     if plan.reason in {"generic_title", "not_simple_hanzi_name", "missing_pinyin"}:
         log.warning("character_names: rejected invalid character surface %r (%s)", surface, plan.reason)
         return False
@@ -169,7 +223,17 @@ async def _record_surface(ctx: StageContext, state: PipelineState, surface: str)
                 WHERE novel_id=%s AND source_term=%s""",
                 (plan.auto_target, ctx.novel.id, surface))
             return False
+    await _refresh_pending(ctx.db, ctx.novel.id, surface, plan, chapter)
     return True
+
+
+async def _refresh_pending(db, novel_id: str, surface: str, plan: NamePlan, chapter: int) -> None:
+    # Refresh stale pinyin-only choices without changing approved spellings or using
+    # a later chapter to change the evidence shown at an earlier reader gate (§0).
+    await db.execute("""UPDATE character_name_review SET candidates=%s,reason=%s,updated_at=now()
+        WHERE novel_id=%s AND source_term=%s AND status='pending' AND first_seen_chapter=%s""",
+        (Jsonb([candidate.as_dict() for candidate in plan.candidates]), plan.reason,
+         novel_id, surface, chapter))
 
 
 class CharacterNamesStage:
@@ -187,11 +251,12 @@ class CharacterNamesStage:
             "AND constraint_class='character_name'", (ctx.novel.id,)
         )).fetchall()
         surfaces = {row[0] for row in approved if row[0] in state.envelope.raw_text}
-        surfaces.update(await _discover(ctx, state.envelope.raw_text))
+        plans = await _discover(ctx, state.envelope.raw_text)
+        surfaces.update(plans)
         pending = []
         async with ctx.db.transaction():
             for surface in sorted(surfaces, key=lambda value: (state.envelope.raw_text.find(value), value)):
-                if await _record_surface(ctx, state, surface):
+                if await _record_surface(ctx, state, surface, plans.get(surface)):
                     pending.append(surface)
         if pending:
             raise NameReviewRequired(pending)

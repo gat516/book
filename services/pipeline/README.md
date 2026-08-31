@@ -56,6 +56,30 @@ identity/link or fact precision. It cannot qualify or activate a graph. Full ben
 and independent publication review remain required. Old prompt revisions cannot be
 resumed with the new extractor; create a new revision and retain historical reports.
 
+## Character-name spelling review
+
+Before translation, exact source names are classified for display: ordinary Chinese
+personal names use deterministic pinyin; foreign names transcribed in Chinese receive
+suggested restored spellings; distinctive personal titles receive meaning-based
+translations. A small conventional-transcription lookup supplements the model for
+recognized English names (including complete middle-dot-separated names), so model
+misclassification does not reduce those suggestions to pinyin. Restorations/titles always require human approval, even
+when there is one choice. They never establish identity or approve facts. Organizations,
+places, and other non-person terms stay in the semantic glossary/translation path.
+
+Existing pending pinyin-only suggestions can be refreshed offline using their original
+quoted evidence, without later chapters, re-importing, approval, or queue changes:
+
+```bash
+cd services/pipeline
+../../scripts/with-env.sh .venv/bin/python -m pipeline.refresh_name_reviews \
+  --novel-id NOVEL_UUID --source-term 劳伦斯
+# Add --apply to save the suggestions. Omit --source-term to refresh all pending names.
+```
+
+Already-approved spellings remain locked. Semantic rendering defaults do not override
+an existing glossary spelling; use the glossary correction UI for those.
+
 ## Legacy reader name cards
 
 The following describes the older presentation-only path. Revision-managed graph
