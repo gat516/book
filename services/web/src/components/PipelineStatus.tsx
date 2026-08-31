@@ -34,7 +34,7 @@ const STAGE_LABELS: Record<string, string> = {
   graph_write: "Saving to the knowledge graph",
 };
 
-function describe(stage?: string): string {
+export function describeStage(stage?: string): string {
   if (!stage) return "Starting…";
   return STAGE_LABELS[stage] ?? stage;
 }
@@ -92,7 +92,7 @@ export function PipelineStatus({ novelId, onProgress, onStatus }: Props) {
       {working ? (
         status.in_flight.map((item) => (
           <p key={item.chapter_index}>
-            <strong>Chapter {item.chapter_index}:</strong> {describe(item.stage)} — {elapsed(item.elapsed_secs)} total processing time
+            <strong>Chapter {item.chapter_index}:</strong> {describeStage(item.stage)} — {elapsed(item.elapsed_secs)} total processing time
           </p>
         ))
       ) : (

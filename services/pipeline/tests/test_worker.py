@@ -78,6 +78,67 @@ async def test_same_novel_cannot_run_twice_but_other_novel_can(scheduled):
     assert await call(client, queue.CLAIM, "101") is None
 
 
+async def test_book_focus_beats_old_priority_and_switch_keeps_pending_work(scheduled):
+    client, keys = scheduled
+    old_priority = message(7, "a", priority=True)
+    await client.lpush(keys[0], old_priority, message(8, "a"), message(3, "b"), message(1, "b"))
+    await client.hset(keys[5], mapping={"focus_novel_id": "b", "mode": "all"})
+    assert await call(client, queue.CLAIM, "100") == message(1, "b")
+    # A switch changes the next selection, never the claim that is already running.
+    await client.hset(keys[5], "focus_novel_id", "a")
+    assert await client.lrange(keys[1], 0, -1) == [message(1, "b")]
+    await call(client, queue.RELEASE, message(1, "b"), "100", "done")
+    assert await call(client, queue.CLAIM, "101") == old_priority
+    await call(client, queue.RELEASE, old_priority, "101", "done")
+    assert await call(client, queue.CLAIM, "102") == message(8, "a")
+    await call(client, queue.RELEASE, message(8, "a"), "102", "done")
+    assert await call(client, queue.CLAIM, "103") == message(3, "b")
+
+
+async def test_focused_mode_and_pause_preserve_queue_and_claims(scheduled):
+    client, keys = scheduled
+    await client.lpush(keys[0], message(1, "a", priority=True), message(1, "b"), message(2, "b"))
+    await client.hset(keys[5], mapping={"mode": "focused", "focus_novel_id": "b"})
+    current = await call(client, queue.CLAIM, "100")
+    assert current == message(1, "b")
+    assert await call(client, queue.CLAIM, "101") is None  # no background fallback
+    await client.hset(keys[5], "mode", "paused")
+    pending = await client.lrange(keys[0], 0, -1)
+    assert await call(client, queue.CLAIM, "102") is None
+    assert await client.lrange(keys[0], 0, -1) == pending
+    assert await call(client, queue.RENEW, current, "100", "103") == 1
+    await call(client, queue.RELEASE, current, "100", "done")
+    assert await call(client, queue.CLAIM, "104") is None
+    await client.hset(keys[5], "mode", "focused")
+    assert await call(client, queue.CLAIM, "105") == message(2, "b")
+    await call(client, queue.RELEASE, message(2, "b"), "105", "done")
+    assert await call(client, queue.CLAIM, "106") is None
+    await client.hdel(keys[5], "focus_novel_id")
+    assert await call(client, queue.CLAIM, "107") is None
+    await client.hset(keys[5], "mode", "all")
+    assert await call(client, queue.CLAIM, "108") == message(1, "a", priority=True)
+
+
+async def test_queue_controls_also_gate_idle_graph_work(scheduled, monkeypatch):
+    from pipeline import graph_rebuild
+    client, keys = scheduled
+    worker = Worker.__new__(Worker)
+    worker.redis, worker.cfg = client, make_config()
+    drain = AsyncMock()
+    monkeypatch.setattr(graph_rebuild, "drain_active", drain)
+    for mode in ("paused", "focused"):
+        await client.hset(keys[5], "mode", mode)
+        await worker._drain_background()
+        drain.assert_not_awaited()
+    await client.hset(keys[5], "focus_novel_id", "b")
+    await worker._drain_background()
+    drain.assert_awaited_once_with(worker.cfg, novel_id="b", preferred_novel="b")
+    drain.reset_mock()
+    await client.hset(keys[5], "mode", "all")
+    await worker._drain_background()
+    drain.assert_awaited_once_with(worker.cfg, novel_id=None, preferred_novel="b")
+
+
 async def test_heartbeat_protects_slow_job_then_crash_recovers_once(scheduled):
     client, keys = scheduled
     raw = message(7)

@@ -68,6 +68,11 @@ type fakeIngestClient struct {
 	lastBody json.RawMessage
 }
 
+func (f *fakeIngestClient) QueueControl(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
+}
+
 func (f *fakeIngestClient) CreateNovel(_ context.Context, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
 	return f.response, f.status, f.err
@@ -625,6 +630,25 @@ func TestPostNovelProxiesToIngestClient(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), testNovelID) {
 		t.Fatalf("response body = %s", response.Body.String())
+	}
+}
+
+func TestQueueControlProxiesSettingsAndErrors(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPatch} {
+		ingest := &fakeIngestClient{response: json.RawMessage(`{"mode":"paused","books":[]}`), status: 200}
+		api := &API{store: readyFake(), ingest: ingest}
+		body := ""
+		if method == http.MethodPatch {
+			body = `{"mode":"paused"}`
+		}
+		response := request(t, api, method, "/queue", body, "")
+		if response.Code != 200 || string(ingest.lastBody) != body {
+			t.Fatalf("proxy: %d %s", response.Code, response.Body)
+		}
+		ingest.err = ErrIngestUnavailable
+		if got := request(t, api, method, "/queue", body, ""); got.Code != 502 {
+			t.Fatalf("status = %d", got.Code)
+		}
 	}
 }
 

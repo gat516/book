@@ -1,8 +1,9 @@
 """Atomic chapter scheduling and renewable claims (spec §5.1, §6.3).
 
 Preserve FIFO between novels, but choose the lowest queued chapter within the
-oldest eligible novel. Explicit reader requests override that order. Only one
-chapter of a novel may be in flight, including across multiple workers.
+oldest eligible novel. The focused book comes first, followed by explicit chapter
+requests. Pause/focused-only controls retain ineligible pointers. Only one chapter
+of a novel may be in flight, including across multiple workers.
 """
 
 PENDING = "jobs:pending"
@@ -10,13 +11,22 @@ PROCESSING = "jobs:processing"
 STARTED = "jobs:processing:started"
 STAGE = "jobs:processing:stage"
 HEARTBEAT = "jobs:processing:heartbeat"
-KEYS = [PENDING, PROCESSING, STARTED, STAGE, HEARTBEAT]
+CONTROL = "jobs:control"  # HASH: mode (all|focused|paused), focus_novel_id
+KEYS = [PENDING, PROCESSING, STARTED, STAGE, HEARTBEAT, CONTROL]
 
 CLAIM = """
+local mode = redis.call('HGET', KEYS[6], 'mode') or 'all'
+local focus = redis.call('HGET', KEYS[6], 'focus_novel_id') or ''
+if mode == 'paused' then return nil end
 local function decode(raw)
   local ok, m = pcall(cjson.decode, raw)
   if ok and type(m) == 'table' and type(m.novel_id) == 'string'
       and tonumber(m.chapter_index) then return m end
+end
+local function rank(m)
+  return (m.novel_id == focus and 4 or 0)
+       + (m.priority == true and 2 or 0)
+       + (m.enrichment ~= true and 1 or 0)
 end
 local active = {}
 for _, raw in ipairs(redis.call('LRANGE', KEYS[2], 0, -1)) do
@@ -31,17 +41,13 @@ for i = #pending, 1, -1 do
   if not m then
     -- Let the worker diagnose malformed pointers without stranding the queue.
     if not selected then selected = raw end
-  elseif not active[m.novel_id] then
-    if m.priority == true then
+  elseif not active[m.novel_id] and (mode ~= 'focused' or m.novel_id == focus) then
+    if not selected_msg then
       selected, selected_msg = raw, m
-      break
-    end
-    if not selected then
-      selected, selected_msg = raw, m
-    elseif selected_msg and ((selected_msg.enrichment == true and m.enrichment ~= true)
-        or ((selected_msg.enrichment == true) == (m.enrichment == true)
+    elseif rank(m) > rank(selected_msg)
+        or (rank(m) == rank(selected_msg) and m.priority ~= true
         and m.novel_id == selected_msg.novel_id
-        and tonumber(m.chapter_index) < tonumber(selected_msg.chapter_index))) then
+        and tonumber(m.chapter_index) < tonumber(selected_msg.chapter_index)) then
       selected, selected_msg = raw, m
     end
   end

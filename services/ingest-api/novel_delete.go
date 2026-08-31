@@ -26,6 +26,9 @@ for _, raw in ipairs(redis.call('LRANGE', KEYS[1], 0, -1)) do
     removed = removed + redis.call('LREM', KEYS[1], 0, raw)
   end
 end
+if redis.call('HGET', KEYS[2], 'focus_novel_id') == ARGV[1] then
+  redis.call('HDEL', KEYS[2], 'focus_novel_id')
+end
 return removed
 `)
 
@@ -76,7 +79,7 @@ func (s *Store) deleteNovel(ctx context.Context, novelID string) (bool, error) {
 // releases the claim and preview. Do not remove active claims here before cancellation
 // has unwound. A scrape mid-flight still fails on its next database write.
 func (s *Store) purgeQueues(ctx context.Context, novelID string, scrapeJobIDs []int64) {
-	if _, err := purgePendingScript.Run(ctx, s.redis, []string{pendingQueue}, novelID).Int(); err != nil {
+	if _, err := purgePendingScript.Run(ctx, s.redis, []string{pendingQueue, queueControlKey}, novelID).Int(); err != nil {
 		log.Printf("deleteNovel %s: purge %s: %v", novelID, pendingQueue, err)
 	}
 	for _, id := range scrapeJobIDs {

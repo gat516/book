@@ -349,6 +349,8 @@ async def test_terminal_graph_failure_blocks_later_chapters_chronologically(db_c
         assert await next_retryable_active_revision(db_conn) is None
         await db_conn.execute("UPDATE graph_job SET attempts=3,retry_at=now()-interval '1 second' WHERE revision_id=%s AND chapter_index=1",(rid,))
         assert await next_retryable_active_revision(db_conn)==str(rid)
+        assert await next_retryable_active_revision(db_conn, novel_id=str(uuid4())) is None
+        assert await next_retryable_active_revision(db_conn, novel_id=novel)==str(rid)
     finally:
         await delete_novel(db_conn,novel)
 

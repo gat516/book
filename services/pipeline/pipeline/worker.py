@@ -159,9 +159,8 @@ class Worker:
             claimed_at = str(time.time())
             raw = await self.redis.eval(queue.CLAIM, len(queue.KEYS), *queue.KEYS, claimed_at)
             if raw is None:
-                from pipeline.graph_rebuild import drain_active
                 try:
-                    await drain_active(self.cfg)
+                    await self._drain_background()
                 except AdmissionRejected as exc:
                     await self._idle(max(exc.retry_after_s, 0.25))
                 except Exception:
@@ -206,6 +205,15 @@ class Worker:
             if disposition != "abandoned":
                 await self.redis.eval(queue.RELEASE, len(queue.KEYS), *queue.KEYS,
                                       raw, claimed_at, disposition)
+
+    async def _drain_background(self) -> None:
+        from pipeline.graph_rebuild import drain_active
+        control = await self.redis.hgetall(queue.KEYS[5])
+        mode, focus = control.get("mode", "all"), control.get("focus_novel_id") or None
+        if mode == "paused" or (mode == "focused" and focus is None):
+            return
+        await drain_active(self.cfg, novel_id=focus if mode == "focused" else None,
+                           preferred_novel=focus)
 
     async def _handle_claim(self, raw: str) -> None:
         msg = QueueMessage.model_validate_json(raw)

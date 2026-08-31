@@ -19,6 +19,7 @@ var ErrIngestUnavailable = errors.New("ingest-api unavailable")
 // comment says so); this mirrors AskClient's shape exactly (services/reader-api/ask.go)
 // rather than inventing a second proxy pattern.
 type IngestClient interface {
+	QueueControl(ctx context.Context, method string, body json.RawMessage) (json.RawMessage, int, error)
 	CreateNovel(ctx context.Context, body json.RawMessage) (json.RawMessage, int, error)
 	DeleteNovel(ctx context.Context, novelID string) (json.RawMessage, int, error)
 	PasteChapter(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
@@ -30,6 +31,10 @@ type IngestClient interface {
 	ApproveCharacterName(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
 	TranslateAhead(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	UpdateNovelSettings(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
+}
+
+func (c *ingestHTTPClient) QueueControl(ctx context.Context, method string, body json.RawMessage) (json.RawMessage, int, error) {
+	return c.send(ctx, method, "/queue", body, true)
 }
 
 type ingestHTTPClient struct {

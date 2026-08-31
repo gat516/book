@@ -10,6 +10,7 @@ import { NovelPicker } from "./components/NovelPicker";
 import { ProgressControls } from "./components/ProgressControls";
 import { ReaderPane } from "./components/ReaderPane";
 import { TranslationNotice } from "./components/TranslationNotice";
+import { QueueControls } from "./components/QueueControls";
 import type { ChapterListItem, ChapterResponse } from "./types";
 
 // `?novel=` is preferred over a hardcoded default so the app is shareable/demoable via
@@ -195,11 +196,12 @@ export default function App() {
     if (creating) {
       return <NovelCreateForm onCreated={chooseNovel} onCancel={() => setCreating(false)} />;
     }
-    return <NovelPicker onSelect={chooseNovel} onCreateNew={() => setCreating(true)} />;
+    return <><QueueControls novelId={null} /><NovelPicker onSelect={chooseNovel} onCreateNew={() => setCreating(true)} /></>;
   }
 
   return (
     <main className="app">
+      <QueueControls novelId={novelId} />
       <button className="app-back" onClick={backToNovels}>
         ← All novels
       </button>

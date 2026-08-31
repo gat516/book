@@ -363,7 +363,7 @@ async def enqueue_completed(db,cfg,novel):
         await db.execute('UPDATE graph_revision SET snapshot=%s,version=version+1 WHERE id=%s',(Jsonb(current['snapshot']),r['id']))
 
 
-async def next_retryable_active_revision(db):
+async def next_retryable_active_revision(db, novel_id=None, preferred_novel=None):
     # Only the earliest unfinished chapter may advance identity state. A retryable
     # failure wakes at its scheduled time; a terminal failure continues to fence all
     # later chapters until an operator explicitly resumes it.
@@ -371,16 +371,18 @@ async def next_retryable_active_revision(db):
             JOIN LATERAL (SELECT state,attempts,retry_at FROM graph_job
                           WHERE revision_id=r.id AND state<>'done'
                           ORDER BY chapter_index LIMIT 1) j ON true
-            WHERE r.state='active' AND r.trusted AND NOT r.legacy AND
+            WHERE (%s::uuid IS NULL OR r.novel_id=%s::uuid) AND
+              r.state='active' AND r.trusted AND NOT r.legacy AND
               (j.state IN ('pending','processing') OR
                (j.state='failed' AND j.attempts<=3 AND j.retry_at<=now()))
-            ORDER BY r.created_at LIMIT 1""")).fetchone()
+            ORDER BY (r.novel_id=%s::uuid) DESC NULLS LAST, r.created_at LIMIT 1""",
+            (novel_id, novel_id, preferred_novel))).fetchone()
     return str(row[0]) if row else None
 
 
-async def drain_active(cfg):
+async def drain_active(cfg, novel_id=None, preferred_novel=None):
     async with await psycopg.AsyncConnection.connect(cfg.database_url,autocommit=True) as db:
-        rid=await next_retryable_active_revision(db)
+        rid=await next_retryable_active_revision(db, novel_id, preferred_novel)
         if rid:
             await resume(db,cfg,rid,limit=1)
 

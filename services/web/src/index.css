@@ -497,6 +497,13 @@ body {
 .name-review-choice span { color: #666; font-size: 0.85rem; }
 .name-review label:not(.name-review-choice) { display: flex; flex-direction: column; gap: 0.3rem; margin: 0.6rem 0; }
 
+.queue-controls { margin: 0 0 1rem; padding: 1rem; border: 1px solid #d8dce3; border-radius: 8px; background: #f7f9fc; font-size: 0.9rem; }
+.queue-controls h2 { font-size: 1rem; margin: 0 0 0.65rem; }
+.queue-controls select { max-width: 100%; padding: 0.35rem; }
+.queue-controls p { margin: 0.5rem 0; }
+.queue-controls .queue-note { color: #586275; font-size: 0.8rem; }
+.queue-controls summary { cursor: pointer; }
+.queue-controls li { margin: 0.35rem 0; }
 .reader-settings { margin: 0.75rem 0 1.25rem; font-size: 0.9rem; }
 .reader-settings summary { cursor: pointer; }
 .reader-settings label { display: block; margin-top: 0.5rem; }

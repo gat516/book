@@ -63,6 +63,22 @@ Run `npm test` for mention segmentation tests and `npm run build` for the produc
 
 ## Reading and enrichment status
 
+**Processing queue** controls the shared local worker. Opening a book or returning to
+its visible browser tab gives its queued chapters priority over other books, including
+old explicit chapter-priority requests. This does not enqueue new chapters or change
+reading progress. The last focused tab wins; polling never changes priority.
+
+- **Open book first, then background books:** finish eligible focused-book work before
+  returning to background books.
+- **Only the focused book:** leave other books queued until you switch or change mode.
+- **Paused:** finish current work, then claim nothing else. Switching books does not resume.
+
+The panel lists active book titles, short IDs, chapters and stages, plus pending counts
+per book. Controls preserve pending jobs and saved translations, and take effect at the
+next chapter boundary. Background graph work obeys the same modes; scraping and explicit
+CLI benchmark/rebuild commands are separate. Settings persist in Redis (`jobs:control`)
+across worker restarts. Both APIs and the worker must be updated together.
+
 Opening a novel (including its direct URL) lands on **All chapters**, with the range
 containing the saved reading position selected. Tabs show 100 chapters at a time:
 **1–100**, **101–200**, and so on; only the active range is fetched and rendered.

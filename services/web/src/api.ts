@@ -97,6 +97,31 @@ export function getPipelineStatus(novelId: string): Promise<PipelineStatusRespon
   return request(`/novels/${novelId}/pipeline`);
 }
 
+export type QueueMode = "all" | "focused" | "paused";
+export interface QueueControl {
+  mode: QueueMode;
+  focus_novel_id: string;
+  books: Array<{
+    novel_id: string;
+    title: string;
+    pending: number;
+    in_flight: Array<{ chapter_index: number; stage: string }>;
+  }>;
+}
+export function getQueueControl(): Promise<QueueControl> {
+  return request("/queue");
+}
+// Serialize navigation writes in this tab so a slow response from book A cannot
+// override the newer selection of book B. Other tabs share the same library policy.
+let queueUpdates: Promise<unknown> = Promise.resolve();
+export function updateQueueControl(patch: { mode?: QueueMode; focus_novel_id?: string }): Promise<QueueControl> {
+  const update = queueUpdates.then(() => request<QueueControl>("/queue", {
+    method: "PATCH", body: JSON.stringify(patch),
+  }));
+  queueUpdates = update.catch(() => undefined);
+  return update;
+}
+
 export function getEntity(novelId: string, entityId: string, at: number): Promise<EntityResponse> {
   return request(`/novels/${novelId}/entity/${entityId}?at=${at}`);
 }

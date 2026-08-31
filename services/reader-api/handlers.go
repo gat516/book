@@ -26,6 +26,8 @@ type progressRequest struct {
 
 func (a *API) routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /queue", a.queueControl)
+	mux.HandleFunc("PATCH /queue", a.queueControl)
 	mux.HandleFunc("GET /healthz", a.healthz)
 	mux.HandleFunc("PUT /novels/{id}/progress", a.putProgress)
 	mux.HandleFunc("GET /novels/{id}/entity/{eid}", a.getEntity)
@@ -59,6 +61,23 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/provider-config", a.getProviderConfig)
 	mux.HandleFunc("PATCH /novels/{id}/provider-config", a.putProviderConfig)
 	return mux
+}
+
+func (a *API) queueControl(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4096))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read queue settings")
+		return
+	}
+	result, status, err := a.ingest.QueueControl(r.Context(), r.Method, body)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
 }
 
 func (a *API) getCharacterNameReviews(w http.ResponseWriter, r *http.Request) {
