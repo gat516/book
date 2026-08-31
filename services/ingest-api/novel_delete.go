@@ -72,9 +72,9 @@ func (s *Store) deleteNovel(ctx context.Context, novelID string) (bool, error) {
 }
 
 // purgeQueues drops the novel's queued work from both Redis queues. Work already claimed
-// by a worker (jobs:processing, or a scrape mid-flight) is not reachable from here; those
-// runs fail on their next database write, which is the correct outcome for a novel that no
-// longer exists.
+// by the pipeline stays owned until its deletion watcher cancels the model call and
+// releases the claim and preview. Do not remove active claims here before cancellation
+// has unwound. A scrape mid-flight still fails on its next database write.
 func (s *Store) purgeQueues(ctx context.Context, novelID string, scrapeJobIDs []int64) {
 	if _, err := purgePendingScript.Run(ctx, s.redis, []string{pendingQueue}, novelID).Int(); err != nil {
 		log.Printf("deleteNovel %s: purge %s: %v", novelID, pendingQueue, err)

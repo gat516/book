@@ -57,6 +57,11 @@ class ChapterFailed(Exception):
     """
 
 
+class NovelDeleted(Exception):
+    """The chapter's owner disappeared; cancel work without retry or failure history."""
+
+
+NOVEL_CHECK_SECONDS = 2
 TRANSLATE_STAGE = "translate"
 # Partial translation text, so a reader watching an in-progress chapter sees it arrive
 # rather than staring at a spinner for minutes. Keyed per chapter and short-lived: it is a
@@ -166,7 +171,11 @@ class Worker:
             heartbeat = asyncio.create_task(self._renew_claim(raw, claimed_at))
             disposition = "done"
             try:
-                await self._handle(raw)
+                await self._handle_claim(raw)
+            except NovelDeleted:
+                msg = QueueMessage.model_validate_json(raw)
+                await self._clear_preview(msg.novel_id, msg.chapter_index)
+                log.info("novel deleted; cancelled chapter %s/%s", msg.novel_id, msg.chapter_index)
             except NameReviewRequired as exc:
                 # This is an expected, durable pause. The chapter row records why it
                 # stopped and approval will enqueue a fresh pointer.
@@ -197,6 +206,46 @@ class Worker:
             if disposition != "abandoned":
                 await self.redis.eval(queue.RELEASE, len(queue.KEYS), *queue.KEYS,
                                       raw, claimed_at, disposition)
+
+    async def _handle_claim(self, raw: str) -> None:
+        msg = QueueMessage.model_validate_json(raw)
+        work = asyncio.create_task(self._handle(raw))
+        owner = asyncio.create_task(self._watch_novel(msg.novel_id))
+        try:
+            done, _ = await asyncio.wait((work, owner), return_when=asyncio.FIRST_COMPLETED)
+            if owner in done:
+                await owner  # NovelDeleted takes precedence over a racing FK failure.
+            await work
+        finally:
+            # Await cancellation before releasing the claim: HTTP cancellation unwinds
+            # Ollama admission, stage transactions and the translation preview observer.
+            for task in (work, owner):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(work, owner, return_exceptions=True)
+
+    async def _watch_novel(self, novel_id: str) -> None:
+        # Use a separate autocommit connection: the stage connection may be busy or
+        # inside a transaction. Only a committed deletion is a cancellation signal.
+        # Checking Postgres also works if best-effort Redis cleanup failed (§0, §6.3).
+        while True:
+            try:
+                async with await psycopg.AsyncConnection.connect(
+                    self.cfg.database_url, autocommit=True, connect_timeout=5
+                ) as monitor:
+                    while True:
+                        async with asyncio.timeout(5):
+                            row = await (await monitor.execute(
+                                "SELECT 1 FROM novel WHERE id=%s", (novel_id,)
+                            )).fetchone()
+                        if row is None:
+                            raise NovelDeleted(novel_id)
+                        await asyncio.sleep(NOVEL_CHECK_SECONDS)
+            except (psycopg.Error, TimeoutError):
+                # A database outage is not evidence of deletion. Keep the claim and
+                # heartbeat intact and reconnect without interrupting live inference.
+                log.warning("could not check novel existence; retrying", exc_info=True)
+                await asyncio.sleep(NOVEL_CHECK_SECONDS)
 
     async def _idle(self, seconds: float) -> None:
         with suppress(asyncio.TimeoutError):
@@ -261,6 +310,7 @@ class Worker:
         )
         if chapter is None:
             log.warning("no chapter row for %s/%s; dropping", msg.novel_id, msg.chapter_index)
+            await self._clear_preview(msg.novel_id, msg.chapter_index)
             return
         raw_hash, raw_uri, source_meta, _status, readable, translated_uri = chapter
         if _status == "done" and not msg.retranslate:
@@ -273,6 +323,7 @@ class Worker:
         )
         if novel is None:
             log.warning("no novel row for %s; dropping", msg.novel_id)
+            await self._clear_preview(msg.novel_id, msg.chapter_index)
             return
         source_lang, target_lang, ontology, managed_graph = novel
         provider, batch_manager, provider_id = await self._provider_for_novel(msg.novel_id)
@@ -386,6 +437,10 @@ class Worker:
             await self._clear_preview(msg.novel_id, msg.chapter_index)
             raise
         except Exception as exc:
+            # Deletion can win the race with a stage write before the watcher polls.
+            # There is no surviving chapter on which to record a failure or retry.
+            if await self._fetch_one("SELECT 1 FROM novel WHERE id=%s", (msg.novel_id,)) is None:
+                raise NovelDeleted(msg.novel_id) from exc
             async with self.db.transaction():
                 await record_failure(self.db, msg.novel_id, msg.chapter_index,
                                      enrichment_error[0] if enrichment_error and exc is enrichment_error[1] else stage.name, exc)
