@@ -11,6 +11,9 @@ import re
 
 ENGLISH_TRANSCRIPTIONS: dict[str, tuple[str, ...]] = {
     "劳伦斯": ("Lawrence", "Laurence"),
+    # 契科夫 is an attested nonstandard Chinese rendering of Chekhov. Keep Chekov as
+    # a reviewable alternative; neither is ever auto-approved.
+    "契科夫": ("Chekhov", "Chekov"),
     "芙蕾雅": ("Freya", "Freyja"),
     "爱丽丝": ("Alice",),
     "威廉": ("William",),

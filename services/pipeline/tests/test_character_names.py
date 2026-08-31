@@ -11,7 +11,18 @@ from pipeline.stages.character_names import _discover, _refresh_pending, _render
 
 def context(items):
     async def complete(prompt, **kwargs):
-        passages = json.loads(prompt.split("\n", 1)[1])["passages"]
+        offered = json.loads(prompt.split("\n", 1)[1])
+        passages = offered["passages"]
+        if "ambiguous_terms" in offered:
+            decisions = []
+            by_surface = {entry["surface"]: entry for entry in items}
+            role = {"chinese_personal": "chinese_person", "foreign_personal": "foreign_person",
+                    "titled_person": "personal_title", "semantic_term": "semantic_term"}
+            for surface in offered["ambiguous_terms"]:
+                entry = by_surface[surface]
+                decisions.append({"surface": surface, "term_role": role[entry["rendering"]],
+                                  "targets": [] if entry["rendering"] == "chinese_personal" else entry["targets"]})
+            return SimpleNamespace(text=json.dumps({"reviewed": True, "decisions": decisions}))
         names = [{"passage_id": passages[0]["id"], **item} for item in items]
         return SimpleNamespace(text=json.dumps({"reviewed": True, "names": names}))
     return SimpleNamespace(
@@ -22,7 +33,8 @@ def context(items):
 
 def item(surface, rendering, targets=()):
     return dict(surface=surface, rendering=rendering, targets=list(targets),
-                kind="not_character" if rendering == "not_character" else "character")
+                kind="character" if rendering in ("chinese_personal", "foreign_personal", "titled_person")
+                else "not_character")
 
 
 async def test_transcribed_name_offers_restorations_not_pinyin_and_requires_review():
@@ -54,6 +66,41 @@ async def test_personal_titles_translate_but_organizations_are_not_character_nam
     assert set(plans) == {"白衣剑圣"}
     assert plans["白衣剑圣"].candidates[0].method == "translated_title"
     assert plans["白衣剑圣"].auto_target is None
+
+
+async def test_named_species_uses_semantic_review_not_character_spelling():
+    plans = await _discover(context([item("星源兽", "semantic_term", ["Star Source Beast"])]), "星源兽低吼一声。")
+    plan = plans["星源兽"]
+    assert plan.term_role == "semantic_term"
+    assert plan.rendering_method == "semantic_translation"
+    assert plan.candidates[0].target_term == "Star Source Beast"
+    assert plan.auto_target is None
+
+
+async def test_chekhov_restoration_survives_polyphonic_classifier_error():
+    plan = (await _discover(context([item("契科夫", "chinese_personal")]), "契科夫也瓮声道。"))["契科夫"]
+    assert [candidate.target_term for candidate in plan.candidates] == ["Chekhov", "Chekov"]
+    assert plan.term_role == "foreign_person"
+
+
+async def test_focused_second_pass_can_reclassify_ambiguous_pinyin_as_foreign():
+    calls = 0
+    async def complete(prompt, **kwargs):
+        nonlocal calls
+        calls += 1
+        data = json.loads(prompt.split("\n", 1)[1])
+        if "ambiguous_terms" in data:
+            return SimpleNamespace(text=json.dumps({"reviewed": True, "decisions": [{
+                "surface": "索拉文", "term_role": "foreign_person", "targets": ["Solavin"]}]}))
+        return SimpleNamespace(text=json.dumps({"reviewed": True, "names": [{
+            "surface": "索拉文", "kind": "character", "passage_id": data["passages"][0]["id"],
+            "rendering": "chinese_personal", "targets": []}]}))
+    ctx = SimpleNamespace(novel=SimpleNamespace(id="novel", target_lang="en"), cfg=make_config(),
+                          provider=SimpleNamespace(complete=AsyncMock(side_effect=complete)))
+    plan = (await _discover(ctx, "索拉文走进大厅。"))["索拉文"]
+    assert calls == 2
+    assert plan.term_role == "foreign_person"
+    assert [candidate.target_term for candidate in plan.candidates] == ["Solavin"]
 
 
 def test_generic_title_does_not_become_name_review():
@@ -103,7 +150,7 @@ async def test_refresh_is_guarded_by_pending_status_and_original_chapter():
     assert "status='pending'" in sql
     assert "first_seen_chapter=%s" in sql
     assert "selected_target" not in sql
-    assert params[-3:] == ("novel", "劳伦斯", 1)
+    assert params[-5:] == ("foreign_person", "restored_name", "novel", "劳伦斯", 1)
 
 
 async def test_offline_refresh_only_uses_saved_quote_and_does_not_approve():
@@ -125,6 +172,19 @@ async def test_offline_refresh_preview_does_not_write():
     ctx.db = SimpleNamespace(execute=AsyncMock(return_value=cursor))
     await refresh_reviews(ctx)
     assert ctx.db.execute.call_count == 1
+
+
+async def test_offline_human_classification_updates_suggestion_without_approval_or_model():
+    ctx = context([])
+    cursor = SimpleNamespace(fetchall=AsyncMock(return_value=[("星源兽", 1, "星源兽低吼。")]))
+    ctx.db = SimpleNamespace(execute=AsyncMock(return_value=cursor))
+    results = await refresh_reviews(ctx, source_term="星源兽", apply=True,
+                                    term_role="semantic_term", targets=["Star Source Beast"])
+    assert results[0]["candidates"][0]["target_term"] == "Star Source Beast"
+    assert ctx.provider.complete.call_count == 0
+    sql, params = ctx.db.execute.call_args_list[1].args
+    assert "status='pending'" in sql
+    assert params[-5:-3] == ("semantic_term", "semantic_translation")
 
 
 @pytest.mark.db

@@ -17,18 +17,29 @@ from pipeline.config import Config
 from pipeline.context import NovelMeta
 from pipeline.llm import provider_from_env
 from pipeline.provider_config import build_provider, load_provider_config
+from pipeline.pinyin_names import NameCandidate, NamePlan, plan_character_name
 from pipeline.stages.character_names import _discover, _refresh_pending
 
 
-async def refresh_reviews(ctx, *, source_term: str | None = None, apply: bool = False) -> list[dict]:
+async def refresh_reviews(ctx, *, source_term: str | None = None, apply: bool = False,
+                          term_role: str | None = None, targets: list[str] | None = None) -> list[dict]:
     rows = await (await ctx.db.execute("""SELECT source_term,first_seen_chapter,quote
         FROM character_name_review WHERE novel_id=%s AND status='pending'
         AND (%s::text IS NULL OR source_term=%s) ORDER BY first_seen_chapter,source_term""",
         (ctx.novel.id, source_term, source_term))).fetchall()
     results = []
     for surface, chapter, quote in rows:
-        plans = await _discover(ctx, quote)
-        plan = plans.get(surface)
+        if term_role:
+            if term_role == "chinese_person":
+                plan = plan_character_name(surface)
+            else:
+                method = {"foreign_person": "restored_name", "personal_title": "translated_title",
+                          "semantic_term": "semantic_translation"}[term_role]
+                candidates = tuple(NameCandidate(target, (), "", method) for target in dict.fromkeys(targets or []))
+                plan = NamePlan(candidates, None, method, term_role, method)
+        else:
+            plans = await _discover(ctx, quote)
+            plan = plans.get(surface)
         if plan is None or not plan.candidates:
             # Absence/reclassification isn't permission to delete an outstanding review.
             results.append({"source_term": surface, "updated": False, "reason": "no_character_suggestions"})
@@ -45,7 +56,15 @@ def main() -> None:
     parser.add_argument("--novel-id", required=True, type=UUID)
     parser.add_argument("--source-term", help="Refresh only this exact pending source spelling")
     parser.add_argument("--apply", action="store_true", help="Save suggestions, without approving them")
+    parser.add_argument("--term-role", choices=("chinese_person", "foreign_person", "personal_title", "semantic_term"),
+                        help="Human-supplied classification for a targeted pending review")
+    parser.add_argument("--target", action="append", default=[],
+                        help="Human-supplied suggestion (repeat for alternatives); does not approve it")
     args = parser.parse_args()
+    if (args.term_role or args.target) and (not args.apply or not args.source_term or not args.term_role):
+        parser.error("--term-role/--target overrides require --apply, --source-term, and --term-role")
+    if args.term_role != "chinese_person" and args.term_role and not args.target:
+        parser.error("non-Chinese term roles require at least one --target")
 
     async def run():
         cfg = Config.load()
@@ -65,7 +84,8 @@ def main() -> None:
             else:
                 provider = build_provider(config, cfg) if config else provider_from_env(cfg)
             ctx = SimpleNamespace(db=db, novel=novel, cfg=cfg, provider=provider)
-            results = await refresh_reviews(ctx, source_term=args.source_term, apply=args.apply)
+            results = await refresh_reviews(ctx, source_term=args.source_term, apply=args.apply,
+                                            term_role=args.term_role, targets=args.target)
             print(json.dumps(results, ensure_ascii=False, indent=2))
 
     asyncio.run(run())

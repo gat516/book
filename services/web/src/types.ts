@@ -100,8 +100,10 @@ export interface CharacterNameCandidate {
   target_term: string;
   pronunciation: string[];
   segmentation: string;
-  method?: "pinyin" | "restored_name" | "translated_title";
+  method?: "pinyin" | "restored_name" | "translated_title" | "semantic_translation";
 }
+
+export type TermRole = "chinese_person" | "foreign_person" | "personal_title" | "semantic_term";
 
 export interface CharacterNameReview {
   source_term: string;
@@ -109,6 +111,8 @@ export interface CharacterNameReview {
   quote: string;
   reason: string;
   candidates: CharacterNameCandidate[];
+  term_role: TermRole;
+  rendering_method: CharacterNameCandidate["method"];
 }
 
 export interface CharacterNameReviewsResponse {

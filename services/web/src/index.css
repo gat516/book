@@ -496,6 +496,7 @@ body {
 .name-review-choice { display: flex; align-items: baseline; gap: 0.5rem; margin: 0.4rem 0; }
 .name-review-choice span { color: #666; font-size: 0.85rem; }
 .name-review label:not(.name-review-choice) { display: flex; flex-direction: column; gap: 0.3rem; margin: 0.6rem 0; }
+.name-review select { max-width: 100%; padding: 0.35rem; }
 
 .queue-controls { margin: 0 0 1rem; padding: 1rem; border: 1px solid #d8dce3; border-radius: 8px; background: #f7f9fc; font-size: 0.9rem; }
 .queue-controls h2 { font-size: 1rem; margin: 0 0 0.65rem; }

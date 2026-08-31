@@ -176,10 +176,10 @@ export function getCharacterNameReviews(novelId: string, chapter?: number): Prom
   return request(`/novels/${novelId}/name-reviews?${query}`);
 }
 
-export function approveCharacterName(novelId: string, sourceTerm: string, targetTerm: string): Promise<unknown> {
+export function approveCharacterName(novelId: string, sourceTerm: string, targetTerm: string, termRole: import("./types").TermRole): Promise<unknown> {
   return request(`/novels/${novelId}/name-reviews/${encodeURIComponent(sourceTerm)}/approve`, {
     method: "POST",
-    body: JSON.stringify({ target_term: targetTerm }),
+    body: JSON.stringify({ target_term: targetTerm, term_role: termRole }),
   });
 }
 

@@ -75,6 +75,8 @@ class NamePlan:
     candidates: tuple[NameCandidate, ...]
     auto_target: str | None
     reason: str
+    term_role: str = "chinese_person"
+    rendering_method: str = "pinyin"
 
 
 def _surname_length(surface: str) -> int:

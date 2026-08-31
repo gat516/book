@@ -17,13 +17,30 @@ var ErrNameReviewNotFound = errors.New("character-name review not found")
 
 type approveCharacterNameReq struct {
 	TargetTerm string `json:"target_term"`
+	TermRole   string `json:"term_role"`
 	Reviewer   string `json:"reviewer,omitempty"`
 }
 
-// ApproveCharacterName atomically publishes the spelling decision and its hard glossary
-// constraint. It returns chapters that are now eligible to resume; completed chapters
-// are marked as replacement translations so their current version remains readable.
-func (s *Store) ApproveCharacterName(ctx context.Context, novelID, sourceTerm, targetTerm, reviewer string) (int, []QueueMessage, error) {
+func renderingForRole(role string) (constraintClass, method string, ok bool) {
+	switch role {
+	case "chinese_person":
+		return "character_name", "pinyin", true
+	case "foreign_person":
+		return "character_name", "restored_name", true
+	case "personal_title":
+		return "character_name", "translated_title", true
+	case "semantic_term":
+		return "semantic_term", "semantic_translation", true
+	default:
+		return "", "", false
+	}
+}
+
+// ApproveCharacterName atomically publishes the rendering decision and the corresponding
+// glossary constraint (hard spelling for people/titles, semantic for other terms). It
+// returns chapters now eligible to resume; completed chapters become replacements so
+// their current version remains readable.
+func (s *Store) ApproveCharacterName(ctx context.Context, novelID, sourceTerm, targetTerm, termRole, reviewer string) (int, []QueueMessage, error) {
 	if problem := sourceTermProblem(sourceTerm); problem != "" {
 		return 0, nil, fmt.Errorf("%w: %s", ErrGlossaryTermInvalid, problem)
 	}
@@ -33,6 +50,10 @@ func (s *Store) ApproveCharacterName(ctx context.Context, novelID, sourceTerm, t
 	}
 	if reviewer == "" {
 		reviewer = "human"
+	}
+	constraintClass, renderingMethod, ok := renderingForRole(termRole)
+	if !ok {
+		return 0, nil, fmt.Errorf("term_role must be chinese_person, foreign_person, personal_title, or semantic_term")
 	}
 
 	tx, err := s.db.Begin(ctx)
@@ -57,8 +78,12 @@ func (s *Store) ApproveCharacterName(ctx context.Context, novelID, sourceTerm, t
 			return 0, nil, fmt.Errorf("%w: %q is already approved as %q", ErrGlossaryTermConflict, sourceTerm, valueOrEmpty(selected))
 		}
 		var version int
-		if err := tx.QueryRow(ctx, `SELECT version FROM glossary WHERE novel_id=$1 AND source_term=$2 AND NOT deleted`, novelID, sourceTerm).Scan(&version); err != nil {
+		var approvedClass string
+		if err := tx.QueryRow(ctx, `SELECT version,constraint_class FROM glossary WHERE novel_id=$1 AND source_term=$2 AND NOT deleted`, novelID, sourceTerm).Scan(&version, &approvedClass); err != nil {
 			return 0, nil, err
+		}
+		if approvedClass != constraintClass {
+			return 0, nil, fmt.Errorf("%w: %q was approved with a different term role", ErrGlossaryTermConflict, sourceTerm)
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return 0, nil, err
@@ -83,16 +108,16 @@ func (s *Store) ApproveCharacterName(ctx context.Context, novelID, sourceTerm, t
 	if !newRow && !existingDeleted && existingTarget != targetTerm {
 		return 0, nil, fmt.Errorf("%w: %q is already locked to %q", ErrGlossaryTermConflict, sourceTerm, existingTarget)
 	}
-	publishNew := newRow || existingDeleted
+	publishNew := newRow || existingDeleted || existingClass != constraintClass
 	if publishNew {
 		if newRow {
 			_, err = tx.Exec(ctx, `INSERT INTO glossary
 			(novel_id,source_term,target_term,version,locked_at_chapter,constraint_class)
-			VALUES($1,$2,$3,$4,0,'character_name')`, novelID, sourceTerm, targetTerm, version)
+			VALUES($1,$2,$3,$4,0,$5)`, novelID, sourceTerm, targetTerm, version, constraintClass)
 		} else {
 			_, err = tx.Exec(ctx, `UPDATE glossary SET target_term=$3,version=$4,locked_at_chapter=0,
-				constraint_class='character_name',deleted=false,entity_id=NULL
-				WHERE novel_id=$1 AND source_term=$2`, novelID, sourceTerm, targetTerm, version)
+				constraint_class=$5,deleted=false,entity_id=NULL
+				WHERE novel_id=$1 AND source_term=$2`, novelID, sourceTerm, targetTerm, version, constraintClass)
 		}
 		if err != nil {
 			return 0, nil, err
@@ -107,30 +132,34 @@ func (s *Store) ApproveCharacterName(ctx context.Context, novelID, sourceTerm, t
 			return 0, nil, err
 		}
 		seq := prevSeq + 1
-		payload := pythonJSONArray(novelID, seq, sourceTerm, "", targetTerm, 0, prevHash)
+		oldTarget := ""
+		if !newRow && !existingDeleted {
+			oldTarget = existingTarget
+		}
+		payload := pythonJSONArray(novelID, seq, sourceTerm, oldTarget, targetTerm, 0, prevHash)
 		sum := sha256.Sum256([]byte(prevHash + payload))
 		var prevArg any
 		if prevHash != "" {
 			prevArg = prevHash
 		}
+		var oldTargetArg any
+		if oldTarget != "" {
+			oldTargetArg = oldTarget
+		}
 		if _, err = tx.Exec(ctx, `INSERT INTO glossary_changelog
 			(novel_id,seq,source_term,old_target,new_target,changed_at_chapter,prev_hash,row_hash)
-			VALUES($1,$2,$3,NULL,$4,0,$5,$6)`, novelID, seq, sourceTerm, targetTerm, prevArg, hex.EncodeToString(sum[:])); err != nil {
+			VALUES($1,$2,$3,$4,$5,0,$6,$7)`, novelID, seq, sourceTerm, oldTargetArg, targetTerm, prevArg, hex.EncodeToString(sum[:])); err != nil {
 			return 0, nil, err
 		}
 	} else {
 		version = existingVersion
-		if existingClass != "character_name" {
-			if _, err = tx.Exec(ctx, `UPDATE glossary SET constraint_class='character_name' WHERE novel_id=$1 AND source_term=$2`, novelID, sourceTerm); err != nil {
-				return 0, nil, err
-			}
-		}
 	}
 	if _, err = tx.Exec(ctx, `UPDATE character_name_review SET status='approved',selected_target=$3,
 		selection_source=CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(candidates) c
 			WHERE c->>'target_term'=$3) THEN 'offered' ELSE 'override' END,
-		reviewed_by=$4,reviewed_at=now(),updated_at=now() WHERE novel_id=$1 AND source_term=$2`,
-		novelID, sourceTerm, targetTerm, reviewer); err != nil {
+		term_role=$4,rendering_method=$5,
+		reviewed_by=$6,reviewed_at=now(),updated_at=now() WHERE novel_id=$1 AND source_term=$2`,
+		novelID, sourceTerm, targetTerm, termRole, renderingMethod, reviewer); err != nil {
 		return 0, nil, err
 	}
 
@@ -191,7 +220,7 @@ func (a *API) approveCharacterName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.TargetTerm = strings.TrimSpace(req.TargetTerm)
-	version, queued, err := a.store.ApproveCharacterName(r.Context(), r.PathValue("id"), r.PathValue("term"), req.TargetTerm, req.Reviewer)
+	version, queued, err := a.store.ApproveCharacterName(r.Context(), r.PathValue("id"), r.PathValue("term"), req.TargetTerm, req.TermRole, req.Reviewer)
 	if errors.Is(err, ErrNameReviewNotFound) {
 		writeErr(w, http.StatusNotFound, err.Error())
 		return
@@ -204,7 +233,7 @@ func (a *API) approveCharacterName(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"source_term": r.PathValue("term"), "target_term": req.TargetTerm, "version": version, "queued_chapters": queued})
+	writeJSON(w, http.StatusOK, map[string]any{"source_term": r.PathValue("term"), "target_term": req.TargetTerm, "term_role": req.TermRole, "version": version, "queued_chapters": queued})
 }
 
 func decodeJSONBody(r *http.Request, value any) error {

@@ -51,7 +51,7 @@ type ReaderStore interface {
 }
 
 func (s *Store) ListNameReviews(ctx context.Context, novelID string, chapter *int) ([]CharacterNameReview, error) {
-	rows, err := s.readerDB.Query(ctx, `SELECT r.source_term,r.first_seen_chapter,r.quote,r.reason,r.candidates
+	rows, err := s.readerDB.Query(ctx, `SELECT r.source_term,r.first_seen_chapter,r.quote,r.reason,r.candidates,r.term_role,r.rendering_method
 		FROM character_name_review r WHERE r.novel_id=$1 AND r.status='pending'
 		AND ($2::int IS NULL OR EXISTS (SELECT 1 FROM character_name_occurrence o
 			WHERE o.novel_id=r.novel_id AND o.source_term=r.source_term AND o.chapter_index=$2))
@@ -64,7 +64,7 @@ func (s *Store) ListNameReviews(ctx context.Context, novelID string, chapter *in
 	for rows.Next() {
 		var review CharacterNameReview
 		var candidates []byte
-		if err := rows.Scan(&review.SourceTerm, &review.FirstSeenChapter, &review.Quote, &review.Reason, &candidates); err != nil {
+		if err := rows.Scan(&review.SourceTerm, &review.FirstSeenChapter, &review.Quote, &review.Reason, &candidates, &review.TermRole, &review.RenderingMethod); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(candidates, &review.Candidates); err != nil {

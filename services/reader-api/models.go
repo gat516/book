@@ -109,6 +109,8 @@ type CharacterNameReview struct {
 	Quote            string                   `json:"quote"`
 	Reason           string                   `json:"reason"`
 	Candidates       []CharacterNameCandidate `json:"candidates"`
+	TermRole         string                   `json:"term_role"`
+	RenderingMethod  string                   `json:"rendering_method"`
 }
 
 type CharacterNameReviewsResponse struct {

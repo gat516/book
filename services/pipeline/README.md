@@ -61,11 +61,14 @@ resumed with the new extractor; create a new revision and retain historical repo
 Before translation, exact source names are classified for display: ordinary Chinese
 personal names use deterministic pinyin; foreign names transcribed in Chinese receive
 suggested restored spellings; distinctive personal titles receive meaning-based
-translations. A small conventional-transcription lookup supplements the model for
+translations; named species, groups, places, organizations, objects, and techniques use
+semantic translations. A focused second model pass reconsiders ambiguous terms after
+the broad inventory pass, so polyphonic Pinyin is not mistaken for foreign-name
+restoration. A small conventional-transcription lookup supplements the model for
 recognized English names (including complete middle-dot-separated names), so model
 misclassification does not reduce those suggestions to pinyin. Restorations/titles always require human approval, even
 when there is one choice. They never establish identity or approve facts. Organizations,
-places, and other non-person terms stay in the semantic glossary/translation path.
+places, and other non-person terms are reviewed into the semantic glossary path.
 
 Existing pending pinyin-only suggestions can be refreshed offline using their original
 quoted evidence, without later chapters, re-importing, approval, or queue changes:
@@ -79,6 +82,11 @@ cd services/pipeline
 
 Already-approved spellings remain locked. Semantic rendering defaults do not override
 an existing glossary spelling; use the glossary correction UI for those.
+
+The review UI exposes the classification. Approval maps Chinese/foreign/personal-title
+roles to a hard `character_name` spelling constraint and semantic terms to the softer
+`semantic_term` constraint. This lets a stale or mistaken review be repaired without
+merging identities or approving graph facts.
 
 ## Legacy reader name cards
 
