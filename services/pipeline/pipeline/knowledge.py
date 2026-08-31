@@ -25,7 +25,6 @@ from pipeline.config import graph_runtime
 from pipeline.passages import PassageContract
 
 
-PROMPT_TARGET_BYTES = 36 * 1024
 PROMPT_HARD_BYTES = 42 * 1024
 CANDIDATE_LIMIT = 8
 

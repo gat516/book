@@ -73,7 +73,11 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
   // anything. Waiting through the earlier stages, which take minutes and show nothing,
   // polls slowly. Stops entirely once readable or failed.
   const streaming = preview !== null && status !== "done";
-  const settled = ready || status === "error" || status === "needs_name_review" || error !== null;
+  // name_repair_error is a failure like "error" -- the worker writes both from the same
+  // branch. Omitting it here reproduced, for that one status, the very bug the comment
+  // below describes: the view polled a chapter forever that had already failed.
+  const failed = status === "error" || status === "name_repair_error";
+  const settled = ready || failed || status === "needs_name_review" || error !== null;
   usePolling(poll, streaming ? 2000 : 6000, initialRequestDone && !settled && !requestingMore);
 
   async function requestMore(priority = false) {
@@ -105,7 +109,7 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
       </h2>
       {status === "needs_name_review" ? (
         <p>This chapter is paused until a character-name spelling is approved below.</p>
-      ) : status === "error" ? (
+      ) : failed ? (
         // Previously this view waited forever on a chapter that had already failed: the
         // old readiness probe couldn't tell "not ready yet" from "will never be ready".
         <p className="chapter-pending-error">
@@ -143,7 +147,7 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
       <div className="chapter-pending-actions">
         <button onClick={onBack}>← Back to chapters</button>
         <button onClick={() => requestMore(true)} disabled={requestingMore}>
-          {requestingMore ? "Requesting…" : status === "error" || error ? "Retry this chapter with priority" : "Prioritize this chapter"}
+          {requestingMore ? "Requesting…" : failed || error ? "Retry this chapter with priority" : "Prioritize this chapter"}
         </button>
         <button onClick={() => requestMore()} disabled={requestingMore}>
           {requestingMore ? "Queueing…" : "Translate 10 more from here"}
