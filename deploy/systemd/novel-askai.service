@@ -1,0 +1,17 @@
+[Unit]
+Description=novel-engine askai RAG service (:8082)
+After=network-online.target
+Wants=network-online.target
+PartOf=novel-engine.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@/services/askai
+EnvironmentFile=@REPO@/.env
+ExecStart=@REPO@/services/askai/.venv/bin/python -m askai
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=novel-engine.target

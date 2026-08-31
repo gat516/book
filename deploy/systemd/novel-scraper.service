@@ -1,0 +1,22 @@
+[Unit]
+Description=novel-engine scraper worker (drains scrape:pending)
+After=network-online.target
+Wants=network-online.target
+PartOf=novel-engine.target
+# Never stop retrying. The default (5 starts / 10s, then give up and stay failed)
+# would recreate the exact failure this supervision exists to prevent: a dead worker
+# that nobody restarts. Infra being down is a normal transient here -- the service
+# crashes, waits RestartSec, and self-heals when Postgres/Redis come back.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@/services/scraper
+EnvironmentFile=@REPO@/.env
+ExecStartPre=/usr/bin/go build -o @REPO@/services/scraper/scraper .
+ExecStart=@REPO@/services/scraper/scraper
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=novel-engine.target
