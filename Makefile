@@ -1,6 +1,20 @@
-.PHONY: proto-python proto-check gateway-proto-python gateway-proto-check textproc-check textproc-test textproc-live-test textproc-benchmark
+.PHONY: worker benchmark askai proto-python proto-check gateway-proto-python gateway-proto-check textproc-check textproc-test textproc-live-test textproc-benchmark
 
 TEXTPROC_TEST_ADDR ?= 127.0.0.1:50051
+
+# Run services through scripts/with-env.sh so .env actually reaches the process. A bare
+# `python -m pipeline.worker` silently uses code defaults for every setting.
+WITH_ENV := scripts/with-env.sh
+
+worker:
+	$(WITH_ENV) services/pipeline/.venv/bin/python -m pipeline.worker
+
+# Extra flags pass through: make benchmark ARGS="--model qwen2.5:7b-instruct --preflight"
+benchmark:
+	$(WITH_ENV) services/pipeline/.venv/bin/python -m pipeline.benchmark_knowledge $(ARGS)
+
+askai:
+	$(WITH_ENV) services/askai/.venv/bin/python -m askai
 
 proto-python:
 	services/pipeline/.venv/bin/python -m grpc_tools.protoc -I proto --python_out=services/pipeline/pipeline --grpc_python_out=services/pipeline/pipeline proto/textproc.proto
