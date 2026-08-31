@@ -128,7 +128,9 @@ async def _discover(ctx: StageContext, source: str) -> dict[str, NamePlan]:
             {"passages": [{"id": p["id"], "text": p["text"]} for p in batch]},
             ensure_ascii=False,
         )
-        completion = await ctx.provider.complete(
+        # This stage's own deadline budget when the novel runs on Ollama, else the
+        # ordinary chapter provider — see StageContext.names_provider.
+        completion = await (ctx.names_provider or ctx.provider).complete(
             prompt, system=system, json_mode=True, json_schema=schema, cls=Class.BATCH,
             model=model_for_stage(STAGE, ctx.cfg),
         )
@@ -211,7 +213,7 @@ async def _focused_renderings(ctx: StageContext, passages: list[dict], plans: di
         "ambiguous_terms": surfaces,
         "passages": [{"id": p["id"], "text": p["text"]} for p in passages],
     }, ensure_ascii=False)
-    completion = await ctx.provider.complete(
+    completion = await (ctx.names_provider or ctx.provider).complete(
         prompt, system=system, json_mode=True, json_schema=schema, cls=Class.BATCH,
         model=model_for_stage(STAGE, ctx.cfg),
     )

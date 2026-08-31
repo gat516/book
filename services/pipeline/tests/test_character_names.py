@@ -28,6 +28,9 @@ def context(items):
     return SimpleNamespace(
         novel=SimpleNamespace(id="novel", target_lang="en"), cfg=make_config(),
         provider=SimpleNamespace(complete=AsyncMock(side_effect=complete)),
+        # No dedicated CHARACTER_NAMES budget in tests: the stage falls back to `provider`,
+        # which is the same path a novel on a hosted provider takes in production.
+        names_provider=None,
     )
 
 
@@ -96,7 +99,8 @@ async def test_focused_second_pass_can_reclassify_ambiguous_pinyin_as_foreign():
             "surface": "索拉文", "kind": "character", "passage_id": data["passages"][0]["id"],
             "rendering": "chinese_personal", "targets": []}]}))
     ctx = SimpleNamespace(novel=SimpleNamespace(id="novel", target_lang="en"), cfg=make_config(),
-                          provider=SimpleNamespace(complete=AsyncMock(side_effect=complete)))
+                          provider=SimpleNamespace(complete=AsyncMock(side_effect=complete)),
+                          names_provider=None)
     plan = (await _discover(ctx, "索拉文走进大厅。"))["索拉文"]
     assert calls == 2
     assert plan.term_role == "foreign_person"
@@ -220,3 +224,21 @@ async def test_persisted_refresh_preserves_approval_and_original_evidence(db_con
                                             (novel_id,))).fetchone())[0] == 0
     finally:
         await delete_novel(db_conn, novel_id)
+
+
+@pytest.mark.asyncio
+async def test_discover_prefers_the_dedicated_names_provider():
+    """The whole point of the budget is that CHARACTER_NAMES calls go through the
+    provider carrying it — a chapter routed to ctx.provider would silently inherit the
+    flat 120s ceiling that made every chapter on this host fail."""
+    ctx = context([{"surface": "索拉文", "kind": "character", "rendering": "chinese_personal",
+                    "targets": []}])
+    # Delegate to the underlying stub, not to ctx.provider.complete itself, or the
+    # fallback mock records an await and the assertion below cannot distinguish them.
+    budgeted = SimpleNamespace(complete=AsyncMock(side_effect=ctx.provider.complete.side_effect))
+    ctx.names_provider = budgeted
+
+    await _discover(ctx, "索拉文走进大厅。")
+
+    assert budgeted.complete.await_count > 0
+    assert ctx.provider.complete.await_count == 0

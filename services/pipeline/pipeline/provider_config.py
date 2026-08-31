@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from novel_llm import AnthropicProvider, DeepSeekProvider, LLMProvider, OllamaProvider
-from pipeline.config import Config
+from pipeline.config import Config, names_runtime
 
 
 @dataclass(frozen=True)
@@ -88,3 +88,34 @@ def build_provider(row: ProviderConfigRow, cfg: Config) -> LLMProvider:
             )
         case other:
             raise ValueError(f"unknown provider in novel_provider_config: {other!r}")
+
+
+def build_names_provider(cfg: Config, *, provider_id: str,
+                         row: ProviderConfigRow | None = None) -> LLMProvider | None:
+    """Dedicated CHARACTER_NAMES provider carrying that stage's own deadline budget.
+
+    Returns None for every non-Ollama backend. The budget is expressed as OllamaProvider
+    constructor kwargs — there is no per-call deadline anywhere in the LLMProvider
+    protocol — so honouring it means standing up a separate instance, the same way
+    KnowledgeEngine does for graph inference. Swapping a novel's pinned hosted provider
+    for a local Ollama client to gain that budget would silently defeat
+    novel_provider_config routing (Phase N4), so a hosted novel keeps ctx.provider and its
+    ordinary timeout instead.
+
+    ``stream=True`` is what actually unlocks the two-phase budget: only the streaming path
+    distinguishes the prefill wait from the gap between tokens. It does not stream to the
+    reader — the translation preview sink stays scoped to TRANSLATE.
+    """
+    if provider_id != "ollama":
+        return None
+    runtime = names_runtime(cfg)
+    limits, identity = runtime["limits"], runtime["identity"]
+    return OllamaProvider(
+        host=(row.base_url if row else None) or cfg.ollama_host,
+        model=(row.model if row else None) or cfg.llm_model_extract,
+        timeout=limits["idle_timeout_seconds"],
+        total_timeout=limits["total_timeout_seconds"],
+        first_token_timeout=limits["first_token_timeout_seconds"],
+        num_ctx=identity["num_ctx"],
+        stream=identity["stream"],
+    )

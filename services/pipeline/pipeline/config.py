@@ -96,6 +96,17 @@ class Config:
     graph_ollama_num_ctx: int = 16384
     graph_ollama_num_predict: int = 4096
 
+    # CHARACTER_NAMES gets the same two-phase treatment as graph inference, and for the
+    # same measured reason: it batches up to 8 KB of source per call, so prefill dominates
+    # on CPU-only hardware and a flat 120s budget aborts mid-prompt-eval. Unlike the graph
+    # budgets these DEFAULT rather than staying None: graph rebuild is an operator-invoked
+    # tool that can demand explicit values, but CHARACTER_NAMES sits on the ordinary ingest
+    # path, where an unset variable must not break a working install on upgrade.
+    names_ollama_first_token_seconds: float = 900
+    names_ollama_timeout_seconds: float = 120
+    names_ollama_total_timeout_seconds: float = 1800
+    names_ollama_num_ctx: int = 16384
+
     @classmethod
     def load(cls) -> "Config":
         # OBJECT_STORE_ENDPOINT in .env.example is a URL (http://localhost:9000); the
@@ -131,6 +142,10 @@ class Config:
             graph_ollama_total_timeout_seconds=float(_getenv("GRAPH_OLLAMA_TOTAL_TIMEOUT_SECONDS", "1800")),
             graph_ollama_num_ctx=int(_getenv("GRAPH_OLLAMA_NUM_CTX", "16384")),
             graph_ollama_num_predict=int(_getenv("GRAPH_OLLAMA_NUM_PREDICT", "4096")),
+            names_ollama_first_token_seconds=float(_getenv("NAMES_OLLAMA_FIRST_TOKEN_SECONDS", "900")),
+            names_ollama_timeout_seconds=float(_getenv("NAMES_OLLAMA_TIMEOUT_SECONDS", "120")),
+            names_ollama_total_timeout_seconds=float(_getenv("NAMES_OLLAMA_TOTAL_TIMEOUT_SECONDS", "1800")),
+            names_ollama_num_ctx=int(_getenv("NAMES_OLLAMA_NUM_CTX", "16384")),
             deepseek_api_key=_getenv("DEEPSEEK_API_KEY", ""),
             deepseek_base_url=_getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
             gateway_addr=_getenv("LLM_GATEWAY_ADDR", "localhost:8081"),
@@ -175,5 +190,30 @@ def graph_runtime(cfg: Config) -> dict:
     return dict(
         identity=dict(version='stream-admission-v2', stream=True,
                       num_ctx=cfg.graph_ollama_num_ctx, num_predict=cfg.graph_ollama_num_predict),
+        limits=dict(first_token_timeout_seconds=first_token, idle_timeout_seconds=idle,
+                    total_timeout_seconds=total))
+
+
+def names_runtime(cfg: Config) -> dict:
+    """Bounded runtime settings for CHARACTER_NAMES inference, split like graph_runtime.
+
+    Same split, same reason: ``identity`` can change what the model produces and so
+    belongs in the completion cache key, while ``limits`` are deadlines that cannot alter
+    a single generated token. Folding deadlines into identity would discard cached work
+    every time a timeout was retuned on slow hardware.
+
+    Unlike graph_runtime this never raises on unset values — the fields carry defaults,
+    because this stage runs on the ordinary ingest path rather than behind an operator
+    command. It still refuses values that are incoherent rather than merely absent.
+    """
+    first_token = cfg.names_ollama_first_token_seconds
+    idle = cfg.names_ollama_timeout_seconds
+    total = cfg.names_ollama_total_timeout_seconds
+    if not all(math.isfinite(v) and v > 0 for v in (first_token, idle, total)) or total < max(first_token, idle):
+        raise ValueError('character-name timeouts must be finite, positive, and total >= first-token and idle')
+    if cfg.names_ollama_num_ctx <= 0:
+        raise ValueError('character-name context budget must be positive')
+    return dict(
+        identity=dict(version='names-stream-v1', stream=True, num_ctx=cfg.names_ollama_num_ctx),
         limits=dict(first_token_timeout_seconds=first_token, idle_timeout_seconds=idle,
                     total_timeout_seconds=total))

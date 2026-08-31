@@ -31,13 +31,13 @@ async def backfill(novel_id: str, start: int, end: int, apply: bool) -> None:
         if row is None:
             raise ValueError("novel not found")
         source, target, ontology = row
-        provider, batches, provider_id = await worker._provider_for_novel(novel_id)
+        provider, batches, provider_id, names_provider = await worker._provider_for_novel(novel_id)
         ctx = StageContext(
             novel=NovelMeta(novel_id, source, target, ontology),
             language_profile=language_profile_for(source), provider=provider,
             batch_manager=batches, embed_provider=worker.embed_provider, db=worker.db,
             objects=worker.minio, cfg=worker.cfg, cache=worker.cache,
-            textproc=worker.textproc, provider_id=provider_id,
+            textproc=worker.textproc, provider_id=provider_id, names_provider=names_provider,
         )
         chapters = await (await worker.db.execute(
             "SELECT chapter_index, COALESCE(translated_uri, raw_uri), translated_uri IS NOT NULL FROM chapter "
@@ -74,7 +74,7 @@ async def backfill(novel_id: str, start: int, end: int, apply: bool) -> None:
         await worker.redis.aclose()
         await worker.textproc.aclose()
         providers = [worker._default_provider, worker.embed_provider]
-        providers.extend(item[0] for item in worker._provider_cache.values())
+        providers.extend(p for item in worker._provider_cache.values() for p in (item[0], item[3]) if p)
         for provider in {id(p): p for p in providers}.values():
             if hasattr(provider, "aclose"):
                 await provider.aclose()

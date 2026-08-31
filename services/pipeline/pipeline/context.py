@@ -105,6 +105,13 @@ class StageContext:
     # for callers/tests built before this field existed; the worker always sets it for real.
     provider_id: str = ""
 
+    # CHARACTER_NAMES-only provider, carrying that stage's own prefill/idle/total budget
+    # (config.names_runtime). None means "no dedicated budget — use `provider`", which is
+    # the case for every non-Ollama backend: the budget is expressed as OllamaProvider
+    # constructor kwargs, and a hosted provider pinned by novel_provider_config must keep
+    # its own routing rather than be silently replaced by a local Ollama client.
+    names_provider: "LLMProvider | None" = None
+
 
 @dataclass
 class PipelineState:

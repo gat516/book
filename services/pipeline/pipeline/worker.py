@@ -25,7 +25,7 @@ from pipeline.context import NovelMeta, PipelineState, StageContext, language_pr
 from pipeline.envelope import ChapterEnvelope, QueueMessage, SourceMeta
 from pipeline.llm import embed_provider_from_env, provider_from_env
 from pipeline.llm.provider import AdmissionRejected, LLMProvider
-from pipeline.provider_config import build_provider, load_provider_config
+from pipeline.provider_config import build_names_provider, build_provider, load_provider_config
 from pipeline import queue
 from pipeline.failures import record_failure
 from pipeline.stages import DEFAULT_STAGES
@@ -101,10 +101,10 @@ class Worker:
         self._default_provider = provider_from_env(cfg)
         self._default_batch_manager = BatchManager(self._default_provider)
         self.embed_provider = embed_provider_from_env(cfg)
-        # Per-novel (provider, batch_manager, provider_id) cache, keyed by novel_id — a
+        # Per-novel (provider, batch_manager, provider_id, names_provider) cache, keyed by novel_id — a
         # provider wraps a live httpx/SDK client, so this must be built once and reused
         # across chapters, not reconstructed per chapter (PLAN.md Phase N4).
-        self._provider_cache: dict[str, tuple[LLMProvider, BatchManager, str]] = {}
+        self._provider_cache: dict[str, tuple[LLMProvider, BatchManager, str, LLMProvider | None]] = {}
         self.textproc = textproc_from_config(
             cfg.textproc_backend, cfg.textproc_grpc_addr, cfg.textproc_timeout_seconds
         )
@@ -334,7 +334,7 @@ class Worker:
             await self._clear_preview(msg.novel_id, msg.chapter_index)
             return
         source_lang, target_lang, ontology, managed_graph = novel
-        provider, batch_manager, provider_id = await self._provider_for_novel(msg.novel_id)
+        provider, batch_manager, provider_id, names_provider = await self._provider_for_novel(msg.novel_id)
 
         raw_text = await asyncio.to_thread(self._get_object, raw_uri)
 
@@ -362,12 +362,17 @@ class Worker:
             cache=self.cache,
             textproc=self.textproc,
             provider_id=provider_id,
+            names_provider=names_provider,
         )
         state = PipelineState(envelope=envelope)
         enrichment_error: tuple[str, Exception] | None = None
-        if readable:
-            # Enrichment retries must not regenerate saved prose or apply a newer
-            # glossary to an older translation (§0.2, forward-only corrections).
+        if readable or msg.enrichment:
+            # Count this attempt. `readable` alone was not enough: a pre-TRANSLATE retry
+            # never takes that branch, so enrichment_attempts stayed 0 forever and the
+            # `< 3` bound below could never fire — an unbounded retry loop. Forward-only
+            # protection (§0.2: never regenerate saved prose or apply a newer glossary to
+            # an older translation) is enforced by the TRANSLATE branch's own `readable`
+            # check, not by this counter.
             await self.db.execute(
                 "UPDATE chapter SET enrichment_attempts=enrichment_attempts+1 "
                 "WHERE novel_id=%s AND chapter_index=%s", (msg.novel_id, msg.chapter_index))
@@ -453,13 +458,17 @@ class Worker:
                 await record_failure(self.db, msg.novel_id, msg.chapter_index,
                                      enrichment_error[0] if enrichment_error and exc is enrichment_error[1] else stage.name, exc)
                 await self._set_status(msg, "name_repair_error" if msg.retranslate else "error")
-                if readable:
-                    # Retry actual extraction failures, not unknown assertions. Bounded
-                    # attempts prevent a malformed response from monopolizing the model.
-                    await self.db.execute(
-                        "UPDATE chapter SET enrichment_retry_at = now() + interval '5 minutes' "
-                        "WHERE novel_id=%s AND chapter_index=%s AND enrichment_attempts < 3",
-                        (msg.novel_id, msg.chapter_index))
+                # Schedule a retry for ANY recorded failure. This used to be guarded by
+                # `if readable`, which silently made every pre-TRANSLATE failure terminal:
+                # CHARACTER_NAMES runs second of eight, so a transient model timeout there
+                # left the chapter at status='error' with a NULL enrichment_retry_at, which
+                # _retry_enrichment's `enrichment_retry_at <= now()` could never match.
+                # Bounded attempts still prevent a deterministic failure from monopolizing
+                # the model.
+                await self.db.execute(
+                    "UPDATE chapter SET enrichment_retry_at = now() + interval '5 minutes' "
+                    "WHERE novel_id=%s AND chapter_index=%s AND enrichment_attempts < 3",
+                    (msg.novel_id, msg.chapter_index))
             # Re-raise as ChapterFailed so the drain loop knows the outcome was recorded
             # and the claim can be dropped rather than left for the reaper to retry.
             raise ChapterFailed(f"chapter {msg.chapter_index} failed") from exc
@@ -477,8 +486,11 @@ class Worker:
         # Keep the due timestamp until the work succeeds. Queue insertion is atomic and
         # deduplicated; a crash between database inspection and enqueue cannot strand it.
         rows = await (await self.db.execute(
-            "SELECT novel_id::text, chapter_index, status FROM chapter WHERE translation_ready "
-            "AND status IN ('error','name_repair_error') AND enrichment_retry_at <= now() AND enrichment_attempts < 3 "
+            # No translation_ready filter: a chapter that failed BEFORE translate is
+            # exactly the one with nothing durable saved, so it is the most important to
+            # retry, not the one to skip.
+            "SELECT novel_id::text, chapter_index, status FROM chapter "
+            "WHERE status IN ('error','name_repair_error') AND enrichment_retry_at <= now() AND enrichment_attempts < 3 "
             "ORDER BY enrichment_retry_at LIMIT 20"
         )).fetchall()
         for novel_id, chapter, status in rows:
@@ -505,7 +517,7 @@ class Worker:
     async def _clear_preview(self, novel_id: str, chapter_index: int) -> None:
         await self.redis.delete(PREVIEW_KEY.format(novel_id=novel_id, chapter_index=chapter_index))
 
-    async def _provider_for_novel(self, novel_id: str) -> tuple[LLMProvider, BatchManager, str]:
+    async def _provider_for_novel(self, novel_id: str) -> tuple[LLMProvider, BatchManager, str, LLMProvider | None]:
         """Return (provider, batch_manager, provider_id) for novel_id, memoized for the
         life of the process (PLAN.md Phase N4). A novel with no novel_provider_config row
         gets the process-wide default; the cache holds that too, so this is still one
@@ -516,15 +528,19 @@ class Worker:
             return cached
         if self.cfg.llm_provider == "gateway":
             provider = provider_from_env(self.cfg, tenant=novel_id)
-            result = (provider, BatchManager(provider), self.cfg.gateway_provider)
+            # The gateway owns its own admission and deadlines; a second direct-to-Ollama
+            # client would bypass exactly the scheduling it exists to provide (§14).
+            result = (provider, BatchManager(provider), self.cfg.gateway_provider, None)
             self._provider_cache[novel_id] = result
             return result
         row = await load_provider_config(self.db, novel_id)
         if row is None:
-            result = (self._default_provider, self._default_batch_manager, self.cfg.llm_provider)
+            result = (self._default_provider, self._default_batch_manager, self.cfg.llm_provider,
+                      build_names_provider(self.cfg, provider_id=self.cfg.llm_provider))
         else:
             provider = build_provider(row, self.cfg)
-            result = (provider, BatchManager(provider), row.provider)
+            result = (provider, BatchManager(provider), row.provider,
+                      build_names_provider(self.cfg, provider_id=row.provider, row=row))
         self._provider_cache[novel_id] = result
         return result
 
