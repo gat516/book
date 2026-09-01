@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -137,6 +138,26 @@ def system_with_schema(system: str, schema: dict | None) -> str:
 # Retry-After still wins when present.
 RATE_LIMIT_RETRY_S = 30.0
 
+# Providers that supply no Retry-After header often put the wait in the error body
+# instead. Gemini answers a 429 with "Please retry in 55.511344849s." and a structured
+# retryDelay; obeying it beats any constant, and on a 20-request-per-minute quota a wait
+# that is too short simply spends another request on a second 429.
+_RETRY_HINT = re.compile(r'(?:retry in|"?retryDelay"?\s*:\s*")\s*([0-9]+(?:\.[0-9]+)?)\s*s', re.I)
+
+
+def _retry_hint_seconds(body: str) -> float | None:
+    """Seconds the provider asked us to wait, from its error body. None if it said none."""
+    match = _RETRY_HINT.search(body)
+    return float(match.group(1)) if match else None
+
+
+def _body_of(exc: "httpx.HTTPStatusError") -> str:
+    """The error body, or "" if it cannot be read. Diagnostics must never mask a failure."""
+    try:
+        return exc.response.text
+    except Exception:  # noqa: BLE001
+        return ""
+
 
 @contextlib.asynccontextmanager
 async def transient_as_backpressure(*, default_retry_s: float = 5.0):
@@ -163,6 +184,8 @@ async def transient_as_backpressure(*, default_retry_s: float = 5.0):
         try:
             delay = float(retry_after)
         except ValueError:
+            delay = _retry_hint_seconds(_body_of(exc)) or 0.0
+        if not delay:
             # 429 gets its own, much longer floor: a server that is out of quota this
             # minute will still be out of quota five seconds from now.
             delay = RATE_LIMIT_RETRY_S if exc.response.status_code == 429 else default_retry_s
@@ -172,10 +195,7 @@ async def transient_as_backpressure(*, default_retry_s: float = 5.0):
         # cannot. Truncated because provider errors can be verbose and this reaches logs,
         # but generously: the quota PERIOD and Google's retryDelay both sit AFTER the limit
         # number, so a tight cut hides exactly the part worth reading.
-        try:
-            detail = exc.response.text[:1200]
-        except Exception:  # noqa: BLE001 -- diagnostics must never mask the real failure
-            detail = ""
+        detail = _body_of(exc)[:1200]
         raise AdmissionRejected(
             f"{exc.response.status_code} from provider: {detail}" if detail
             else f"{exc.response.status_code} from provider",

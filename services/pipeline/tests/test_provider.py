@@ -279,3 +279,26 @@ async def test_success_path_is_transparent():
     async with transient_as_backpressure():
         value = 1
     assert value == 1
+
+
+async def test_rate_limit_obeys_a_retry_hint_in_the_body():
+    """Gemini sends no Retry-After header; it puts the wait in the body as
+    "Please retry in 55.511344849s." On a 20-request-per-minute quota, guessing a shorter
+    delay just spends another of those 20 requests on a second 429."""
+    request = httpx.Request("POST", "https://example.invalid/chat/completions")
+    body = '{"error":{"code":429,"message":"Quota exceeded. Please retry in 55.511344849s."}}'
+    response = httpx.Response(429, request=request, text=body)
+    with pytest.raises(AdmissionRejected) as caught:
+        async with transient_as_backpressure():
+            raise httpx.HTTPStatusError("boom", request=request, response=response)
+    assert caught.value.retry_after_s == pytest.approx(55.511344849)
+
+
+async def test_retry_after_header_still_wins_over_the_body():
+    request = httpx.Request("POST", "https://example.invalid/chat/completions")
+    response = httpx.Response(429, headers={"retry-after": "12"}, request=request,
+                              text="Please retry in 99s.")
+    with pytest.raises(AdmissionRejected) as caught:
+        async with transient_as_backpressure():
+            raise httpx.HTTPStatusError("boom", request=request, response=response)
+    assert caught.value.retry_after_s == 12.0
