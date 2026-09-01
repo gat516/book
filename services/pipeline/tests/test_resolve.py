@@ -19,6 +19,7 @@ LLM and its embeddings are fakes; nothing here talks to a network.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 from fixtures import FakeProvider, FakeRedis, delete_novel, make_config, make_novel, seed_entities
@@ -128,6 +129,15 @@ async def test_success_is_recorded_but_does_not_skip_live_resolution(db_conn, no
 
     await _run(ctx, "An empty room.")
     assert len(provider.calls) == 2, "done tracks success, not a content-cache hit"
+
+
+async def test_resolve_uses_its_phase_budget_provider(db_conn, novel):
+    fallback = FakeProvider(_responder(propose={}, decide={}))
+    budgeted = FakeProvider(_responder(propose={}, decide={}))
+    ctx = replace(_ctx(db_conn, novel, fallback), resolve_provider=budgeted)
+    await _run(ctx, "An empty room.")
+    assert len(budgeted.calls) == 1
+    assert fallback.calls == []
 
 
 async def test_variant_spelling_resolves_to_the_existing_entity(db_conn, novel):
@@ -596,6 +606,54 @@ async def test_scanned_alias_binds_without_disambiguation(db_conn, novel):
     assert state.resolutions["Li Xiaoyao"] == known["Li Xiaoyao"]
     assert len(provider.calls) == 1, "an unambiguous known alias must not be disambiguated"
     assert len(await _entities(db_conn, novel)) == 1
+
+
+async def test_retry_reuses_same_chapter_entity_for_repeated_surface(db_conn, novel):
+    """A failed attempt may have committed RESOLVE's idempotent entity/alias writes
+    before its job marker. On retry, replaying one model call per occurrence can exceed
+    the claim lease and restart the same chapter forever. An entity first seen in this
+    chapter is the result the initial no-candidate pass already chose, so resume it for
+    every occurrence without weakening the cross-chapter homonym check (§5, §6.3)."""
+    known = await seed_entities(db_conn, novel, {"Li Xiaoyao": "character"})
+    await db_conn.execute(
+        "UPDATE entity SET first_seen_chapter=%s WHERE id=%s",
+        (CHAPTER, known["Li Xiaoyao"]),
+    )
+    provider = FakeProvider(_responder(propose={"Li Xiaoyao": "character"}, decide={}))
+
+    state = await _run(
+        _ctx(db_conn, novel, provider),
+        "Li Xiaoyao drew his sword. Li Xiaoyao advanced. Li Xiaoyao smiled.",
+    )
+
+    assert state.resolutions["Li Xiaoyao"] == known["Li Xiaoyao"]
+    assert len(provider.calls) == 1, "same-chapter resume must not replay occurrence calls"
+
+
+async def test_retry_drops_same_chapter_identity_conflict_without_making_more(db_conn, novel):
+    """Contradictory partial decisions are not evidence for choosing either identity.
+    Retrying per occurrence would grow the conflict forever, so fail closed and let the
+    rest of the chapter proceed (§0.2, §5, §6.3)."""
+    first = await seed_entities(db_conn, novel, {"Li Xiaoyao": "character"})
+    second = await seed_entities(db_conn, novel, {"Other Li": "character"})
+    await db_conn.execute(
+        "UPDATE entity SET first_seen_chapter=%s WHERE id = ANY(%s::uuid[])",
+        (CHAPTER, [first["Li Xiaoyao"], second["Other Li"]]),
+    )
+    await db_conn.execute(
+        "INSERT INTO alias (entity_id,surface,lang,first_seen_chapter) VALUES (%s,%s,%s,%s)",
+        (second["Other Li"], "Li Xiaoyao", "en", CHAPTER),
+    )
+    provider = FakeProvider(_responder(propose={"Li Xiaoyao": "character"}, decide={}))
+
+    state = await _run(
+        _ctx(db_conn, novel, provider),
+        "Li Xiaoyao drew his sword. Li Xiaoyao smiled.",
+    )
+
+    assert "Li Xiaoyao" not in state.resolutions
+    assert len(provider.calls) == 1, "retry conflict must not create another identity"
+    assert len(await _entities(db_conn, novel)) == 2
 
 
 async def test_ambiguous_scanned_surface_is_disambiguated(db_conn, novel):

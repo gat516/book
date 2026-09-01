@@ -27,6 +27,18 @@ async def test_literal_mentions_not_capitalization_or_invented_names():
     assert ctx.provider.calls[0]["json_schema"]
 
 
+async def test_discovery_prefers_the_phase_aware_names_provider():
+    ctx = context('{"names":[]}')
+    budgeted = FakeProvider('{"names":["Ann"]}')
+    ctx.names_provider = budgeted
+
+    spans = await discover_names(ctx, "Ann left.")
+
+    assert [span.char_end - span.char_start for span in spans] == [3]
+    assert len(budgeted.calls) == 1
+    assert ctx.provider.calls == []
+
+
 async def test_cache_uses_text_prompt_and_actual_model():
     ctx = context('{"names":["Ann"]}')
     await discover_names(ctx, "Ann left.")

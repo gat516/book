@@ -14,7 +14,14 @@ from psycopg.types.json import Jsonb
 
 from pipeline.context import PipelineState, StageContext
 from pipeline.evidence import digest, stable_id
-from pipeline.jobs import idempotency_key, insert_job, mark_job_done, model_for_stage
+from pipeline.jobs import (
+    idempotency_key,
+    insert_job,
+    job_is_done,
+    mark_job_done,
+    model_for_stage,
+    model_id_for_stage,
+)
 from pipeline.llm.provider import Class
 from pipeline.name_renderings import conventional_english_names
 from pipeline.passages import source_passages
@@ -322,9 +329,34 @@ class CharacterNamesStage:
     async def run(self, ctx: StageContext, state: PipelineState) -> None:
         if ctx.novel.source_lang.split("-")[0] != "zh" or ctx.novel.source_lang == ctx.novel.target_lang:
             return
-        key = idempotency_key(STAGE, state.envelope.source_meta.raw_hash or digest(state.envelope.raw_text), ctx.cfg)
+        key = idempotency_key(
+            STAGE,
+            state.envelope.source_meta.raw_hash or digest(state.envelope.raw_text),
+            ctx.cfg,
+            model_id=model_id_for_stage(
+                STAGE, ctx.cfg, provider=ctx.provider_id or None, override=ctx.model_override
+            ),
+        )
         await insert_job(ctx.db, novel_id=ctx.novel.id, chapter_index=state.envelope.chapter_index,
                          stage=STAGE, key=key)
+        # This stage's durable output is the review/occurrence/glossary rows written below;
+        # it contributes no transient PipelineState needed by later stages. Replaying the
+        # identical chapter after a later RESOLVE timeout used to spend 10+ CPU-model
+        # minutes rediscovering names whose transaction and job marker had already
+        # committed. The exact job key makes this a safe §6.1 resume boundary.
+        if await job_is_done(
+            ctx.db,
+            novel_id=ctx.novel.id,
+            chapter_index=state.envelope.chapter_index,
+            stage=STAGE,
+            key=key,
+        ):
+            log.info(
+                "stage %s chapter=%d already complete; resuming after it",
+                self.name,
+                state.envelope.chapter_index,
+            )
+            return
 
         approved = await (await ctx.db.execute(
             "SELECT source_term FROM glossary WHERE novel_id=%s AND NOT deleted "

@@ -50,6 +50,10 @@ def make_config(**overrides) -> Config:
         textproc_backend="python",
         textproc_grpc_addr="localhost:50051",
         textproc_timeout_seconds=10.0,
+        resolve_ollama_first_token_seconds=900.0,
+        resolve_ollama_timeout_seconds=120.0,
+        resolve_ollama_total_timeout_seconds=1800.0,
+        resolve_ollama_num_ctx=16384,
     )
     base.update(overrides)
     return Config(**base)

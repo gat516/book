@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from fixtures import make_config
+from fixtures import FakeProvider, delete_novel, make_config, make_novel
+from pipeline.stages.character_names import CharacterNamesStage
 from pipeline.refresh_name_reviews import refresh_reviews
 from pipeline.stages.character_names import _discover, _refresh_pending, _rendering_plan
 
@@ -243,3 +244,36 @@ async def test_discover_prefers_the_dedicated_names_provider():
 
     assert budgeted.complete.await_count > 0
     assert ctx.provider.complete.await_count == 0
+
+
+@pytest.mark.db
+async def test_completed_character_name_work_is_a_resume_boundary(db_conn):
+    """A later-stage retry must not repeat an already committed model inventory."""
+    novel_id = await make_novel(db_conn)
+    provider = FakeProvider(json.dumps({"reviewed": True, "names": []}))
+    ctx = SimpleNamespace(
+        novel=SimpleNamespace(id=novel_id, source_lang="zh", target_lang="en"),
+        cfg=make_config(),
+        provider=provider,
+        names_provider=None,
+        provider_id="ollama",
+        model_override=None,
+        db=db_conn,
+    )
+    state = SimpleNamespace(envelope=SimpleNamespace(
+        raw_text="无人走进大厅。",
+        chapter_index=1,
+        source_meta=SimpleNamespace(raw_hash="sha256:resume-names"),
+    ))
+    try:
+        await CharacterNamesStage().run(ctx, state)
+        assert len(provider.calls) == 1
+        await CharacterNamesStage().run(ctx, state)
+        assert len(provider.calls) == 1
+        row = await (await db_conn.execute(
+            "SELECT state FROM job WHERE novel_id=%s AND stage='character_names'",
+            (novel_id,),
+        )).fetchone()
+        assert row == ("done",)
+    finally:
+        await delete_novel(db_conn, novel_id)

@@ -20,6 +20,7 @@ LLM and Redis are fakes; nothing here talks to a network.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 from fixtures import (
@@ -183,6 +184,22 @@ async def test_stage_asks_for_json_at_batch_priority(db_conn, novel):
     # state-extract is structured data: a different model is a quality variance, not a
     # discontinuity, so it must NOT pin (§15.4 case 2 — only translate pins).
     assert call["pin_model"] is False
+
+
+async def test_state_uses_phase_aware_provider_for_sequential_batch(db_conn, novel):
+    fallback = FakeProvider(RESPONSE)
+    budgeted = FakeProvider(RESPONSE)
+    ctx = replace(
+        _ctx(db_conn, novel, fallback, LLMCache(FakeRedis())),
+        resolve_provider=budgeted,
+    )
+    state = _state()
+    state.envelope.novel_id = novel
+
+    await StateStage().run(ctx, state)
+
+    assert len(budgeted.calls) == 1
+    assert fallback.calls == []
 
 
 async def test_chapter_text_is_not_in_the_cacheable_prefix(db_conn, novel):

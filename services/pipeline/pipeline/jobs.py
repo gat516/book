@@ -19,9 +19,10 @@ a config-version fallback for callers that compute a key before loading a glossa
 
 Note (§4, PLAN.md §1.2): the ``resolve`` stage is deliberately NOT content-cached — its
 output depends on the live alias index (DB state), not just chapter text. Only
-``translate`` and ``state`` are pure functions of (content, prompt, config, model) and
-therefore safe to skip on a cache hit. This module computes keys for all LLM-bearing
-stages for *tracking*; the cache-skip logic (step 1.5) applies only to translate/state.
+``translate`` and ``state`` cache model output. ``character_names`` may resume from its
+durable done marker because all of its effects are already committed database rows and it
+contributes no transient PipelineState; it does not reuse raw model output. This module
+computes keys for all LLM-bearing stages for tracking and resume boundaries.
 """
 
 from __future__ import annotations

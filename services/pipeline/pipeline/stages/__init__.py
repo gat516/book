@@ -1,7 +1,6 @@
-"""Pipeline stages (instructions.md §5). Runtime order: chunk → scan → resolve →
-translate → display-scan → state → graph-write. Chunk and graph-write are real (1.4),
-state is real (1.5), scan and resolve are real (1.6), translate is real (1.7),
-display-scan is real (Phase 5.2).
+"""Pipeline stages (instructions.md §5). Reader-critical order: chunk → translate;
+then offline enrichment: character-names → scan → resolve → display-scan → state →
+graph-write.
 
 The build order deliberately differs from the runtime order (PLAN.md): state was filled
 before resolve even though it runs after it, because state populates fact/edge/event —
@@ -10,9 +9,9 @@ where resolution is easy and translation is skipped. Resolve then replaced the
 exact-match placeholder that stood in for it, and now owns ``state.resolutions``, the
 single surface → entity_id map every later stage binds through.
 
-display-scan sits right after translate (produce the display text, then scan it) and
-before state — state-extract's LLM call has no dependency on display spans either way,
-so its position relative to state is free.
+Translation intentionally uses the glossary locked by *previously completed* work. New
+terms discovered while enriching this chapter apply forward-only to later translations
+(§0.2); knowledge-graph latency must never hold reader-visible prose hostage (§5).
 """
 
 from pipeline.stages.chunk import ChunkStage
@@ -27,10 +26,10 @@ from pipeline.stages.translate import TranslateStage
 # The pipeline in runtime order (§5).
 DEFAULT_STAGES = [
     ChunkStage(),
+    TranslateStage(),
     CharacterNamesStage(),
     ScanStage(),
     ResolveStage(),
-    TranslateStage(),
     DisplayScanStage(),
     StateStage(),
     GraphWriteStage(),

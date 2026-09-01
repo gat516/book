@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import logging
 
+from pipeline.batch import BatchManager
 from pipeline.context import PipelineState, StageContext
 from pipeline.extraction import Extraction, build_system_prompt, build_user_prompt, parse_extraction
 from pipeline.jobs import (
@@ -122,9 +123,18 @@ class StateStage:
                 "json_schema": Extraction.model_json_schema(),
                 "model": model_for_stage(STAGE, ctx.cfg, ctx.model_override),
             }
-            batch_id = await ctx.batch_manager.batch_submit([request])
-            results = await ctx.batch_manager.batch_poll(batch_id)
-            result = ctx.batch_manager.require_single_result(key, results)
+            # Ollama's batch API is the protocol's sequential compatibility path. Use
+            # the phase-aware streaming client there so long CPU prompt evaluation is
+            # not mistaken for a provider outage at the ordinary 120s buffered-read
+            # ceiling. Hosted/native batch providers retain the worker-owned manager.
+            manager = (
+                BatchManager(ctx.resolve_provider)
+                if ctx.resolve_provider is not None
+                else ctx.batch_manager
+            )
+            batch_id = await manager.batch_submit([request])
+            results = await manager.batch_poll(batch_id)
+            result = manager.require_single_result(key, results)
             raw = result["output"]
             # Invalid structured output is a failed attempt, never a reusable result.
             extraction = parse_extraction(raw)

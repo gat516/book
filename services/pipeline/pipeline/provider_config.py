@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from novel_llm import AnthropicProvider, DeepSeekProvider, GeminiProvider, LLMProvider, OllamaProvider
-from pipeline.config import Config, names_runtime
+from pipeline.config import Config, names_runtime, resolve_runtime
 
 
 @dataclass(frozen=True)
@@ -163,6 +163,29 @@ def build_names_provider(cfg: Config, *, provider_id: str,
     if provider_id != "ollama":
         return None
     runtime = names_runtime(cfg)
+    limits, identity = runtime["limits"], runtime["identity"]
+    return OllamaProvider(
+        host=(row.base_url if row else None) or cfg.ollama_host,
+        model=(row.model if row else None) or cfg.llm_model_extract,
+        timeout=limits["idle_timeout_seconds"],
+        total_timeout=limits["total_timeout_seconds"],
+        first_token_timeout=limits["first_token_timeout_seconds"],
+        num_ctx=identity["num_ctx"],
+        stream=identity["stream"],
+    )
+
+
+def build_resolve_provider(cfg: Config, *, provider_id: str,
+                           row: ProviderConfigRow | None = None) -> LLMProvider | None:
+    """Dedicated RESOLVE provider with CPU-appropriate phase deadlines (§5.4).
+
+    As with ``build_names_provider``, hosted backends keep their configured routing and
+    return None. Only an Ollama-backed novel gets a second client with streaming enabled;
+    streaming is internal here and never reaches the reader-facing translation preview.
+    """
+    if provider_id != "ollama":
+        return None
+    runtime = resolve_runtime(cfg)
     limits, identity = runtime["limits"], runtime["identity"]
     return OllamaProvider(
         host=(row.base_url if row else None) or cfg.ollama_host,

@@ -111,6 +111,15 @@ class Config:
     names_ollama_total_timeout_seconds: float = 1800
     names_ollama_num_ctx: int = 16384
 
+    # RESOLVE starts with one chapter-wide proposal and may follow it with several
+    # per-surface decisions. On a CPU-only Ollama host, prompt evaluation alone can
+    # exceed the ordinary 120s request timeout. Give it the same phase-aware streaming
+    # budget as CHARACTER_NAMES so a healthy prefill is not mistaken for an outage.
+    resolve_ollama_first_token_seconds: float = 900
+    resolve_ollama_timeout_seconds: float = 120
+    resolve_ollama_total_timeout_seconds: float = 1800
+    resolve_ollama_num_ctx: int = 16384
+
     @classmethod
     def load(cls) -> "Config":
         # OBJECT_STORE_ENDPOINT in .env.example is a URL (http://localhost:9000); the
@@ -150,6 +159,10 @@ class Config:
             names_ollama_timeout_seconds=float(_getenv("NAMES_OLLAMA_TIMEOUT_SECONDS", "120")),
             names_ollama_total_timeout_seconds=float(_getenv("NAMES_OLLAMA_TOTAL_TIMEOUT_SECONDS", "1800")),
             names_ollama_num_ctx=int(_getenv("NAMES_OLLAMA_NUM_CTX", "16384")),
+            resolve_ollama_first_token_seconds=float(_getenv("RESOLVE_OLLAMA_FIRST_TOKEN_SECONDS", "900")),
+            resolve_ollama_timeout_seconds=float(_getenv("RESOLVE_OLLAMA_TIMEOUT_SECONDS", "120")),
+            resolve_ollama_total_timeout_seconds=float(_getenv("RESOLVE_OLLAMA_TOTAL_TIMEOUT_SECONDS", "1800")),
+            resolve_ollama_num_ctx=int(_getenv("RESOLVE_OLLAMA_NUM_CTX", "16384")),
             deepseek_api_key=_getenv("DEEPSEEK_API_KEY", ""),
             deepseek_base_url=_getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
             gateway_addr=_getenv("LLM_GATEWAY_ADDR", "localhost:8081"),
@@ -221,5 +234,25 @@ def names_runtime(cfg: Config) -> dict:
         raise ValueError('character-name context budget must be positive')
     return dict(
         identity=dict(version='names-stream-v1', stream=True, num_ctx=cfg.names_ollama_num_ctx),
+        limits=dict(first_token_timeout_seconds=first_token, idle_timeout_seconds=idle,
+                    total_timeout_seconds=total))
+
+
+def resolve_runtime(cfg: Config) -> dict:
+    """Phase-aware Ollama limits for §5's identity-resolution model calls.
+
+    These are operational deadlines, not output-shaping inputs, so changing them does
+    not invalidate the job key. ``num_ctx`` and streaming mode can affect output and are
+    kept in the identity half for the same reason as ``names_runtime``.
+    """
+    first_token = cfg.resolve_ollama_first_token_seconds
+    idle = cfg.resolve_ollama_timeout_seconds
+    total = cfg.resolve_ollama_total_timeout_seconds
+    if not all(math.isfinite(v) and v > 0 for v in (first_token, idle, total)) or total < max(first_token, idle):
+        raise ValueError('resolve timeouts must be finite, positive, and total >= first-token and idle')
+    if cfg.resolve_ollama_num_ctx <= 0:
+        raise ValueError('resolve context budget must be positive')
+    return dict(
+        identity=dict(version='resolve-stream-v1', stream=True, num_ctx=cfg.resolve_ollama_num_ctx),
         limits=dict(first_token_timeout_seconds=first_token, idle_timeout_seconds=idle,
                     total_timeout_seconds=total))

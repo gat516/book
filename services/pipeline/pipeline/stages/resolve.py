@@ -421,10 +421,42 @@ class ResolveStage:
             occurrences.setdefault(surface,set()).add((span.char_start,span.char_end))
 
         ambiguous: list[str] = []
+        retry_conflicts: set[str] = set()
         for surface, entity_ids in scanned.items():
             one_char_cjk=(envelope.source_lang.split("-")[0] in {"zh","ja","ko"} and len(surface)==1)
-            if len(entity_ids) == 1 and not one_char_cjk and len(occurrences[surface])==1:
-                entity_id=next(iter(entity_ids));resolutions[surface] = entity_id
+            entity_id = next(iter(entity_ids)) if len(entity_ids) == 1 else None
+            created_this_chapter = False
+            if entity_id is not None:
+                row = await (
+                    await ctx.db.execute(
+                        "SELECT first_seen_chapter FROM entity WHERE id=%s", (entity_id,)
+                    )
+                ).fetchone()
+                created_this_chapter = row is not None and row[0] == envelope.chapter_index
+            elif entity_ids:
+                rows = await (
+                    await ctx.db.execute(
+                        "SELECT first_seen_chapter FROM entity WHERE id = ANY(%s::uuid[])",
+                        (list(entity_ids),),
+                    )
+                ).fetchall()
+                if rows and all(row[0] == envelope.chapter_index for row in rows):
+                    # A killed/reaped attempt may have committed several contradictory
+                    # NEW_ENTITY decisions for repeated occurrences before RESOLVE's job
+                    # marker. Asking again only manufactures more identities. Fail closed:
+                    # this chapter publishes no claims for the surface, while unrelated
+                    # resolved facts may still advance (§0.2, §5, §6.3).
+                    retry_conflicts.add(surface)
+                    log.warning(
+                        "resolve: %r has %d conflicting identities created by this "
+                        "unfinished chapter; leaving surface unbound",
+                        surface,
+                        len(entity_ids),
+                    )
+                    continue
+            if (entity_id is not None and not one_char_cjk
+                    and (len(occurrences[surface]) == 1 or created_this_chapter)):
+                resolutions[surface] = entity_id
                 # Seeing a known translated alias in a later chapter is independent
                 # corroboration; retries in one chapter remain one ledger vote.
                 if ctx.novel.source_lang != ctx.novel.target_lang:
@@ -440,7 +472,7 @@ class ResolveStage:
                 ambiguous.append(surface)
 
         # --- pass 2: proposal ----------------------------------------------
-        completion = await ctx.provider.complete(
+        completion = await (ctx.resolve_provider or ctx.provider).complete(
             build_proposal_user_prompt(text),
             system=build_proposal_system_prompt(ctx.novel.ontology),
             json_mode=True,
@@ -457,7 +489,8 @@ class ResolveStage:
         kinds = {m.surface: m.kind for m in proposed}
 
         unresolved = ambiguous + [
-            m.surface for m in proposed if m.surface not in resolutions
+            m.surface for m in proposed
+            if m.surface not in resolutions and m.surface not in retry_conflicts
         ]
         # Drop blank surfaces before they can reach _lock_glossary. The proposal pass is
         # the one generative step here, and a model that returns an empty (or whitespace)
@@ -561,7 +594,7 @@ class ResolveStage:
         if ctx.novel.source_lang != ctx.novel.target_lang:
             locked_target = await _locked_target(ctx.db, ctx.novel.id, surface)
 
-        completion = await ctx.provider.complete(
+        completion = await (ctx.resolve_provider or ctx.provider).complete(
             build_disambiguation_user_prompt(
                 surface, candidates, context=context or _context_around(text, surface), locked_target=locked_target
             ),

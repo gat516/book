@@ -10,9 +10,12 @@ PENDING = "jobs:pending"
 PROCESSING = "jobs:processing"
 STARTED = "jobs:processing:started"
 STAGE = "jobs:processing:stage"
+STAGE_STARTED = "jobs:processing:stage:started"
 HEARTBEAT = "jobs:processing:heartbeat"
 CONTROL = "jobs:control"  # HASH: mode (all|focused|paused), focus_novel_id
-KEYS = [PENDING, PROCESSING, STARTED, STAGE, HEARTBEAT, CONTROL]
+# Keep CONTROL at KEYS[6]: the scheduling Lua below refers to it by position. New
+# observational keys append after the recovery/scheduling contract.
+KEYS = [PENDING, PROCESSING, STARTED, STAGE, HEARTBEAT, CONTROL, STAGE_STARTED]
 
 CLAIM = """
 local mode = redis.call('HGET', KEYS[6], 'mode') or 'all'
@@ -64,6 +67,7 @@ end
 redis.call('LPUSH', KEYS[2], selected)
 redis.call('HSET', KEYS[3], selected, ARGV[1])
 redis.call('HSET', KEYS[5], selected, ARGV[1])
+redis.call('HDEL', KEYS[7], selected)
 return selected
 """
 
@@ -79,7 +83,15 @@ redis.call('LREM', KEYS[2], 0, ARGV[1])
 redis.call('HDEL', KEYS[3], ARGV[1])
 redis.call('HDEL', KEYS[4], ARGV[1])
 redis.call('HDEL', KEYS[5], ARGV[1])
-if ARGV[3] == 'retry' then redis.call('LPUSH', KEYS[1], ARGV[1]) end
+redis.call('HDEL', KEYS[7], ARGV[1])
+if ARGV[3] == 'retry' then
+  redis.call('LPUSH', KEYS[1], ARGV[1])
+elseif ARGV[3] == 'enrich' then
+  -- Translation is durable. Replace the reader-critical pointer atomically with a
+  -- low-priority enrichment pointer, so a crash cannot strand optional graph work and
+  -- enrichment cannot sit in front of the next untranslated chapter (§5).
+  redis.call('LPUSH', KEYS[1], ARGV[4])
+end
 return 1
 """
 
@@ -92,6 +104,7 @@ local removed = redis.call('LREM', KEYS[2], 0, ARGV[1])
 redis.call('HDEL', KEYS[3], ARGV[1])
 redis.call('HDEL', KEYS[4], ARGV[1])
 redis.call('HDEL', KEYS[5], ARGV[1])
+redis.call('HDEL', KEYS[7], ARGV[1])
 if removed > 0 then redis.call('LPUSH', KEYS[1], ARGV[1]) end
 return removed
 """

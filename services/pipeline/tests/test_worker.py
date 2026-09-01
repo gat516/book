@@ -15,7 +15,7 @@ import redis.asyncio as redis
 from fixtures import make_novel, delete_novel, make_config
 from pipeline import queue
 from pipeline.failures import record_failure, error_code
-from pipeline.worker import Worker, ChapterFailed, NovelDeleted
+from pipeline.worker import Worker, ChapterFailed, NovelDeleted, TranslationPublished
 
 
 async def keep_novel_alive(novel_id):
@@ -58,6 +58,27 @@ async def test_order_retries_before_later_chapters_and_keep_novel_fifo(scheduled
         assert await call(client, queue.CLAIM, "100") == raw
         await call(client, queue.RELEASE, raw, "100", "done")
     assert await call(client, queue.CLAIM, "101") is None
+
+
+async def test_release_clears_current_stage_timer(scheduled):
+    client, keys = scheduled
+    raw = message(1)
+    await client.lpush(keys[0], raw)
+    assert await call(client, queue.CLAIM, "100") == raw
+    await client.hset(keys[6], raw, "101")
+    await call(client, queue.RELEASE, raw, "100", "done")
+    assert await client.hexists(keys[6], raw) == 0
+
+
+async def test_translation_release_atomically_requeues_low_priority_enrichment(scheduled):
+    client, keys = scheduled
+    raw = message(1)
+    enrichment = json.dumps({"novel_id": "a", "chapter_index": 1, "enrichment": True})
+    await client.lpush(keys[0], raw)
+    assert await call(client, queue.CLAIM, "100") == raw
+    assert await call(client, queue.RELEASE, raw, "100", "enrich", enrichment) == 1
+    assert await client.lrange(keys[1], 0, -1) == []
+    assert await client.lrange(keys[0], 0, -1) == [enrichment]
 
 
 async def test_explicit_priority_wins_once_and_deduplicates(scheduled):
@@ -340,7 +361,9 @@ async def test_deleted_novel_stage_error_does_not_write_failure_history(db_conn,
     worker.db, worker.cfg = db_conn, make_config()
     worker.redis = AsyncMock()
     worker.minio = worker.cache = worker.textproc = worker.embed_provider = None
-    worker._provider_for_novel = AsyncMock(return_value=(object(), object(), "ollama", None, None))
+    worker._provider_for_novel = AsyncMock(
+        return_value=(object(), object(), "ollama", None, None, None)
+    )
     worker._get_object = lambda uri: "source"
     class DeletedDuringStage:
         name = "translate"
@@ -386,7 +409,9 @@ async def test_failure_history_survives_retry_without_recording_private_payload(
 
 
 @pytest.mark.db
-@pytest.mark.parametrize("failed_stage", ["resolve", "translate", "state", "graph_write"])
+@pytest.mark.parametrize(
+    "failed_stage", ["translate", "character_names", "resolve", "state", "graph_write"]
+)
 async def test_enrichment_failure_cannot_hide_valid_translation(db_conn, monkeypatch, failed_stage):
     import pipeline.worker as module
     novel = await make_novel(db_conn)
@@ -394,7 +419,9 @@ async def test_enrichment_failure_cannot_hide_valid_translation(db_conn, monkeyp
     worker.db, worker.cfg = db_conn, make_config()
     worker.redis = AsyncMock()
     worker.minio = worker.cache = worker.textproc = worker.embed_provider = None
-    worker._provider_for_novel = AsyncMock(return_value=(object(), object(), "ollama", None, None))
+    worker._provider_for_novel = AsyncMock(
+        return_value=(object(), object(), "ollama", None, None, None)
+    )
     worker._get_object = lambda uri: "saved prose" if uri == "saved" else "original text"
     calls = []
     class Stage:
@@ -409,18 +436,31 @@ async def test_enrichment_failure_cannot_hide_valid_translation(db_conn, monkeyp
             if self.name in {"state", "graph_write"}:
                 row = await (await db_conn.execute("SELECT translation_ready FROM chapter WHERE novel_id=%s", (novel,))).fetchone()
                 assert row[0] is True  # readable BEFORE optional work completes
-    monkeypatch.setattr(module, "DEFAULT_STAGES", [Stage(n) for n in ("resolve", "translate", "display_scan", "state", "graph_write")])
+    monkeypatch.setattr(module, "DEFAULT_STAGES", [Stage(n) for n in (
+        "translate", "character_names", "resolve", "display_scan", "state", "graph_write")])
     try:
-        await db_conn.execute("INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status) VALUES (%s,1,'test','raw','{}','queued')", (novel,))
-        with pytest.raises(ChapterFailed):
-            await worker._handle(message(1, novel))
-        row = await (await db_conn.execute("SELECT status,translation_ready,enrichment_retry_at IS NOT NULL,translated_uri FROM chapter WHERE novel_id=%s", (novel,))).fetchone()
         readable = failed_stage != "translate"
-        assert row == ("error", readable, readable, "saved" if readable else None)
+        await db_conn.execute(
+            "INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status,"
+            "translation_ready,translated_uri) VALUES (%s,1,'test','raw','{}','queued',%s,%s)",
+            (novel, readable, "saved" if readable else None),
+        )
+        raw = json.dumps({"novel_id": novel, "chapter_index": 1, "enrichment": readable})
+        with pytest.raises(ChapterFailed):
+            await worker._handle(raw)
+        row = await (await db_conn.execute("SELECT status,translation_ready,enrichment_retry_at IS NOT NULL,translated_uri FROM chapter WHERE novel_id=%s", (novel,))).fetchone()
+        # Pre-translation failures are retryable too; otherwise a transient TRANSLATE
+        # timeout permanently strands the chapter with no prose (§6.3 recovery).
+        assert row == ("error", readable, True, "saved" if readable else None)
         failure = await (await db_conn.execute("SELECT stage FROM chapter_failure WHERE novel_id=%s", (novel,))).fetchone()
         assert failure[0] == failed_stage
-        if failed_stage == "resolve":
-            assert calls == ["resolve", "translate", "display_scan"]  # names need no identity; no partially bound graph writes
+        if failed_stage in {"character_names", "resolve"}:
+            # Prose is already durable; failed identity enrichment cannot produce a
+            # partially bound graph or delay reading (§0.2, §5).
+            expected = (["character_names"]
+                        if failed_stage == "character_names"
+                        else ["character_names", "resolve"])
+            assert calls == expected
         else:
             # Graph retries retain the saved text, even if terminology has since changed.
             class SuccessfulStage(Stage):
@@ -430,12 +470,96 @@ async def test_enrichment_failure_cannot_hide_valid_translation(db_conn, monkeyp
                     if self.name == "graph_write" and readable:
                         assert state.translation == "saved prose"
             if readable:
-                monkeypatch.setattr(module, "DEFAULT_STAGES", [SuccessfulStage(n) for n in ("resolve", "translate", "state", "graph_write")])
-                await worker._handle(message(1, novel))
+                monkeypatch.setattr(module, "DEFAULT_STAGES", [SuccessfulStage(n) for n in (
+                    "translate", "character_names", "resolve", "state", "graph_write")])
+                await worker._handle(raw)
                 row = await (await db_conn.execute("SELECT status,translation_ready,enrichment_retry_at FROM chapter WHERE novel_id=%s", (novel,))).fetchone()
                 assert row == ("done", True, None)
     finally:
         await delete_novel(db_conn, novel)
+
+
+@pytest.mark.db
+async def test_fresh_translation_yields_before_optional_enrichment(db_conn, monkeypatch):
+    import pipeline.worker as module
+    novel = await make_novel(db_conn)
+    worker = Worker.__new__(Worker)
+    worker.db, worker.cfg = db_conn, make_config()
+    worker.redis = AsyncMock()
+    worker.minio = worker.cache = worker.textproc = worker.embed_provider = None
+    worker._provider_for_novel = AsyncMock(
+        return_value=(object(), object(), "ollama", None, None, None)
+    )
+    worker._get_object = lambda uri: "original text"
+    calls = []
+
+    class Stage:
+        def __init__(self, name): self.name = name
+        async def run(self, ctx, state):
+            calls.append(self.name)
+            if self.name == "translate":
+                state.translation = "saved prose"
+                await db_conn.execute(
+                    "UPDATE chapter SET translated_uri='saved' WHERE novel_id=%s", (novel,)
+                )
+
+    monkeypatch.setattr(module, "DEFAULT_STAGES", [Stage("translate"), Stage("resolve")])
+    try:
+        await db_conn.execute(
+            "INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status) "
+            "VALUES (%s,1,'test','raw','{}','queued')", (novel,)
+        )
+        with pytest.raises(TranslationPublished):
+            await worker._handle(message(1, novel))
+        assert calls == ["translate"]
+        row = await (await db_conn.execute(
+            "SELECT translation_ready,translated_uri FROM chapter WHERE novel_id=%s", (novel,)
+        )).fetchone()
+        assert row == (True, "saved")
+    finally:
+        await delete_novel(db_conn, novel)
+
+
+@pytest.mark.db
+async def test_legacy_readable_pointer_is_demoted_before_enrichment(db_conn, monkeypatch):
+    import pipeline.worker as module
+    novel = await make_novel(db_conn)
+    worker = Worker.__new__(Worker)
+    worker.db, worker.cfg = db_conn, make_config()
+    worker.redis = AsyncMock()
+    worker.minio = worker.cache = worker.textproc = worker.embed_provider = None
+    worker._provider_for_novel = AsyncMock(
+        return_value=(object(), object(), "ollama", None, None, None)
+    )
+    worker._get_object = lambda uri: "saved prose" if uri == "saved" else "original text"
+    calls = []
+
+    class Stage:
+        def __init__(self, name): self.name = name
+        async def run(self, ctx, state): calls.append(self.name)
+
+    monkeypatch.setattr(module, "DEFAULT_STAGES", [Stage("translate"), Stage("resolve")])
+    try:
+        await db_conn.execute(
+            "INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status,"
+            "translation_ready,translated_uri) VALUES (%s,1,'test','raw','{}','queued',true,'saved')",
+            (novel,),
+        )
+        with pytest.raises(TranslationPublished):
+            await worker._handle(message(1, novel))
+        assert calls == []
+    finally:
+        await delete_novel(db_conn, novel)
+
+
+def test_translation_is_the_reader_critical_path_before_enrichment():
+    from pipeline.stages import DEFAULT_STAGES
+
+    names = [stage.name for stage in DEFAULT_STAGES]
+    assert names[:2] == ["chunk", "translate"]
+    assert names[2:] == [
+        "character_names", "scan", "resolve", "display_scan", "state", "graph_write"
+    ]
 
 
 async def test_enrichment_retries_are_deduplicated_and_yield_to_reading(scheduled):

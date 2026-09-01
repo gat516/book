@@ -25,7 +25,12 @@ from pipeline.context import NovelMeta, PipelineState, StageContext, language_pr
 from pipeline.envelope import ChapterEnvelope, QueueMessage, SourceMeta
 from pipeline.llm import embed_provider_from_env, provider_from_env
 from pipeline.llm.provider import AdmissionRejected, LLMProvider
-from pipeline.provider_config import build_names_provider, build_provider, resolve_provider_config
+from pipeline.provider_config import (
+    build_names_provider,
+    build_provider,
+    build_resolve_provider,
+    resolve_provider_config,
+)
 from pipeline import queue
 from pipeline.failures import record_failure
 from pipeline.stages import DEFAULT_STAGES
@@ -42,6 +47,17 @@ PROCESSING_STARTED = "jobs:processing:started"  # HASH: raw queue message -> cla
 # is a black box: a single TRANSLATE call on a local model can run for minutes with no
 # outward sign, which is indistinguishable from a hung worker. reader-api surfaces this.
 PROCESSING_STAGE = "jobs:processing:stage"
+PROCESSING_STAGE_STARTED = "jobs:processing:stage:started"
+PUBLISH_STAGE = """
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+redis.call('HSET', KEYS[2], ARGV[1], ARGV[3])
+return 1
+"""
+WORKER_HEARTBEAT = "jobs:worker:heartbeat"
+# Longer than the claim-renewal interval (at most 30s), so a healthy worker stays online
+# in the reader even while one slow model request owns the event loop's useful work.
+WORKER_HEARTBEAT_TTL_SECONDS = 45
+
 
 class ChapterFailed(Exception):
     """A chapter failed and the failure is already recorded on its row (status='error').
@@ -58,6 +74,10 @@ class ChapterFailed(Exception):
 
 class NovelDeleted(Exception):
     """The chapter's owner disappeared; cancel work without retry or failure history."""
+
+
+class TranslationPublished(Exception):
+    """Validated prose is durable; hand remaining work back as low-priority enrichment."""
 
 
 NOVEL_CHECK_SECONDS = 2
@@ -103,10 +123,14 @@ class Worker:
         self._default_provider = provider_from_env(cfg)
         self._default_batch_manager = BatchManager(self._default_provider)
         self.embed_provider = embed_provider_from_env(cfg)
-        # Per-novel (provider, batch_manager, provider_id, names_provider) cache, keyed by novel_id — a
+        # Per-novel (provider, batch manager, identity, stage-specific Ollama clients,
+        # model override) cache, keyed by novel_id — a
         # provider wraps a live httpx/SDK client, so this must be built once and reused
         # across chapters, not reconstructed per chapter (PLAN.md Phase N4).
-        self._provider_cache: dict[str, tuple[LLMProvider, BatchManager, str, LLMProvider | None, str | None]] = {}
+        self._provider_cache: dict[
+            str,
+            tuple[LLMProvider, BatchManager, str, LLMProvider | None, LLMProvider | None, str | None],
+        ] = {}
         self.textproc = textproc_from_config(
             cfg.textproc_backend, cfg.textproc_grpc_addr, cfg.textproc_timeout_seconds
         )
@@ -162,6 +186,7 @@ class Worker:
 
     async def _loop(self) -> None:
         while not self.stopping.is_set():
+            await self.redis.set(WORKER_HEARTBEAT, str(time.time()), ex=WORKER_HEARTBEAT_TTL_SECONDS)
             claimed_at = str(time.time())
             raw = await self.redis.eval(queue.CLAIM, len(queue.KEYS), *queue.KEYS, claimed_at)
             if raw is None:
@@ -175,12 +200,26 @@ class Worker:
                 continue
             heartbeat = asyncio.create_task(self._renew_claim(raw, claimed_at))
             disposition = "done"
+            enrichment_raw = ""
             try:
                 await self._handle_claim(raw)
             except NovelDeleted:
                 msg = QueueMessage.model_validate_json(raw)
                 await self._clear_preview(msg.novel_id, msg.chapter_index)
                 log.info("novel deleted; cancelled chapter %s/%s", msg.novel_id, msg.chapter_index)
+            except TranslationPublished:
+                msg = QueueMessage.model_validate_json(raw)
+                disposition = "enrich"
+                enrichment_raw = QueueMessage(
+                    novel_id=msg.novel_id,
+                    chapter_index=msg.chapter_index,
+                    enrichment=True,
+                ).model_dump_json()
+                log.info(
+                    "chapter %s/%s released for reading; enrichment requeued behind translations",
+                    msg.novel_id,
+                    msg.chapter_index,
+                )
             except AdmissionRejected as exc:
                 # Backpressure is not a failed chapter. Keep the claim recoverable
                 # during the requested delay, then place it back on the pending queue.
@@ -222,13 +261,14 @@ class Worker:
                 log.exception("chapter processing failed; leaving pointer in %s", PROCESSING_QUEUE)
                 disposition = "abandoned"
                 await self.redis.hdel(PROCESSING_STAGE, raw)
+                await self.redis.hdel(PROCESSING_STAGE_STARTED, raw)
             finally:
                 heartbeat.cancel()
                 with suppress(asyncio.CancelledError):
                     await heartbeat
             if disposition != "abandoned":
                 await self.redis.eval(queue.RELEASE, len(queue.KEYS), *queue.KEYS,
-                                      raw, claimed_at, disposition)
+                                      raw, claimed_at, disposition, enrichment_raw)
 
     async def _drain_background(self) -> None:
         from pipeline.graph_rebuild import drain_active
@@ -290,6 +330,9 @@ class Worker:
         while True:
             await asyncio.sleep(interval)
             try:
+                await self.redis.set(
+                    WORKER_HEARTBEAT, str(time.time()), ex=WORKER_HEARTBEAT_TTL_SECONDS
+                )
                 renewed = await self.redis.eval(queue.RENEW, len(queue.KEYS), *queue.KEYS,
                                                 raw, claimed_at, str(time.time()))
                 if not renewed:
@@ -358,7 +401,8 @@ class Worker:
             await self._clear_preview(msg.novel_id, msg.chapter_index)
             return
         source_lang, target_lang, ontology, managed_graph = novel
-        provider, batch_manager, provider_id, names_provider, model_override = await self._provider_for_novel(msg.novel_id)
+        (provider, batch_manager, provider_id, names_provider, resolve_provider,
+         model_override) = await self._provider_for_novel(msg.novel_id)
 
         raw_text = await asyncio.to_thread(self._get_object, raw_uri)
 
@@ -387,6 +431,7 @@ class Worker:
             textproc=self.textproc,
             provider_id=provider_id,
             names_provider=names_provider,
+            resolve_provider=resolve_provider,
             model_override=model_override,
         )
         state = PipelineState(envelope=envelope)
@@ -408,10 +453,18 @@ class Worker:
                     continue
                 if enrichment_error and stage.name in {"state", "graph_write"}:
                     continue
-                # Publish the stage before running it, so an observer sees the stage that
-                # is currently blocking rather than the last one that finished — the whole
-                # point here is explaining a chapter that appears stuck.
-                await self.redis.hset(PROCESSING_STAGE, raw, stage.name)
+                # Publish the stage name and its own start time atomically. The claim's
+                # original timestamp remains the total-chapter clock; conflating the two
+                # made the UI attribute every earlier stage's minutes to the current one.
+                await self.redis.eval(
+                    PUBLISH_STAGE,
+                    2,
+                    PROCESSING_STAGE,
+                    PROCESSING_STAGE_STARTED,
+                    raw,
+                    stage.name,
+                    str(time.time()),
+                )
                 # Stream partial output for the one stage that produces prose. Scoped to
                 # translate deliberately: RESOLVE and STATE emit JSON, and feeding that to
                 # a reader-facing preview would be noise.
@@ -423,6 +476,12 @@ class Worker:
                         if translated_uri:
                             state.translation = await asyncio.to_thread(self._get_object, translated_uri)
                             TranslateStage._set_chunks(ctx, state, state.translation)
+                        if not msg.enrichment:
+                            # Legacy/recovered pointers may predate the explicit
+                            # enrichment flag even though their prose is already durable.
+                            # Normalize them at the same atomic queue boundary instead of
+                            # letting old graph work block a new translation.
+                            raise TranslationPublished
                     else:
                         try:
                             await stage.run(ctx, state)
@@ -444,8 +503,18 @@ class Worker:
                             "UPDATE chapter SET translation_ready=true WHERE novel_id=%s AND chapter_index=%s",
                             (msg.novel_id, msg.chapter_index))
                         readable = True
-                        log.info("chapter %s/%s translation ready; enriching graph", msg.novel_id, msg.chapter_index)
+                        log.info("chapter %s/%s translation ready", msg.novel_id, msg.chapter_index)
                         await self._clear_preview(msg.novel_id, msg.chapter_index)
+                        if not msg.enrichment:
+                            # Do not spend the reader queue's claim on optional graph work.
+                            # RELEASE atomically swaps this pointer for enrichment=True,
+                            # whose scheduler rank is below every untranslated chapter.
+                            raise TranslationPublished
+                        log.info(
+                            "chapter %s/%s translation already readable; enriching graph",
+                            msg.novel_id,
+                            msg.chapter_index,
+                        )
                 finally:
                     if streaming:
                         _set_stream_sink(provider, None)
@@ -465,6 +534,8 @@ class Worker:
                 await enqueue_completed(self.db,self.cfg,msg.novel_id)
             if enrichment_error:
                 raise enrichment_error[1]
+        except TranslationPublished:
+            raise
         except AdmissionRejected:
             # The outer loop requeues without turning capacity pressure into a job error.
             raise
@@ -542,7 +613,11 @@ class Worker:
     async def _clear_preview(self, novel_id: str, chapter_index: int) -> None:
         await self.redis.delete(PREVIEW_KEY.format(novel_id=novel_id, chapter_index=chapter_index))
 
-    async def _provider_for_novel(self, novel_id: str) -> tuple[LLMProvider, BatchManager, str, LLMProvider | None, str | None]:
+    async def _provider_for_novel(
+        self, novel_id: str
+    ) -> tuple[
+        LLMProvider, BatchManager, str, LLMProvider | None, LLMProvider | None, str | None
+    ]:
         """Return (provider, batch_manager, provider_id) for novel_id, memoized for the
         life of the process (PLAN.md Phase N4). A novel with no novel_provider_config row
         gets the process-wide default; the cache holds that too, so this is still one
@@ -555,19 +630,31 @@ class Worker:
             provider = provider_from_env(self.cfg, tenant=novel_id)
             # The gateway owns its own admission and deadlines; a second direct-to-Ollama
             # client would bypass exactly the scheduling it exists to provide (§14).
-            result = (provider, BatchManager(provider), self.cfg.gateway_provider, None, None)
+            result = (provider, BatchManager(provider), self.cfg.gateway_provider, None, None, None)
             self._provider_cache[novel_id] = result
             return result
         # Merges the novel's own row over the account-wide credential (migration 0035),
         # so one key in Settings serves every book while a book may still override it.
         row = await resolve_provider_config(self.db, novel_id, self.cfg.llm_provider)
         if row is None:
-            result = (self._default_provider, self._default_batch_manager, self.cfg.llm_provider,
-                      build_names_provider(self.cfg, provider_id=self.cfg.llm_provider), None)
+            result = (
+                self._default_provider,
+                self._default_batch_manager,
+                self.cfg.llm_provider,
+                build_names_provider(self.cfg, provider_id=self.cfg.llm_provider),
+                build_resolve_provider(self.cfg, provider_id=self.cfg.llm_provider),
+                None,
+            )
         else:
             provider = build_provider(row, self.cfg)
-            result = (provider, BatchManager(provider), row.provider,
-                      build_names_provider(self.cfg, provider_id=row.provider, row=row), row.model)
+            result = (
+                provider,
+                BatchManager(provider),
+                row.provider,
+                build_names_provider(self.cfg, provider_id=row.provider, row=row),
+                build_resolve_provider(self.cfg, provider_id=row.provider, row=row),
+                row.model,
+            )
         self._provider_cache[novel_id] = result
         return result
 

@@ -6,9 +6,13 @@ from fixtures import make_config
 from novel_llm import DeepSeekProvider, OllamaProvider
 import pytest
 
-from pipeline.config import names_runtime
+from pipeline.config import names_runtime, resolve_runtime
 from pipeline.llm import provider_from_env
-from pipeline.provider_config import ProviderConfigRow, build_names_provider
+from pipeline.provider_config import (
+    ProviderConfigRow,
+    build_names_provider,
+    build_resolve_provider,
+)
 
 
 def test_deepseek_case_constructs_a_deepseek_provider():
@@ -62,3 +66,28 @@ def test_names_runtime_rejects_a_total_below_its_own_phases():
                                   names_ollama_total_timeout_seconds=60))
     with pytest.raises(ValueError):
         names_runtime(make_config(names_ollama_timeout_seconds=0))
+
+
+def test_resolve_provider_carries_phase_budgets_and_streams():
+    cfg = make_config(resolve_ollama_first_token_seconds=700,
+                      resolve_ollama_timeout_seconds=45,
+                      resolve_ollama_total_timeout_seconds=1200)
+    provider = build_resolve_provider(cfg, provider_id="ollama")
+    assert isinstance(provider, OllamaProvider)
+    assert provider._stream is True
+    assert provider._first_token_timeout == 700
+    assert provider._idle_timeout == 45
+    assert provider._total_timeout == 1200
+
+
+def test_resolve_provider_does_not_replace_hosted_routing():
+    for provider_id in ("anthropic", "deepseek", "gateway"):
+        assert build_resolve_provider(make_config(), provider_id=provider_id) is None
+
+
+def test_resolve_runtime_rejects_incoherent_limits():
+    with pytest.raises(ValueError):
+        resolve_runtime(make_config(resolve_ollama_first_token_seconds=900,
+                                    resolve_ollama_total_timeout_seconds=60))
+    with pytest.raises(ValueError):
+        resolve_runtime(make_config(resolve_ollama_timeout_seconds=0))
