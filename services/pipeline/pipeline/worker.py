@@ -193,10 +193,14 @@ class Worker:
                 self._deferrals += 1
                 delay = min(max(exc.retry_after_s, 0.25) * (2 ** (self._deferrals - 1)),
                             DEFERRAL_BACKOFF_CAP_SECONDS)
-                await asyncio.sleep(delay)
+                # _idle, not asyncio.sleep: it waits on self.stopping, so a shutdown
+                # during a long backoff is immediate. A flat 5s sleep hid this; escalating
+                # to a 120s one made `systemctl restart` wait out its stop timeout and
+                # SIGABRT the worker mid-backoff.
+                await self._idle(delay)
                 disposition = "retry"
-                log.info("model admission deferred chapter for %.1fs (deferral %d)",
-                         delay, self._deferrals)
+                log.info("model admission deferred chapter for %.1fs (deferral %d): %s",
+                         delay, self._deferrals, exc)
             except ChapterFailed:
                 # The outcome is recorded on the chapter row, so this job is not lost and
                 # must not be resurrected: drop the claim outright. Leaving it made failed

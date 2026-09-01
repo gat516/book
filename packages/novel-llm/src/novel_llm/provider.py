@@ -166,8 +166,18 @@ async def transient_as_backpressure(*, default_retry_s: float = 5.0):
             # 429 gets its own, much longer floor: a server that is out of quota this
             # minute will still be out of quota five seconds from now.
             delay = RATE_LIMIT_RETRY_S if exc.response.status_code == 429 else default_retry_s
+        # Carry a snippet of the body: a 429 says WHICH quota was exceeded (per-minute vs
+        # per-day) and often when it resets. Without it "429" is indistinguishable between
+        # "slow down" -- which backoff fixes -- and "you are out for the day", which it
+        # cannot. Truncated because provider errors can be verbose, and it reaches logs.
+        try:
+            detail = exc.response.text[:400]
+        except Exception:  # noqa: BLE001 -- diagnostics must never mask the real failure
+            detail = ""
         raise AdmissionRejected(
-            f"{exc.response.status_code} from provider", retry_after_s=max(delay, 0.0)
+            f"{exc.response.status_code} from provider: {detail}" if detail
+            else f"{exc.response.status_code} from provider",
+            retry_after_s=max(delay, 0.0),
         ) from exc
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
             httpx.WriteTimeout, httpx.PoolTimeout, httpx.RemoteProtocolError) as exc:
