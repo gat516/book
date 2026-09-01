@@ -56,9 +56,14 @@ class BatchResult(TypedDict):
 class AdmissionRejected(Exception):
     """Capacity backpressure that callers must retry without counting as failure."""
 
-    def __init__(self, message: str = "admission rejected", *, retry_after_s: float = 0.0) -> None:
+    def __init__(self, message: str = "admission rejected", *, retry_after_s: float = 0.0,
+                 exact_hint: bool = False) -> None:
         super().__init__(message)
         self.retry_after_s = retry_after_s
+        # True when retry_after_s came from the provider itself rather than a local
+        # default, so callers know it is an instruction to obey rather than a guess to
+        # escalate from.
+        self.exact_hint = exact_hint
 
 
 @runtime_checkable
@@ -184,8 +189,12 @@ async def transient_as_backpressure(*, default_retry_s: float = 5.0):
         try:
             delay = float(retry_after)
         except ValueError:
+            hinted = True
             delay = _retry_hint_seconds(_body_of(exc)) or 0.0
+        else:
+            hinted = True
         if not delay:
+            hinted = False
             # 429 gets its own, much longer floor: a server that is out of quota this
             # minute will still be out of quota five seconds from now.
             delay = RATE_LIMIT_RETRY_S if exc.response.status_code == 429 else default_retry_s
@@ -200,6 +209,7 @@ async def transient_as_backpressure(*, default_retry_s: float = 5.0):
             f"{exc.response.status_code} from provider: {detail}" if detail
             else f"{exc.response.status_code} from provider",
             retry_after_s=max(delay, 0.0),
+            exact_hint=hinted,
         ) from exc
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
             httpx.WriteTimeout, httpx.PoolTimeout, httpx.RemoteProtocolError) as exc:

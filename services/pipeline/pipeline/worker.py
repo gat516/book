@@ -191,8 +191,16 @@ class Worker:
                 # retries. Doubling backs off to the cap and stays there until something
                 # succeeds, which is what a per-minute quota actually needs.
                 self._deferrals += 1
-                delay = min(max(exc.retry_after_s, 0.25) * (2 ** (self._deferrals - 1)),
-                            DEFERRAL_BACKOFF_CAP_SECONDS)
+                # Escalate only when we are GUESSING. A provider that states when to retry
+                # (Gemini: "Please retry in 59.2s") has told us the answer, and doubling it
+                # is simply wrong -- it was turning an explicit 59s into 120s here.
+                # exact_hint is set when the delay came from the provider rather than a
+                # local default.
+                if getattr(exc, "exact_hint", False):
+                    delay = max(exc.retry_after_s, 0.25)
+                else:
+                    delay = min(max(exc.retry_after_s, 0.25) * (2 ** (self._deferrals - 1)),
+                                DEFERRAL_BACKOFF_CAP_SECONDS)
                 # _idle, not asyncio.sleep: it waits on self.stopping, so a shutdown
                 # during a long backoff is immediate. A flat 5s sleep hid this; escalating
                 # to a 120s one made `systemctl restart` wait out its stop timeout and
