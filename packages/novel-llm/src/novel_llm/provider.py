@@ -169,9 +169,11 @@ async def transient_as_backpressure(*, default_retry_s: float = 5.0):
         # Carry a snippet of the body: a 429 says WHICH quota was exceeded (per-minute vs
         # per-day) and often when it resets. Without it "429" is indistinguishable between
         # "slow down" -- which backoff fixes -- and "you are out for the day", which it
-        # cannot. Truncated because provider errors can be verbose, and it reaches logs.
+        # cannot. Truncated because provider errors can be verbose and this reaches logs,
+        # but generously: the quota PERIOD and Google's retryDelay both sit AFTER the limit
+        # number, so a tight cut hides exactly the part worth reading.
         try:
-            detail = exc.response.text[:400]
+            detail = exc.response.text[:1200]
         except Exception:  # noqa: BLE001 -- diagnostics must never mask the real failure
             detail = ""
         raise AdmissionRejected(
