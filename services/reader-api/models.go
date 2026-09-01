@@ -193,9 +193,10 @@ type ChapterListResponse struct {
 // Stage is the pipeline stage running right now ("translate", "resolve", …), empty if the
 // worker claimed the chapter but hasn't started a stage yet.
 type InFlightChapter struct {
-	ChapterIndex int    `json:"chapter_index"`
-	Stage        string `json:"stage,omitempty"`
-	ElapsedSecs  int    `json:"elapsed_secs"`
+	ChapterIndex     int    `json:"chapter_index"`
+	Stage            string `json:"stage,omitempty"`
+	ElapsedSecs      int    `json:"elapsed_secs"`
+	StageElapsedSecs int    `json:"stage_elapsed_secs"`
 }
 
 // PipelineStatusResponse answers "what is the worker actually doing right now" — the one
@@ -209,8 +210,10 @@ type PipelineStatusResponse struct {
 	NovelID string `json:"novel_id"`
 	// Pending counts the WHOLE queue, not just this novel: the worker drains one shared
 	// queue, so another novel's backlog is exactly why this novel's chapters are waiting.
-	Pending  int               `json:"pending"`
-	InFlight []InFlightChapter `json:"in_flight"`
+	Pending         int               `json:"pending"`
+	PendingForNovel int               `json:"pending_for_novel"`
+	WorkerOnline    bool              `json:"worker_online"`
+	InFlight        []InFlightChapter `json:"in_flight"`
 }
 
 // ChapterPreviewResponse carries a chapter's translation as it is being produced.

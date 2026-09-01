@@ -94,6 +94,8 @@ const (
 	pipelineProcessingQueue = "jobs:processing"
 	pipelineProcessingStart = "jobs:processing:started"
 	pipelineProcessingStage = "jobs:processing:stage"
+	pipelineStageStart      = "jobs:processing:stage:started"
+	pipelineWorkerHeartbeat = "jobs:worker:heartbeat"
 	// Partial translation text for a chapter still in flight. Format must match
 	// services/pipeline/pipeline/worker.py's PREVIEW_KEY.
 	pipelinePreviewKeyFmt = "translate:preview:%s:%d"
@@ -291,11 +293,26 @@ func (s *Store) ListChapters(ctx context.Context, novelID string, limit, offset 
 func (s *Store) PipelineStatus(ctx context.Context, novelID string) (PipelineStatusResponse, error) {
 	status := PipelineStatusResponse{NovelID: novelID, InFlight: []InFlightChapter{}}
 
-	pending, err := s.redis.LLen(ctx, pipelinePendingQueue).Result()
+	pending, err := s.redis.LRange(ctx, pipelinePendingQueue, 0, -1).Result()
 	if err != nil {
-		return PipelineStatusResponse{}, fmt.Errorf("pending queue depth: %w", err)
+		return PipelineStatusResponse{}, fmt.Errorf("pending queue: %w", err)
 	}
-	status.Pending = int(pending)
+	status.Pending = len(pending)
+	for _, raw := range pending {
+		var msg struct {
+			NovelID string `json:"novel_id"`
+		}
+		if json.Unmarshal([]byte(raw), &msg) == nil && msg.NovelID == novelID {
+			status.PendingForNovel++
+		}
+	}
+
+	// The worker refreshes this expiring key while idle and during long model calls. Its
+	// presence distinguishes an ordinary queue wait from work that cannot advance because
+	// the worker process is stopped.
+	if online, err := s.redis.Exists(ctx, pipelineWorkerHeartbeat).Result(); err == nil {
+		status.WorkerOnline = online > 0
+	}
 
 	claims, err := s.redis.LRange(ctx, pipelineProcessingQueue, 0, -1).Result()
 	if err != nil {
@@ -317,6 +334,11 @@ func (s *Store) PipelineStatus(ctx context.Context, novelID string) (PipelineSta
 		if startedAt, err := s.redis.HGet(ctx, pipelineProcessingStart, raw).Float64(); err == nil {
 			if elapsed := time.Since(time.Unix(int64(startedAt), 0)).Seconds(); elapsed > 0 {
 				item.ElapsedSecs = int(elapsed)
+			}
+		}
+		if startedAt, err := s.redis.HGet(ctx, pipelineStageStart, raw).Float64(); err == nil {
+			if elapsed := time.Since(time.Unix(int64(startedAt), 0)).Seconds(); elapsed > 0 {
+				item.StageElapsedSecs = int(elapsed)
 			}
 		}
 		status.InFlight = append(status.InFlight, item)

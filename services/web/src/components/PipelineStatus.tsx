@@ -25,14 +25,16 @@ const IDLE_POLL_INTERVAL_MS = 20000;
 // are internal jargon; "resolve" means nothing to someone waiting on a chapter.
 const STAGE_LABELS: Record<string, string> = {
   chunk: "Splitting into chunks",
+  translate: "Translating",
   character_names: "Checking character names",
   scan: "Scanning for known names",
   resolve: "Identifying characters and places",
-  translate: "Translating",
   display_scan: "Marking names in the translation",
   state: "Extracting facts",
   graph_write: "Saving to the knowledge graph",
 };
+
+const PIPELINE_STAGES = Object.keys(STAGE_LABELS);
 
 export function describeStage(stage?: string): string {
   if (!stage) return "Starting…";
@@ -51,6 +53,8 @@ function elapsed(seconds: number): string {
 export function PipelineStatus({ novelId, onProgress, onStatus }: Props) {
   const [status, setStatus] = useState<PipelineStatusResponse | null>(null);
   const [unreachable, setUnreachable] = useState(false);
+  const [polledAt, setPolledAt] = useState(Date.now());
+  const [clock, setClock] = useState(Date.now());
   const previous = useRef<string | null>(null);
   const callbacks = useRef({ onProgress, onStatus });
   useEffect(() => { callbacks.current = { onProgress, onStatus }; }, [onProgress, onStatus]);
@@ -62,6 +66,9 @@ export function PipelineStatus({ novelId, onProgress, onStatus }: Props) {
       if (previous.current !== null && previous.current !== signature) callbacks.current.onProgress?.();
       previous.current = signature;
       setStatus(latest);
+      const now = Date.now();
+      setPolledAt(now);
+      setClock(now);
       callbacks.current.onStatus?.(latest);
       setUnreachable(false);
     } catch {
@@ -82,29 +89,51 @@ export function PipelineStatus({ novelId, onProgress, onStatus }: Props) {
   const busy = status === null || status.in_flight.length > 0 || status.pending > 0;
   usePolling(poll, busy ? POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS, true);
 
+  // Keep elapsed time visibly moving between network polls. Long local-model stages can
+  // take minutes; a ticking timer reassures the reader that the status view itself is live.
+  useEffect(() => {
+    if (!status?.in_flight.length) return;
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [status?.in_flight.length]);
+
   if (unreachable) return <p className="pipeline-status">Pipeline status unavailable.</p>;
   if (!status) return null;
 
   const working = status.in_flight.length > 0;
+  const sincePoll = Math.max(0, Math.floor((clock - polledAt) / 1000));
 
   return (
-    <div className="pipeline-status">
+    <div className={`pipeline-status ${working ? "pipeline-status-working" : ""}`} aria-live="polite">
       {working ? (
-        status.in_flight.map((item) => (
-          <p key={item.chapter_index}>
-            <strong>Chapter {item.chapter_index}:</strong> {describeStage(item.stage)} — {elapsed(item.elapsed_secs)} total processing time
-          </p>
-        ))
+        status.in_flight.map((item) => {
+          const stageIndex = PIPELINE_STAGES.indexOf(item.stage ?? "");
+          const step = stageIndex >= 0 ? stageIndex + 1 : 1;
+          return <div className="pipeline-status-job" key={item.chapter_index}>
+            <p className="pipeline-status-heading">
+              <span className="pipeline-status-live-dot" aria-hidden="true" />
+              <strong>Actively processing chapter {item.chapter_index}</strong>
+            </p>
+            <p>
+              {describeStage(item.stage)} · step {step} of {PIPELINE_STAGES.length} · {elapsed(item.stage_elapsed_secs + sincePoll)} in this step · {elapsed(item.elapsed_secs + sincePoll)} total
+            </p>
+            <progress value={step} max={PIPELINE_STAGES.length} aria-label={`Chapter ${item.chapter_index} pipeline progress`} />
+          </div>;
+        })
       ) : (
         <p>
-          {status.pending > 0
-            ? // Pending is library-wide, while in_flight is scoped to this novel.
-              // Another novel may be active: absence here does not prove a dead worker.
-              `No chapter from this novel is processing. ${status.pending} job(s) queued across the library.`
+          {!status.worker_online && status.pending_for_novel > 0
+            ? `Worker offline — ${status.pending_for_novel} chapter(s) from this book are queued but cannot start.`
+            : status.pending_for_novel > 0
+              ? `Worker online — ${status.pending_for_novel} chapter(s) from this book are waiting for their turn.`
+              : status.pending > 0
+                ? `Worker ${status.worker_online ? "online" : "offline"}. ${status.pending} job(s) from other books are queued.`
             : "Pipeline idle — nothing queued."}
         </p>
       )}
-      {working && status.pending > 0 && <p className="pipeline-status-queue">{status.pending} more queued across the library.</p>}
+      {working && status.pending_for_novel > 0 && <p className="pipeline-status-queue">
+        {status.pending_for_novel} more from this book queued · {status.pending} queued across the library.
+      </p>}
     </div>
   );
 }

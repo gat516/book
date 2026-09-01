@@ -182,7 +182,10 @@ export interface ChapterListResponse {
 export interface InFlightChapter {
   chapter_index: number;
   stage?: string;
+  // Total time since the worker claimed this chapter.
   elapsed_secs: number;
+  // Time since the current stage began; resets whenever `stage` changes.
+  stage_elapsed_secs: number;
 }
 
 export interface PipelineStatusResponse {
@@ -190,6 +193,10 @@ export interface PipelineStatusResponse {
   // Whole-queue depth, not just this novel — another novel's backlog is exactly why this
   // one might be waiting.
   pending: number;
+  // Queue depth scoped to the book being viewed.
+  pending_for_novel: number;
+  // Published by the worker with a short TTL, including while a model call is running.
+  worker_online: boolean;
   in_flight: InFlightChapter[];
 }
 

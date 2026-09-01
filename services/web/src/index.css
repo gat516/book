@@ -394,6 +394,45 @@ body {
   font-size: 0.9rem;
 }
 
+.pipeline-status-working {
+  background: #f1f8f3;
+  border-left-color: #2f7d4a;
+}
+
+.pipeline-status-job {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.pipeline-status-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.pipeline-status-live-dot {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: #2f7d4a;
+  box-shadow: 0 0 0 0 rgb(47 125 74 / 45%);
+  animation: pipeline-pulse 1.8s infinite;
+}
+
+.pipeline-status progress {
+  width: min(28rem, 100%);
+  accent-color: #2f7d4a;
+}
+
+@keyframes pipeline-pulse {
+  70% { box-shadow: 0 0 0 0.45rem rgb(47 125 74 / 0%); }
+  100% { box-shadow: 0 0 0 0 rgb(47 125 74 / 0%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pipeline-status-live-dot { animation: none; }
+}
+
 .pipeline-status p {
   margin: 0.2rem 0;
 }
