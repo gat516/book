@@ -238,10 +238,23 @@ async def test_rate_limit_becomes_backpressure_honouring_retry_after():
     assert caught.value.retry_after_s == 42.0
 
 
-async def test_rate_limit_without_a_header_falls_back_to_the_default_delay():
+async def test_rate_limit_without_a_header_uses_the_rate_limit_floor():
+    """A quota is usually per-minute, so a seconds-long retry is guaranteed to hit it
+    again -- observed live as 7 429s to 2 successes with no chapter advancing."""
+    from novel_llm.provider import RATE_LIMIT_RETRY_S
+
     with pytest.raises(AdmissionRejected) as caught:
         async with transient_as_backpressure(default_retry_s=7.5):
             raise _status_error(429)
+    assert caught.value.retry_after_s == RATE_LIMIT_RETRY_S
+
+
+async def test_server_errors_use_the_ordinary_default_delay():
+    """A 503 is not a quota: the server may well be fine on the next request, so it keeps
+    the short default rather than the rate-limit floor."""
+    with pytest.raises(AdmissionRejected) as caught:
+        async with transient_as_backpressure(default_retry_s=7.5):
+            raise _status_error(503)
     assert caught.value.retry_after_s == 7.5
 
 

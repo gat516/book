@@ -25,12 +25,6 @@ log = logging.getLogger(__name__)
 STAGE = "character_names"
 
 
-class NameReviewRequired(RuntimeError):
-    def __init__(self, source_terms: list[str]):
-        super().__init__("character-name review required: " + ", ".join(source_terms))
-        self.source_terms = source_terms
-
-
 def _strip_fence(text: str) -> str:
     value = text.strip()
     if value.startswith("```"):
@@ -345,6 +339,21 @@ class CharacterNamesStage:
                 if await _record_surface(ctx, state, surface, plans.get(surface)):
                     pending.append(surface)
         if pending:
-            raise NameReviewRequired(pending)
+            # Recorded, not blocking. This used to raise NameReviewRequired, which parked
+            # the chapter at status='needs_name_review' until a human approved every
+            # proposed rendering -- 15+ clicks for a single chapter, before a word of it
+            # could be read.
+            #
+            # What §0 actually protects is the GLOSSARY, not the translation: a locked term
+            # is immutable and primed into every later chapter, so one bad lock is
+            # unrecoverable. Translating with an unlocked, model-chosen rendering risks
+            # none of that. So the chapter goes through, the proposals stay pending, and
+            # locking still needs either approval or GLOSSARY_MIN_PROPOSALS agreement
+            # across chapters. The reader corrects a name by clicking it in the prose.
+            #
+            # The cost, accepted deliberately: an unapproved name can be spelled
+            # differently in different chapters until it locks.
+            log.info("character_names: %d proposals pending review; translating anyway: %s",
+                     len(pending), ", ".join(pending[:10]))
         await mark_job_done(ctx.db, novel_id=ctx.novel.id,
                             chapter_index=state.envelope.chapter_index, stage=STAGE, key=key)

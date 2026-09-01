@@ -131,6 +131,13 @@ def system_with_schema(system: str, schema: dict | None) -> str:
     return system + "\nReturn JSON matching this schema:\n" + json.dumps(schema, ensure_ascii=False)
 
 
+# A rate limit is usually a per-MINUTE quota, so retrying seconds later is guaranteed to
+# hit it again. Measured against Gemini's free tier, a 5s default produced a hot loop:
+# 7 429s to 2 successes, no chapter progressing, quota burned on retries. Server-supplied
+# Retry-After still wins when present.
+RATE_LIMIT_RETRY_S = 30.0
+
+
 @contextlib.asynccontextmanager
 async def transient_as_backpressure(*, default_retry_s: float = 5.0):
     """Re-raise transient transport failures as AdmissionRejected.
@@ -156,7 +163,9 @@ async def transient_as_backpressure(*, default_retry_s: float = 5.0):
         try:
             delay = float(retry_after)
         except ValueError:
-            delay = default_retry_s
+            # 429 gets its own, much longer floor: a server that is out of quota this
+            # minute will still be out of quota five seconds from now.
+            delay = RATE_LIMIT_RETRY_S if exc.response.status_code == 429 else default_retry_s
         raise AdmissionRejected(
             f"{exc.response.status_code} from provider", retry_after_s=max(delay, 0.0)
         ) from exc

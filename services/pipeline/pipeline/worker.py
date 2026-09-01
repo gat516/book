@@ -29,7 +29,6 @@ from pipeline.provider_config import build_names_provider, build_provider, resol
 from pipeline import queue
 from pipeline.failures import record_failure
 from pipeline.stages import DEFAULT_STAGES
-from pipeline.stages.character_names import NameReviewRequired
 from pipeline.stages.translate import TranslateStage
 from pipeline.textproc import textproc_from_config
 
@@ -72,6 +71,9 @@ PREVIEW_TTL_SECONDS = 900
 # Write at most this often. A token-rate write would hammer Redis for no visible benefit;
 # prose arriving twice a second already reads as live.
 PREVIEW_THROTTLE_SECONDS = 0.5
+# Ceiling on escalating admission backoff. High enough to clear a per-minute quota,
+# low enough that a recovered provider is noticed promptly.
+DEFERRAL_BACKOFF_CAP_SECONDS = 120.0
 
 
 def _set_stream_sink(provider, sink) -> None:
@@ -114,6 +116,10 @@ class Worker:
         self.cache = LLMCache(self.redis)
         self.db: psycopg.AsyncConnection | None = None
         self.stopping = asyncio.Event()
+        # Consecutive admission deferrals across chapters. A rate limit is a property of
+        # the account, not the chapter, so backing off per-chapter would just round-robin
+        # the same saturated quota. Reset by any completed chapter.
+        self._deferrals = 0
 
     def request_stop(self) -> None:
         log.info("shutdown requested; finishing current chapter before stopping")
@@ -175,16 +181,22 @@ class Worker:
                 msg = QueueMessage.model_validate_json(raw)
                 await self._clear_preview(msg.novel_id, msg.chapter_index)
                 log.info("novel deleted; cancelled chapter %s/%s", msg.novel_id, msg.chapter_index)
-            except NameReviewRequired as exc:
-                # This is an expected, durable pause. The chapter row records why it
-                # stopped and approval will enqueue a fresh pointer.
-                log.info("chapter paused for character-name review: %s", exc)
             except AdmissionRejected as exc:
                 # Backpressure is not a failed chapter. Keep the claim recoverable
                 # during the requested delay, then place it back on the pending queue.
-                await asyncio.sleep(max(exc.retry_after_s, 0.25))
+                #
+                # Escalate while deferrals keep coming. A flat delay turned a rate-limited
+                # provider into a hot loop -- observed against a free-tier quota as 7 429s
+                # to 2 successes, no chapter advancing, and quota spent entirely on
+                # retries. Doubling backs off to the cap and stays there until something
+                # succeeds, which is what a per-minute quota actually needs.
+                self._deferrals += 1
+                delay = min(max(exc.retry_after_s, 0.25) * (2 ** (self._deferrals - 1)),
+                            DEFERRAL_BACKOFF_CAP_SECONDS)
+                await asyncio.sleep(delay)
                 disposition = "retry"
-                log.info("model admission deferred chapter for %.3fs", exc.retry_after_s)
+                log.info("model admission deferred chapter for %.1fs (deferral %d)",
+                         delay, self._deferrals)
             except ChapterFailed:
                 # The outcome is recorded on the chapter row, so this job is not lost and
                 # must not be resurrected: drop the claim outright. Leaving it made failed
@@ -444,12 +456,6 @@ class Worker:
         except AdmissionRejected:
             # The outer loop requeues without turning capacity pressure into a job error.
             raise
-        except NameReviewRequired:
-            # Do not record a pipeline failure or show an error. Approval is the only
-            # operation that may release this fail-closed translation gate.
-            await self._set_status(msg, "needs_name_review")
-            await self._clear_preview(msg.novel_id, msg.chapter_index)
-            raise
         except Exception as exc:
             # Deletion can win the race with a stage write before the watcher polls.
             # There is no surviving chapter on which to record a failure or retry.
@@ -473,6 +479,7 @@ class Worker:
             # Re-raise as ChapterFailed so the drain loop knows the outcome was recorded
             # and the claim can be dropped rather than left for the reaper to retry.
             raise ChapterFailed(f"chapter {msg.chapter_index} failed") from exc
+        self._deferrals = 0
         await self._set_status(msg, "done")
         await self.db.execute(
             "UPDATE chapter SET translation_ready=true, enrichment_retry_at=NULL "
@@ -491,7 +498,12 @@ class Worker:
             # exactly the one with nothing durable saved, so it is the most important to
             # retry, not the one to skip.
             "SELECT novel_id::text, chapter_index, status FROM chapter "
-            "WHERE status IN ('error','name_repair_error') AND enrichment_retry_at <= now() AND enrichment_attempts < 3 "
+            # needs_name_review is included because nothing produces it any more: the
+            # character-name gate no longer blocks translation, so a chapter still parked
+            # at that status is stranded exactly the way pre-TRANSLATE failures were before
+            # 0033. It was excluded then precisely because it WAS a live human gate.
+            "WHERE status IN ('error','name_repair_error','needs_name_review') "
+            "AND enrichment_retry_at <= now() AND enrichment_attempts < 3 "
             "ORDER BY enrichment_retry_at LIMIT 20"
         )).fetchall()
         for novel_id, chapter, status in rows:
