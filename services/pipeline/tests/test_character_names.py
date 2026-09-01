@@ -31,6 +31,7 @@ def context(items):
         # No dedicated CHARACTER_NAMES budget in tests: the stage falls back to `provider`,
         # which is the same path a novel on a hosted provider takes in production.
         names_provider=None,
+        model_override=None,
     )
 
 
@@ -100,7 +101,7 @@ async def test_focused_second_pass_can_reclassify_ambiguous_pinyin_as_foreign():
             "rendering": "chinese_personal", "targets": []}]}))
     ctx = SimpleNamespace(novel=SimpleNamespace(id="novel", target_lang="en"), cfg=make_config(),
                           provider=SimpleNamespace(complete=AsyncMock(side_effect=complete)),
-                          names_provider=None)
+                          names_provider=None, model_override=None)
     plan = (await _discover(ctx, "索拉文走进大厅。"))["索拉文"]
     assert calls == 2
     assert plan.term_role == "foreign_person"

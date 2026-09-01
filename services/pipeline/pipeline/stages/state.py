@@ -120,7 +120,7 @@ class StateStage:
                 "system": build_system_prompt(ctx.novel.ontology),
                 "json_mode": True,
                 "json_schema": Extraction.model_json_schema(),
-                "model": model_for_stage(STAGE, ctx.cfg),
+                "model": model_for_stage(STAGE, ctx.cfg, ctx.model_override),
             }
             batch_id = await ctx.batch_manager.batch_submit([request])
             results = await ctx.batch_manager.batch_poll(batch_id)
@@ -131,7 +131,7 @@ class StateStage:
             await ctx.cache.put(
                 cache_key,
                 raw,
-                requested_model_id=model_id_for_stage(STAGE, ctx.cfg),
+                requested_model_id=model_id_for_stage(STAGE, ctx.cfg, ctx.provider_id, ctx.model_override),
                 served_provider=result["served_provider"],
                 served_model=result["served_model"],
                 stage=STAGE,

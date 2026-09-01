@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -26,6 +27,9 @@ type IngestClient interface {
 	CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
 	DeleteGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
 	GetProviderConfig(ctx context.Context, novelID string) (json.RawMessage, int, error)
+	ListProviderCredentials(ctx context.Context) (json.RawMessage, int, error)
+	PutProviderCredential(ctx context.Context, provider string, body json.RawMessage) (json.RawMessage, int, error)
+	DeleteProviderCredential(ctx context.Context, provider string) (json.RawMessage, int, error)
 	PutProviderConfig(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	BootstrapGlossary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	ApproveCharacterName(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
@@ -70,7 +74,13 @@ func (c *ingestHTTPClient) send(ctx context.Context, method, path string, body j
 	defer resp.Body.Close()
 	var result json.RawMessage
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, 0, fmt.Errorf("invalid ingest-api response: %w", err)
+		// An empty body is not a malformed response. 204 No Content has none by
+		// definition, and DELETE /provider-credentials returns exactly that -- decoding
+		// it as an error made a successful delete report 502 to the browser.
+		if !errors.Is(err, io.EOF) {
+			return nil, 0, fmt.Errorf("invalid ingest-api response: %w", err)
+		}
+		result = nil
 	}
 	return result, resp.StatusCode, nil
 }
@@ -104,6 +114,20 @@ func (c *ingestHTTPClient) GetProviderConfig(ctx context.Context, novelID string
 
 func (c *ingestHTTPClient) PutProviderConfig(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
 	return c.send(ctx, http.MethodPatch, "/novels/"+novelID+"/provider-config", body, false)
+}
+
+// Global provider credentials (migration 0035). Ungated like the other administration
+// routes: they expose no chapter content, and reads are masked (api_key_set, never a key).
+func (c *ingestHTTPClient) ListProviderCredentials(ctx context.Context) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodGet, "/provider-credentials", nil, false)
+}
+
+func (c *ingestHTTPClient) PutProviderCredential(ctx context.Context, provider string, body json.RawMessage) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodPut, "/provider-credentials/"+provider, body, false)
+}
+
+func (c *ingestHTTPClient) DeleteProviderCredential(ctx context.Context, provider string) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodDelete, "/provider-credentials/"+provider, nil, false)
 }
 
 func (c *ingestHTTPClient) BootstrapGlossary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {

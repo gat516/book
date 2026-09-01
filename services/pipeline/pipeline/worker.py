@@ -25,7 +25,7 @@ from pipeline.context import NovelMeta, PipelineState, StageContext, language_pr
 from pipeline.envelope import ChapterEnvelope, QueueMessage, SourceMeta
 from pipeline.llm import embed_provider_from_env, provider_from_env
 from pipeline.llm.provider import AdmissionRejected, LLMProvider
-from pipeline.provider_config import build_names_provider, build_provider, load_provider_config
+from pipeline.provider_config import build_names_provider, build_provider, resolve_provider_config
 from pipeline import queue
 from pipeline.failures import record_failure
 from pipeline.stages import DEFAULT_STAGES
@@ -104,7 +104,7 @@ class Worker:
         # Per-novel (provider, batch_manager, provider_id, names_provider) cache, keyed by novel_id — a
         # provider wraps a live httpx/SDK client, so this must be built once and reused
         # across chapters, not reconstructed per chapter (PLAN.md Phase N4).
-        self._provider_cache: dict[str, tuple[LLMProvider, BatchManager, str, LLMProvider | None]] = {}
+        self._provider_cache: dict[str, tuple[LLMProvider, BatchManager, str, LLMProvider | None, str | None]] = {}
         self.textproc = textproc_from_config(
             cfg.textproc_backend, cfg.textproc_grpc_addr, cfg.textproc_timeout_seconds
         )
@@ -334,7 +334,7 @@ class Worker:
             await self._clear_preview(msg.novel_id, msg.chapter_index)
             return
         source_lang, target_lang, ontology, managed_graph = novel
-        provider, batch_manager, provider_id, names_provider = await self._provider_for_novel(msg.novel_id)
+        provider, batch_manager, provider_id, names_provider, model_override = await self._provider_for_novel(msg.novel_id)
 
         raw_text = await asyncio.to_thread(self._get_object, raw_uri)
 
@@ -363,6 +363,7 @@ class Worker:
             textproc=self.textproc,
             provider_id=provider_id,
             names_provider=names_provider,
+            model_override=model_override,
         )
         state = PipelineState(envelope=envelope)
         enrichment_error: tuple[str, Exception] | None = None
@@ -517,7 +518,7 @@ class Worker:
     async def _clear_preview(self, novel_id: str, chapter_index: int) -> None:
         await self.redis.delete(PREVIEW_KEY.format(novel_id=novel_id, chapter_index=chapter_index))
 
-    async def _provider_for_novel(self, novel_id: str) -> tuple[LLMProvider, BatchManager, str, LLMProvider | None]:
+    async def _provider_for_novel(self, novel_id: str) -> tuple[LLMProvider, BatchManager, str, LLMProvider | None, str | None]:
         """Return (provider, batch_manager, provider_id) for novel_id, memoized for the
         life of the process (PLAN.md Phase N4). A novel with no novel_provider_config row
         gets the process-wide default; the cache holds that too, so this is still one
@@ -530,17 +531,19 @@ class Worker:
             provider = provider_from_env(self.cfg, tenant=novel_id)
             # The gateway owns its own admission and deadlines; a second direct-to-Ollama
             # client would bypass exactly the scheduling it exists to provide (§14).
-            result = (provider, BatchManager(provider), self.cfg.gateway_provider, None)
+            result = (provider, BatchManager(provider), self.cfg.gateway_provider, None, None)
             self._provider_cache[novel_id] = result
             return result
-        row = await load_provider_config(self.db, novel_id)
+        # Merges the novel's own row over the account-wide credential (migration 0035),
+        # so one key in Settings serves every book while a book may still override it.
+        row = await resolve_provider_config(self.db, novel_id, self.cfg.llm_provider)
         if row is None:
             result = (self._default_provider, self._default_batch_manager, self.cfg.llm_provider,
-                      build_names_provider(self.cfg, provider_id=self.cfg.llm_provider))
+                      build_names_provider(self.cfg, provider_id=self.cfg.llm_provider), None)
         else:
             provider = build_provider(row, self.cfg)
             result = (provider, BatchManager(provider), row.provider,
-                      build_names_provider(self.cfg, provider_id=row.provider, row=row))
+                      build_names_provider(self.cfg, provider_id=row.provider, row=row), row.model)
         self._provider_cache[novel_id] = result
         return result
 

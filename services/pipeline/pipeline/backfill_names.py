@@ -31,13 +31,14 @@ async def backfill(novel_id: str, start: int, end: int, apply: bool) -> None:
         if row is None:
             raise ValueError("novel not found")
         source, target, ontology = row
-        provider, batches, provider_id, names_provider = await worker._provider_for_novel(novel_id)
+        provider, batches, provider_id, names_provider, model_override = await worker._provider_for_novel(novel_id)
         ctx = StageContext(
             novel=NovelMeta(novel_id, source, target, ontology),
             language_profile=language_profile_for(source), provider=provider,
             batch_manager=batches, embed_provider=worker.embed_provider, db=worker.db,
             objects=worker.minio, cfg=worker.cfg, cache=worker.cache,
             textproc=worker.textproc, provider_id=provider_id, names_provider=names_provider,
+            model_override=model_override,
         )
         chapters = await (await worker.db.execute(
             "SELECT chapter_index, COALESCE(translated_uri, raw_uri), translated_uri IS NOT NULL FROM chapter "

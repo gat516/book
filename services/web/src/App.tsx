@@ -11,6 +11,7 @@ import { ProgressControls } from "./components/ProgressControls";
 import { ReaderPane } from "./components/ReaderPane";
 import { TranslationNotice } from "./components/TranslationNotice";
 import { ProviderConfigPanel } from "./components/ProviderConfigPanel";
+import { SettingsView } from "./components/SettingsView";
 import { QueueControls } from "./components/QueueControls";
 import type { ChapterListItem, ChapterResponse } from "./types";
 
@@ -60,6 +61,7 @@ export default function App() {
   // ChapterPending for it holds them here and polls until it's readable.
   const [pending, setPending] = useState<PendingChapter | null>(null);
   const [showGlossary, setShowGlossary] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [showChapters, setShowChapters] = useState(true);
   const [clickableEntities, setClickableEntities] = useState(savedClickableEntities);
 
@@ -193,11 +195,28 @@ export default function App() {
     goToChapter(item.chapter_index);
   }
 
+  // Account-level, so it takes precedence over both the picker and an open novel.
+  if (showSettings) {
+    return (
+      <SettingsView
+        clickableEntities={clickableEntities}
+        onChangeClickableEntities={changeClickableEntities}
+        onClose={() => setShowSettings(false)}
+      />
+    );
+  }
+
   if (!novelId) {
     if (creating) {
       return <NovelCreateForm onCreated={chooseNovel} onCancel={() => setCreating(false)} />;
     }
-    return <><QueueControls novelId={null} /><NovelPicker onSelect={chooseNovel} onCreateNew={() => setCreating(true)} /></>;
+    return (
+      <>
+        <QueueControls novelId={null} />
+        <button className="app-back" onClick={() => setShowSettings(true)}>Settings</button>
+        <NovelPicker onSelect={chooseNovel} onCreateNew={() => setCreating(true)} />
+      </>
+    );
   }
 
   return (
@@ -210,11 +229,9 @@ export default function App() {
       <button className="app-toggle-glossary" onClick={() => setShowGlossary((v) => !v)}>
         {showGlossary ? "← Close glossary" : "Glossary"}
       </button>
-      <details className="reader-settings">
-        <summary>Reading settings</summary>
-        <label><input type="checkbox" checked={!clickableEntities} onChange={(event) => changeClickableEntities(!event.target.checked)} /> Show hover previews</label>
-        <p>Highlighted names are always clickable, even when no information is linked yet. Enable previews to also see a card on hover. Saved in this browser.</p>
-      </details>
+      <button className="app-back" onClick={() => setShowSettings(true)}>
+        Settings
+      </button>
       <ProviderConfigPanel key={`provider-${novelId}`} novelId={novelId} />
       {showGlossary && <GlossaryView key={novelId} novelId={novelId} at={chapter?.at} />}
       <div hidden={showGlossary}>

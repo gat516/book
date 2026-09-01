@@ -35,7 +35,7 @@ class NameProposal(BaseModel):
 async def discover_names(ctx: StageContext, text: str) -> list[Span]:
     if not text.strip():
         return []
-    model = model_for_stage("display_scan", ctx.cfg)
+    model = model_for_stage("display_scan", ctx.cfg, ctx.model_override)
     requested_id = f"{ctx.provider_id or ctx.cfg.llm_provider}:{model}"
     # This pass depends only on this display text and prompt, never on future glossary
     # or graph state. Attribute the cache to the actual serving model (§6.1, §14.3).

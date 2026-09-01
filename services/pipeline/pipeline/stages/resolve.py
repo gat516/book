@@ -445,7 +445,7 @@ class ResolveStage:
             system=build_proposal_system_prompt(ctx.novel.ontology),
             json_mode=True,
             cls=Class.BATCH,
-            model=model_for_stage(STAGE, ctx.cfg),
+            model=model_for_stage(STAGE, ctx.cfg, ctx.model_override),
         )
         proposal = parse_proposal(completion.text)
         allowed_kinds=set(ctx.novel.ontology.get("kinds",[]))
@@ -571,7 +571,7 @@ class ResolveStage:
             ),
             json_mode=True,
             cls=Class.BATCH,
-            model=model_for_stage(STAGE, ctx.cfg),
+            model=model_for_stage(STAGE, ctx.cfg, ctx.model_override),
         )
         try:
             decision = parse_decision(completion.text, candidates)

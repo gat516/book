@@ -12,6 +12,8 @@ def context(response):
     return SimpleNamespace(
         cfg=make_config(), provider_id="ollama", provider=FakeProvider(response),
         cache=LLMCache(FakeRedis()), novel=SimpleNamespace(target_lang="en"),
+        # No per-book model here: the stage falls back to the env default for its stage.
+        model_override=None,
     )
 
 

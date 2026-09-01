@@ -61,6 +61,44 @@ async def load_provider_config(conn, novel_id: str) -> ProviderConfigRow | None:
     return ProviderConfigRow(provider=provider, model=model, base_url=base_url, api_key=api_key)
 
 
+async def load_provider_credential(conn, provider: str) -> tuple[str | None, str | None]:
+    """Account-wide (base_url, api_key) for one provider (migration 0035)."""
+    row = await (
+        await conn.execute(
+            "SELECT base_url, api_key_cipher, api_key_nonce FROM provider_credential WHERE provider = %s",
+            (provider,),
+        )
+    ).fetchone()
+    if row is None:
+        return None, None
+    base_url, cipher, nonce = row
+    api_key = None
+    if cipher is not None:
+        api_key = AESGCM(_decryption_key()).decrypt(bytes(nonce), bytes(cipher), None).decode("utf-8")
+    return base_url, api_key
+
+
+async def resolve_provider_config(conn, novel_id: str, default_provider: str) -> ProviderConfigRow | None:
+    """The novel's effective provider config: its own row over the global credential.
+
+    Deliberately mirrors pipeline/provider_config.py's function of the same name. askai
+    must answer questions through the same backend that translated the book -- resolving
+    differently here would mean the reader's answers came from a different model than the
+    prose, with no indication anywhere that they had.
+    """
+    row = await load_provider_config(conn, novel_id)
+    provider = row.provider if row is not None else default_provider
+    global_base_url, global_api_key = await load_provider_credential(conn, provider)
+    if row is None and global_api_key is None and global_base_url is None:
+        return None
+    return ProviderConfigRow(
+        provider=provider,
+        model=row.model if row is not None else None,
+        base_url=(row.base_url if row is not None else None) or global_base_url,
+        api_key=(row.api_key if row is not None else None) or global_api_key,
+    )
+
+
 def build_provider(row: ProviderConfigRow, *, default_model: str, ollama_host: str, deepseek_base_url: str) -> LLMProvider:
     match row.provider:
         case "ollama":

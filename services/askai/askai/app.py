@@ -14,7 +14,7 @@ from psycopg_pool import AsyncConnectionPool
 from novel_llm import AdmissionRejected, Class, GatewayProvider, LLMProvider
 
 from askai.config import Config, load_config
-from askai.provider_config import build_provider, load_provider_config
+from askai.provider_config import build_provider, resolve_provider_config
 from askai.retrieval import build_context, retrieve
 
 log = logging.getLogger(__name__)
@@ -85,7 +85,9 @@ class Service:
         cached = self._provider_cache.get(novel_id)
         if cached is not None:
             return cached
-        row = await load_provider_config(conn, novel_id)
+        # Same merge the pipeline does (0035): the novel's own row over the global
+        # credential, so an answer comes from the backend that wrote the prose.
+        row = await resolve_provider_config(conn, novel_id, self.config.llm_provider)
         if row is None:
             provider = self.provider
         else:

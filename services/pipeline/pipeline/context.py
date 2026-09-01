@@ -112,6 +112,11 @@ class StageContext:
     # its own routing rather than be silently replaced by a local Ollama client.
     names_provider: "LLMProvider | None" = None
 
+    # The novel's own configured model (novel_provider_config.model), or None to use the
+    # env default for each stage. Stages pass model= explicitly on every call, so this is
+    # the only thing that makes a per-book model choice take effect.
+    model_override: str | None = None
+
 
 @dataclass
 class PipelineState:

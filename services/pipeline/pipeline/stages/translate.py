@@ -160,7 +160,7 @@ class TranslateStage:
         resolved_provider = ctx.provider_id or ctx.cfg.llm_provider
         if pinned is None:
             requested_provider = resolved_provider
-            requested_model = model_for_stage(STAGE, ctx.cfg)
+            requested_model = model_for_stage(STAGE, ctx.cfg, ctx.model_override)
             requested_id = f"{requested_provider}:{requested_model}"
         else:
             requested_provider, separator, requested_model = pinned.partition(":")

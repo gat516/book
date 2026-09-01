@@ -59,6 +59,9 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/name-reviews", a.getCharacterNameReviews)
 	mux.HandleFunc("POST /novels/{id}/name-reviews/{term}/approve", a.approveCharacterName)
 	mux.HandleFunc("GET /novels/{id}/provider-config", a.getProviderConfig)
+	mux.HandleFunc("GET /provider-credentials", a.listProviderCredentials)
+	mux.HandleFunc("PUT /provider-credentials/{provider}", a.putProviderCredential)
+	mux.HandleFunc("DELETE /provider-credentials/{provider}", a.deleteProviderCredential)
 	mux.HandleFunc("PATCH /novels/{id}/provider-config", a.putProviderConfig)
 	return mux
 }
@@ -962,6 +965,60 @@ func (a *API) getProviderConfig(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("get provider config: %v", err)
 		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
+}
+
+// listProviderCredentials proxies the masked list of global provider credentials.
+// Ungated like the other administration routes: no chapter content, and the response
+// reports api_key_set rather than any key.
+func (a *API) listProviderCredentials(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	result, status, err := a.ingest.ListProviderCredentials(r.Context())
+	if err != nil {
+		log.Printf("list provider credentials: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
+}
+
+// putProviderCredential proxies a global credential create/replace to ingest-api.
+func (a *API) putProviderCredential(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read request body")
+		return
+	}
+	result, status, err := a.ingest.PutProviderCredential(r.Context(), r.PathValue("provider"), body)
+	if err != nil {
+		log.Printf("put provider credential: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
+}
+
+// deleteProviderCredential proxies removal of a global credential. This is the only way
+// to clear a stored key -- an omitted key on PUT means "unchanged", never "erase".
+func (a *API) deleteProviderCredential(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	result, status, err := a.ingest.DeleteProviderCredential(r.Context(), r.PathValue("provider"))
+	if err != nil {
+		log.Printf("delete provider credential: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	if status == http.StatusNoContent {
+		w.WriteHeader(status)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

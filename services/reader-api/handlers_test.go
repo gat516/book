@@ -97,6 +97,18 @@ func (f *fakeIngestClient) DeleteGlossaryTerm(_ context.Context, _, _ string, bo
 	return f.response, f.status, f.err
 }
 
+func (f *fakeIngestClient) ListProviderCredentials(_ context.Context) (json.RawMessage, int, error) {
+	return json.RawMessage(`{"credentials":[]}`), 200, nil
+}
+
+func (f *fakeIngestClient) PutProviderCredential(_ context.Context, _ string, _ json.RawMessage) (json.RawMessage, int, error) {
+	return json.RawMessage(`{"credentials":[]}`), 200, nil
+}
+
+func (f *fakeIngestClient) DeleteProviderCredential(_ context.Context, _ string) (json.RawMessage, int, error) {
+	return nil, 204, nil
+}
+
 func (f *fakeIngestClient) GetProviderConfig(_ context.Context, _ string) (json.RawMessage, int, error) {
 	return f.response, f.status, f.err
 }

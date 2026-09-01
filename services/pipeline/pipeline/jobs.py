@@ -39,7 +39,7 @@ LLM_STAGES = ("extract", "character_names", "resolve", "translate", "state")
 _UNIT_SEPARATOR = "\x1f"
 
 
-def model_for_stage(stage: str, cfg: Config) -> str:
+def model_for_stage(stage: str, cfg: Config, override: str | None = None) -> str:
     """The bare model name (no provider prefix) a stage should ask the provider for.
 
     THE single source of truth for stage→model selection. Stage code MUST call this
@@ -50,7 +50,15 @@ def model_for_stage(stage: str, cfg: Config) -> str:
     module computed the translate key assuming ``llm_model_translate`` was actually
     used). Routing every stage's model choice through this one function is what makes
     that class of bug structurally impossible instead of merely avoided by convention.
+
+    ``override`` is the novel's own configured model (novel_provider_config.model). It
+    wins for every stage: a book picks one model, not one per stage. Without this the
+    per-book model was silently ignored -- stages pass model= explicitly, so the model on
+    the provider instance never applied, and a novel pinned to Gemini was still sent the
+    env's Ollama model name (a 404 on every call).
     """
+    if override:
+        return override
     return cfg.llm_model_translate if stage == "translate" else cfg.llm_model_extract
 
 
@@ -102,10 +110,18 @@ def stage_config_version(
     return cfg.config_version
 
 
-def model_id_for_stage(stage: str, cfg: Config) -> str:
+def model_id_for_stage(stage: str, cfg: Config, provider: str | None = None,
+                      override: str | None = None) -> str:
     """provider:model for a stage. translate uses the stronger model; the rest the cheap
-    extraction model (§10 / .env.example)."""
-    return f"{cfg.llm_provider}:{model_for_stage(stage, cfg)}"
+    extraction model (§10 / .env.example).
+
+    ``provider``/``override`` carry the novel's own resolved provider and model, so two
+    novels on different backends cannot share a cache key. cacheable_result already stops
+    a mismatched result being WRITTEN under the wrong key, but the read side needs this:
+    without it a Gemini novel could read an entry an Ollama novel had produced for the
+    same raw_hash.
+    """
+    return f"{provider or cfg.llm_provider}:{model_for_stage(stage, cfg, override)}"
 
 
 def idempotency_key(

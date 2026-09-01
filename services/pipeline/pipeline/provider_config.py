@@ -68,6 +68,54 @@ async def load_provider_config(db, novel_id: str) -> ProviderConfigRow | None:
     return ProviderConfigRow(provider=provider, model=model, base_url=base_url, api_key=api_key)
 
 
+async def load_provider_credential(db, provider: str) -> tuple[str | None, str | None]:
+    """Fetch and decrypt the account-wide (base_url, api_key) for one provider (0035).
+
+    Returns (None, None) when no credential is stored, which is an ordinary state: a novel
+    may carry its own key, or the provider may need none at all (Ollama).
+    """
+    row = await (
+        await db.execute(
+            "SELECT base_url, api_key_cipher, api_key_nonce FROM provider_credential WHERE provider = %s",
+            (provider,),
+        )
+    ).fetchone()
+    if row is None:
+        return None, None
+    base_url, cipher, nonce = row
+    api_key = None
+    if cipher is not None:
+        api_key = AESGCM(_decryption_key()).decrypt(bytes(nonce), bytes(cipher), None).decode("utf-8")
+    return base_url, api_key
+
+
+async def resolve_provider_config(db, novel_id: str, default_provider: str) -> ProviderConfigRow | None:
+    """The novel's effective provider config, merging its own row over the global credential.
+
+    Resolution, per field: the novel's value wins if it has one, else the account-wide
+    credential for whichever provider is in play. That makes the common case -- one key in
+    Settings, each book choosing only a model -- work without re-pasting the secret, while
+    a book billed to a different account can still override with its own key.
+
+    The provider itself comes from the novel's row when it has one, else the process-wide
+    default, so a novel that has never been configured still picks up a global key.
+
+    Returns None only when there is nothing to say beyond the process default, which is
+    what keeps a zero-config install working exactly as before (Phase N4).
+    """
+    row = await load_provider_config(db, novel_id)
+    provider = row.provider if row is not None else default_provider
+    global_base_url, global_api_key = await load_provider_credential(db, provider)
+    if row is None and global_api_key is None and global_base_url is None:
+        return None
+    return ProviderConfigRow(
+        provider=provider,
+        model=row.model if row is not None else None,
+        base_url=(row.base_url if row is not None else None) or global_base_url,
+        api_key=(row.api_key if row is not None else None) or global_api_key,
+    )
+
+
 def build_provider(row: ProviderConfigRow, cfg: Config) -> LLMProvider:
     """Construct the completion provider row describes, falling back to the service's
     own default model when the novel didn't override one."""

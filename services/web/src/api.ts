@@ -18,6 +18,8 @@ import type {
   TranslationHealth,
   PasteChapterRequest,
   ProviderConfigView,
+  ProviderCredentialsResponse,
+  SaveProviderCredentialRequest,
   SaveProviderConfigRequest,
   PasteChapterResponse,
   Progress,
@@ -268,5 +270,30 @@ export function saveProviderConfig(
   return request(`/novels/${novelId}/provider-config`, {
     method: "PATCH",
     body: JSON.stringify(body),
+  });
+}
+
+
+// Global provider credentials. Ungated like the other administration routes; reads are
+// masked server-side, so no key ever reaches the browser.
+export function listProviderCredentials(): Promise<ProviderCredentialsResponse> {
+  return request(`/provider-credentials`);
+}
+
+export function saveProviderCredential(
+  provider: string,
+  body: SaveProviderCredentialRequest,
+): Promise<ProviderCredentialsResponse> {
+  return request(`/provider-credentials/${provider}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+// The only way to clear a stored key: an omitted key on save means "unchanged".
+export async function deleteProviderCredential(provider: string): Promise<void> {
+  await fetch(`/api/provider-credentials/${provider}`, {
+    method: "DELETE",
+    headers: { "X-Reader-ID": readerId() },
   });
 }

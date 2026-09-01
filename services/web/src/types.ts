@@ -322,3 +322,22 @@ export interface ProviderConfigView {
   base_url?: string;
   api_key_set: boolean;
 }
+
+
+// One shared credential per provider (migration 0035): entered once in Settings and used
+// by every book, unless a book carries its own key as an override. Read shape is masked
+// the same way ProviderConfigView is -- api_key_set, never the key.
+export interface ProviderCredentialView {
+  provider: ProviderName;
+  base_url?: string;
+  api_key_set: boolean;
+}
+
+export interface ProviderCredentialsResponse {
+  credentials: ProviderCredentialView[];
+}
+
+export interface SaveProviderCredentialRequest {
+  base_url?: string;
+  api_key?: string;
+}

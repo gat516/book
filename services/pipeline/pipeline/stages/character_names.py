@@ -132,7 +132,7 @@ async def _discover(ctx: StageContext, source: str) -> dict[str, NamePlan]:
         # ordinary chapter provider — see StageContext.names_provider.
         completion = await (ctx.names_provider or ctx.provider).complete(
             prompt, system=system, json_mode=True, json_schema=schema, cls=Class.BATCH,
-            model=model_for_stage(STAGE, ctx.cfg),
+            model=model_for_stage(STAGE, ctx.cfg, ctx.model_override),
         )
         body = json.loads(_strip_fence(completion.text))
         if (not isinstance(body, dict) or set(body) != {"reviewed", "names"}
@@ -215,7 +215,7 @@ async def _focused_renderings(ctx: StageContext, passages: list[dict], plans: di
     }, ensure_ascii=False)
     completion = await (ctx.names_provider or ctx.provider).complete(
         prompt, system=system, json_mode=True, json_schema=schema, cls=Class.BATCH,
-        model=model_for_stage(STAGE, ctx.cfg),
+        model=model_for_stage(STAGE, ctx.cfg, ctx.model_override),
     )
     body = json.loads(_strip_fence(completion.text))
     if (not isinstance(body, dict) or set(body) != {"reviewed", "decisions"}

@@ -340,7 +340,7 @@ async def test_deleted_novel_stage_error_does_not_write_failure_history(db_conn,
     worker.db, worker.cfg = db_conn, make_config()
     worker.redis = AsyncMock()
     worker.minio = worker.cache = worker.textproc = worker.embed_provider = None
-    worker._provider_for_novel = AsyncMock(return_value=(object(), object(), "ollama", None))
+    worker._provider_for_novel = AsyncMock(return_value=(object(), object(), "ollama", None, None))
     worker._get_object = lambda uri: "source"
     class DeletedDuringStage:
         name = "translate"
@@ -394,7 +394,7 @@ async def test_enrichment_failure_cannot_hide_valid_translation(db_conn, monkeyp
     worker.db, worker.cfg = db_conn, make_config()
     worker.redis = AsyncMock()
     worker.minio = worker.cache = worker.textproc = worker.embed_provider = None
-    worker._provider_for_novel = AsyncMock(return_value=(object(), object(), "ollama", None))
+    worker._provider_for_novel = AsyncMock(return_value=(object(), object(), "ollama", None, None))
     worker._get_object = lambda uri: "saved prose" if uri == "saved" else "original text"
     calls = []
     class Stage:

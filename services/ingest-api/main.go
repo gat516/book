@@ -49,6 +49,11 @@ func main() {
 	mux.HandleFunc("PATCH /novels/{id}/settings", api.patchNovelSettings)
 	mux.HandleFunc("GET /novels/{id}/provider-config", api.getProviderConfig)
 	mux.HandleFunc("PATCH /novels/{id}/provider-config", api.putProviderConfig)
+	// Global provider credentials (migration 0035): shared by every novel, so a key is
+	// entered once rather than re-pasted per book. A novel may still override with its own.
+	mux.HandleFunc("GET /provider-credentials", api.listProviderCredentials)
+	mux.HandleFunc("PUT /provider-credentials/{provider}", api.putProviderCredential)
+	mux.HandleFunc("DELETE /provider-credentials/{provider}", api.deleteProviderCredential)
 	mux.HandleFunc("GET /healthz", api.healthz)
 
 	srv := &http.Server{
