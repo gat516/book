@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { getProviderConfig, saveProviderConfig } from "../api";
-import { DEFAULT_MODEL, NEEDS_API_KEY, PROVIDER_LABELS } from "../providers";
+import {
+  CUSTOM_MODEL,
+  DEFAULT_MODEL,
+  MODEL_LIST_IS_ADVISORY,
+  MODEL_OPTIONS,
+  NEEDS_API_KEY,
+  PROVIDER_LABELS,
+} from "../providers";
 import type { ProviderConfigView, ProviderName } from "../types";
 
 interface Props {
@@ -17,6 +24,9 @@ export function ProviderConfigPanel({ novelId }: Props) {
   const [loading, setLoading] = useState(true);
   const [provider, setProvider] = useState<ProviderName>("gemini");
   const [model, setModel] = useState("");
+  // A saved model that is not in the catalog must stay editable rather than being
+  // silently rewritten to a listed one on the next save.
+  const [custom, setCustom] = useState(false);
   const [baseURL, setBaseURL] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [pending, setPending] = useState(false);
@@ -32,6 +42,9 @@ export function ProviderConfigPanel({ novelId }: Props) {
       if (config) {
         setProvider(config.provider);
         setModel(config.model ?? "");
+        setCustom(
+          !!config.model && !MODEL_OPTIONS[config.provider].some((m) => m.id === config.model),
+        );
         setBaseURL(config.base_url ?? "");
       }
     } catch (err) {
@@ -47,8 +60,20 @@ export function ProviderConfigPanel({ novelId }: Props) {
 
   function chooseProvider(next: ProviderName) {
     setProvider(next);
-    // Only prefill a model the user hasn't already typed over for this provider.
-    if (!model || model === DEFAULT_MODEL[provider]) setModel(DEFAULT_MODEL[next] ?? "");
+    // Model ids do not carry across providers, so a stale one would just 404 at call
+    // time. Always reset to the new provider's default.
+    setModel(DEFAULT_MODEL[next] ?? "");
+    setCustom(false);
+  }
+
+  function chooseModel(value: string) {
+    if (value === CUSTOM_MODEL) {
+      setCustom(true);
+      setModel("");
+    } else {
+      setCustom(false);
+      setModel(value);
+    }
   }
 
   async function submit(event: React.FormEvent) {
@@ -76,6 +101,7 @@ export function ProviderConfigPanel({ novelId }: Props) {
   }
 
   const needsKey = NEEDS_API_KEY[provider];
+  const selectedNote = MODEL_OPTIONS[provider].find((m) => m.id === model)?.note;
   const missingKey = needsKey && !current?.api_key_set && !apiKey.trim();
 
   return (
@@ -104,8 +130,32 @@ export function ProviderConfigPanel({ novelId }: Props) {
 
           <label>
             Model{" "}
-            <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="server default" />
+            <select value={custom ? CUSTOM_MODEL : model} onChange={(e) => chooseModel(e.target.value)}>
+              {MODEL_OPTIONS[provider].map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+              <option value={CUSTOM_MODEL}>Other…</option>
+            </select>
           </label>
+          {custom && (
+            <label>
+              Model name{" "}
+              <input
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder="exact model id"
+              />
+            </label>
+          )}
+          {!custom && selectedNote && <p className="novel-create-form-hint">{selectedNote}</p>}
+          {MODEL_LIST_IS_ADVISORY[provider] && (
+            <p className="novel-create-form-hint">
+              Ollama serves whatever is pulled on the host, so this list is a hint — a model
+              the machine doesn't have fails when a chapter runs, not when you save.
+            </p>
+          )}
 
           <label>
             Base URL{" "}

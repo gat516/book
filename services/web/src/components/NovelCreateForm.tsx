@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { createNovel } from "../api";
-import { DEFAULT_MODEL } from "../providers";
+import type { ProviderName } from "../types";
+import { CUSTOM_MODEL, DEFAULT_MODEL, MODEL_OPTIONS } from "../providers";
 
 interface Props {
   onCreated: (novelId: string) => void;
@@ -15,6 +16,7 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
   // "" = use the server's process-wide provider, i.e. no per-novel override at all.
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
+  const [customModel, setCustomModel] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [baseURL, setBaseURL] = useState("");
   const [ingestLookahead, setIngestLookahead] = useState("50");
@@ -25,6 +27,12 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
   function chooseProvider(next: string) {
     setProvider(next);
     setModel(DEFAULT_MODEL[next] ?? "");
+    setCustomModel(false);
+  }
+
+  function chooseModel(value: string) {
+    setCustomModel(value === CUSTOM_MODEL);
+    setModel(value === CUSTOM_MODEL ? "" : value);
   }
 
   async function submit(e: React.FormEvent) {
@@ -95,12 +103,28 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
           <>
             <label>
               Model
-              <input
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder={DEFAULT_MODEL[provider] || "server default"}
-              />
+              <select
+                value={customModel ? CUSTOM_MODEL : model}
+                onChange={(e) => chooseModel(e.target.value)}
+              >
+                {(MODEL_OPTIONS[provider as ProviderName] ?? []).map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+                <option value={CUSTOM_MODEL}>Other…</option>
+              </select>
             </label>
+            {customModel && (
+              <label>
+                Model name
+                <input
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder="exact model id"
+                />
+              </label>
+            )}
             {provider !== "ollama" ? (
               <label>
                 API key{" "}
