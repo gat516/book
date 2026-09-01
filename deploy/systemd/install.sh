@@ -5,10 +5,19 @@
 # died -- but it runs *inside* the worker, so it cannot cover "no worker is running".
 # That gap is a supervision gap, and this is the layer that closes it.
 #
-#   ./deploy/systemd/install.sh          # install + enable + start
+#   ./deploy/systemd/install.sh              # install + enable + restart (deploy changes)
+#   ./deploy/systemd/install.sh --start-only # install + enable; start only if stopped
 #   systemctl --user status novel-engine.target
 #
 set -euo pipefail
+
+service_action=restart
+if [[ "${1:-}" == "--start-only" ]]; then
+  service_action=start
+elif [[ $# -gt 0 ]]; then
+  echo "usage: $0 [--start-only]" >&2
+  exit 2
+fi
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
@@ -32,7 +41,15 @@ done
 
 systemctl --user daemon-reload
 systemctl --user enable "${units[@]}"
-systemctl --user restart novel-engine.target
+if [[ "$service_action" == "start" ]]; then
+  # Starting an already-active target does not necessarily pull a dependency back up.
+  # Name every unit so a stopped service is restored while healthy processes (including
+  # an in-flight translation) remain untouched.
+  systemctl --user start "${units[@]}"
+else
+  # PartOf= propagates a target restart to the application services after a deployment.
+  systemctl --user restart novel-engine.target
+fi
 
 # Without lingering, user units are killed at logout and never start at boot -- the
 # reboot half of this fix simply would not work. This is the one step needing polkit,

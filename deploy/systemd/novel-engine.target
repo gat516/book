@@ -3,7 +3,7 @@ Description=novel-engine application services
 # One handle for the whole fleet:
 #   systemctl --user start|stop|restart novel-engine.target
 # PartOf= in each unit propagates stop/restart down; WantedBy= pulls them up on start.
-Wants=novel-pipeline.service novel-scraper.service novel-ingest-api.service novel-reader-api.service novel-askai.service
+Wants=novel-pipeline.service novel-scraper.service novel-ingest-api.service novel-reader-api.service novel-askai.service novel-web.service
 
 [Install]
 WantedBy=default.target

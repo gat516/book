@@ -1,10 +1,13 @@
-.PHONY: worker benchmark askai proto-python proto-check gateway-proto-python gateway-proto-check textproc-check textproc-test textproc-live-test textproc-benchmark
+.PHONY: start worker benchmark askai proto-python proto-check gateway-proto-python gateway-proto-check textproc-check textproc-test textproc-live-test textproc-benchmark
 
 TEXTPROC_TEST_ADDR ?= 127.0.0.1:50051
 
 # Run services through scripts/with-env.sh so .env actually reaches the process. A bare
 # `python -m pipeline.worker` silently uses code defaults for every setting.
 WITH_ENV := scripts/with-env.sh
+
+start:
+	./scripts/start-local.sh
 
 worker:
 	$(WITH_ENV) services/pipeline/.venv/bin/python -m pipeline.worker
