@@ -16,6 +16,7 @@ interface Props {
 export function BootstrapChapterForm({ novelId, chapterIndex, onChapterIndexChange, onAdded }: Props) {
   const [rawText, setRawText] = useState("");
   const [translatedText, setTranslatedText] = useState("");
+  const [sourceURL, setSourceURL] = useState("");
   const [terms, setTerms] = useState<BootstrapGlossaryTermInput[]>([{ source_term: "", target_term: "" }]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,6 +50,7 @@ export function BootstrapChapterForm({ novelId, chapterIndex, onChapterIndexChan
         chapter_index: chapterIndex,
         raw_text: rawText,
         translated_text: translatedText,
+        ...(sourceURL.trim() ? { source_url: sourceURL.trim() } : {}),
       });
       onAdded(chapterIndex);
     } catch (err) {
@@ -73,6 +75,10 @@ export function BootstrapChapterForm({ novelId, chapterIndex, onChapterIndexChan
           value={chapterIndex}
           onChange={(e) => onChapterIndexChange(Number(e.target.value))}
         />
+      </label>
+      <label>
+        Source chapter URL (optional)
+        <input type="url" value={sourceURL} onChange={(e) => setSourceURL(e.target.value)} />
       </label>
       <label>
         Original text

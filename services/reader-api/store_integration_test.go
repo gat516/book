@@ -343,6 +343,83 @@ func TestSpoilerGateEndToEnd(t *testing.T) {
 	}
 }
 
+func TestEntityRenderingsExposeOnlyBoundChapterSafeChoices(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	fixture := seedIntegrationFixture(t, admin)
+	ctx := context.Background()
+
+	var revisionID string
+	if err := admin.QueryRow(ctx, `SELECT revision_id::text FROM entity WHERE id=$1`, fixture.heroID).Scan(&revisionID); err != nil {
+		t.Fatal(err)
+	}
+	evidenceID := uuid.NewString()
+	mentionID := uuid.NewString()
+	if _, err := admin.Exec(ctx, `INSERT INTO graph_evidence
+		(id,revision_id,novel_id,chapter_index,source_hash,char_start,char_end,quote)
+		VALUES ($1,$2,$3,100,'sha256:rendering',0,2,'林峰')`, evidenceID, revisionID, fixture.novelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO source_mention
+		(id,revision_id,novel_id,chapter_index,surface,kind,evidence_id)
+		VALUES ($1,$2,$3,100,'林峰','character',$4)`, mentionID, revisionID, fixture.novelID, evidenceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO mention_binding
+		(revision_id,mention_id,known_from_chapter,entity_id,evidence_id)
+		VALUES ($1,$2,100,$3,$4)`, revisionID, mentionID, fixture.heroID, evidenceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO character_name_review
+		(novel_id,source_term,first_seen_chapter,source_hash,char_start,char_end,quote,
+		 candidates,reason,status,term_role,rendering_method,selected_target,selection_source,reviewed_at)
+		VALUES
+		($1,'林峰',100,'sha256:rendering',0,2,'林峰',
+		 '[{"target_term":"Lin Feng","pronunciation":["lín","fēng"],"segmentation":"林|峰","method":"pinyin"},{"target_term":"Lin-feng","pronunciation":[],"segmentation":"","method":"pinyin"}]',
+		 'multiple_pronunciations','pending','chinese_person','pinyin',NULL,NULL,NULL),
+		($1,'旧名',100,'sha256:locked',0,2,'旧名',
+		 '[{"target_term":"Old Name","pronunciation":[],"segmentation":"","method":"semantic_translation"},{"target_term":"Former Name","pronunciation":[],"segmentation":"","method":"semantic_translation"}]',
+		 'semantic_translation','approved','semantic_term','semantic_translation','Old Name','offered',now()),
+		($1,'未来名',500,'sha256:future',0,3,'未来名',
+		 '[{"target_term":"Future Name","pronunciation":[],"segmentation":"","method":"semantic_translation"}]',
+		 'semantic_translation','approved','semantic_term','semantic_translation','Future Name','offered',now())`, fixture.novelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO glossary
+		(novel_id,source_term,target_term,entity_id,version,locked_at_chapter,constraint_class)
+		VALUES ($1,'旧名','Old Name',$2,1,100,'semantic_term'),
+		       ($1,'未来名','Future Name',$2,2,500,'semantic_term')`, fixture.novelID, fixture.heroID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), `DELETE FROM mention_binding WHERE revision_id=$1 AND mention_id=$2`, revisionID, mentionID)
+		_, _ = admin.Exec(context.Background(), `DELETE FROM source_mention WHERE revision_id=$1 AND id=$2`, revisionID, mentionID)
+		_, _ = admin.Exec(context.Background(), `DELETE FROM graph_evidence WHERE id=$1`, evidenceID)
+		_, _ = admin.Exec(context.Background(), `DELETE FROM glossary WHERE novel_id=$1`, fixture.novelID)
+		_, _ = admin.Exec(context.Background(), `DELETE FROM character_name_review WHERE novel_id=$1`, fixture.novelID)
+	})
+
+	entity, err := store.GetEntity(ctx, fixture.novelID, fixture.heroID, 220)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entity.Renderings) != 2 {
+		t.Fatalf("renderings = %#v, want one pending and one locked", entity.Renderings)
+	}
+	bySource := make(map[string]TermRenderingView, len(entity.Renderings))
+	for _, rendering := range entity.Renderings {
+		bySource[rendering.SourceTerm] = rendering
+	}
+	if pending := bySource["林峰"]; pending.Status != "pending" || pending.TargetTerm != nil || len(pending.Candidates) != 2 {
+		t.Fatalf("pending rendering = %#v", pending)
+	}
+	if locked := bySource["旧名"]; locked.Status != "locked" || locked.TargetTerm == nil || *locked.TargetTerm != "Old Name" || len(locked.Candidates) != 2 {
+		t.Fatalf("locked rendering = %#v", locked)
+	}
+	if _, leaked := bySource["未来名"]; leaked {
+		t.Fatalf("future rendering leaked at chapter 220: %#v", entity.Renderings)
+	}
+}
+
 func TestRLSAloneFailsClosedAndDoesNotLeakSettings(t *testing.T) {
 	store, admin := integrationDatabase(t)
 	fixture := seedIntegrationFixture(t, admin)

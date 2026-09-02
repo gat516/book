@@ -367,6 +367,13 @@ class KnowledgeEngine:
             await self.db.execute('''INSERT INTO display_mention VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING''',
                 (s['id'],revision,novel,chapter,s['mention_id'],s['char_start'],s['char_end'],s['phrase'],output['display_hash'],ev))
             mid=s['mention_id']
+            if mid and mid in mentions:
+                await self.db.execute('''INSERT INTO term_rendering_occurrence
+                    (novel_id,chapter_index,char_start,char_end,source_term,display_term,method)
+                    VALUES(%s,%s,%s,%s,%s,%s,'aligned')
+                    ON CONFLICT(novel_id,chapter_index,char_start,char_end) DO UPDATE
+                    SET source_term=EXCLUDED.source_term,display_term=EXCLUDED.display_term,method='aligned' ''',
+                    (novel,chapter,s['char_start'],s['char_end'],mentions[mid]['surface'],s['phrase']))
             if mid in state.resolutions:
                 # This is an independently verified alignment proposal, not an alias
                 # cache hit. Retries cannot add a second vote for the same chapter.

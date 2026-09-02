@@ -56,6 +56,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("PATCH /novels/{id}/glossary/{term}", a.patchGlossaryTerm)
 	mux.HandleFunc("DELETE /novels/{id}/glossary/{term}", a.patchGlossaryTerm)
 	mux.HandleFunc("POST /novels/{id}/glossary/bootstrap", a.postBootstrapGlossary)
+	mux.HandleFunc("POST /novels/{id}/glossary/confirm", a.postConfirmGlossaryTerm)
 	mux.HandleFunc("GET /novels/{id}/name-reviews", a.getCharacterNameReviews)
 	mux.HandleFunc("POST /novels/{id}/name-reviews/{term}/approve", a.approveCharacterName)
 	mux.HandleFunc("GET /novels/{id}/provider-config", a.getProviderConfig)
@@ -442,6 +443,7 @@ func (a *API) getChapter(w http.ResponseWriter, r *http.Request) {
 			NewFacts:           chapter.NewFacts,
 			HasNext:            chapter.HasNext,
 			SiteChapterNo:      chapter.SiteChapterNo,
+			SourceURL:          chapter.SourceURL,
 			Part:               chapter.Part,
 			TranslationWarning: chapter.TranslationWarning,
 		})
@@ -943,6 +945,32 @@ func (a *API) postBootstrapGlossary(w http.ResponseWriter, r *http.Request) {
 	result, status, err := a.ingest.BootstrapGlossary(r.Context(), novelID, body)
 	if err != nil {
 		log.Printf("bootstrap glossary: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
+}
+
+func (a *API) postConfirmGlossaryTerm(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	if _, ok := readerID(r); !ok {
+		writeError(w, http.StatusUnauthorized, "X-Reader-ID is required")
+		return
+	}
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "could not read request body")
+		return
+	}
+	result, status, err := a.ingest.ConfirmGlossaryTerm(r.Context(), novelID, body)
+	if err != nil {
 		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
 		return
 	}

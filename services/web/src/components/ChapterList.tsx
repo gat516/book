@@ -140,6 +140,9 @@ export function ChapterList({ novelId, currentChapter, onOpen, onClose, onAdd }:
                     <td>
                       {chapter.site_chapter_no ?? "—"}
                       {chapter.part > 1 && <span className="chapter-list-part"> · Part {chapter.part}</span>}
+                      {chapter.source_url && <>
+                        {" · "}<a href={chapter.source_url} target="_blank" rel="noreferrer">Source ↗</a>
+                      </>}
                     </td>
                     <td>
                       {chapter.status === "done"

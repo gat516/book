@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -69,6 +70,9 @@ type pasteChapterReq struct {
 	// scraper, or by a human who knows the source site's numbering.
 	TranslatedText string `json:"translated_text,omitempty"`
 	SiteChapterNo  string `json:"site_chapter_no,omitempty"`
+	// SourceURL is durable provenance and a reader escape hatch when automation is down.
+	// It is metadata only, never fetched by ingest-api or used as a gate key.
+	SourceURL string `json:"source_url,omitempty"`
 	// Part is which piece of a multi-page source chapter this is (see SourceMeta.Part).
 	// Omitted or 0 means part 1 — an ordinary chapter is "part 1" without the caller
 	// having to say so.
@@ -245,6 +249,14 @@ func (a *API) pasteChapter(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "chapter_index must be >= 0")
 		return
 	}
+	if req.SourceURL != "" {
+		parsed, err := url.Parse(req.SourceURL)
+		if err != nil || len(req.SourceURL) > 4096 || parsed.Host == "" ||
+			(parsed.Scheme != "http" && parsed.Scheme != "https") {
+			writeErr(w, http.StatusBadRequest, "source_url must be an absolute http(s) URL")
+			return
+		}
+	}
 
 	// Look up the novel's source language (also validates the novel exists).
 	sourceLang, err := a.store.getNovelSourceLang(r.Context(), novelID)
@@ -277,6 +289,13 @@ func (a *API) pasteChapter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if found && existingIndex != req.ChapterIndex {
+		// A re-scrape can teach a legacy row its original page URL even though content-hash
+		// dedup correctly refuses to insert the chapter again.
+		if err := a.store.recordChapterSourceURL(r.Context(), novelID, existingIndex, req.SourceURL); err != nil {
+			log.Printf("pasteChapter record duplicate source URL: %v", err)
+			writeErr(w, http.StatusInternalServerError, "could not record chapter source")
+			return
+		}
 		writeJSON(w, http.StatusOK, pasteChapterResp{
 			NovelID:      novelID,
 			ChapterIndex: existingIndex,
@@ -324,6 +343,7 @@ func (a *API) pasteChapter(w http.ResponseWriter, r *http.Request) {
 		RawText:      req.RawText,
 		SourceLang:   sourceLang,
 		SourceMeta: SourceMeta{
+			SourceURL:     req.SourceURL,
 			FetchedAt:     time.Now().UTC().Format(time.RFC3339),
 			RawHash:       rawHash,
 			Adapter:       "paste",
@@ -335,6 +355,13 @@ func (a *API) pasteChapter(w http.ResponseWriter, r *http.Request) {
 	if err := a.store.insertChapter(r.Context(), env, rawURI, translatedURI, translatedBy); err != nil {
 		log.Printf("pasteChapter insert: %v", err)
 		writeErr(w, http.StatusInternalServerError, "could not record chapter")
+		return
+	}
+	// Also enrich a same-index re-paste whose original row predates source_url support;
+	// insertChapter itself remains a content-idempotent ON CONFLICT no-op.
+	if err := a.store.recordChapterSourceURL(r.Context(), novelID, req.ChapterIndex, req.SourceURL); err != nil {
+		log.Printf("pasteChapter record source URL: %v", err)
+		writeErr(w, http.StatusInternalServerError, "could not record chapter source")
 		return
 	}
 
@@ -582,6 +609,36 @@ type bootstrapGlossaryReq struct {
 type bootstrapGlossaryTermReq struct {
 	SourceTerm string `json:"source_term"`
 	TargetTerm string `json:"target_term"`
+}
+
+type confirmGlossaryTermReq struct {
+	SourceTerm string `json:"source_term"`
+	TargetTerm string `json:"target_term"`
+	AtChapter  int    `json:"at_chapter"`
+	TermRole   string `json:"term_role"`
+}
+
+func (a *API) confirmGlossaryTerm(w http.ResponseWriter, r *http.Request) {
+	var req confirmGlossaryTermReq
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	req.SourceTerm = strings.TrimSpace(req.SourceTerm)
+	version, err := a.store.ConfirmGlossaryTerm(r.Context(), r.PathValue("id"), req.SourceTerm,
+		req.TargetTerm, req.AtChapter, req.TermRole)
+	if errors.Is(err, ErrGlossaryTermInvalid) || errors.Is(err, ErrGlossaryTermConflict) {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, correctGlossaryTermResp{
+		NovelID: r.PathValue("id"), SourceTerm: req.SourceTerm,
+		TargetTerm: strings.TrimSpace(req.TargetTerm), Version: version,
+	})
 }
 
 type bootstrapGlossaryResp struct {

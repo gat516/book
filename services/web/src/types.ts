@@ -48,6 +48,7 @@ export interface PasteChapterRequest {
   raw_text: string;
   translated_text?: string;
   site_chapter_no?: string;
+  source_url?: string;
 }
 
 export interface PasteChapterResponse {
@@ -154,6 +155,7 @@ export interface ChapterListItem {
   graph_status?: "pending" | "done" | "error";
   chapter_index: number;
   site_chapter_no?: string;
+  source_url?: string;
   // Which piece of a multi-page source chapter this is (1-based; 1 when not paginated).
   // Sites that split a chapter across pages yield several rows sharing one
   // site_chapter_no, distinguished only by this.
@@ -221,6 +223,9 @@ export interface SpanView {
   evidence?: Evidence | null;
   known_from_chapter?: number | null;
   enrichment_status?: string;
+  // A source-term rendering review matched to this literal display span. This can exist
+  // before identity resolution, so it deliberately does not imply entity_id.
+  rendering?: TermRenderingView;
   // A literal named mention can have a card before its identity is linked.
   entity_id: string | null;
   char_start: number;
@@ -246,6 +251,8 @@ export interface ChapterResponse {
   // from a scrape — NOT the same number as chapter_index, which is our own sequential
   // counter for this ingestion batch. Absent for a plain paste with no site of origin.
   site_chapter_no?: string;
+  // Durable original page URL, available even when scraper/pipeline workers are stopped.
+  source_url?: string;
   // Which piece of a multi-page source chapter this is (1-based; 1 when not paginated).
   part: number;
 }
@@ -281,6 +288,15 @@ export interface EntityView extends EntitySummary {
   knowledge: KnowledgeStatus;
   aliases: string[];
   facts: FactView[];
+  renderings: TermRenderingView[];
+}
+
+export interface TermRenderingView {
+  source_term: string;
+  target_term: string | null;
+  status: "pending" | "unlocked" | "locked";
+  term_role: TermRole | "";
+  candidates: CharacterNameCandidate[];
 }
 
 export interface EntityResponse {

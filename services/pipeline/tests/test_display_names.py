@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from fixtures import FakeProvider, FakeRedis, make_config
 from pipeline.cache import LLMCache
-from pipeline.display_names import discover_names, merge_names
+from pipeline.display_names import align_names, discover_names, merge_names
 from pipeline.mentions import Span
 
 
@@ -72,3 +72,15 @@ def test_discovery_cannot_replace_existing_identity():
     known = Span(alias_id="real-id", char_start=4, char_end=7, byte_start=4, byte_end=7)
     guessed = Span(alias_id="", char_start=0, char_end=10, byte_start=0, byte_end=10)
     assert merge_names([known], [guessed]) == [known]
+
+
+async def test_alignment_requires_exact_offered_display_and_source_terms():
+    ctx = context('{"alignments":[{"display_term":"Chekov","source_term":"契科夫"},'
+                  '{"display_term":"Invented","source_term":"契科夫"},'
+                  '{"display_term":"Chekov","source_term":"不存在"}]}')
+    display = "Chekov spoke. Chekov left."
+    spans = [Span(alias_id="", byte_start=0, byte_end=6, char_start=0, char_end=6),
+             Span(alias_id="", byte_start=14, byte_end=20, char_start=14, char_end=20)]
+    rows = await align_names(ctx, "契科夫说完便走了。", display, spans)
+    assert [(r.source_term, r.display_term, r.char_start, r.char_end) for r in rows] == [
+        ("契科夫", "Chekov", 0, 6), ("契科夫", "Chekov", 14, 20)]

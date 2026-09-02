@@ -287,6 +287,7 @@ func (w *Worker) handle(ctx context.Context, jobID int64) error {
 			ChapterIndex:  nextIndex,
 			RawText:       page.Text,
 			SiteChapterNo: page.Title,
+			SourceURL:     page.SourceURL,
 			Part:          part,
 			Enqueue:       false, // reader-api queues translation on demand; see the field's comment
 		}

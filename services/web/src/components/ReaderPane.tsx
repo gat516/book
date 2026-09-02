@@ -4,7 +4,7 @@ import type { ChapterFactView, ChapterResponse, EntityView } from "../types";
 import { HoverCard } from "./HoverCard";
 import { EntityInspector } from "./EntityInspector";
 import { usePolling } from "../usePolling";
-import { lastMentionPerEntity, segment } from "../readerSegments";
+import { applyRenderingChoices, lastMentionPerEntity, segment } from "../readerSegments";
 
 interface Props {
   novelId: string;
@@ -112,8 +112,10 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
   if (error) return <p className="reader-pane-error">Could not load chapter: {error}</p>;
   if (!chapter) return <p>Loading chapter…</p>;
 
-  // One anchor per distinct thing, at its last mention, rather than one per occurrence.
-  const segments = segment(chapter.text, lastMentionPerEntity(chapter.text, chapter.spans));
+  // Render every confirmed occurrence with the preferred spelling, while keeping only one
+  // interactive anchor per distinct thing. The stored translation remains unchanged.
+  const rendered = applyRenderingChoices(chapter.text, chapter.spans);
+  const segments = segment(rendered.text, lastMentionPerEntity(rendered.text, rendered.spans));
   const newFactsByEntity = new Map<string, ChapterFactView[]>();
   for (const fact of chapter.new_facts ?? []) {
     const held = newFactsByEntity.get(fact.entity_id);
@@ -135,6 +137,11 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
             {chapter.part > 1 && ` (part ${chapter.part})`}
           </span>
         )}
+        {chapter.source_url && (
+          <>
+            {" "}— <a href={chapter.source_url} target="_blank" rel="noreferrer">Open source chapter ↗</a>
+          </>
+        )}
       </p>
       {chapter.knowledge?.status === "repair" && <p role="status" className="reader-entity-hint">Knowledge cards are under repair. Saved translations are unchanged; unverified facts are withheld.</p>}
       {chapter.knowledge?.status === "processing" && <p role="status">Checking names and supported facts…</p>}
@@ -154,7 +161,7 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
             onMouseLeave={() => setHovered((current) => current === index ? null : current)}>
             <button
               type="button"
-              className={`mention mention-button${piece.entityId ? "" : " mention-unlinked"}${newFacts.length ? " mention-has-new-fact" : ""}`}
+              className={`mention mention-button${piece.entityId ? "" : " mention-unlinked"}${piece.rendering?.status === "locked" ? " mention-confirmed" : ""}${newFacts.length ? " mention-has-new-fact" : ""}`}
               aria-haspopup="dialog"
               aria-label={newFacts.length
                 ? `Inspect ${piece.text} — ${newFacts.length} fact${newFacts.length > 1 ? "s" : ""} learned in this chapter`
@@ -175,10 +182,21 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
               <HoverCard
                 novelId={novelId}
                 entityId={piece.entityId}
+                rendering={piece.rendering}
                 status={chapter.knowledge?.status}
                 mention={piece.text}
                 at={chapter.at}
                 cache={cache}
+                onRenderingChanged={(updatedRendering) => setChapter((current) => current ? {
+                  ...current,
+                  spans: current.spans.map((span) => {
+                    const surface = Array.from(current.text).slice(span.char_start, span.char_end).join("");
+                    return span.rendering?.source_term === updatedRendering.source_term ||
+                      (!span.rendering && surface === piece.text)
+                      ? { ...span, rendering: updatedRendering }
+                      : span;
+                  }),
+                } : current)}
                 onClose={() => setHovered(null)}
               />
             )}

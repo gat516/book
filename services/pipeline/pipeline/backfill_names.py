@@ -16,7 +16,7 @@ import psycopg
 
 from pipeline.config import Config
 from pipeline.context import NovelMeta, StageContext, language_profile_for
-from pipeline.display_names import discover_names, merge_names
+from pipeline.display_names import align_names, discover_names, merge_names
 from pipeline.graph import GraphWriter
 from pipeline.mentions import Span
 from pipeline.worker import Worker
@@ -31,7 +31,8 @@ async def backfill(novel_id: str, start: int, end: int, apply: bool) -> None:
         if row is None:
             raise ValueError("novel not found")
         source, target, ontology = row
-        provider, batches, provider_id, names_provider, model_override = await worker._provider_for_novel(novel_id)
+        (provider, batches, provider_id, names_provider, _resolve_provider,
+         model_override) = await worker._provider_for_novel(novel_id)
         ctx = StageContext(
             novel=NovelMeta(novel_id, source, target, ontology),
             language_profile=language_profile_for(source), provider=provider,
@@ -41,16 +42,25 @@ async def backfill(novel_id: str, start: int, end: int, apply: bool) -> None:
             model_override=model_override,
         )
         chapters = await (await worker.db.execute(
-            "SELECT chapter_index, COALESCE(translated_uri, raw_uri), translated_uri IS NOT NULL FROM chapter "
+            "SELECT chapter_index, raw_uri, COALESCE(translated_uri, raw_uri), translated_uri IS NOT NULL FROM chapter "
             "WHERE novel_id=%s AND status='done' AND chapter_index BETWEEN %s AND %s ORDER BY chapter_index",
             (novel_id, start, end),
         )).fetchall()
-        for index, uri, translated in chapters:
+        for index, raw_uri, uri, translated in chapters:
+            source_text = await asyncio.to_thread(worker._get_object, raw_uri)
             text = await asyncio.to_thread(worker._get_object, uri)
             # Legacy completed chapters can still display raw text. Use that language
             # for word boundaries, just as the reader uses raw_uri as its fallback.
             display_ctx = ctx if translated else replace(ctx, novel=replace(ctx.novel, target_lang=source))
             names = await discover_names(display_ctx, text)
+            rows = await (await worker.db.execute(
+                "SELECT entity_id, char_start, char_end FROM mention_span WHERE novel_id=%s AND chapter_index=%s",
+                (novel_id, index),
+            )).fetchall()
+            existing = [Span(alias_id=str(entity) if entity else "", char_start=a, char_end=b,
+                             byte_start=0, byte_end=0) for entity, a, b in rows]
+            merged = merge_names(existing, names)
+            renderings = await align_names(display_ctx, source_text, text, merged)
             async with worker.db.transaction():
                 # Don't publish offsets if another process replaced this text while the
                 # model worked. Lock only during the short persistence transaction.
@@ -59,17 +69,12 @@ async def backfill(novel_id: str, start: int, end: int, apply: bool) -> None:
                     "WHERE novel_id=%s AND chapter_index=%s FOR UPDATE", (novel_id, index))
                 if current != ("done", uri):
                     raise RuntimeError(f"chapter {index} changed during indexing; retry")
-                rows = await (await worker.db.execute(
-                    "SELECT entity_id, char_start, char_end FROM mention_span WHERE novel_id=%s AND chapter_index=%s",
-                    (novel_id, index),
-                )).fetchall()
-                existing = [Span(alias_id=str(entity) if entity else "", char_start=a, char_end=b,
-                                 byte_start=0, byte_end=0) for entity, a, b in rows]
-                merged = merge_names(existing, names)
                 if apply:
-                    await GraphWriter(worker.db).replace_mention_spans(novel_id, index, merged)
+                    await GraphWriter(worker.db).replace_mention_spans(
+                        novel_id, index, merged, renderings)
             print(json.dumps({"chapter": index, "added": len(merged)-len(existing),
-                              "total": len(merged), "applied": apply}), flush=True)
+                              "total": len(merged), "aligned": len(renderings),
+                              "applied": apply}), flush=True)
     finally:
         await worker.db.close()
         await worker.redis.aclose()

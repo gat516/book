@@ -522,14 +522,15 @@ class Worker:
                 # Graph repair is independent of translation. Keep shared RAG chunks and
                 # empty presentation cards, but never run the legacy identity writer.
                 from pipeline.graph import GraphWriter
-                from pipeline.display_names import discover_names
+                from pipeline.display_names import align_names, discover_names
                 writer=GraphWriter(self.db)
                 await writer.ready()
                 embeddings=await ctx.embed_provider.embed([c.text for c in state.chunks]) if state.chunks else []
                 names=await discover_names(ctx,state.translation or raw_text)
+                renderings=await align_names(ctx,raw_text,state.translation or raw_text,names)
                 async with self.db.transaction():
                     await writer.replace_chunks(msg.novel_id,msg.chapter_index,state.chunks,embeddings)
-                    await writer.replace_mention_spans(msg.novel_id,msg.chapter_index,names)
+                    await writer.replace_mention_spans(msg.novel_id,msg.chapter_index,names,renderings)
                 from pipeline.graph_rebuild import enqueue_completed
                 await enqueue_completed(self.db,self.cfg,msg.novel_id)
             if enrichment_error:

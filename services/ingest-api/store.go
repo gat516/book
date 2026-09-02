@@ -275,6 +275,22 @@ func (s *Store) insertChapter(ctx context.Context, env ChapterEnvelope, rawURI, 
 	return nil
 }
 
+// recordChapterSourceURL enriches provenance without changing chapter content or its
+// content-hash identity. This is intentionally fill-only: a later scrape retry must not
+// silently replace the URL that originally produced the stored text.
+func (s *Store) recordChapterSourceURL(ctx context.Context, novelID string, chapterIndex int, sourceURL string) error {
+	if sourceURL == "" {
+		return nil
+	}
+	_, err := s.db.Exec(ctx,
+		`UPDATE chapter
+		 SET source_meta=jsonb_set(COALESCE(source_meta,'{}'::jsonb),'{source_url}',to_jsonb($3::text),true)
+		 WHERE novel_id=$1 AND chapter_index=$2
+		   AND COALESCE(source_meta->>'source_url','')=''`,
+		novelID, chapterIndex, sourceURL)
+	return err
+}
+
 // enqueue LPUSHes a lightweight pointer onto the pending queue for the pipeline to pick
 // up. We push a pointer (not the body) so Redis stays small; the pipeline reads the body
 // from the object store via chapter.raw_uri.

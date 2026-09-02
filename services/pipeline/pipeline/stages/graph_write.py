@@ -68,7 +68,8 @@ class GraphWriteStage:
 
         async with ctx.db.transaction():
             await writer.replace_chunks(ctx.novel.id, chapter_index, state.chunks, embeddings)
-            await writer.replace_mention_spans(ctx.novel.id, chapter_index, state.display_spans)
+            await writer.replace_mention_spans(ctx.novel.id, chapter_index, state.display_spans,
+                                               state.term_renderings)
 
             written = (0, 0, 0, 0)
             if state.extraction is not None:

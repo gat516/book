@@ -15,9 +15,10 @@ import "context"
 // chapter_index is assigned sequentially as pages are walked, independent of whatever a
 // site's own chapter/part scheme looks like (instructions.md §3.1).
 type Page struct {
-	Title   string
-	Text    string
-	NextURL string // absolute URL of the next chapter; "" means "no next link found"
+	Title     string
+	Text      string
+	SourceURL string // absolute URL fetched for this page; assigned by walk
+	NextURL   string // absolute URL of the next chapter; "" means "no next link found"
 }
 
 // Site is the per-site adapter contract. Simpler than spec §3.2's generic

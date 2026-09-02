@@ -123,6 +123,11 @@ func (f *fakeIngestClient) BootstrapGlossary(_ context.Context, _ string, body j
 	return f.response, f.status, f.err
 }
 
+func (f *fakeIngestClient) ConfirmGlossaryTerm(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
+}
+
 func (f *fakeIngestClient) ApproveCharacterName(_ context.Context, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
 	return f.response, f.status, f.err
@@ -283,9 +288,10 @@ func readyFake() *fakeStore {
 		timeline:      []EventView{},
 		relationships: []RelationshipView{},
 		chapter: ChapterView{
-			Text:    "chapter text",
-			Spans:   []SpanView{{EntityID: &entityID, CharStart: 0, CharEnd: 7}},
-			HasNext: true,
+			Text:      "chapter text",
+			Spans:     []SpanView{{EntityID: &entityID, CharStart: 0, CharEnd: 7}},
+			HasNext:   true,
+			SourceURL: "https://example.com/novel/chapter-3",
 		},
 		novels: []NovelSummary{{ID: testNovelID, Title: "Test Novel", SourceLang: "zh", TargetLang: "en"}},
 		novel:  NovelSummary{ID: testNovelID, Title: "Test Novel", SourceLang: "zh", TargetLang: "en"},
@@ -479,7 +485,8 @@ func TestGetChapterWithinProgressSucceeds(t *testing.T) {
 	}
 	// At must be the reader's STORED PROGRESS (5), not the requested chapter (3) — the
 	// client uses this exact value as the hover-card cache key (PLAN.md §5.3/§6.1).
-	if body.At != 5 || body.ChapterIndex != 3 || body.Text != "chapter text" || !body.HasNext {
+	if body.At != 5 || body.ChapterIndex != 3 || body.Text != "chapter text" || !body.HasNext ||
+		body.SourceURL != "https://example.com/novel/chapter-3" {
 		t.Fatalf("response = %#v", body)
 	}
 }
@@ -810,6 +817,20 @@ func TestPatchGlossaryTermProxiesToIngestClient(t *testing.T) {
 	}
 	if string(ingest.lastBody) != `{"target_term":"Verdant Cloud Sect","at_chapter":1}` {
 		t.Fatalf("body forwarded = %q", ingest.lastBody)
+	}
+}
+
+func TestConfirmGlossaryTermRequiresPrincipalAndProxiesBody(t *testing.T) {
+	ingest := &fakeIngestClient{response: json.RawMessage(`{"version":2}`), status: http.StatusCreated}
+	api := &API{store: readyFake(), ingest: ingest}
+	path := "/novels/" + testNovelID + "/glossary/confirm"
+	body := `{"source_term":"契科夫","target_term":"Chekhov","at_chapter":5,"term_role":"foreign_person"}`
+	if response := request(t, api, http.MethodPost, path, body, ""); response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated confirm: %d", response.Code)
+	}
+	response := request(t, api, http.MethodPost, path, body, "reader-a")
+	if response.Code != http.StatusCreated || string(ingest.lastBody) != body {
+		t.Fatalf("confirm response: %d %s; forwarded=%s", response.Code, response.Body.String(), ingest.lastBody)
 	}
 }
 

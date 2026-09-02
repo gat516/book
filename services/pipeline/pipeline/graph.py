@@ -309,7 +309,7 @@ class GraphWriter:
                 )
 
     async def replace_mention_spans(
-        self, novel_id: str, chapter_index: int, spans: list["Span"]
+        self, novel_id: str, chapter_index: int, spans: list["Span"], renderings=()
     ) -> None:
         """Delete this chapter's existing display spans and re-insert. Same discipline
         as ``replace_chunks``: derived data, not knowledge, no natural key to
@@ -319,6 +319,10 @@ class GraphWriter:
         async with self.db.cursor() as cur:
             await cur.execute(
                 "DELETE FROM mention_span WHERE novel_id = %s AND chapter_index = %s",
+                (novel_id, chapter_index),
+            )
+            await cur.execute(
+                "DELETE FROM term_rendering_occurrence WHERE novel_id = %s AND chapter_index = %s",
                 (novel_id, chapter_index),
             )
             if spans:
@@ -331,4 +335,12 @@ class GraphWriter:
                         (novel_id, chapter_index, s.alias_id or None, s.char_start, s.char_end)
                         for s in spans
                     ],
+                )
+            if renderings:
+                await cur.executemany(
+                    """INSERT INTO term_rendering_occurrence
+                       (novel_id,chapter_index,char_start,char_end,source_term,display_term,method)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                    [(novel_id, chapter_index, r.char_start, r.char_end, r.source_term,
+                      r.display_term, r.method) for r in renderings],
                 )

@@ -20,6 +20,7 @@ export function AddChapterForm({ novelId, nextChapterIndex, onAdded, onCancel }:
   const [method, setMethod] = useState<Method>("paste");
   const [chapterIndex, setChapterIndex] = useState(nextChapterIndex);
   const [rawText, setRawText] = useState("");
+  const [sourceURL, setSourceURL] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,7 +30,11 @@ export function AddChapterForm({ novelId, nextChapterIndex, onAdded, onCancel }:
     setPending(true);
     setError(null);
     try {
-      await pasteChapter(novelId, { chapter_index: chapterIndex, raw_text: rawText });
+      await pasteChapter(novelId, {
+        chapter_index: chapterIndex,
+        raw_text: rawText,
+        ...(sourceURL.trim() ? { source_url: sourceURL.trim() } : {}),
+      });
       onAdded(chapterIndex);
     } catch (err) {
       setError(String(err));
@@ -74,6 +79,10 @@ export function AddChapterForm({ novelId, nextChapterIndex, onAdded, onCancel }:
               value={chapterIndex}
               onChange={(e) => setChapterIndex(Number(e.target.value))}
             />
+          </label>
+          <label>
+            Source chapter URL (optional)
+            <input type="url" value={sourceURL} onChange={(e) => setSourceURL(e.target.value)} />
           </label>
           <label>
             Chapter text

@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from pipeline.llm.provider import LLMProvider
     from pipeline.mentions import Span
     from pipeline.textproc import TextProcClient
+    from pipeline.display_names import TermRenderingOccurrence
 
 
 @dataclass(frozen=True)
@@ -137,6 +138,9 @@ class PipelineState:
     # An empty alias_id denotes a literal named mention with no entity binding; the
     # database stores it as NULL. Never use these spans to bind graph facts.
     display_spans: "list[Span]" = field(default_factory=list)
+    # Exact source-term -> display-span alignments. Derived terminology metadata only;
+    # it never binds an entity and is independently chapter-gated on reads (§0.3).
+    term_renderings: "list[TermRenderingOccurrence]" = field(default_factory=list)
 
     # resolve stage (1.6): the AUTHORITATIVE occurrence-ID -> entity_id map (revision pipeline). Every stage that
     # needs to turn a name into an id reads this and nothing else — a surface absent from

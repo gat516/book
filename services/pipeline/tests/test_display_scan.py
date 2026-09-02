@@ -61,6 +61,11 @@ def _state(*, source_lang: str, translation: str | None = None) -> PipelineState
 @pytest.fixture
 async def novel(db_conn):
     novel_id = await make_novel(db_conn, source_lang="zh", target_lang="en", ontology=json.dumps(ONTOLOGY))
+    await db_conn.execute(
+        "INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status) "
+        "VALUES (%s,%s,%s,'raw/test.txt','{}','done')",
+        (novel_id, CHAPTER, f"sha256:{novel_id}"),
+    )
     try:
         yield novel_id
     finally:
@@ -129,7 +134,11 @@ async def test_untranslated_novel_reuses_the_extraction_time_scan(db_conn, novel
 
 async def test_unlinked_names_publish_before_facts_and_do_not_create_entities(db_conn, novel):
     ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
-    ctx.provider.response = '{"names": ["Ling Feng", "Black Tower", "Not in the text"]}'
+    ctx.provider.response = lambda _prompt, system: (
+        '{"alignments":[{"display_term":"Ling Feng","source_term":"他"},'
+        '{"display_term":"Black Tower","source_term":"青云宗"}]}'
+        if "Map each offered" in system else
+        '{"names": ["Ling Feng", "Black Tower", "Not in the text"]}')
     state = _state(source_lang="zh", translation="Ling Feng entered the Black Tower.")
     await DisplayScanStage().run(ctx, state)
     await DisplayScanStage().run(ctx, state)
@@ -138,8 +147,12 @@ async def test_unlinked_names_publish_before_facts_and_do_not_create_entities(db
         (novel,),
     )).fetchall()
     assert rows == [(None, 0, 9), (None, 22, 33)]
+    aligned = await (await db_conn.execute(
+        "SELECT source_term,display_term,char_start,char_end FROM term_rendering_occurrence "
+        "WHERE novel_id=%s ORDER BY char_start", (novel,))).fetchall()
+    assert aligned == [("他", "Ling Feng", 0, 9), ("青云宗", "Black Tower", 22, 33)]
     assert await (await db_conn.execute("SELECT count(*) FROM entity WHERE novel_id=%s", (novel,))).fetchone() == (0,)
-    assert len(ctx.provider.calls) == 1
+    assert len(ctx.provider.calls) == 2  # one discovery + one alignment; rerun is cached
 
 
 async def test_discovery_preserves_verified_link_and_does_not_link_other_names(db_conn, novel):
@@ -153,7 +166,9 @@ async def test_discovery_preserves_verified_link_and_does_not_link_other_names(d
         (novel, entity_id),
     )
     ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
-    ctx.provider.response = '{"names": ["Azure Cloud Sect", "Ling Feng"]}'
+    ctx.provider.response = lambda _prompt, system: (
+        '{"alignments":[]}' if "Map each offered" in system
+        else '{"names": ["Azure Cloud Sect", "Ling Feng"]}')
     state = _state(source_lang="zh", translation="Ling Feng joined Azure Cloud Sect.")
     await DisplayScanStage().run(ctx, state)
     assert [(s.alias_id, state.translation[s.char_start:s.char_end]) for s in state.display_spans] == [

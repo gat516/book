@@ -29,8 +29,20 @@ type FactView struct {
 type EntityView struct {
 	Knowledge KnowledgeStatus `json:"knowledge"`
 	EntitySummary
-	Aliases []string   `json:"aliases"`
-	Facts   []FactView `json:"facts"`
+	Aliases    []string            `json:"aliases"`
+	Facts      []FactView          `json:"facts"`
+	Renderings []TermRenderingView `json:"renderings"`
+}
+
+// TermRenderingView puts the terminology decision next to the prose that uses it.
+// A pending rendering is approved through the name-review path; a locked rendering is
+// corrected through the append-only glossary path. Both remain chapter-gated (§0.2/§0.3).
+type TermRenderingView struct {
+	SourceTerm string                   `json:"source_term"`
+	TargetTerm *string                  `json:"target_term"`
+	Status     string                   `json:"status"`
+	TermRole   string                   `json:"term_role"`
+	Candidates []CharacterNameCandidate `json:"candidates"`
 }
 
 type EventView struct {
@@ -145,11 +157,12 @@ type NovelListResponse struct {
 }
 
 type SpanView struct {
-	SourceMentionID  *string         `json:"source_mention_id"`
-	Evidence         json.RawMessage `json:"evidence"`
-	MentionID        string          `json:"mention_id"`
-	KnownFromChapter *int            `json:"known_from_chapter"`
-	EnrichmentStatus string          `json:"enrichment_status"`
+	SourceMentionID  *string            `json:"source_mention_id"`
+	Evidence         json.RawMessage    `json:"evidence"`
+	MentionID        string             `json:"mention_id"`
+	Rendering        *TermRenderingView `json:"rendering,omitempty"`
+	KnownFromChapter *int               `json:"known_from_chapter"`
+	EnrichmentStatus string             `json:"enrichment_status"`
 	// NULL is a named mention whose identity is not yet linked; it still gets a card.
 	EntityID  *string `json:"entity_id"`
 	CharStart int     `json:"char_start"`
@@ -163,6 +176,7 @@ type SpanView struct {
 type ChapterListItem struct {
 	ChapterIndex  int    `json:"chapter_index"`
 	SiteChapterNo string `json:"site_chapter_no,omitempty"`
+	SourceURL     string `json:"source_url,omitempty"`
 	// Part of a multi-page source chapter (1-based; 1 for an ordinary chapter). Sites that
 	// paginate a chapter produce several rows sharing one SiteChapterNo, distinguished
 	// only by this.
@@ -288,6 +302,7 @@ type ChapterView struct {
 	NewFacts           []ChapterFactView
 	HasNext            bool
 	SiteChapterNo      string // "" when this chapter has none (a plain paste, not a scrape)
+	SourceURL          string // persisted provenance; "" for legacy/plain pasted chapters
 	Part               int    // 1-based; 1 for an ordinary (non-paginated) chapter
 	TranslationWarning *TranslationWarning
 }
@@ -302,6 +317,9 @@ type ChapterResponse struct {
 	// gate key, site_chapter_no is inert display metadata). Omitted when absent (a plain
 	// paste, not a scrape) so the reader UI can distinguish "no site label" from "".
 	SiteChapterNo string `json:"site_chapter_no,omitempty"`
+	// SourceURL lets a reader continue from the original page even while workers are down.
+	// Only validated absolute http(s) URLs enter source_meta.
+	SourceURL string `json:"source_url,omitempty"`
 	// Part of a multi-page source chapter (1-based; 1 when the chapter isn't paginated).
 	Part int `json:"part"`
 	// At is the reader's STORED PROGRESS (not the chapter index n). Re-reading an old

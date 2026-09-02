@@ -1,6 +1,7 @@
 """Stage 6: DISPLAY SCAN (instructions.md §5 step 6; PLAN.md Phase 5.2).
 
-Produces the mention spans the reader UI highlights. These are a **separate** pass from
+Produces the mention spans the reader UI highlights and a durable source-term → exact
+display-span ledger. These are a **separate** pass from
 the extraction-time scan (``ScanStage``, step 2): that pass finds aliases in the SOURCE
 text so RESOLVE can bind them; this one finds locked glossary links in the DISPLAY
 text and independently discovers named mentions that have no identity yet. For translated
@@ -14,6 +15,7 @@ keep terms stable chapter to chapter. Rows are keyed by ``entity_id`` for the sa
 ``ScanStage`` keys by it (§4: alias has no surrogate key); a glossary row with a NULL
 entity_id cannot assert an identity. Independent name discovery may still produce an
 unlinked card for that literal name, without pretending the glossary has approved it.
+The ledger records terminology alignment only; it never creates or binds an entity.
 
 No chapter gate on the glossary query, for the same reason ``ScanStage`` has none:
 ingestion is not a read path (§0.3 governs reads, not writes).
@@ -24,7 +26,7 @@ from __future__ import annotations
 import logging
 
 from pipeline.context import PipelineState, StageContext
-from pipeline.display_names import discover_names, merge_names
+from pipeline.display_names import TermRenderingOccurrence, align_names, discover_names, merge_names
 from pipeline.graph import GraphWriter
 from pipeline.mentions import Alias, MentionScanRequest, scan_mentions
 
@@ -35,16 +37,25 @@ class DisplayScanStage:
     name = "display_scan"
 
     async def run(self, ctx: StageContext, state: PipelineState) -> None:
+        state.term_renderings = []
         await self._linked_mentions(ctx, state)
         text = state.translation if state.translation is not None else state.envelope.raw_text
         if ctx.novel.source_lang != ctx.novel.target_lang and state.translation is None:
             return
-        state.display_spans = merge_names(state.display_spans, await discover_names(ctx, text))
+        linked = list(state.display_spans)
+        discovered = await discover_names(ctx, text)
+        state.display_spans = merge_names(state.display_spans, discovered)
+        unlinked = [span for span in discovered if not any(
+            span.char_start < old.char_end and old.char_start < span.char_end
+            for old in linked)]
+        state.term_renderings.extend(await align_names(
+            ctx, state.envelope.raw_text, text, unlinked))
         # Cards are derived from readable prose, not gated on fact extraction completing.
         # Publish atomically here; graph-write may idempotently replace the same spans.
         async with ctx.db.transaction():
             await GraphWriter(ctx.db).replace_mention_spans(
-                ctx.novel.id, state.envelope.chapter_index, state.display_spans
+                ctx.novel.id, state.envelope.chapter_index, state.display_spans,
+                state.term_renderings,
             )
         log.info("stage %s chapter=%d linked=%d unlinked=%d", self.name,
                  state.envelope.chapter_index,
@@ -67,7 +78,7 @@ class DisplayScanStage:
 
         rows = await (
             await ctx.db.execute(
-                "SELECT entity_id, target_term FROM glossary WHERE novel_id = %s AND NOT deleted",
+                "SELECT source_term, entity_id, target_term FROM glossary WHERE novel_id = %s AND NOT deleted",
                 (ctx.novel.id,),
             )
         ).fetchall()
@@ -75,14 +86,19 @@ class DisplayScanStage:
         request = MentionScanRequest(
             text=state.translation,
             aliases=[
-                Alias(alias_id=str(entity_id), surface=target_term)
-                for entity_id, target_term in rows
+                Alias(alias_id=str(index), surface=target_term)
+                for index, (_, entity_id, target_term) in enumerate(rows)
                 if entity_id is not None
             ],
             lang=ctx.novel.target_lang,
         )
         response = await ctx.textproc.scan(request) if ctx.textproc else scan_mentions(request)
-        state.display_spans = response.spans
+        state.display_spans = []
+        for span in response.spans:
+            source_term, entity_id, target_term = rows[int(span.alias_id)]
+            state.display_spans.append(span.model_copy(update={"alias_id": str(entity_id)}))
+            state.term_renderings.append(TermRenderingOccurrence(
+                source_term, target_term, span.char_start, span.char_end, "glossary"))
 
         log.debug(
             "stage %s chapter=%d terms=%d spans=%d",

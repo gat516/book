@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -249,7 +251,7 @@ func (s *Store) ListChapters(ctx context.Context, novelID string, limit, offset 
 	// ordinary non-paginated chapter is part 1 by definition — so the absent case and the
 	// default case are the same answer.
 	rows, err := s.progressDB.Query(ctx,
-		`SELECT chapter_index, source_meta->>'site_chapter_no',
+		`SELECT chapter_index, source_meta->>'site_chapter_no', source_meta->>'source_url',
 		        COALESCE((source_meta->>'part')::int, 1),
 		        CASE WHEN translation_ready THEN 'done' ELSE status END,
 		        CASE WHEN status='done' THEN 'done' WHEN status='error' THEN 'error' ELSE 'pending' END,
@@ -266,14 +268,17 @@ func (s *Store) ListChapters(ctx context.Context, novelID string, limit, offset 
 	chapters := []ChapterListItem{}
 	for rows.Next() {
 		var item ChapterListItem
-		var siteChapterNo *string
+		var siteChapterNo, sourceURL *string
 		var warningCode *string
 		var warningCount int
-		if err := rows.Scan(&item.ChapterIndex, &siteChapterNo, &item.Part, &item.Status, &item.GraphStatus, &warningCode, &warningCount); err != nil {
+		if err := rows.Scan(&item.ChapterIndex, &siteChapterNo, &sourceURL, &item.Part, &item.Status, &item.GraphStatus, &warningCode, &warningCount); err != nil {
 			return nil, 0, err
 		}
 		if siteChapterNo != nil {
 			item.SiteChapterNo = *siteChapterNo
+		}
+		if sourceURL != nil {
+			item.SourceURL = *sourceURL
 		}
 		if warningCode != nil {
 			item.TranslationWarning = &TranslationWarning{Code: *warningCode, TermCount: warningCount}
@@ -485,7 +490,7 @@ func (s *Store) withReaderTx(
 func (s *Store) GetEntity(
 	ctx context.Context, novelID, entityID string, at int,
 ) (EntityView, error) {
-	view := EntityView{Aliases: []string{}, Facts: []FactView{}}
+	view := EntityView{Aliases: []string{}, Facts: []FactView{}, Renderings: []TermRenderingView{}}
 	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
 		var err error
 		view.Knowledge, err = knowledgeInTx(ctx, tx, at)
@@ -520,6 +525,49 @@ func (s *Store) GetEntity(
 			view.Aliases = append(view.Aliases, alias)
 		}
 		if err := aliasRows.Err(); err != nil {
+			return err
+		}
+
+		// Locked glossary decisions are attached through the revision-specific binding,
+		// never by matching a displayed name back to an entity. That preserves RESOLVE's
+		// sole ownership of identity while making the existing alternatives available at
+		// the exact place a reader encounters the term.
+		renderingRows, err := tx.Query(ctx,
+			`SELECT g.source_term,g.target_term,'locked',COALESCE(r.term_role,''),
+			        COALESCE(r.candidates,'[]'::jsonb)
+			 FROM glossary g
+			 LEFT JOIN glossary_binding gb ON gb.novel_id=g.novel_id AND gb.source_term=g.source_term
+			 LEFT JOIN character_name_review r ON r.novel_id=g.novel_id
+			   AND r.source_term=g.source_term AND r.first_seen_chapter <= $3
+			 WHERE g.novel_id=$1 AND COALESCE(gb.entity_id,g.entity_id)=$2
+			   AND g.locked_at_chapter <= $3 AND NOT g.deleted
+			 UNION ALL
+			 SELECT DISTINCT r.source_term,NULL::text,'pending',r.term_role,r.candidates
+			 FROM character_name_review r
+			 JOIN source_mention m ON m.novel_id=r.novel_id AND m.surface=r.source_term
+			 JOIN mention_binding b ON b.revision_id=m.revision_id AND b.mention_id=m.id
+			 WHERE r.novel_id=$1 AND b.entity_id=$2 AND r.status='pending'
+			   AND r.first_seen_chapter <= $3 AND b.known_from_chapter <= $3
+			 ORDER BY 1`, novelID, entityID, at)
+		if err != nil {
+			return err
+		}
+		defer renderingRows.Close()
+		for renderingRows.Next() {
+			var rendering TermRenderingView
+			var candidates []byte
+			if err := renderingRows.Scan(
+				&rendering.SourceTerm, &rendering.TargetTerm, &rendering.Status,
+				&rendering.TermRole, &candidates,
+			); err != nil {
+				return err
+			}
+			if err := json.Unmarshal(candidates, &rendering.Candidates); err != nil {
+				return err
+			}
+			view.Renderings = append(view.Renderings, rendering)
+		}
+		if err := renderingRows.Err(); err != nil {
 			return err
 		}
 
@@ -806,17 +854,17 @@ func newFactsInTx(ctx context.Context, tx pgx.Tx, novelID string, n int, view *C
 // query below is additionally RLS-gated (novel_id/chapter_index <= reader_chapter())
 // via withReaderTx, same defense-in-depth every other read gets.
 func (s *Store) GetChapter(ctx context.Context, novelID string, n, at int) (ChapterView, error) {
-	var rawURI, translatedURI, siteChapterNo *string
+	var rawURI, translatedURI, siteChapterNo, sourceURL *string
 	var status string
 	var warningCode *string
 	var warningCount int
 	var part int
 	err := s.progressDB.QueryRow(ctx,
-		`SELECT raw_uri, translated_uri, CASE WHEN translation_ready THEN 'done' ELSE status END, source_meta->>'site_chapter_no',
+		`SELECT raw_uri, translated_uri, CASE WHEN translation_ready THEN 'done' ELSE status END, source_meta->>'site_chapter_no', source_meta->>'source_url',
 		        COALESCE((source_meta->>'part')::int, 1),translation_warning_code,translation_warning_count
 		 FROM chapter WHERE novel_id = $1 AND chapter_index = $2`,
 		novelID, n,
-	).Scan(&rawURI, &translatedURI, &status, &siteChapterNo, &part, &warningCode, &warningCount)
+	).Scan(&rawURI, &translatedURI, &status, &siteChapterNo, &sourceURL, &part, &warningCode, &warningCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ChapterView{}, ErrNotFound
 	}
@@ -846,6 +894,9 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n, at int) (Chap
 	}
 	if siteChapterNo != nil {
 		view.SiteChapterNo = *siteChapterNo
+	}
+	if sourceURL != nil {
+		view.SourceURL = *sourceURL
 	}
 	if err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
 		var err error
@@ -890,6 +941,9 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n, at int) (Chap
 		if err := rows.Err(); err != nil {
 			return err
 		}
+		if err := attachChapterRenderings(ctx, tx, novelID, n, at, text, view.Spans); err != nil {
+			return err
+		}
 		return newFactsInTx(ctx, tx, novelID, n, &view)
 	}); err != nil {
 		return ChapterView{}, err
@@ -904,6 +958,142 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n, at int) (Chap
 	}
 
 	return view, nil
+}
+
+// attachChapterRenderings makes terminology choices available even before RESOLVE has
+// linked a display-only name to an entity. It joins reviews to their source occurrence in
+// this exact chapter, then matches only the offered/locked target spellings to the literal
+// display span. This is terminology association, never identity resolution: entity_id
+// remains NULL and state.resolutions is still the only identity authority (§0.3, §12).
+func attachChapterRenderings(
+	ctx context.Context, tx pgx.Tx, novelID string, chapter, at int, text string, spans []SpanView,
+) error {
+	// The durable alignment is authoritative for terminology association. It is keyed by
+	// the exact display offsets, so no reverse translation or entity-name matching occurs.
+	aligned, err := tx.Query(ctx,
+		`SELECT t.char_start,t.char_end,t.source_term,g.target_term,
+		        CASE WHEN g.source_term IS NULL THEN 'unlocked' ELSE 'locked' END,
+		        COALESCE(r.term_role,CASE WHEN g.constraint_class='character_name'
+		          THEN 'chinese_person' ELSE 'semantic_term' END),
+		        COALESCE(r.candidates,'[]'::jsonb)
+		 FROM term_rendering_occurrence t
+		 LEFT JOIN glossary g ON g.novel_id=t.novel_id AND g.source_term=t.source_term
+		   AND g.locked_at_chapter <= $3 AND NOT g.deleted
+		 LEFT JOIN character_name_review r ON r.novel_id=t.novel_id
+		   AND r.source_term=t.source_term AND r.first_seen_chapter <= $3
+		 WHERE t.novel_id=$1 AND t.chapter_index=$2`, novelID, chapter, at)
+	if err != nil {
+		return err
+	}
+	byOffset := map[[2]int]*TermRenderingView{}
+	for aligned.Next() {
+		var start, end int
+		var rendering TermRenderingView
+		var candidates []byte
+		if err := aligned.Scan(&start, &end, &rendering.SourceTerm, &rendering.TargetTerm,
+			&rendering.Status, &rendering.TermRole, &candidates); err != nil {
+			aligned.Close()
+			return err
+		}
+		if err := json.Unmarshal(candidates, &rendering.Candidates); err != nil {
+			aligned.Close()
+			return err
+		}
+		copy := rendering
+		byOffset[[2]int{start, end}] = &copy
+	}
+	aligned.Close()
+	if err := aligned.Err(); err != nil {
+		return err
+	}
+	for index := range spans {
+		if rendering := byOffset[[2]int{spans[index].CharStart, spans[index].CharEnd}]; rendering != nil {
+			copy := *rendering
+			spans[index].Rendering = &copy
+		}
+	}
+
+	// Compatibility fallback for chapters not yet backfilled: reviewed spellings can be
+	// associated without guessing by exact/normalized offered target spelling.
+	rows, err := tx.Query(ctx,
+		`SELECT DISTINCT r.source_term,g.target_term,
+		        CASE WHEN g.source_term IS NULL THEN 'pending' ELSE 'locked' END,
+		        r.term_role,r.candidates
+		 FROM character_name_review r
+		 JOIN character_name_occurrence o ON o.novel_id=r.novel_id
+		   AND o.source_term=r.source_term AND o.chapter_index=$2
+		 LEFT JOIN glossary g ON g.novel_id=r.novel_id AND g.source_term=r.source_term
+		   AND g.locked_at_chapter <= $3 AND NOT g.deleted
+		 WHERE r.novel_id=$1 AND r.first_seen_chapter <= $3
+		   AND (r.status='pending' OR g.source_term IS NOT NULL)
+		 ORDER BY r.source_term`, novelID, chapter, at)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	bySpelling := map[string]*TermRenderingView{}
+	for rows.Next() {
+		var rendering TermRenderingView
+		var candidates []byte
+		if err := rows.Scan(&rendering.SourceTerm, &rendering.TargetTerm, &rendering.Status,
+			&rendering.TermRole, &candidates); err != nil {
+			return err
+		}
+		if err := json.Unmarshal(candidates, &rendering.Candidates); err != nil {
+			return err
+		}
+		spellings := []string{}
+		if rendering.TargetTerm != nil {
+			spellings = append(spellings, *rendering.TargetTerm)
+		}
+		for _, candidate := range rendering.Candidates {
+			spellings = append(spellings, candidate.TargetTerm)
+		}
+		copy := rendering
+		for _, spelling := range spellings {
+			key := normalizedRendering(spelling)
+			if key == "" {
+				continue
+			}
+			if previous, exists := bySpelling[key]; exists && previous != nil && previous.SourceTerm != rendering.SourceTerm {
+				// An ambiguous spelling is not enough evidence to choose between two source
+				// terms. Leave it unattached rather than offering the wrong correction.
+				bySpelling[key] = nil
+			} else if !exists {
+				bySpelling[key] = &copy
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	chars := []rune(text)
+	for index := range spans {
+		span := &spans[index]
+		if span.Rendering != nil {
+			continue
+		}
+		if span.CharStart < 0 || span.CharEnd > len(chars) || span.CharStart >= span.CharEnd {
+			continue
+		}
+		if rendering := bySpelling[normalizedRendering(string(chars[span.CharStart:span.CharEnd]))]; rendering != nil {
+			copy := *rendering
+			span.Rendering = &copy
+		}
+	}
+	return nil
+}
+
+func normalizedRendering(value string) string {
+	var normalized strings.Builder
+	for _, char := range strings.ToLower(value) {
+		if unicode.IsLetter(char) || unicode.IsNumber(char) {
+			normalized.WriteRune(char)
+		}
+	}
+	return normalized.String()
 }
 
 // CreateScrapeJob inserts the job row and pushes its id onto the Redis queue the scraper

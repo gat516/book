@@ -44,6 +44,7 @@ func main() {
 	mux.HandleFunc("PATCH /novels/{id}/glossary/{term}", api.correctGlossaryTerm)
 	mux.HandleFunc("DELETE /novels/{id}/glossary/{term}", api.deleteGlossaryTerm)
 	mux.HandleFunc("POST /novels/{id}/glossary/bootstrap", api.bootstrapGlossary)
+	mux.HandleFunc("POST /novels/{id}/glossary/confirm", api.confirmGlossaryTerm)
 	mux.HandleFunc("POST /novels/{id}/name-reviews/{term}/approve", api.approveCharacterName)
 	mux.HandleFunc("POST /novels/{id}/translate-ahead", api.translateAhead)
 	mux.HandleFunc("PATCH /novels/{id}/settings", api.patchNovelSettings)

@@ -32,6 +32,7 @@ type IngestClient interface {
 	DeleteProviderCredential(ctx context.Context, provider string) (json.RawMessage, int, error)
 	PutProviderConfig(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	BootstrapGlossary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
+	ConfirmGlossaryTerm(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	ApproveCharacterName(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
 	TranslateAhead(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	UpdateNovelSettings(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
@@ -132,6 +133,10 @@ func (c *ingestHTTPClient) DeleteProviderCredential(ctx context.Context, provide
 
 func (c *ingestHTTPClient) BootstrapGlossary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
 	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/glossary/bootstrap", body, false)
+}
+
+func (c *ingestHTTPClient) ConfirmGlossaryTerm(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/glossary/confirm", body, false)
 }
 
 func (c *ingestHTTPClient) ApproveCharacterName(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error) {

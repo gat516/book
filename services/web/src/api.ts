@@ -174,6 +174,16 @@ export function bootstrapGlossary(
   });
 }
 
+export function confirmGlossaryTerm(
+  novelId: string,
+  body: { source_term: string; target_term: string; at_chapter: number; term_role: import("./types").TermRole },
+): Promise<CorrectGlossaryTermResponse> {
+  return request(`/novels/${novelId}/glossary/confirm`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export function getCharacterNameReviews(novelId: string, chapter?: number): Promise<CharacterNameReviewsResponse> {
   const query = new URLSearchParams({ status: "pending" });
   if (chapter !== undefined) query.set("chapter", String(chapter));

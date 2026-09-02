@@ -77,6 +77,49 @@ body {
   vertical-align: top;
 }
 
+.hover-card-rendering {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0.65rem 0;
+  font-weight: 600;
+}
+
+.hover-card-rendering small {
+  color: #666;
+  font-weight: 400;
+}
+
+.hover-card-rendering select {
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 0.35rem;
+}
+
+.hover-card-rendering form,
+.hover-card-rendering label {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.hover-card-rendering input {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  padding: 0.35rem;
+}
+
+.hover-card-rendering-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.hover-card-notice {
+  color: #315d35;
+  font-size: 0.82rem;
+  margin: 0.4rem 0;
+}
+
 .progress-controls {
   display: flex;
   align-items: center;
@@ -565,6 +608,14 @@ body {
 .entity-inspector input:not([type="checkbox"]) { box-sizing: border-box; max-width: 100%; }
 .mention-anchor { position: relative; }
 .mention-unlinked { text-decoration: underline dotted; text-underline-offset: 3px; }
+/* A confirmed spelling remains an accessible button so the reader can revise it, but
+   it should read like ordinary prose until they intentionally point at it. */
+.mention-confirmed,
+.mention-confirmed:hover {
+  background: transparent;
+  text-decoration: none;
+  padding-inline: 0;
+}
 
 /* A mention that introduced a fact in this chapter. The underline marks the anchor itself
    so it still reads as one continuous highlight; the chip carries what was learned. */

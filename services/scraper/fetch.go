@@ -56,6 +56,9 @@ func walk(
 		if err != nil {
 			return "", fmt.Errorf("fetch %s: %w", pageURL, err)
 		}
+		// Adapters extract content and next links; walk owns the exact URL that produced
+		// this page, so provenance is attached here before ingestion.
+		page.SourceURL = pageURL
 
 		hash := contentHash(page.Text)
 		if len(page.Text) < contentLenFloor && seenHashes[hash] {

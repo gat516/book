@@ -197,6 +197,28 @@ func (s *Store) changeGlossaryTerm(ctx context.Context, novelID, sourceTerm, new
 // not a silent overwrite (correcting an existing term is CorrectGlossaryTerm's job, not
 // this one's).
 func (s *Store) BootstrapGlossaryTerm(ctx context.Context, novelID, sourceTerm, targetTerm string) (int, error) {
+	return s.insertGlossaryTerm(ctx, novelID, sourceTerm, targetTerm, 0, "semantic_term")
+}
+
+// ConfirmGlossaryTerm publishes a reader-confirmed source-to-display spelling at the
+// reader's current knowledge boundary. Unlike bootstrap, it must not backdate the term to
+// chapter 0: learning that a named thing exists can itself be a spoiler (§0.2/§0.3).
+func (s *Store) ConfirmGlossaryTerm(ctx context.Context, novelID, sourceTerm, targetTerm string, atChapter int, termRole string) (int, error) {
+	targetTerm = strings.TrimSpace(targetTerm)
+	if targetTerm == "" || len([]rune(targetTerm)) > 160 {
+		return 0, errors.New("target_term is required and must be at most 160 characters")
+	}
+	constraintClass, _, ok := renderingForRole(termRole)
+	if !ok {
+		return 0, errors.New("term_role must be chinese_person, foreign_person, personal_title, or semantic_term")
+	}
+	if atChapter < 0 {
+		return 0, errors.New("at_chapter must be nonnegative")
+	}
+	return s.insertGlossaryTerm(ctx, novelID, sourceTerm, targetTerm, atChapter, constraintClass)
+}
+
+func (s *Store) insertGlossaryTerm(ctx context.Context, novelID, sourceTerm, targetTerm string, atChapter int, constraintClass string) (int, error) {
 	// Shape-check before anything permanent happens, exactly where _lock_glossary does it.
 	// A human seeding a term is still seeding one that every later chapter is rewritten
 	// against, so "a person typed it" is not on its own a reason to skip the guard.
@@ -227,14 +249,15 @@ func (s *Store) BootstrapGlossaryTerm(ctx context.Context, novelID, sourceTerm, 
 
 	var inserted bool
 	err = tx.QueryRow(ctx,
-		`INSERT INTO glossary (novel_id, source_term, target_term, version, locked_at_chapter)
-		 VALUES ($1, $2, $3, $4, 0)
+		`INSERT INTO glossary (novel_id, source_term, target_term, version, locked_at_chapter, constraint_class)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 ON CONFLICT (novel_id, source_term) DO UPDATE
 		 SET target_term = EXCLUDED.target_term, version = EXCLUDED.version,
-		     deleted = false, entity_id = NULL, locked_at_chapter = 0
+		     deleted = false, entity_id = NULL, locked_at_chapter = EXCLUDED.locked_at_chapter,
+		     constraint_class = EXCLUDED.constraint_class
 		 WHERE glossary.deleted
 		 RETURNING true`,
-		novelID, sourceTerm, targetTerm, newVersion,
+		novelID, sourceTerm, targetTerm, newVersion, atChapter, constraintClass,
 	).Scan(&inserted)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -278,7 +301,7 @@ func (s *Store) BootstrapGlossaryTerm(ctx context.Context, novelID, sourceTerm, 
 	// old_target is "" in the hash payload (never a real prior value — this is an
 	// original insert, exactly like _lock_glossary's own original-insert path) but NULL
 	// in the changelog row itself; that split matches _lock_glossary byte-for-byte.
-	payload := pythonJSONArray(novelID, seq, sourceTerm, "", targetTerm, 0, prevHash)
+	payload := pythonJSONArray(novelID, seq, sourceTerm, "", targetTerm, atChapter, prevHash)
 	sum := sha256.Sum256([]byte(prevHash + payload))
 	rowHash := hex.EncodeToString(sum[:])
 
@@ -290,7 +313,7 @@ func (s *Store) BootstrapGlossaryTerm(ctx context.Context, novelID, sourceTerm, 
 		`INSERT INTO glossary_changelog
 		   (novel_id, seq, source_term, old_target, new_target, changed_at_chapter, prev_hash, row_hash)
 		 VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)`,
-		novelID, seq, sourceTerm, targetTerm, 0, prevHashArg, rowHash,
+		novelID, seq, sourceTerm, targetTerm, atChapter, prevHashArg, rowHash,
 	); err != nil {
 		return 0, err
 	}

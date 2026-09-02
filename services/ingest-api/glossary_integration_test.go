@@ -195,6 +195,30 @@ func TestBootstrapGlossaryTermUsesNovelWideVersionCounterAndLeavesEntityNull(t *
 	}
 }
 
+func TestConfirmGlossaryTermKeepsReaderKnowledgeBoundaryAndRole(t *testing.T) {
+	store := integrationStore(t)
+	ctx := context.Background()
+	novelID := seedNovelWithGlossary(t, store, map[string]string{})
+
+	version, err := store.ConfirmGlossaryTerm(ctx, novelID, "契科夫", "Chekhov", 42, "foreign_person")
+	if err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if version != 1 {
+		t.Fatalf("version = %d, want 1", version)
+	}
+	var target, class string
+	var lockedAt, changedAt int
+	if err := store.db.QueryRow(ctx, `SELECT g.target_term,g.locked_at_chapter,g.constraint_class,c.changed_at_chapter
+		FROM glossary g JOIN glossary_changelog c USING(novel_id,source_term)
+		WHERE g.novel_id=$1 AND g.source_term='契科夫'`, novelID).Scan(&target, &lockedAt, &class, &changedAt); err != nil {
+		t.Fatal(err)
+	}
+	if target != "Chekhov" || lockedAt != 42 || changedAt != 42 || class != "character_name" {
+		t.Fatalf("confirmed term = target %q, locked %d, changed %d, class %q", target, lockedAt, changedAt, class)
+	}
+}
+
 func TestBootstrapGlossaryTermIsIdempotent(t *testing.T) {
 	store := integrationStore(t)
 	ctx := context.Background()
