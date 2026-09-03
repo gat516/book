@@ -25,6 +25,7 @@ import type {
   Progress,
   ScrapeJobView,
   StartScrapeRequest,
+  TimelineResponse,
 } from "./types";
 
 class ApiError extends Error {
@@ -256,6 +257,12 @@ export function prioritizeChapter(novelId: string, chapter: number): Promise<{ p
 
 export function getKnowledgeStatus(novelId: string, chapter: number): Promise<import('./types').KnowledgeStatus> {
   return request(`/novels/${novelId}/knowledge-status?chapter=${chapter}`);
+}
+export function getEventStatus(novelId: string, chapter: number): Promise<import('./types').KnowledgeStatus> {
+  return request(`/novels/${novelId}/event-status?chapter=${chapter}`);
+}
+export function getTimeline(novelId: string): Promise<TimelineResponse> {
+  return request(`/novels/${novelId}/timeline`);
 }
 export function getRelationships(novelId: string, entityId: string, at: number): Promise<{relationships: import('./types').Relationship[]}> {
   return request(`/novels/${novelId}/relationships/${entityId}?at=${at}`);

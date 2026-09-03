@@ -46,11 +46,25 @@ type TermRenderingView struct {
 }
 
 type EventView struct {
-	Evidence     json.RawMessage `json:"evidence"`
-	ID           int64           `json:"id"`
-	ChapterIndex int             `json:"chapter_index"`
-	Summary      string          `json:"summary"`
-	Entities     []EntitySummary `json:"entities"`
+	Evidence     json.RawMessage     `json:"evidence"`
+	ID           string              `json:"id"`
+	ChapterIndex int                 `json:"chapter_index"`
+	EventType    string              `json:"event_type"`
+	Action       string              `json:"action"`
+	Status       string              `json:"status"`
+	Summary      string              `json:"summary"`
+	Result       *string             `json:"result"`
+	Arguments    []EventArgumentView `json:"arguments"`
+	// Entities is retained as a compact compatibility/indexing view. Argument surfaces
+	// remain useful even when RESOLVE could not safely establish an identity (§0.3).
+	Entities []EntitySummary `json:"entities"`
+}
+
+type EventArgumentView struct {
+	Role     string         `json:"role"`
+	Surface  string         `json:"surface"`
+	EntityID *string        `json:"entity_id"`
+	Entity   *EntitySummary `json:"entity,omitempty"`
 }
 
 type RelationshipView struct {
@@ -79,10 +93,11 @@ type WikiResponse struct {
 }
 
 type TimelineResponse struct {
-	Knowledge KnowledgeStatus `json:"knowledge"`
-	NovelID   string          `json:"novel_id"`
-	At        int             `json:"at"`
-	Events    []EventView     `json:"events"`
+	Knowledge      KnowledgeStatus `json:"knowledge"`
+	EventKnowledge KnowledgeStatus `json:"event_knowledge"`
+	NovelID        string          `json:"novel_id"`
+	At             int             `json:"at"`
+	Events         []EventView     `json:"events"`
 }
 
 type RelationshipsResponse struct {
@@ -297,9 +312,11 @@ type ChapterFactView struct {
 
 type ChapterView struct {
 	Knowledge          KnowledgeStatus
+	EventKnowledge     KnowledgeStatus
 	Text               string
 	Spans              []SpanView
 	NewFacts           []ChapterFactView
+	Events             []EventView
 	HasNext            bool
 	SiteChapterNo      string // "" when this chapter has none (a plain paste, not a scrape)
 	SourceURL          string // persisted provenance; "" for legacy/plain pasted chapters
@@ -308,9 +325,10 @@ type ChapterView struct {
 }
 
 type ChapterResponse struct {
-	Knowledge    KnowledgeStatus `json:"knowledge"`
-	NovelID      string          `json:"novel_id"`
-	ChapterIndex int             `json:"chapter_index"`
+	Knowledge      KnowledgeStatus `json:"knowledge"`
+	EventKnowledge KnowledgeStatus `json:"event_knowledge"`
+	NovelID        string          `json:"novel_id"`
+	ChapterIndex   int             `json:"chapter_index"`
 	// SiteChapterNo is the source site's own printed chapter label (e.g. "第4610章"),
 	// distinct from ChapterIndex — our own sequential counter for THIS ingestion batch,
 	// not the novel's overall chapter number (instructions.md §3.1: chapter_index is the
@@ -335,6 +353,7 @@ type ChapterResponse struct {
 	// mention that introduced them. Facts learned earlier stay where they always were —
 	// on the entity card, fetched on demand.
 	NewFacts           []ChapterFactView   `json:"new_facts"`
+	Events             []EventView         `json:"events"`
 	HasNext            bool                `json:"has_next"`
 	TranslationWarning *TranslationWarning `json:"translation_warning"`
 }

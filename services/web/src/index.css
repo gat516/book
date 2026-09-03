@@ -36,6 +36,40 @@ body {
   font-style: italic;
 }
 
+.chapter-events {
+  margin: 1rem 0 1.35rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #e3dfd3;
+  border-radius: 8px;
+  background: #faf8f2;
+  white-space: normal;
+  font-size: 0.92rem;
+}
+
+.chapter-events h2,
+.timeline-view h2 { margin: 0; font-size: 1.05rem; }
+.event-list { list-style: none; margin: 0.65rem 0 0; padding: 0; display: grid; gap: 0.7rem; }
+.event-card { padding: 0.7rem 0; border-top: 1px solid #e6e1d7; }
+.event-card:first-child { border-top: 0; }
+.event-card p { margin: 0.25rem 0; }
+.event-card-heading { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.2rem; color: #666; font-size: 0.78rem; text-transform: capitalize; }
+.event-status { border-radius: 999px; padding: 0 0.45rem; background: #e7edf4; }
+.event-status-attempted { background: #fff1c9; }
+.event-status-prevented { background: #f4dddd; }
+.event-type { color: #777; }
+.event-arguments { display: flex; flex-wrap: wrap; gap: 0.35rem 0.7rem; margin: 0.45rem 0; }
+.event-arguments div { display: flex; gap: 0.25rem; }
+.event-arguments dt { color: #777; text-transform: capitalize; }
+.event-arguments dt::after { content: ":"; }
+.event-arguments dd { margin: 0; }
+.event-result span { font-weight: 600; }
+.event-evidence { color: #666; font-size: 0.85rem; }
+.event-evidence q { display: block; margin-top: 0.25rem; }
+.event-empty { margin: 0.6rem 0 0; color: #666; }
+.timeline-view { margin: 1rem 0; }
+.timeline-heading { display: flex; justify-content: space-between; align-items: start; gap: 1rem; }
+.timeline-heading p { margin: 0.15rem 0; color: #666; }
+
 .mention {
   position: relative;
   background: #fff3b0;

@@ -141,22 +141,28 @@ async def test_focused_mode_and_pause_preserve_queue_and_claims(scheduled):
 
 
 async def test_queue_controls_also_gate_idle_graph_work(scheduled, monkeypatch):
-    from pipeline import graph_rebuild
+    from pipeline import event_rebuild, graph_rebuild
     client, keys = scheduled
     worker = Worker.__new__(Worker)
     worker.redis, worker.cfg = client, make_config()
     drain = AsyncMock()
+    drain_events = AsyncMock()
     monkeypatch.setattr(graph_rebuild, "drain_active", drain)
+    monkeypatch.setattr(event_rebuild, "drain_active", drain_events)
     for mode in ("paused", "focused"):
         await client.hset(keys[5], "mode", mode)
         await worker._drain_background()
         drain.assert_not_awaited()
+        drain_events.assert_not_awaited()
     await client.hset(keys[5], "focus_novel_id", "b")
     await worker._drain_background()
+    drain_events.assert_awaited_once_with(worker.cfg, novel_id="b")
     drain.assert_awaited_once_with(worker.cfg, novel_id="b", preferred_novel="b")
     drain.reset_mock()
+    drain_events.reset_mock()
     await client.hset(keys[5], "mode", "all")
     await worker._drain_background()
+    drain_events.assert_awaited_once_with(worker.cfg, novel_id=None)
     drain.assert_awaited_once_with(worker.cfg, novel_id=None, preferred_novel="b")
 
 

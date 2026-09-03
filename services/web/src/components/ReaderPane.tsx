@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, getChapter, getKnowledgeStatus, putProgress } from "../api";
+import { ApiError, getChapter, getEventStatus, getKnowledgeStatus, putProgress } from "../api";
 import type { ChapterFactView, ChapterResponse, EntityView } from "../types";
 import { HoverCard } from "./HoverCard";
 import { EntityInspector } from "./EntityInspector";
 import { usePolling } from "../usePolling";
 import { applyRenderingChoices, lastMentionPerEntity, segment } from "../readerSegments";
+import { EventList } from "./EventList";
 
 interface Props {
   novelId: string;
@@ -93,9 +94,10 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
     if (!chapter || polling.current) return;
     const current = generation.current;
     polling.current = true;
-    getKnowledgeStatus(novelId, chapterIndex).then(async (status) => {
+    Promise.all([getKnowledgeStatus(novelId, chapterIndex), getEventStatus(novelId, chapterIndex)]).then(async ([status, eventStatus]) => {
       if (current !== generation.current) return;
-      if (JSON.stringify(status) === JSON.stringify(chapter.knowledge) && !needsBindingRefresh.current) return;
+      if (JSON.stringify(status) === JSON.stringify(chapter.knowledge) &&
+          JSON.stringify(eventStatus) === JSON.stringify(chapter.event_knowledge) && !needsBindingRefresh.current) return;
       needsBindingRefresh.current = true;
       // Close old cards immediately; late responses cannot repopulate the new cache.
       cache.clear(); setSelected(null); setHovered(null);
@@ -149,6 +151,10 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
       {chapter.translation_warning?.code === "locked_terms_missing" && <p role="status" className="reader-translation-warning">
         This chapter is readable, but {chapter.translation_warning.term_count} locked name{chapter.translation_warning.term_count === 1 ? " was" : "s were"} not preserved exactly.
       </p>}
+      <section className="chapter-events" aria-labelledby="chapter-events-heading">
+        <h2 id="chapter-events-heading">What happened</h2>
+        <EventList events={chapter.events ?? []} knowledge={chapter.event_knowledge ?? { revision_id: "", version: 0, trusted: false, status: "unavailable" }} />
+      </section>
       {clickableEntities && chapter.spans.length === 0 && <p className="reader-entity-hint">
         No named mentions are available for this chapter yet. Cards do not require facts or a glossary entry.
       </p>}

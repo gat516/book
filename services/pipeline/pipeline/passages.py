@@ -11,10 +11,10 @@ import re
 from pipeline.evidence import Names, digest, passage
 
 
-def source_passages(source: str) -> list[dict]:
+def source_passages(source: str, *, max_chars: int = 400, overlap: int = 80) -> list[dict]:
     """Stable chapter-content-scoped IDs, retaining whitespace and punctuation.
 
-    Paragraphs are capped at 400 code points. Long paragraphs overlap by 80, so a
+    Paragraphs are capped at ``max_chars`` code points. Long paragraphs overlap, so a
     maximum-length named surface cannot disappear at a hard split. No text is rewritten.
     """
     result=[]
@@ -24,19 +24,49 @@ def source_passages(source: str) -> list[dict]:
         if not paragraph.group().strip():
             continue
         while start < end:
-            stop=min(start+400,end)
+            stop=min(start+max_chars,end)
             result.append(dict(id=f'p{start:x}_{source_hash[:12]}',source_hash=source_hash,
                                char_start=start,char_end=stop,text=source[start:stop]))
             if stop==end:
                 break
-            start=stop-80
+            start=stop-overlap
+    return result
+
+
+def source_windows(source: str, *, max_chars: int = 1600, overlap: int = 200) -> list[dict]:
+    """Contiguous evidence windows that retain antecedents across paragraph breaks.
+
+    Event roles often use a name in one paragraph and a pronoun in the next. The generic
+    claim extractor keeps paragraph-sized evidence, while chapter events opt into these
+    larger exact slices so a cited record can prove both identity and action (§0.2).
+    """
+    if max_chars <= overlap or overlap < 0:
+        raise ValueError("passage window must be larger than its overlap")
+    result = []
+    source_hash = digest(source)
+    start = 0
+    while start < len(source):
+        stop = min(start + max_chars, len(source))
+        if stop < len(source):
+            boundary = source.rfind("\n", start + (max_chars * 3 // 4), stop)
+            if boundary > start:
+                stop = boundary + 1
+        text = source[start:stop]
+        if text.strip():
+            result.append(dict(id=f'w{start:x}_{source_hash[:12]}', source_hash=source_hash,
+                               char_start=start, char_end=stop, text=text))
+        if stop == len(source):
+            break
+        start = max(start + 1, stop - overlap)
     return result
 
 
 class PassageContract:
-    def __init__(self, source: str, passage_ids: set[str] | None = None):
+    def __init__(self, source: str, passage_ids: set[str] | None = None,
+                 *, max_chars: int = 400, overlap: int = 80, windows: bool = False):
         self.source=source
-        all_passages=source_passages(source)
+        factory = source_windows if windows else source_passages
+        all_passages=factory(source, max_chars=max_chars, overlap=overlap)
         self.passages=[p for p in all_passages if passage_ids is None or p['id'] in passage_ids]
         # Validation must only accept references that were actually offered.
         self.by_id={p['id']:p for p in self.passages}
@@ -112,7 +142,9 @@ class PassageContract:
         if stage not in {'propose','align'}:
             return internal_schema.model_validate(body)
         result=deepcopy(body)
-        for key in (['decisions','claims'] if stage=='propose' else ['alignments']):
+        # Event extraction shares this evidence contract with graph proposals: the model
+        # selects an offered passage_id but never supplies a quote or offset (§0.2).
+        for key in (['decisions','claims','events'] if stage=='propose' else ['alignments']):
             for item in result.get(key,[]):
                 if 'quote' in item or 'evidence_start' in item or 'passage_id' not in item:
                     raise ValueError('model must cite offered passages, not generate evidence text or offsets')

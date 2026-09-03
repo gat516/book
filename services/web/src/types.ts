@@ -234,6 +234,7 @@ export interface SpanView {
 
 export interface ChapterResponse {
   knowledge: KnowledgeStatus;
+  event_knowledge: KnowledgeStatus;
   novel_id: string;
   chapter_index: number;
   // The reader's STORED PROGRESS (not chapter_index) — see HoverCard.tsx for why this
@@ -245,6 +246,7 @@ export interface ChapterResponse {
   // Facts whose source_chapter is exactly this chapter — what the reader learns HERE.
   // Everything learned earlier stays on the entity card, fetched on demand.
   new_facts: ChapterFactView[];
+  events: EventView[];
   has_next: boolean;
   translation_warning: TranslationWarning | null;
   // The source site's own printed chapter label (e.g. "第4610章"), when this chapter came
@@ -284,6 +286,34 @@ export interface EntitySummary {
   first_seen_chapter: number;
 }
 
+export interface EventArgumentView {
+  role: string;
+  surface: string;
+  entity_id: string | null;
+  entity?: EntitySummary;
+}
+
+export interface EventView {
+  id: string;
+  chapter_index: number;
+  event_type: string;
+  action: string;
+  status: "completed" | "attempted" | "prevented";
+  summary: string;
+  result: string | null;
+  arguments: EventArgumentView[];
+  entities: EntitySummary[];
+  evidence: Evidence;
+}
+
+export interface TimelineResponse {
+  knowledge: KnowledgeStatus;
+  event_knowledge: KnowledgeStatus;
+  novel_id: string;
+  at: number;
+  events: EventView[];
+}
+
 export interface EntityView extends EntitySummary {
   knowledge: KnowledgeStatus;
   aliases: string[];
@@ -306,8 +336,8 @@ export interface EntityResponse {
 }
 
 export interface RetrievedSource {
-  kind: "chunk" | "fact" | "edge";
-  id: number;
+  kind: "chunk" | "fact" | "edge" | "event";
+  id: number | string;
   chapter: number;
 }
 
@@ -316,6 +346,8 @@ export interface AskResponse {
   at: number;
   retrieved_sources: RetrievedSource[];
   served_by: { provider: string; model: string } | null;
+  knowledge?: KnowledgeStatus;
+  event_knowledge?: KnowledgeStatus;
 }
 
 export interface Progress {

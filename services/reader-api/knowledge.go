@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -32,6 +33,26 @@ func (s *Store) KnowledgeStatus(ctx context.Context, novel string, chapter, at i
 	return k, err
 }
 
+func eventKnowledgeInTx(ctx context.Context, tx pgx.Tx, chapter int) (KnowledgeStatus, error) {
+	var k KnowledgeStatus
+	err := tx.QueryRow(ctx, `SELECT revision_id::text,version,trusted,status FROM reader_event_status($1)`, chapter).
+		Scan(&k.RevisionID, &k.Version, &k.Trusted, &k.Status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return KnowledgeStatus{Status: "unavailable"}, nil
+	}
+	return k, err
+}
+
+func (s *Store) EventStatus(ctx context.Context, novel string, chapter, at int) (KnowledgeStatus, error) {
+	var k KnowledgeStatus
+	err := s.withReaderTx(ctx, novel, at, func(tx pgx.Tx) error {
+		var err error
+		k, err = eventKnowledgeInTx(ctx, tx, chapter)
+		return err
+	})
+	return k, err
+}
+
 func (a *API) getKnowledgeStatus(w http.ResponseWriter, r *http.Request) {
 	_, novel, at, ok := a.gateAt(w, r, nil)
 	if !ok {
@@ -49,6 +70,29 @@ func (a *API) getKnowledgeStatus(w http.ResponseWriter, r *http.Request) {
 	k, err := a.store.KnowledgeStatus(r.Context(), novel, chapter, at)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load knowledge status")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, k)
+}
+
+func (a *API) getEventStatus(w http.ResponseWriter, r *http.Request) {
+	_, novel, at, ok := a.gateAt(w, r, nil)
+	if !ok {
+		return
+	}
+	chapter, err := strconv.Atoi(r.URL.Query().Get("chapter"))
+	if err != nil || chapter < 0 {
+		writeError(w, http.StatusBadRequest, "invalid chapter")
+		return
+	}
+	if chapter > at {
+		writeError(w, http.StatusNotFound, "chapter not found")
+		return
+	}
+	k, err := a.store.EventStatus(r.Context(), novel, chapter, at)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load event status")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")

@@ -10,7 +10,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -36,6 +35,7 @@ type ReaderStore interface {
 	GetEntity(context.Context, string, string, int) (EntityView, error)
 	ListWiki(context.Context, string, int) ([]EntitySummary, error)
 	ListTimeline(context.Context, string, int) ([]EventView, error)
+	EventStatus(context.Context, string, int, int) (KnowledgeStatus, error)
 	ListRelationships(context.Context, string, string, int) ([]RelationshipView, error)
 	GetChapter(context.Context, string, int, int) (ChapterView, error)
 	KnowledgeStatus(context.Context, string, int, int) (KnowledgeStatus, error)
@@ -672,65 +672,81 @@ func (s *Store) ListGlossary(ctx context.Context, novelID string, at int) ([]Glo
 func (s *Store) ListTimeline(ctx context.Context, novelID string, at int) ([]EventView, error) {
 	events := []EventView{}
 	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx,
-			`SELECT id, chapter_index, summary, entity_ids, COALESCE((SELECT jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash) FROM graph_evidence v WHERE v.id=event.evidence_id),'null'::jsonb)
-			 FROM event
-			 WHERE novel_id = $1 AND chapter_index <= $2
-			 ORDER BY chapter_index, id`, novelID, at)
-		if err != nil {
-			return err
-		}
-		type eventRow struct {
-			event EventView
-			ids   []uuid.UUID
-		}
-		buffered := []eventRow{}
-		for rows.Next() {
-			row := eventRow{event: EventView{Entities: []EntitySummary{}}}
-			if err := rows.Scan(
-				&row.event.ID, &row.event.ChapterIndex, &row.event.Summary, &row.ids, &row.event.Evidence,
-			); err != nil {
-				rows.Close()
-				return err
-			}
-			buffered = append(buffered, row)
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return err
-		}
-		rows.Close()
-
-		for _, row := range buffered {
-			entityRows, err := tx.Query(ctx,
-				`SELECT e.id::text, e.canonical, e.kind, e.first_seen_chapter
-				 FROM unnest($1::uuid[]) WITH ORDINALITY AS ref(id, ordinal)
-				 JOIN entity e ON e.id = ref.id
-				 WHERE e.novel_id = $2 AND e.first_seen_chapter <= $3
-				 ORDER BY ref.ordinal`, row.ids, novelID, at)
-			if err != nil {
-				return err
-			}
-			for entityRows.Next() {
-				var entity EntitySummary
-				if err := entityRows.Scan(
-					&entity.ID, &entity.Canonical, &entity.Kind, &entity.FirstSeenChapter,
-				); err != nil {
-					entityRows.Close()
-					return err
-				}
-				row.event.Entities = append(row.event.Entities, entity)
-			}
-			if err := entityRows.Err(); err != nil {
-				entityRows.Close()
-				return err
-			}
-			entityRows.Close()
-			events = append(events, row.event)
-		}
-		return nil
+		var err error
+		events, err = listEventsInTx(ctx, tx, novelID, nil, at)
+		return err
 	})
 	return events, err
+}
+
+// listEventsInTx reads the independently activated event ledger. RLS applies both the
+// reader's knowledge-time cap and novel.active_event_revision (§0.1/§0.2). An argument's
+// literal surface is always returned; its optional entity link is visible only when the
+// linked entity is also authorized in the active graph revision.
+func listEventsInTx(ctx context.Context, tx pgx.Tx, novelID string, chapter *int, at int) ([]EventView, error) {
+	events := []EventView{}
+	rows, err := tx.Query(ctx,
+		`SELECT e.id::text,e.chapter_index,e.event_type,e.action,e.status,e.summary,e.result,
+		        jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,
+		          'source_hash',v.source_hash,'char_start',v.char_start,'char_end',v.char_end)
+		 FROM chapter_event e JOIN event_evidence v ON v.id=e.evidence_id
+		 WHERE e.novel_id=$1 AND e.chapter_index<=$3
+		   AND ($2::int IS NULL OR e.chapter_index=$2)
+		 ORDER BY e.chapter_index,e.id`, novelID, chapter, at)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		event := EventView{Arguments: []EventArgumentView{}, Entities: []EntitySummary{}}
+		if err := rows.Scan(&event.ID, &event.ChapterIndex, &event.EventType, &event.Action,
+			&event.Status, &event.Summary, &event.Result, &event.Evidence); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+
+	for index := range events {
+		argumentRows, err := tx.Query(ctx,
+			`SELECT a.role,a.surface,visible.id::text,visible.canonical,visible.kind,visible.first_seen_chapter
+			 FROM chapter_event_argument a
+			 LEFT JOIN entity visible ON visible.id=a.entity_id
+			   AND visible.revision_id=a.linked_graph_revision
+			 WHERE a.event_id=$1 ORDER BY a.ordinal`, events[index].ID)
+		if err != nil {
+			return nil, err
+		}
+		seenEntities := map[string]bool{}
+		for argumentRows.Next() {
+			var argument EventArgumentView
+			var canonical, kind *string
+			var firstSeen *int
+			if err := argumentRows.Scan(&argument.Role, &argument.Surface, &argument.EntityID,
+				&canonical, &kind, &firstSeen); err != nil {
+				argumentRows.Close()
+				return nil, err
+			}
+			if argument.EntityID != nil && canonical != nil && kind != nil && firstSeen != nil {
+				entity := EntitySummary{ID: *argument.EntityID, Canonical: *canonical, Kind: *kind, FirstSeenChapter: *firstSeen}
+				argument.Entity = &entity
+				if !seenEntities[entity.ID] {
+					events[index].Entities = append(events[index].Entities, entity)
+					seenEntities[entity.ID] = true
+				}
+			}
+			events[index].Arguments = append(events[index].Arguments, argument)
+		}
+		if err := argumentRows.Err(); err != nil {
+			argumentRows.Close()
+			return nil, err
+		}
+		argumentRows.Close()
+	}
+	return events, nil
 }
 
 func (s *Store) ListRelationships(
@@ -888,7 +904,7 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n, at int) (Chap
 		return ChapterView{}, err
 	}
 
-	view := ChapterView{Text: text, Spans: []SpanView{}, NewFacts: []ChapterFactView{}, Part: part}
+	view := ChapterView{Text: text, Spans: []SpanView{}, NewFacts: []ChapterFactView{}, Events: []EventView{}, Part: part}
 	if warningCode != nil {
 		view.TranslationWarning = &TranslationWarning{Code: *warningCode, TermCount: warningCount}
 	}
@@ -901,6 +917,14 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n, at int) (Chap
 	if err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
 		var err error
 		view.Knowledge, err = knowledgeInTx(ctx, tx, n)
+		if err != nil {
+			return err
+		}
+		view.EventKnowledge, err = eventKnowledgeInTx(ctx, tx, n)
+		if err != nil {
+			return err
+		}
+		view.Events, err = listEventsInTx(ctx, tx, novelID, &n, at)
 		if err != nil {
 			return err
 		}

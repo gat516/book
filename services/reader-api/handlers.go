@@ -38,6 +38,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/chapters", a.getChapters)
 	mux.HandleFunc("GET /novels/{id}/progress", a.getProgress)
 	mux.HandleFunc("GET /novels/{id}/knowledge-status", a.getKnowledgeStatus)
+	mux.HandleFunc("GET /novels/{id}/event-status", a.getEventStatus)
 	mux.HandleFunc("GET /novels/{id}/pipeline", a.getPipelineStatus)
 	mux.HandleFunc("POST /novels/{id}/translate-ahead", a.postTranslateAhead)
 	mux.HandleFunc("PATCH /novels/{id}/settings", a.patchNovelSettings)
@@ -357,6 +358,11 @@ func (a *API) getTimeline(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load knowledge status")
 		return
 	}
+	eventKnowledge, eventKnowledgeErr := a.store.EventStatus(r.Context(), novelID, at, at)
+	if eventKnowledgeErr != nil {
+		writeError(w, http.StatusInternalServerError, "could not load event status")
+		return
+	}
 	events, err := a.store.ListTimeline(r.Context(), novelID, at)
 	if err != nil {
 		log.Printf("list timeline: %v", err)
@@ -366,7 +372,12 @@ func (a *API) getTimeline(w http.ResponseWriter, r *http.Request) {
 	if !a.knowledgeUnchanged(w, r, novelID, at, knowledge) {
 		return
 	}
-	writeJSON(w, http.StatusOK, TimelineResponse{Knowledge: knowledge, NovelID: novelID, At: at, Events: events})
+	eventAfter, err := a.store.EventStatus(r.Context(), novelID, at, at)
+	if err != nil || eventAfter.RevisionID != eventKnowledge.RevisionID || eventAfter.Version != eventKnowledge.Version {
+		writeError(w, http.StatusConflict, "events changed; retry request")
+		return
+	}
+	writeJSON(w, http.StatusOK, TimelineResponse{Knowledge: knowledge, EventKnowledge: eventKnowledge, NovelID: novelID, At: at, Events: events})
 }
 
 func (a *API) getRelationships(w http.ResponseWriter, r *http.Request) {
@@ -435,12 +446,14 @@ func (a *API) getChapter(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusOK, ChapterResponse{
 			Knowledge:          chapter.Knowledge,
+			EventKnowledge:     chapter.EventKnowledge,
 			NovelID:            novelID,
 			ChapterIndex:       n,
 			At:                 progress,
 			Text:               chapter.Text,
 			Spans:              chapter.Spans,
 			NewFacts:           chapter.NewFacts,
+			Events:             chapter.Events,
 			HasNext:            chapter.HasNext,
 			SiteChapterNo:      chapter.SiteChapterNo,
 			SourceURL:          chapter.SourceURL,

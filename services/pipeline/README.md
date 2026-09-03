@@ -25,6 +25,44 @@ No provider fallback, retranslation, or automatic graph activation is permitted.
 
 See [runtime findings and verification](../../eval/knowledge/RUNTIME-INVESTIGATION.md).
 
+## Structured chapter events
+
+Event extraction has its own append-only revision and activation pointer. Preparing or
+reviewing events does not quarantine or switch the entity graph, and unresolved names
+remain as exact argument surfaces rather than causing the supported action to disappear
+(instructions.md §0.2–§0.4).
+
+The extractor reads the already-saved display translation, so evidence and unresolved
+argument surfaces match what the reader sees; it never retranslates or receives future
+text. The local path is deliberately bounded for this CPU-only host: one structured generation
+pass per ordinary chapter, followed by deterministic passage/schema checks. There is no
+second model verifier. A revision remains invisible until an operator reviews a sample
+covering at least five chapters and 30 expected plot events, then explicitly activates
+the exact frozen report. Translation work always has queue priority over event backfill.
+
+```bash
+cd services/pipeline
+../../scripts/with-env.sh .venv/bin/python -m pipeline.event_rebuild prepare \
+  --novel NOVEL_UUID --model qwen2.5:7b-instruct
+../../scripts/with-env.sh .venv/bin/python -m pipeline.event_rebuild resume \
+  --revision EVENT_REVISION --limit 1
+../../scripts/with-env.sh .venv/bin/python -m pipeline.event_rebuild preview \
+  --revision EVENT_REVISION --output event-report.json
+../../scripts/with-env.sh .venv/bin/python -m pipeline.event_rebuild review \
+  --revision EVENT_REVISION --file event-review.json
+../../scripts/with-env.sh .venv/bin/python -m pipeline.event_rebuild activate \
+  --revision EVENT_REVISION --review-hash REVIEW_HASH
+```
+
+`event-review.json` names a reviewer, sets `approved: true`, copies the preview's
+`review_hash`, assesses every published event with explicit `correct`,
+`arguments_correct`, and `status_correct` booleans, and lists the human-expected events
+with `chapter`, literal `arguments` (`role`/`surface` pairs), and optional
+`matched_event_id`. Activation requires ≥95% precision,
+≥85% expected-event recall and argument quality, ≥95% completion-status accuracy, valid
+evidence, and zero critical false completions. `rollback` accepts only an archived event
+revision and never changes `active_graph_revision`.
+
 ## Exact source passage references
 
 `evidence-v4-bounded-candidates` offers bounded, unchanged source passages with stable IDs.

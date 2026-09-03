@@ -10,6 +10,7 @@ import { NovelPicker } from "./components/NovelPicker";
 import { ProgressControls } from "./components/ProgressControls";
 import { ReaderPane } from "./components/ReaderPane";
 import { TranslationNotice } from "./components/TranslationNotice";
+import { TimelineView } from "./components/TimelineView";
 import { ProviderConfigPanel } from "./components/ProviderConfigPanel";
 import { SettingsView } from "./components/SettingsView";
 import { QueueControls } from "./components/QueueControls";
@@ -62,6 +63,7 @@ export default function App() {
   // ChapterPending for it holds them here and polls until it's readable.
   const [pending, setPending] = useState<PendingChapter | null>(null);
   const [showGlossary, setShowGlossary] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showChapters, setShowChapters] = useState(true);
   const [clickableEntities, setClickableEntities] = useState(savedClickableEntities);
@@ -110,6 +112,7 @@ export default function App() {
     setPending(null);
     setLookingForMore(false);
     setShowGlossary(false);
+    setShowTimeline(false);
     setShowChapters(true);
   }
 
@@ -122,6 +125,7 @@ export default function App() {
     setPending(null);
     setLookingForMore(false);
     setShowGlossary(false);
+    setShowTimeline(false);
     setShowChapters(true);
   }
 
@@ -150,6 +154,7 @@ export default function App() {
     setPending(null);
     setShowChapters(false);
     setShowGlossary(false);
+    setShowTimeline(false);
   }
 
   function chapterAdded(index: number) {
@@ -175,6 +180,7 @@ export default function App() {
       setChapterIndex(index);
       setShowChapters(false);
       setShowGlossary(false);
+      setShowTimeline(false);
       return;
     }
     await putProgress(novelId!, index);
@@ -275,15 +281,19 @@ export default function App() {
         ← All novels
       </button>
 
-      <button className="app-toggle-glossary" onClick={() => setShowGlossary((v) => !v)}>
+      <button className="app-toggle-glossary" onClick={() => { setShowGlossary((v) => !v); setShowTimeline(false); }}>
         {showGlossary ? "← Close glossary" : "Glossary"}
+      </button>
+      <button className="app-toggle-glossary" onClick={() => { setShowTimeline((v) => !v); setShowGlossary(false); }}>
+        {showTimeline ? "← Close timeline" : "Timeline"}
       </button>
       <button className="app-back" onClick={() => setShowSettings(true)}>
         Settings
       </button>
       <ProviderConfigPanel key={`provider-${novelId}`} novelId={novelId} />
       {showGlossary && <GlossaryView key={novelId} novelId={novelId} at={chapter?.at} />}
-      <div hidden={showGlossary}>
+      {showTimeline && <TimelineView key={`timeline-${novelId}`} novelId={novelId} onClose={() => setShowTimeline(false)} />}
+      <div hidden={showGlossary || showTimeline}>
         {navigationError && <p role="alert" className="chapter-list-error">{navigationError}</p>}
         {addingChapter ? (
           <AddChapterForm

@@ -271,11 +271,16 @@ class Worker:
                                       raw, claimed_at, disposition, enrichment_raw)
 
     async def _drain_background(self) -> None:
+        from pipeline.event_rebuild import drain_active as drain_events
         from pipeline.graph_rebuild import drain_active
         control = await self.redis.hgetall(queue.KEYS[5])
         mode, focus = control.get("mode", "all"), control.get("focus_novel_id") or None
         if mode == "paused" or (mode == "focused" and focus is None):
             return
+        # Chapter actions are independently reviewable and substantially cheaper than
+        # full identity repair.  Both remain below reader-critical translation work and
+        # share the same process-wide Ollama reservation (§0.1, §6.3).
+        await drain_events(self.cfg, novel_id=focus if mode == "focused" else None)
         await drain_active(self.cfg, novel_id=focus if mode == "focused" else None,
                            preferred_novel=focus)
 
@@ -505,6 +510,11 @@ class Worker:
                         readable = True
                         log.info("chapter %s/%s translation ready", msg.novel_id, msg.chapter_index)
                         await self._clear_preview(msg.novel_id, msg.chapter_index)
+                        # An active event revision owns its own low-priority queue.  Adding
+                        # this readable source to its immutable snapshot does not delay or
+                        # roll back the translation that was just published (§0.2).
+                        from pipeline.event_rebuild import enqueue_completed as enqueue_events
+                        await enqueue_events(self.db, self.cfg, msg.novel_id)
                         if not msg.enrichment:
                             # Do not spend the reader queue's claim on optional graph work.
                             # RELEASE atomically swaps this pointer for enrichment=True,

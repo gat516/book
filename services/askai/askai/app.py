@@ -35,6 +35,7 @@ class AskResponse(BaseModel):
     retrieved_sources: list[dict]
     served_by: dict[str, str] | None
     knowledge: dict = Field(default_factory=dict)
+    event_knowledge: dict = Field(default_factory=dict)
 
 
 class Service:
@@ -120,11 +121,13 @@ class Service:
                 await conn.execute("SELECT set_config('app.current_chapter', %s, true)", (str(request.at),))
                 k = await (await conn.execute("SELECT revision_id::text,version,trusted,status FROM reader_knowledge_status(%s)",(request.at,))).fetchone()
                 knowledge = dict(zip(["revision_id","version","trusted","status"],k)) if k else {}
+                ek = await (await conn.execute("SELECT revision_id::text,version,trusted,status FROM reader_event_status(%s)",(request.at,))).fetchone()
+                event_knowledge = dict(zip(["revision_id","version","trusted","status"],ek)) if ek else {"status": "unavailable"}
                 provider = gateway_provider or await self._provider_for_novel(conn, request.novel_id)
-                sources = await retrieve(conn, request.novel_id, request.at, vectors[0], max_chunks=self.config.max_chunks, max_entities=self.config.max_entities, max_facts=self.config.max_facts, max_edges=self.config.max_edges)
+                sources = await retrieve(conn, request.novel_id, request.at, vectors[0], question=request.question, max_chunks=self.config.max_chunks, max_entities=self.config.max_entities, max_facts=self.config.max_facts, max_edges=self.config.max_edges, max_events=self.config.max_events)
         context, used = build_context(sources, self.config.max_context_chars)
         if not used:
-            return AskResponse(answer=INSUFFICIENT, at=request.at, retrieved_sources=[], served_by=None, knowledge=knowledge)
+            return AskResponse(answer=INSUFFICIENT, at=request.at, retrieved_sources=[], served_by=None, knowledge=knowledge, event_knowledge=event_knowledge)
         completion = await provider.complete(f"Question:\n{request.question}\n\nRetrieved context:\n{context}", system=SYSTEM, cls=Class.INTERACTIVE, model=self.config.model)
         # A cutover/quarantine during slow inference invalidates the old answer too.
         async with self.pool.connection() as conn:
@@ -132,10 +135,14 @@ class Service:
                 await conn.execute("SELECT set_config('app.novel_id', %s, true)",(request.novel_id,))
                 await conn.execute("SELECT set_config('app.current_chapter', %s, true)",(str(request.at),))
                 current=await (await conn.execute("SELECT revision_id::text,version,trusted,status FROM reader_knowledge_status(%s)",(request.at,))).fetchone()
+                current_event=await (await conn.execute("SELECT revision_id::text,version,trusted,status FROM reader_event_status(%s)",(request.at,))).fetchone()
         if current and (current[0]!=knowledge.get('revision_id') or current[1]!=knowledge.get('version')):
-            return AskResponse(answer="Knowledge changed while answering. Please ask again.",at=request.at,retrieved_sources=[],served_by=None,knowledge=dict(zip(["revision_id","version","trusted","status"],current)))
+            return AskResponse(answer="Knowledge changed while answering. Please ask again.",at=request.at,retrieved_sources=[],served_by=None,knowledge=dict(zip(["revision_id","version","trusted","status"],current)),event_knowledge=event_knowledge)
+        current_event_identity = current_event[:2] if current_event else (None, None)
+        if current_event_identity != (event_knowledge.get('revision_id'), event_knowledge.get('version')):
+            return AskResponse(answer="Events changed while answering. Please ask again.",at=request.at,retrieved_sources=[],served_by=None,knowledge=knowledge,event_knowledge=dict(zip(["revision_id","version","trusted","status"],current_event)) if current_event else {"status":"unavailable"})
         log.info("ask completed novel=%s at=%s sources=%s", request.novel_id, request.at, used)
-        return AskResponse(answer=completion.text, at=request.at, retrieved_sources=used, knowledge=knowledge, served_by={"provider": completion.served_provider, "model": completion.served_model})
+        return AskResponse(answer=completion.text, at=request.at, retrieved_sources=used, knowledge=knowledge, event_knowledge=event_knowledge, served_by={"provider": completion.served_provider, "model": completion.served_model})
 
 
 def create_app(service: Service) -> FastAPI:

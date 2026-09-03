@@ -194,6 +194,10 @@ func (f *fakeStore) ListTimeline(
 	return f.timeline, f.timelineErr
 }
 
+func (f *fakeStore) EventStatus(context.Context, string, int, int) (KnowledgeStatus, error) {
+	return KnowledgeStatus{RevisionID: "events", Version: 1, Trusted: true, Status: "done"}, nil
+}
+
 func (f *fakeStore) ListRelationships(
 	_ context.Context, _, _ string, at int,
 ) ([]RelationshipView, error) {
@@ -361,7 +365,7 @@ func TestLowerRequestedChapterIsUsed(t *testing.T) {
 
 func TestCollectionEndpointsReturnStableEnvelopes(t *testing.T) {
 	store := readyFake()
-	store.timeline = []EventView{{ID: 1, ChapterIndex: 2, Summary: "Event", Entities: []EntitySummary{}}}
+	store.timeline = []EventView{{ID: "00000000-0000-0000-0000-000000000001", ChapterIndex: 2, Summary: "Event", Entities: []EntitySummary{}, Arguments: []EventArgumentView{}}}
 	store.relationships = []RelationshipView{{
 		ID: 1, Relation: "ally", Direction: "outgoing",
 		Entity: EntitySummary{ID: testEntityID, Canonical: "Ally", Kind: "character"},

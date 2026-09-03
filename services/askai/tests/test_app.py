@@ -35,6 +35,13 @@ def test_context_budget_keeps_source_attribution() -> None:
     assert sources == [{"kind": "chunk", "id": 1, "chapter": 2}]
 
 
+def test_event_context_keeps_exact_evidence() -> None:
+    evidence = {"quote": "Ares handed Abaddon the lotus.", "char_start": 10, "char_end": 41}
+    context, sources = build_context([Source("event", "event-id", 7, "handed (giver: Ares, recipient: Abaddon)", evidence)], 500)
+    assert "[event:event-id ch:7]" in context
+    assert sources[0]["evidence"] == evidence
+
+
 @pytest.mark.asyncio
 async def test_internal_authentication_happens_before_service_call() -> None:
     provider = FakeProvider()
