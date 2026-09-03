@@ -89,6 +89,7 @@ type jobRow struct {
 	novelID  string
 	startURL string
 	mode     string
+	status   string
 	// maxQueueDepth is per-scrape (nil = fall back to the service default): how far ahead
 	// of the pipeline this novel may be fetched. Per novel rather than process-wide
 	// because the right answer depends on the book — a short novel can be pulled in one
@@ -99,9 +100,43 @@ type jobRow struct {
 func (w *Worker) loadJob(ctx context.Context, jobID int64) (jobRow, error) {
 	var row jobRow
 	err := w.db.QueryRow(ctx,
-		`SELECT novel_id::text, start_url, mode, max_queue_depth FROM scrape_job WHERE id = $1`, jobID,
-	).Scan(&row.novelID, &row.startURL, &row.mode, &row.maxQueueDepth)
+		`SELECT novel_id::text, start_url, mode, status, max_queue_depth FROM scrape_job WHERE id = $1`, jobID,
+	).Scan(&row.novelID, &row.startURL, &row.mode, &row.status, &row.maxQueueDepth)
 	return row, err
+}
+
+// RecoverProcessing returns queue pointers stranded by a scraper restart to pending.
+// A scrape can safely resume from its start URL because content-hash dedup skips pages
+// already stored; terminal jobs are discarded rather than accidentally replayed.
+func (w *Worker) RecoverProcessing(ctx context.Context) error {
+	raws, err := w.redis.LRange(ctx, processingQueue, 0, -1).Result()
+	if err != nil {
+		return err
+	}
+	for _, raw := range raws {
+		jobID, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil {
+			if err := w.redis.LRem(ctx, processingQueue, 1, raw).Err(); err != nil {
+				return err
+			}
+			continue
+		}
+		job, loadErr := w.loadJob(ctx, jobID)
+		if loadErr != nil || (job.status != "pending" && job.status != "running") {
+			if err := w.redis.LRem(ctx, processingQueue, 1, raw).Err(); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := w.redis.LRem(ctx, processingQueue, 1, raw).Err(); err != nil {
+			return err
+		}
+		if err := w.redis.LPush(ctx, pendingQueue, raw).Err(); err != nil {
+			return err
+		}
+		log.Printf("requeued interrupted scrape job %d", jobID)
+	}
+	return nil
 }
 
 // waitForCapacity blocks while the pipeline's pending queue is at or above this scrape's
@@ -244,6 +279,9 @@ func (w *Worker) handle(ctx context.Context, jobID int64) error {
 	}
 	if err != nil {
 		return err
+	}
+	if job.status != "pending" && job.status != "running" {
+		return nil
 	}
 
 	parsed, err := url.Parse(job.startURL)

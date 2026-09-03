@@ -82,6 +82,54 @@ func TestChapterIndexByHashIsScopedPerNovel(t *testing.T) {
 	}
 }
 
+func TestChapterBySourceURLFindsExistingPageBeforeContentHashing(t *testing.T) {
+	store := integrationStore(t)
+	ctx := context.Background()
+	novelID := seedNovelForChapters(t, store)
+	url := "https://example.com/novel/chapter-7"
+	if _, err := store.db.Exec(ctx,
+		`INSERT INTO chapter (novel_id, chapter_index, raw_hash, raw_uri, source_meta, status)
+		 VALUES ($1, 7, 'sha256:original', 'raw/test.txt', jsonb_build_object('source_url',$2::text), 'ingested')`,
+		novelID, url,
+	); err != nil {
+		t.Fatalf("insert chapter: %v", err)
+	}
+
+	index, hash, found, err := store.chapterBySourceURL(ctx, novelID, url)
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if !found || index != 7 || hash != "sha256:original" {
+		t.Fatalf("got (index=%d hash=%q found=%v), want (7 sha256:original true)", index, hash, found)
+	}
+	if _, _, found, err = store.chapterBySourceURL(ctx, novelID, "https://example.com/unseen"); err != nil {
+		t.Fatalf("lookup unseen: %v", err)
+	} else if found {
+		t.Fatal("unseen URL reported as already ingested")
+	}
+}
+
+func TestDuplicateSourceURLAtANewIndexIsRejectedByTheDatabase(t *testing.T) {
+	store := integrationStore(t)
+	novelID := seedNovelForChapters(t, store)
+	url := "https://example.com/novel/chapter-1"
+	if _, err := store.db.Exec(context.Background(),
+		`INSERT INTO chapter (novel_id, chapter_index, raw_hash, raw_uri, source_meta, status)
+		 VALUES ($1, 1, 'sha256:first', 'raw/test.txt', jsonb_build_object('source_url',$2::text), 'ingested')`,
+		novelID, url,
+	); err != nil {
+		t.Fatalf("insert first chapter: %v", err)
+	}
+	_, err := store.db.Exec(context.Background(),
+		`INSERT INTO chapter (novel_id, chapter_index, raw_hash, raw_uri, source_meta, status)
+		 VALUES ($1, 2, 'sha256:second', 'raw/test.txt', jsonb_build_object('source_url',$2::text), 'ingested')`,
+		novelID, url,
+	)
+	if err == nil {
+		t.Fatal("inserting duplicate source URL at a new index succeeded; 0038 index is missing")
+	}
+}
+
 // Migration 0013's unique index is the backstop under the app-layer check: even if two
 // concurrent pastes both pass the lookup, only one row can land. Without it, the scraper's
 // fresh-index-per-run behaviour re-inserts every chapter with nothing to conflict on,

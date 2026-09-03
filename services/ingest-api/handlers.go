@@ -269,7 +269,27 @@ func (a *API) pasteChapter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// raw_hash is the dedup / cache key (§3.1); prefix with the algorithm per the spec.
+	// A page URL is the cheapest scrape identity. On a re-scrape this returns before any
+	// object write, queue pointer, or LLM-capable worker can see the page. Same-index
+	// re-pastes intentionally continue, preserving the existing retry affordance.
+	if req.SourceURL != "" {
+		existingIndex, existingHash, found, err := a.store.chapterBySourceURL(r.Context(), novelID, req.SourceURL)
+		if err != nil {
+			log.Printf("pasteChapter source URL dedup lookup: %v", err)
+			writeErr(w, http.StatusInternalServerError, "lookup failed")
+			return
+		}
+		if found && existingIndex != req.ChapterIndex {
+			writeJSON(w, http.StatusOK, pasteChapterResp{
+				NovelID: novelID, ChapterIndex: existingIndex, RawHash: existingHash,
+				Status: "duplicate", Duplicate: true,
+			})
+			return
+		}
+	}
+
+	// raw_hash is the second, content-addressed identity check (§3.1). It catches the
+	// same chapter published at a changed URL or a mirror site.
 	sum := sha256.Sum256([]byte(req.RawText))
 	rawHash := "sha256:" + hex.EncodeToString(sum[:])
 

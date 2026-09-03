@@ -137,6 +137,26 @@ func (s *Store) chapterIndexByHash(ctx context.Context, novelID, rawHash string)
 	return chapterIndex, true, nil
 }
 
+// chapterBySourceURL is the first, provenance-keyed dedup check. Unlike the raw hash it
+// needs no body-derived work and lets a re-scrape stop before storing or queueing a known
+// page. The partial unique index from migration 0038 makes this an index probe.
+func (s *Store) chapterBySourceURL(ctx context.Context, novelID, sourceURL string) (int, string, bool, error) {
+	var chapterIndex int
+	var rawHash string
+	err := s.db.QueryRow(ctx,
+		`SELECT chapter_index, raw_hash FROM chapter
+		 WHERE novel_id = $1 AND source_meta->>'source_url' = $2`,
+		novelID, sourceURL,
+	).Scan(&chapterIndex, &rawHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, "", false, nil
+	}
+	if err != nil {
+		return 0, "", false, fmt.Errorf("lookup chapter by source URL: %w", err)
+	}
+	return chapterIndex, rawHash, true, nil
+}
+
 // queueTranslationRange marks every still-unqueued chapter in [from, from+count) as
 // 'queued' and pushes a pipeline job for each, returning the indices actually queued.
 //

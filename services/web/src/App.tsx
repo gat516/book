@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ApiError, getChapterPreview, getProgress, listChapters, putProgress } from "./api";
+import { ApiError, getChapterPreview, getProgress, getScrapeStatus, listChapters, putProgress, startScrape } from "./api";
 import { AddChapterForm } from "./components/AddChapterForm";
 import { AskBox } from "./components/AskBox";
 import { ChapterList } from "./components/ChapterList";
@@ -13,6 +13,7 @@ import { TranslationNotice } from "./components/TranslationNotice";
 import { ProviderConfigPanel } from "./components/ProviderConfigPanel";
 import { SettingsView } from "./components/SettingsView";
 import { QueueControls } from "./components/QueueControls";
+import { usePolling } from "./usePolling";
 import type { ChapterListItem, ChapterResponse } from "./types";
 
 // `?novel=` is preferred over a hardcoded default so the app is shareable/demoable via
@@ -64,6 +65,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showChapters, setShowChapters] = useState(true);
   const [clickableEntities, setClickableEntities] = useState(savedClickableEntities);
+  const [lookingForMore, setLookingForMore] = useState(false);
 
   function changeClickableEntities(enabled: boolean) {
     setClickableEntities(enabled);
@@ -106,6 +108,7 @@ export default function App() {
     setNavigationError(null);
     setAddingChapter(false);
     setPending(null);
+    setLookingForMore(false);
     setShowGlossary(false);
     setShowChapters(true);
   }
@@ -117,6 +120,7 @@ export default function App() {
     setNavigationError(null);
     setAddingChapter(false);
     setPending(null);
+    setLookingForMore(false);
     setShowGlossary(false);
     setShowChapters(true);
   }
@@ -176,6 +180,51 @@ export default function App() {
     await putProgress(novelId!, index);
     goToChapter(index);
   }
+
+  // The saved page URL is the continuation cursor. Starting from the current page is
+  // deliberate: the scraper's content-hash dedup skips it, then follows its next-link
+  // into chapters the local library does not have yet.
+  async function findMoreChapters() {
+    if (!novelId || !chapter?.source_url) {
+      throw new Error("This chapter has no saved source URL. Add one or start a scrape from the chapter list.");
+    }
+    try {
+      await startScrape(novelId, { start_url: chapter.source_url, mode: "translate" });
+    } catch (err) {
+      // A running scrape is already doing exactly what this action asks for. Join it
+      // rather than making the reader interpret a normal 409 as a failure.
+      if (!(err instanceof ApiError) || err.status !== 409) throw err;
+      const active = await getScrapeStatus(novelId);
+      if (active.status !== "pending" && active.status !== "running") throw err;
+    }
+    setLookingForMore(true);
+    setNavigationError("Looking for the next source chapters…");
+  }
+
+  usePolling(() => {
+    if (!novelId || !lookingForMore) return;
+    void (async () => {
+      try {
+        const list = await listChapters(novelId, 1, chapterIndex);
+        if (list.total > chapterIndex) {
+          setLookingForMore(false);
+          setNavigationError(null);
+          await navigateChapter(chapterIndex + 1);
+          return;
+        }
+        const job = await getScrapeStatus(novelId);
+        if (job.status !== "pending" && job.status !== "running") {
+          setLookingForMore(false);
+          setNavigationError(job.status === "done"
+            ? "No newer chapter was found at the source."
+            : `Could not fetch more chapters: ${job.last_error ?? job.status}`);
+        }
+      } catch (err) {
+        setLookingForMore(false);
+        setNavigationError(String(err));
+      }
+    })();
+  }, 5000, lookingForMore);
 
   async function openChapter(item: ChapterListItem) {
     if (item.status !== "done") {
@@ -282,6 +331,8 @@ export default function App() {
               chapterIndex={chapterIndex}
               hasNext={chapter?.has_next ?? false}
               onNavigate={navigateChapter}
+              sourceURL={chapter?.source_url}
+              onFindMore={findMoreChapters}
             />
             <button className="app-chapters" onClick={() => setShowChapters(true)}>
               All chapters
