@@ -36,7 +36,45 @@ var ErrGlossaryTermInvalid = errors.New("glossary source term is not a usable su
 const (
 	minSourceTermChars = 2
 	maxSourceTermChars = 80
+	maxTargetTermChars = 80
 )
+
+// cjkLangs and containsCJK mirror resolve.py's _CJK_LANGS and _CJK_RANGE. Ranges are
+// checked directly rather than by regexp so the cost stays proportional to the term.
+var cjkLangs = map[string]bool{"zh": true, "ja": true}
+
+func containsCJK(s string) bool {
+	for _, r := range s {
+		if (r >= 0x3400 && r <= 0x4DBF) || (r >= 0x4E00 && r <= 0x9FFF) ||
+			(r >= 0xF900 && r <= 0xFAFF) {
+			return true
+		}
+	}
+	return false
+}
+
+// ErrGlossaryTargetInvalid is returned when a caller supplies a target_term that cannot
+// safely be locked. The source side has been guarded since this file was written; the
+// target side was not, so a hand-seeded half-translated target was substituted into every
+// later chapter unchallenged while the pipeline's own path refused the identical string.
+var ErrGlossaryTargetInvalid = errors.New("glossary target term is not a usable rendering")
+
+// targetTermProblem is the Go port of resolve.py's _target_term_problem — it returns why
+// targetTerm is unusable as a locked rendering, or "" if it looks plausible.
+//
+// Cheap shape checks, not a quality judgement: they catch a target that was never
+// translated at all, not one translated badly. A locked target is immutable and enforced
+// against every later translation, so garbage here is unrecoverable.
+func targetTermProblem(targetTerm, targetLang string) string {
+	target := strings.TrimSpace(targetTerm)
+	if length := len([]rune(target)); length > maxTargetTermChars {
+		return fmt.Sprintf("looks like prose, not a name (%d chars)", length)
+	}
+	if !cjkLangs[targetLang] && containsCJK(target) {
+		return fmt.Sprintf("contains CJK characters but target language is %q", targetLang)
+	}
+	return ""
+}
 
 // proseMarkers mirrors resolve.py's _PROSE_MARKERS. An ASCII period is deliberately absent:
 // it is legitimate inside a name ("St. Mary") and is not sentence punctuation on its own.
@@ -224,6 +262,14 @@ func (s *Store) insertGlossaryTerm(ctx context.Context, novelID, sourceTerm, tar
 	// against, so "a person typed it" is not on its own a reason to skip the guard.
 	if problem := sourceTermProblem(sourceTerm); problem != "" {
 		return 0, fmt.Errorf("%w: %s", ErrGlossaryTermInvalid, problem)
+	}
+	var targetLang string
+	if err := s.db.QueryRow(ctx, "SELECT target_lang FROM novel WHERE id=$1", novelID).
+		Scan(&targetLang); err != nil {
+		return 0, err
+	}
+	if problem := targetTermProblem(targetTerm, targetLang); problem != "" {
+		return 0, fmt.Errorf("%w: %s", ErrGlossaryTargetInvalid, problem)
 	}
 
 	tx, err := s.db.Begin(ctx)

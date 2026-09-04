@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 )
 
@@ -66,6 +67,33 @@ func TestPythonJSONArrayMatchesPythonJSONDumps(t *testing.T) {
 			rowHash := hex.EncodeToString(sum[:])
 			if rowHash != tt.wantRowHash {
 				t.Fatalf("row_hash = %q, want %q", rowHash, tt.wantRowHash)
+			}
+		})
+	}
+}
+
+// TestTargetTermProblemMatchesResolvePy pins the Go port against the same strings
+// resolve.py's _target_term_problem is tested with. The two sides must agree about what
+// is lockable: a term one accepts and the other refuses means the pipeline and the human
+// endpoints disagree, which is the divergence this file exists to prevent.
+func TestTargetTermProblemMatchesResolvePy(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		target     string
+		targetLang string
+		wantOK     bool
+	}{
+		{"half translated is refused", "Hexalinear Star莲", "en", false},
+		{"fully rendered is accepted", "Sixth Era Star Lotus", "en", true},
+		{"transliteration is not caught by a script check", "Hexalinear Star Lian", "en", true},
+		{"CJK target language keeps CJK", "六纪星莲", "zh", true},
+		{"prose is refused", strings.Repeat("a", maxTargetTermChars+1), "en", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			problem := targetTermProblem(tc.target, tc.targetLang)
+			if gotOK := problem == ""; gotOK != tc.wantOK {
+				t.Fatalf("targetTermProblem(%q, %q) = %q; wantOK=%v",
+					tc.target, tc.targetLang, problem, tc.wantOK)
 			}
 		})
 	}
