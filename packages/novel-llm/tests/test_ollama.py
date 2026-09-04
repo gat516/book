@@ -233,3 +233,114 @@ async def test_real_http_idle_timeout_tracks_stream_activity(stall):
         await provider.aclose()
         server.close();await server.wait_closed()
         await asyncio.gather(*handlers)
+
+
+@pytest.mark.parametrize("think", [None, False, True])
+async def test_thinking_is_omitted_unless_asked_for(think):
+    """A reasoning model's chain-of-thought lands in message.thinking, which no stream sink
+    observes, so an extraction caller must be able to turn it off explicitly."""
+    provider = OllamaProvider(host="http://test", model="model", think=think)
+    await provider._client.aclose()
+
+    def handle(request):
+        payload = json.loads(request.content)
+        if think is None:
+            assert "think" not in payload
+        else:
+            assert payload["think"] is think
+        return httpx.Response(200, json={"message": {"content": "{}"}})
+
+    provider._client = httpx.AsyncClient(base_url="http://test", transport=httpx.MockTransport(handle))
+    try:
+        assert (await provider.complete("source", json_schema=SCHEMA)).text == "{}"
+    finally:
+        await provider.aclose()
+
+
+async def test_reasoning_reaches_the_sink_but_never_the_completion():
+    """Ollama puts chain-of-thought in message.thinking. It must drive the liveness sink,
+    yet stay out of the returned text, which for a schema call has to parse as JSON."""
+    provider = OllamaProvider(host="http://test", model="model", think=True)
+    await provider._client.aclose()
+    seen = []
+
+    async def sink(text):
+        seen.append(text)
+
+    provider.stream_sink = sink
+
+    def handle(request):
+        lines = [
+            {"message": {"thinking": "weighing "}},
+            {"message": {"thinking": "the roles"}},
+            {"message": {"content": '{"value":'}},
+            {"message": {"content": '"known"}'}, "done": True,
+             "prompt_eval_count": 10, "eval_count": 5},
+        ]
+        return httpx.Response(200, content="".join(json.dumps(row) + "\n" for row in lines))
+
+    provider._client = httpx.AsyncClient(base_url="http://test", transport=httpx.MockTransport(handle))
+    try:
+        result = await provider.complete("source", json_schema=SCHEMA)
+        assert result.text == '{"value":"known"}'
+        assert json.loads(result.text) == {"value": "known"}
+        # The sink saw the reasoning accumulate before any content arrived, so a heartbeat
+        # reading it reports progress instead of an apparent stall.
+        assert seen[0] == "weighing "
+        assert seen[1] == "weighing the roles"
+        assert all("weighing" not in text for text in seen[2:])
+    finally:
+        await provider.aclose()
+
+
+async def test_output_that_hits_the_token_cap_is_reported_not_silently_dropped():
+    """A cap-exhausting call must carry evidence of what it produced.
+
+    qwen3:4b looped on one extraction batch — 8192 tokens against 2259 and 1786 for the
+    calls that succeeded — and the partial text was discarded, so a degenerate repetition
+    looked exactly like a slow model. The repeated fragment is the only thing that
+    distinguishes them.
+    """
+    provider = OllamaProvider(host="http://test", model="model", stream=True)
+    await provider._client.aclose()
+    looped = "the star lotus the star lotus " * 60
+
+    def handle(request):
+        rows = [
+            {"message": {"content": looped}},
+            {"message": {"content": ""}, "done": True, "done_reason": "length"},
+        ]
+        return httpx.Response(200, content="".join(json.dumps(r) + "\n" for r in rows))
+
+    provider._client = httpx.AsyncClient(base_url="http://test", transport=httpx.MockTransport(handle))
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            await provider.complete("source", json_schema=SCHEMA)
+        message = str(caught.value)
+        assert "exhausted num_predict" in message
+        assert "rejected output" in message
+        assert "star lotus" in message
+        # Bounded: the window must not carry the whole degenerate response into a log.
+        assert len(message) < len(looped)
+        assert "chars elided" in message
+    finally:
+        await provider.aclose()
+
+
+async def test_a_short_capped_response_is_shown_whole():
+    """Below the window size there is nothing to elide, so no misleading truncation."""
+    provider = OllamaProvider(host="http://test", model="model")
+    await provider._client.aclose()
+
+    def handle(request):
+        return httpx.Response(200, json={
+            "message": {"content": "{\"value\":"}, "done": True, "done_reason": "length"})
+
+    provider._client = httpx.AsyncClient(base_url="http://test", transport=httpx.MockTransport(handle))
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            await provider.complete("source", json_mode=True)
+        assert "chars elided" not in str(caught.value)
+        assert "rejected output" in str(caught.value)
+    finally:
+        await provider.aclose()

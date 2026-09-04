@@ -23,10 +23,18 @@ class OllamaProvider(SequentialBatchMixin):
     def __init__(self, *, host: str, model: str, timeout: float = 120.0,
                  num_ctx: int | None = None, num_predict: int | None = None,
                  stream: bool = False, total_timeout: float | None = None,
-                 first_token_timeout: float | None = None) -> None:
+                 first_token_timeout: float | None = None,
+                 think: bool | None = None) -> None:
         super().__init__()
         self._host = host.rstrip("/")
         self._model = model
+        # Ollama sends a reasoning model's chain-of-thought to message.thinking, NOT to
+        # message.content, and only content reaches stream_sink. A thinking model therefore
+        # looks identical to an infinite prefill: zero streamed characters while it reasons.
+        # granite4.2:8b burned the whole 1800s deadline that way on one chapter, then the
+        # same prompt returned in 1.9s with think=False. Left as None the key is omitted and
+        # nothing changes; Ollama accepts think=False even for models with no thinking mode.
+        self._think = think
         self._options = {k:v for k,v in {"num_ctx":num_ctx,"num_predict":num_predict}.items() if v is not None}
         if timeout <= 0 or (total_timeout is not None and total_timeout <= 0):
             raise ValueError("Ollama timeouts must be positive")
@@ -92,23 +100,46 @@ class OllamaProvider(SequentialBatchMixin):
             payload["format"] = "json"
         if self._options and "options" not in payload:
             payload["options"] = dict(self._options)
+        if self._think is not None:
+            payload["think"] = self._think
         if not payload["stream"]:
             async with transient_as_backpressure():
                 resp = await self._client.post("/api/chat", json=payload)
                 resp.raise_for_status()
             body = resp.json()
-            self._check_body(body)
+            self._check_body(body, (body.get("message") or {}).get("content", ""))
             return Completion(text=body["message"]["content"], served_provider="ollama",
                               served_model=body.get("model", use_model), input_tokens=body.get("prompt_eval_count", 0),
                               output_tokens=body.get("eval_count", 0), timings=self._timings(body))
         return await self._complete_streaming(payload, use_model, sink)
 
     @staticmethod
-    def _check_body(body: dict) -> None:
+    def _rejected_window(partial: str, *, edge: int = 400) -> str:
+        """A bounded window on output that ran to the token cap.
+
+        Discarding it is what made a looping model indistinguishable from a slow one: the
+        only evidence that generation degenerated into repetition is the repeated fragment
+        itself. Bounded hard on both ends and labelled as rejected, because this text
+        failed validation and must never be mistaken for a usable completion.
+        """
+        text = partial.strip()
+        if not text:
+            return ""
+        if len(text) <= edge * 2:
+            window = text
+        else:
+            window = f"{text[:edge]}…[{len(text) - edge * 2} chars elided]…{text[-edge:]}"
+        return f" — rejected output ({len(partial)} chars): {window!r}"
+
+    @classmethod
+    def _check_body(cls, body: dict, partial: str = "") -> None:
         if body.get("error"):
             raise RuntimeError(f"Ollama stream error: {body['error']}")
         if body.get("done_reason") == "length":
-            raise RuntimeError("Ollama exhausted num_predict; refusing incomplete output")
+            raise RuntimeError(
+                "Ollama exhausted num_predict; refusing incomplete output"
+                + cls._rejected_window(partial)
+            )
 
     @staticmethod
     def _timings(body: dict) -> dict[str, float]:
@@ -122,6 +153,10 @@ class OllamaProvider(SequentialBatchMixin):
         text to `sink` while the response arrives. Ollama streams newline-delimited JSON,
         one object per token, with the final object carrying the token counts."""
         pieces: list[str] = []
+        # Reasoning is kept apart from `pieces` on purpose: it must reach the sink so a
+        # thinking model looks alive, but it must never join the completion text, which
+        # for a schema-constrained call has to stay parseable JSON.
+        reasoning: list[str] = []
         final = None
         started = time.monotonic()
         first_token = None
@@ -153,8 +188,25 @@ class OllamaProvider(SequentialBatchMixin):
                 if not line.strip():
                     continue
                 body = json.loads(line)
-                self._check_body(body)
-                piece = body.get("message", {}).get("content", "")
+                # Reasoning counts as partial output here: a thinking model that loops
+                # never reaches content, so `pieces` would be empty and the evidence lost.
+                self._check_body(body, "".join(pieces) or "".join(reasoning))
+                message = body.get("message", {})
+                thought = message.get("thinking") or ""
+                if thought:
+                    # A reasoning model emits here and nowhere else until it starts
+                    # answering. Counting it ends the prefill budget and gives the sink
+                    # something to show; without this the call is indistinguishable from
+                    # a hang for as long as the model reasons.
+                    if first_token is None:
+                        first_token = time.monotonic() - started
+                    reasoning.append(thought)
+                    if sink is not None and not pieces:
+                        try:
+                            await sink("".join(reasoning))
+                        except Exception:  # noqa: BLE001
+                            pass
+                piece = message.get("content", "")
                 if piece:
                     if first_token is None:
                         first_token = time.monotonic() - started
