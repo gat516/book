@@ -116,6 +116,35 @@ async def prepare(db, cfg, novel: str, model: str, schema: dict | None = None,
     return str(rid)
 
 
+# Past this many chapters failing back to back, the fault is the model or the
+# connection rather than the prose, and continuing just marks everything failed.
+MAX_CONSECUTIVE_CHAPTER_FAILURES = 3
+
+
+async def record_job_failure(db, rid: str, index: int, exc: BaseException) -> int | None:
+    """Mark one chapter failed with a safe class and its next retry time.
+
+    Its own function for the same reason as graph_rebuild's: an error path is the worst
+    place to keep an SQL statement no test can execute. The consecutive-failure circuit
+    breaker and the stderr log line stay with the caller, which is where the decision to
+    keep going or stop belongs.
+    """
+    attempts = (await (await db.execute(
+        "SELECT attempts FROM event_job WHERE revision_id=%s AND chapter_index=%s",
+        (rid, index),
+    )).fetchone())[0]
+    delay = retry_delay_minutes(attempts)
+    await db.execute(
+        """UPDATE event_job SET state='failed',error=%s,category=%s,
+           retry_at=CASE WHEN %s::int IS NULL THEN NULL
+                         ELSE now()+(%s::int*interval '1 minute') END,
+           updated_at=now() WHERE revision_id=%s AND chapter_index=%s""",
+        ((type(exc).__name__ + ": " + str(exc))[:2000], failure_category(exc),
+         delay, delay, rid, index),
+    )
+    return delay
+
+
 def retry_delay_minutes(attempt: int) -> int | None:
     return {1: 5, 2: 15, 3: 45}.get(attempt)
 
@@ -162,14 +191,20 @@ async def resume(db, cfg, rid: str, *, limit: int | None = None, chapter: int | 
                 raise ValueError("saved source changed since event snapshot")
             await db.execute(
                 """UPDATE event_job SET state='processing',attempts=attempts+1,error=NULL,
-                   retry_at=NULL,generation=%s,updated_at=now()
+                   category=NULL,retry_at=NULL,generation=%s,updated_at=now()
                    WHERE revision_id=%s AND chapter_index=%s""",
                 (r["generation"], rid, index),
             )
             try:
                 output = await engine.extract(r["novel_id"], index, source, target)
-                if await local_model(cfg, r["model"]["name"]) != r["model"]:
-                    raise ValueError("model changed during event extraction")
+                live = await extraction_model(
+                    cfg, r["model"]["provider"], r["model"]["name"]
+                )
+                if live != r["model"]:
+                    raise ValueError(
+                        "model or inference configuration changed during event extraction "
+                        f"({model_drift(r['model'], live)})"
+                    )
                 async with db.transaction():
                     current = await revision(db, rid, lock=True)
                     if current["generation"] != r["generation"] or current["state"] == "archived":
@@ -194,26 +229,22 @@ async def resume(db, cfg, rid: str, *, limit: int | None = None, chapter: int | 
                     await db.execute(
                         "UPDATE event_revision SET version=version+1,review=NULL WHERE id=%s", (rid,)
                     )
+                consecutive_failures = 0
             except AdmissionRejected:
                 await db.execute(
-                    "UPDATE event_job SET state='pending',error=NULL,retry_at=NULL,updated_at=now() "
+                    "UPDATE event_job SET state='pending',error=NULL,category=NULL,retry_at=NULL,updated_at=now() "
                     "WHERE revision_id=%s AND chapter_index=%s", (rid, index),
                 )
                 raise
             except Exception as exc:
-                attempts = (await (await db.execute(
-                    "SELECT attempts FROM event_job WHERE revision_id=%s AND chapter_index=%s",
-                    (rid, index),
-                )).fetchone())[0]
-                delay = retry_delay_minutes(attempts)
-                await db.execute(
-                    """UPDATE event_job SET state='failed',error=%s,
-                       retry_at=CASE WHEN %s::int IS NULL THEN NULL
-                                     ELSE now()+(%s::int*interval '1 minute') END,
-                       updated_at=now() WHERE revision_id=%s AND chapter_index=%s""",
-                    ((type(exc).__name__ + ": " + str(exc))[:2000], delay, delay, rid, index),
-                )
-                raise
+                await record_job_failure(db, rid, index, exc)
+                consecutive_failures += 1
+                print(json.dumps(dict(revision=rid, chapter=index, state="failed",
+                                      consecutive_failures=consecutive_failures,
+                                      error=f"{type(exc).__name__}: {exc}"[:500])),
+                      file=sys.stderr, flush=True)
+                if consecutive_failures >= MAX_CONSECUTIVE_CHAPTER_FAILURES:
+                    raise
     finally:
         if engine:
             await engine.close()

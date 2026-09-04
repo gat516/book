@@ -24,6 +24,7 @@ from pipeline.config import Config
 from pipeline.context import PipelineState
 from pipeline.envelope import ChapterEnvelope, SourceMeta
 from pipeline.evidence import PROMPT_VERSION, digest
+from pipeline.failures import failure_category
 from pipeline.knowledge import KnowledgeEngine
 from pipeline.llm.provider import AdmissionRejected
 from pipeline.stages.resolve import _lock_glossary
@@ -60,6 +61,35 @@ def select_model(reports):
     if not candidates:
         return None
     return min(candidates,key=lambda r:(-r['metrics']['link_precision'],-r['metrics']['fact_precision'],r['metrics']['model_inference_seconds']))['model']
+
+
+def _flatten(value: dict, prefix: str = "") -> dict:
+    flat = {}
+    for key, item in value.items():
+        path = f"{prefix}{key}"
+        if isinstance(item, dict):
+            flat.update(_flatten(item, f"{path}."))
+        else:
+            flat[path] = item
+    return flat
+
+
+def model_drift(pinned: dict, live: dict) -> str:
+    """Name the fields that differ between a revision's pinned model and the live one.
+
+    The callers test whole-dict inequality, which is right, but reporting that as "the
+    model changed" sends a reader to inspect the model when the mismatch is usually a
+    runtime setting. A `think` flag set on `prepare` and forgotten on `resume` is
+    indistinguishable from swapped weights in the message, and costs a debugging session
+    to tell apart. Nested identity is flattened so the differing key is named directly.
+    """
+    a, b = _flatten(pinned), _flatten(live)
+    parts = [
+        f"{key}: pinned {a.get(key)!r}, live {b.get(key)!r}"
+        for key in sorted(set(a) | set(b))
+        if a.get(key) != b.get(key)
+    ]
+    return "; ".join(parts) or "no field differs"
 
 
 async def local_model(cfg, name):
@@ -137,6 +167,24 @@ def graph_retry_delay_minutes(attempt: int) -> int | None:
     return {1:5,2:15,3:45}.get(attempt)
 
 
+async def record_job_failure(db,rid,index,exc):
+    """Mark one chapter failed with a safe class and its next retry time.
+
+    Its own function because this path, by definition, only runs when something has
+    already gone wrong -- the worst place for an untested SQL statement. Inline in the
+    except block it was reachable only by driving a real model to failure; here a test can
+    call it against real rows. Only ``category`` is ever returned to a reader; ``error``
+    stays behind the database for operator debugging (migration 0046).
+    """
+    attempts=(await(await db.execute('SELECT attempts FROM graph_job WHERE revision_id=%s AND chapter_index=%s',(rid,index))).fetchone())[0]
+    delay=graph_retry_delay_minutes(attempts)
+    await db.execute("""UPDATE graph_job SET state='failed',error=%s,category=%s,
+        retry_at=CASE WHEN %s::int IS NULL THEN NULL ELSE now()+(%s::int*interval '1 minute') END,
+        updated_at=now() WHERE revision_id=%s AND chapter_index=%s""",
+                     ((type(exc).__name__+': '+str(exc))[:2000],failure_category(exc),delay,delay,rid,index))
+    return delay
+
+
 async def resume(db,cfg,rid, *, limit=None):
     # Session advisory lock means interrupted jobs can be retried immediately, while
     # two resume processes cannot independently advance a revision out of order.
@@ -148,8 +196,10 @@ async def resume(db,cfg,rid, *, limit=None):
         r = await revision(db,rid)
         if r['state']=='archived' or r['legacy']:
             raise ValueError('revision cannot be rebuilt')
-        if await local_model(cfg,r['model']['name']) != r['model']:
-            raise ValueError('installed model or inference configuration changed since snapshot; create a new revision')
+        live = await local_model(cfg,r['model']['name'])
+        if live != r['model']:
+            raise ValueError('installed model or inference configuration changed since snapshot; '
+                             f'create a new revision ({model_drift(r["model"], live)})')
         engine = KnowledgeEngine(db,cfg,r)
         client = objects(cfg)
         lang = await (await db.execute('SELECT source_lang,target_lang FROM novel WHERE id=%s',(r['novel_id'],))).fetchone()
@@ -161,12 +211,14 @@ async def resume(db,cfg,rid, *, limit=None):
             display = await asyncio.to_thread(read_object,client,cfg,c['translated_uri'] or c['raw_uri'])
             if digest(source)!=c['source_hash'] or digest(display)!=c['display_hash']:
                 raise ValueError('saved prose changed since snapshot')
-            await db.execute("UPDATE graph_job SET state='processing',attempts=attempts+1,error=NULL,retry_at=NULL,generation=%s,updated_at=now() WHERE revision_id=%s AND chapter_index=%s",(r['generation'],rid,index))
+            await db.execute("UPDATE graph_job SET state='processing',attempts=attempts+1,error=NULL,category=NULL,retry_at=NULL,generation=%s,updated_at=now() WHERE revision_id=%s AND chapter_index=%s",(r['generation'],rid,index))
             print(json.dumps(dict(revision=rid,chapter=index,state='processing')),flush=True)
             try:
                 output = await engine.extract(r['novel_id'],index,source,display,lang[1])
-                if await local_model(cfg,r['model']['name']) != r['model']:
-                    raise ValueError('model or inference configuration changed during extraction; publication refused')
+                live = await local_model(cfg,r['model']['name'])
+                if live != r['model']:
+                    raise ValueError('model or inference configuration changed during extraction; '
+                                     f'publication refused ({model_drift(r["model"], live)})')
                 state = PipelineState(envelope=ChapterEnvelope(novel_id=r['novel_id'],chapter_index=index,
                     raw_text=source,source_lang=lang[0],source_meta=SourceMeta()))
                 async with db.transaction():
@@ -187,15 +239,10 @@ async def resume(db,cfg,rid, *, limit=None):
                     await db.execute('UPDATE graph_revision SET version=version+1,review=NULL WHERE id=%s',(rid,))
                 print(json.dumps(dict(revision=rid,chapter=index,state='done',linked=len(state.resolutions))),flush=True)
             except AdmissionRejected:
-                await db.execute("UPDATE graph_job SET state='pending',error=NULL,retry_at=NULL,updated_at=now() WHERE revision_id=%s AND chapter_index=%s",(rid,index))
+                await db.execute("UPDATE graph_job SET state='pending',error=NULL,category=NULL,retry_at=NULL,updated_at=now() WHERE revision_id=%s AND chapter_index=%s",(rid,index))
                 raise
             except Exception as exc:
-                attempts=(await(await db.execute('SELECT attempts FROM graph_job WHERE revision_id=%s AND chapter_index=%s',(rid,index))).fetchone())[0]
-                delay=graph_retry_delay_minutes(attempts)
-                await db.execute("""UPDATE graph_job SET state='failed',error=%s,
-                    retry_at=CASE WHEN %s::int IS NULL THEN NULL ELSE now()+(%s::int*interval '1 minute') END,
-                    updated_at=now() WHERE revision_id=%s AND chapter_index=%s""",
-                                 ((type(exc).__name__+': '+str(exc))[:2000],delay,delay,rid,index))
+                await record_job_failure(db,rid,index,exc)
                 raise
     finally:
         if engine:
