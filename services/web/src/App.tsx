@@ -12,6 +12,7 @@ import { ReaderPane } from "./components/ReaderPane";
 import { TranslationNotice } from "./components/TranslationNotice";
 import { TimelineView } from "./components/TimelineView";
 import { ProviderConfigPanel } from "./components/ProviderConfigPanel";
+import { RepairPanel } from "./components/RepairPanel";
 import { SettingsView } from "./components/SettingsView";
 import { QueueControls } from "./components/QueueControls";
 import { usePolling } from "./usePolling";
@@ -66,6 +67,9 @@ export default function App() {
   const [showTimeline, setShowTimeline] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showChapters, setShowChapters] = useState(true);
+  // Bumping this scrolls the repair panel into view and opens it, so the reader's
+  // "facts are withheld" notice can lead somewhere instead of dead-ending.
+  const [repairRequest, setRepairRequest] = useState(0);
   const [clickableEntities, setClickableEntities] = useState(savedClickableEntities);
   const [lookingForMore, setLookingForMore] = useState(false);
 
@@ -113,6 +117,7 @@ export default function App() {
     setLookingForMore(false);
     setShowGlossary(false);
     setShowTimeline(false);
+    setRepairRequest(0);
     setShowChapters(true);
   }
 
@@ -168,6 +173,7 @@ export default function App() {
     setShowChapters(false);
     setShowGlossary(false);
     setShowTimeline(false);
+    setRepairRequest(0);
   }
 
   function chapterAdded(index: number) {
@@ -304,6 +310,7 @@ export default function App() {
         Settings
       </button>
       <ProviderConfigPanel key={`provider-${novelId}`} novelId={novelId} />
+      <RepairPanel key={`repair-${novelId}`} novelId={novelId} openSignal={repairRequest} />
       {showGlossary && <GlossaryView key={novelId} novelId={novelId} at={chapter?.at} />}
       {showTimeline && <TimelineView key={`timeline-${novelId}`} novelId={novelId} onClose={() => setShowTimeline(false)} />}
       <div hidden={showGlossary || showTimeline}>
@@ -348,6 +355,7 @@ export default function App() {
                 clickableEntities={clickableEntities}
                 onChapterLoaded={chapterLoaded}
                 onNoChapter={handleNoChapter}
+                onOpenRepair={() => setRepairRequest((count) => count + 1)}
               />
             </div>
             <ProgressControls

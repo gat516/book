@@ -16,9 +16,12 @@ interface Props {
   // chapter — a brand-new novel) doesn't exist yet, so the caller can offer to add one
   // instead of showing a raw "chapter is missing or not done" string.
   onNoChapter: () => void;
+  // Opens the Knowledge repair panel. Optional so the reader still renders standalone in
+  // contexts (tests, the pending view) that have no panel to open.
+  onOpenRepair?: () => void;
 }
 
-export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapterLoaded, onNoChapter }: Props) {
+export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapterLoaded, onNoChapter, onOpenRepair }: Props) {
   const [chapter, setChapter] = useState<ChapterResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hovered, setHovered] = useState<number | null>(null);
@@ -145,7 +148,10 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
           </>
         )}
       </p>
-      {chapter.knowledge?.status === "repair" && <p role="status" className="reader-entity-hint">Knowledge cards are under repair. Saved translations are unchanged; unverified facts are withheld.</p>}
+      {chapter.knowledge?.status === "repair" && <p role="status" className="reader-entity-hint">
+        Knowledge cards are under repair. Saved translations are unchanged; unverified facts are withheld.
+        {onOpenRepair && <> <button type="button" className="reader-inline-link" onClick={onOpenRepair}>See repair status</button></>}
+      </p>}
       {chapter.knowledge?.status === "processing" && <p role="status">Checking names and supported facts…</p>}
       {chapter.knowledge?.status === "failed" && <p role="status">Knowledge processing failed. The chapter is still readable.</p>}
       {chapter.translation_warning?.code === "locked_terms_missing" && <p role="status" className="reader-translation-warning">

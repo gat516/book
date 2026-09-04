@@ -666,3 +666,49 @@ body {
 }
 .mention-new-fact-item { color: #333; }
 .mention-new-fact-item + .mention-new-fact-item { border-left: 1px solid #e0c65a; padding-left: 0.35rem; }
+
+/* Knowledge repair. Reuses the warm-paper palette and the 999px status-pill idiom the
+   event and queue surfaces already use, so a quarantined book reads as one more state of
+   the same system rather than an alarm bolted on. */
+.repair-panel { border-top: 1px solid #e6e1d7; padding-top: 0.6rem; }
+.repair-track { margin: 0.8rem 0; padding-top: 0.6rem; border-top: 1px solid #f0ece4; }
+.repair-track:first-of-type { border-top: 0; padding-top: 0; }
+.repair-track h4 { margin: 0 0 0.3rem; font-size: 0.92rem; display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: baseline; }
+.repair-reason { margin: 0.2rem 0; color: #444; font-size: 0.87rem; }
+.repair-pill { border-radius: 999px; padding: 0 0.5rem; font-size: 0.75rem; font-weight: normal; background: #e7edf4; }
+.repair-pill-ok { background: #e4efe4; }
+.repair-pill-warn { background: #fff1c9; }
+.repair-pill-bad { background: #f4dddd; }
+.repair-replacement { display: flex; flex-wrap: wrap; gap: 0.35rem 1.2rem; margin: 0.5rem 0; font-size: 0.83rem; }
+.repair-replacement div { display: flex; gap: 0.3rem; }
+.repair-replacement dt { color: #777; }
+.repair-replacement dd { margin: 0; }
+.repair-failures, .repair-requests, .repair-history { margin: 0.5rem 0; font-size: 0.83rem; }
+.repair-failures summary, .repair-requests summary, .repair-history summary { cursor: pointer; color: #666; }
+.repair-failures ul, .repair-requests ul, .repair-history ul { margin: 0.4rem 0 0; padding-left: 1.1rem; display: grid; gap: 0.35rem; }
+.repair-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.6rem 0 0.2rem; }
+.repair-operator { margin-top: 0.9rem; padding-top: 0.6rem; border-top: 1px solid #f0ece4; }
+
+/* Review is long-form work: give the quotes room and keep each item visually separate so
+   a reviewer can tell at a glance which claim they are assessing. */
+.repair-review { margin: 0.75rem 0 1.25rem; font-size: 0.9rem; }
+.repair-review-header { display: flex; justify-content: space-between; align-items: baseline; gap: 0.6rem; }
+.repair-review-header h3 { margin: 0; font-size: 1rem; }
+.repair-review h4 { margin: 1rem 0 0.3rem; font-size: 0.9rem; }
+.repair-review-progress { display: flex; flex-wrap: wrap; gap: 0.35rem 1.2rem; margin: 0.6rem 0; font-size: 0.83rem; }
+.repair-review-progress div { display: flex; gap: 0.3rem; }
+.repair-review-progress dt { color: #777; }
+.repair-review-progress dd { margin: 0; }
+.repair-review-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.7rem; }
+.repair-review-list li { padding: 0.6rem 0; border-top: 1px solid #e6e1d7; }
+.repair-review-list li:first-child { border-top: 0; }
+.repair-review-list label { display: inline-flex; align-items: center; gap: 0.3rem; margin-right: 1rem; font-size: 0.85rem; }
+.repair-review-surface { margin: 0 0 0.3rem; }
+.repair-review blockquote { margin: 0.3rem 0; padding-left: 0.7rem; border-left: 2px solid #e6e1d7; color: #555; font-size: 0.85rem; }
+.repair-review-submit { margin-top: 1rem; padding-top: 0.7rem; border-top: 1px solid #e6e1d7; display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: flex-end; }
+.repair-review-submit label { display: grid; gap: 0.2rem; font-size: 0.83rem; color: #666; }
+
+/* A button that reads as a link, for the in-chapter repair notice. */
+.reader-inline-link { background: none; border: 0; padding: 0; color: #2b5c8a; text-decoration: underline; cursor: pointer; font: inherit; }
+.repair-rollback { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.83rem; color: #666; }
+.repair-rollback select, .repair-rollback input { font: inherit; }
