@@ -143,7 +143,13 @@ async def _discover(ctx: StageContext, source: str) -> dict[str, NamePlan]:
         offered = {p["id"]: p for p in batch}
         for item in body["names"]:
             if not isinstance(item, dict) or set(item) != {"surface", "kind", "passage_id", "rendering", "targets"}:
-                raise ValueError("character-name proposal has invalid fields")
+                # A discovery batch is advisory: one malformed candidate must not prevent
+                # all later RESOLVE/STATE work for an otherwise readable chapter. We still
+                # reject it structurally (never create a glossary row from it), but preserve
+                # valid proposals in the same bounded response. See instructions.md §5:
+                # incomplete terminology may not block reader-visible prose or graph facts.
+                log.warning("character_names: rejected malformed proposal %r", item)
+                continue
             rendering, targets = item["rendering"], item["targets"]
             if (rendering not in ("chinese_personal", "foreign_personal", "titled_person", "semantic_term", "not_character")
                     or item["kind"] not in ("character", "not_character")
@@ -154,7 +160,8 @@ async def _discover(ctx: StageContext, source: str) -> dict[str, NamePlan]:
                            or any(ord(c) < 32 for c in t)
                            or (ctx.novel.target_lang.split("-")[0] == "en" and re.search(r"[\u3400-\u9fff]", t))
                            for t in targets)):
-                raise ValueError("character-name proposal has invalid rendering or targets")
+                log.warning("character_names: rejected invalid rendering or targets %r", item)
+                continue
             passage = offered.get(item["passage_id"])
             surface = item["surface"]
             if (rendering != "not_character" and passage and isinstance(surface, str)
@@ -176,7 +183,13 @@ async def _discover(ctx: StageContext, source: str) -> dict[str, NamePlan]:
                          and found[surface].auto_target is None)
                      or not found[surface].candidates}
         if ambiguous:
-            found.update(await _focused_renderings(ctx, batch, ambiguous))
+            # The focused pass refines optional display suggestions only. A small local
+            # model can still emit an invalid decision despite the schema; retain the
+            # conservative first-pass plans instead of failing all fact extraction.
+            try:
+                found.update(await _focused_renderings(ctx, batch, ambiguous))
+            except ValueError:
+                log.warning("character_names: rejected malformed focused rendering batch", exc_info=True)
     return found
 
 

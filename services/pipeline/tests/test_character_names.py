@@ -118,10 +118,19 @@ async def test_nonliteral_proposal_cannot_create_name():
     assert plans == {}
 
 
+async def test_malformed_focused_rendering_keeps_first_pass_plan(monkeypatch):
+    from pipeline.stages import character_names
+    ctx = context([item("索拉文", "chinese_personal")])
+    monkeypatch.setattr(character_names, "_focused_renderings", AsyncMock(side_effect=ValueError("bad decision")))
+    plans = await _discover(ctx, "索拉文走进大厅。")
+    assert "索拉文" in plans
+
+
 @pytest.mark.parametrize("targets", [[""], [" Lawrence"], ["劳伦斯"], ["x" * 161], ["a\nb"], [1], ["a"] * 5])
 async def test_invalid_targets_rejected(targets):
-    with pytest.raises(ValueError, match="invalid rendering"):
-        await _discover(context([item("劳伦斯", "foreign_personal", targets)]), "劳伦斯走了。")
+	# A malformed optional proposal is discarded, but cannot poison a whole chapter's
+	# extraction batch. The glossary is still protected because no plan is returned.
+	assert await _discover(context([item("劳伦斯", "foreign_personal", targets)]), "劳伦斯走了。") == {}
 
 
 async def test_uncertain_foreign_spelling_requires_custom_review():
