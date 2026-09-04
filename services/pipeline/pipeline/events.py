@@ -19,12 +19,17 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from typing_extensions import Annotated
 
 from pipeline.evidence import digest, passage, stable_id
+from novel_llm.gemini import GeminiProvider
 from pipeline.llm.ollama import OllamaProvider
 from pipeline.llm.provider import Class
 from pipeline.passages import PassageContract
 
 
-EVENT_PROMPT_VERSION = "chapter-events-v12-grouped-extraction"
+EVENT_PROMPT_VERSION = "chapter-events-v11-schema-required-roles"
+# Providers an event revision may pin. Kept in step with novel_provider_config's provider
+# CHECK (migrations 0011, 0034) and event_completion's (migration 0040). Ollama is the only
+# one that can be identity-pinned by digest; see event_rebuild.extraction_model.
+EXTRACTION_PROVIDERS = ("ollama", "gemini")
 PROMPT_HARD_BYTES = 42 * 1024
 MAX_EVENTS_PER_BATCH = 10
 MAX_EVENTS_PER_CHAPTER = 24
@@ -35,34 +40,34 @@ NonEmpty = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)
 # logic (§0.4); a later genre-specific revision may replace the complete document.
 DEFAULT_EVENT_SCHEMA = {
     "types": [
-        {"name": "conflict", "group": "physical_state", "description": "A fight, attack, threat, defeat, or restraint.",
+        {"name": "conflict", "description": "A fight, attack, threat, defeat, or restraint.",
          "roles": ["actor", "target", "instrument", "companion", "location"],
          "required_roles": ["actor", "target"]},
-        {"name": "acquisition", "group": "possession_item", "description": "Someone obtains, takes, captures, or loses something.",
+        {"name": "acquisition", "description": "Someone obtains, takes, captures, or loses something.",
          "roles": ["actor", "item", "source", "location"], "required_roles": ["actor", "item"]},
-        {"name": "transfer", "group": "possession_item", "description": "Something is given, sold, returned, or entrusted.",
+        {"name": "transfer", "description": "Something is given, sold, returned, or entrusted.",
          "roles": ["giver", "recipient", "item", "location"],
          "required_roles": ["giver", "recipient", "item"]},
-        {"name": "use", "group": "physical_state", "description": "A technique, ability, artifact, medicine, or other item is used.",
+        {"name": "use", "description": "A technique, ability, artifact, medicine, or other item is used.",
          "roles": ["actor", "item", "target", "instrument", "location"],
          "required_roles": ["actor", "item"]},
-        {"name": "communication", "group": "social_information", "description": "Consequential information, an order, promise, or warning is communicated.",
+        {"name": "communication", "description": "Consequential information, an order, promise, or warning is communicated.",
          "roles": ["actor", "target", "subject", "recipient"],
          "required_roles": ["actor", "subject"]},
-        {"name": "social_interaction", "group": "social_information", "description": "An insult, offense, betrayal, rescue, alliance act, or other consequential social act.",
+        {"name": "social_interaction", "description": "An insult, offense, betrayal, rescue, alliance act, or other consequential social act.",
          "roles": ["actor", "target", "companion", "subject"],
          "required_roles": ["actor", "target"]},
-        {"name": "decision", "group": "social_information", "description": "A character makes a consequential choice or commitment.",
+        {"name": "decision", "description": "A character makes a consequential choice or commitment.",
          "roles": ["actor", "subject", "target", "item"], "required_roles": ["actor", "subject"]},
-        {"name": "discovery", "group": "social_information", "description": "Someone learns, finds, identifies, or reveals something.",
+        {"name": "discovery", "description": "Someone learns, finds, identifies, or reveals something.",
          "roles": ["actor", "subject", "item", "location"], "required_roles": ["actor"],
          "required_any_role": ["subject", "item"]},
-        {"name": "movement", "group": "physical_state", "description": "Consequential arrival, departure, pursuit, escape, or confinement.",
+        {"name": "movement", "description": "Consequential arrival, departure, pursuit, escape, or confinement.",
          "roles": ["actor", "source", "target", "location", "companion"],
          "required_roles": ["actor"]},
-        {"name": "condition_change", "group": "physical_state", "description": "Injury, healing, death, awakening, transformation, or another major condition change.",
+        {"name": "condition_change", "description": "Injury, healing, death, awakening, transformation, or another major condition change.",
          "roles": ["actor", "target", "subject", "instrument"], "required_roles": ["target"]},
-        {"name": "creation_destruction", "group": "physical_state", "description": "Something significant is created, repaired, damaged, or destroyed.",
+        {"name": "creation_destruction", "description": "Something significant is created, repaired, damaged, or destroyed.",
          "roles": ["actor", "target", "item", "instrument", "location"],
          "required_roles": [], "required_any_role": ["target", "item"]},
     ]
@@ -109,6 +114,17 @@ class EventProposal(Strict):
 
 class EventProposals(Strict):
     events: list[EventProposal] = Field(max_length=MAX_EVENTS_PER_BATCH)
+
+
+# A verb phrase carries no sentence punctuation and no dialogue. Only `max_length=80`
+# stood here before, and translategemma emitted a 79-character narrative clause --
+# "An Ruosu's spirits lifted immediately; she began to give a detailed description:" --
+# which passed, and which canonical_summary then rendered as though it were an action.
+# Structural, not prompted (§0): this rejects the shape without knowing the model.
+ACTION_PUNCTUATION = tuple('.;:!?"\u201c\u201d\u3002\uff1b\uff1a\uff01\uff1f')
+# Generous on purpose. "sketched out a simple map on the ground" is eight words and is a
+# real action; the clause above is twelve. The cap catches prose, not verbosity.
+MAX_ACTION_WORDS = 8
 
 
 MODAL_MARKERS = (
@@ -179,6 +195,13 @@ def validate_events(
             surface for surface in proposal.participants.model_dump().values() if surface
         }:
             why = "event action is a participant rather than a verb phrase"
+        elif any(mark in proposal.action for mark in ACTION_PUNCTUATION):
+            why = "event action contains sentence punctuation, so it is prose not a verb phrase"
+        elif len(proposal.action.split()) > MAX_ACTION_WORDS:
+            why = (
+                f"event action is {len(proposal.action.split())} words, "
+                f"over the {MAX_ACTION_WORDS}-word verb-phrase limit"
+            )
         else:
             valid_arguments = []
             offered_by_surface = {
@@ -220,24 +243,62 @@ def validate_events(
     return accepted, rejected
 
 
+def _roles_and_surfaces(item: dict) -> tuple:
+    return tuple(sorted((a["role"], a["surface"]) for a in item["arguments"]))
+
+
+def _surfaces(item: dict) -> frozenset:
+    return frozenset(a["surface"] for a in item["arguments"])
+
+
 def deduplicate_events(items: list[dict]) -> list[dict]:
-    """Collapse only same-participant records supported by overlapping evidence."""
+    """Collapse records supported by overlapping evidence that describe one act.
+
+    Two shapes of duplicate, and only keying on the first is what let v12 publish one pill
+    handoff three times:
+
+    * SAME FRAME — identical event_type and roles, differing only in wording.
+    * CROSS FRAME — the same act extracted under different event_types, so neither the
+      event_type nor the (role, surface) pairs match. Grouped extraction produced exactly
+      this: one handoff as `transfer` (giver/recipient/item), as `use`
+      (actor/target/instrument), and as `communication` (actor/recipient/subject).
+
+    The discriminator for the cross-frame case is the ACTION, not the participants. The
+    three duplicates all carried action "handed over", while genuinely distinct events in
+    one evidence window carry distinct actions -- chapter 7's "plucked" and "handed over"
+    share both participants and evidence yet are two real events. Requiring a shared action
+    plus two shared surfaces collapses the restatements without merging those.
+    """
     kept: list[dict] = []
     for item in sorted(items, key=lambda row: row["evidence_start"]):
-        args = tuple(sorted((a["role"], a["surface"]) for a in item["arguments"]))
-        key = (item["event_type"], item["status"], args)
         start, end = item["evidence_start"], item["evidence_start"] + len(item["quote"])
-        duplicate = False
-        for prior in kept:
-            prior_args = tuple(sorted((a["role"], a["surface"]) for a in prior["arguments"]))
-            prior_key = (prior["event_type"], prior["status"], prior_args)
+        action = item["action"].strip().lower()
+        duplicate = None
+        for index, prior in enumerate(kept):
             prior_start = prior["evidence_start"]
             prior_end = prior_start + len(prior["quote"])
-            if key == prior_key and start < prior_end and prior_start < end:
-                duplicate = True
+            if not (start < prior_end and prior_start < end):
+                continue
+            if item["status"] != prior["status"]:
+                continue
+            same_frame = (
+                item["event_type"] == prior["event_type"]
+                and _roles_and_surfaces(item) == _roles_and_surfaces(prior)
+            )
+            cross_frame = (
+                action == prior["action"].strip().lower()
+                and len(_surfaces(item) & _surfaces(prior)) >= 2
+            )
+            if same_frame or cross_frame:
+                duplicate = index
                 break
-        if not duplicate:
+        if duplicate is None:
             kept.append(item)
+        elif len(item["arguments"]) > len(kept[duplicate]["arguments"]):
+            # Keep the more completely described frame. A tie keeps whichever was seen
+            # first, which is arbitrary between two equally specific readings -- the
+            # review gate, not this function, decides which reading is true.
+            kept[duplicate] = item
     return kept[:MAX_EVENTS_PER_CHAPTER]
 
 
@@ -246,23 +307,45 @@ class EventEngine:
         self.db, self.cfg, self.revision = db, cfg, revision
         if revision["prompt_version"] != EVENT_PROMPT_VERSION:
             raise ValueError("event prompt changed; create a new event revision")
-        if revision["model"].get("provider") != "ollama":
-            raise ValueError("event extraction permits only the pinned local Ollama model")
+        self.served_provider = revision["model"].get("provider")
+        if self.served_provider not in EXTRACTION_PROVIDERS:
+            raise ValueError(
+                f"event extraction permits only {'/'.join(EXTRACTION_PROVIDERS)}; "
+                f"revision pins {self.served_provider!r}"
+            )
         self.model = revision["model"]["name"]
-        runtime = revision["model"]["identity"]
-        limits = cfg.graph_ollama_first_token_seconds, cfg.graph_ollama_timeout_seconds
-        if None in limits:
-            raise ValueError("event extraction requires configured graph Ollama timeouts")
-        self.provider = OllamaProvider(
-            host=cfg.ollama_host,
-            model=self.model,
-            first_token_timeout=limits[0],
-            timeout=limits[1],
-            total_timeout=cfg.graph_ollama_total_timeout_seconds,
-            num_ctx=runtime["num_ctx"],
-            num_predict=runtime["num_predict"],
-            stream=True,
-        )
+        self.streams = self.served_provider == "ollama"
+        if self.served_provider == "ollama":
+            runtime = revision["model"]["identity"]
+            limits = cfg.graph_ollama_first_token_seconds, cfg.graph_ollama_timeout_seconds
+            if None in limits:
+                raise ValueError("event extraction requires configured graph Ollama timeouts")
+            self.provider = OllamaProvider(
+                host=cfg.ollama_host,
+                model=self.model,
+                first_token_timeout=limits[0],
+                timeout=limits[1],
+                total_timeout=cfg.graph_ollama_total_timeout_seconds,
+                num_ctx=runtime["num_ctx"],
+                num_predict=runtime["num_predict"],
+                stream=True,
+                # Pinned per revision, because reasoning changes what the model produces.
+                # Defaults to off for an identity recorded before this was configurable:
+                # leaving it to the model's own default differs per model and silently
+                # turned a 5-minute chapter into a 30-minute timeout on granite4.2.
+                think=runtime.get("think", False),
+            )
+        else:
+            # A hosted provider needs no prefill budget: the CPU-prefill split that the
+            # graph_ollama_* pair exists to bound (see config.py) is not how a remote call
+            # fails. One wall-clock timeout is the whole story, and a free-tier 429 comes
+            # back as backpressure so ``resume`` requeues the chapter rather than failing it.
+            self.provider = GeminiProvider(
+                model=self.model,
+                base_url=cfg.gemini_base_url,
+                api_key=cfg.gemini_api_key or None,
+                timeout=cfg.event_remote_timeout_seconds,
+            )
 
     async def _call(self, stage: str, internal_schema, payload: dict, passage_ids: set[str]):
         call_event_schema = payload.get("event_schema", self.revision["event_schema"])
@@ -272,8 +355,7 @@ class EventEngine:
         prompt_payload = contract.prompt_payload(payload)
         extract_instructions = (
             "Extract only plot-significant events asserted as happening in these novel passages. "
-            "Use ONLY the supplied event types and roles; they are one focused event group. Review all "
-            "passages for that group. Distinguish completed actions from attempts "
+            "Use ONLY the supplied event types and roles. Distinguish completed actions from attempts "
             "and actions explicitly prevented. Exclude plans, desires, hypotheticals, negations, "
             "generic exposition, scenery, emotions, facial expressions, voice qualities, and routine "
             "speech tags. PRIORITIZE concrete answers a reader asks about: fights and injuries; insults, "
@@ -338,8 +420,8 @@ class EventEngine:
         ])
         row = await (await self.db.execute(
             "SELECT response FROM event_completion WHERE revision_id=%s AND cache_key=%s "
-            "AND served_provider='ollama' AND served_model=%s",
-            (self.revision["id"], key, self.model),
+            "AND served_provider=%s AND served_model=%s",
+            (self.revision["id"], key, self.served_provider, self.model),
         )).fetchone()
         if row:
             return internal_schema.model_validate(row[0])
@@ -355,7 +437,12 @@ class EventEngine:
             while True:
                 await asyncio.sleep(30)
                 elapsed = round(time.monotonic() - started, 1)
-                phase = "streaming" if progress["first_token"] is not None else "prefill"
+                # A non-streaming provider yields nothing until the whole reply lands, so
+                # "prefill" would be a lie for the entire call; report the wait honestly.
+                if not self.streams:
+                    phase = "awaiting_response"
+                else:
+                    phase = "streaming" if progress["first_token"] is not None else "prefill"
                 print(json.dumps({
                     "revision": self.revision["id"], "stage": f"event_{stage}",
                     "event": "inference_progress", "phase": phase,
@@ -366,13 +453,15 @@ class EventEngine:
         print(json.dumps({"revision": self.revision["id"], "stage": f"event_{stage}",
                           "event": "inference_started"}), file=sys.stderr, flush=True)
         reporter = asyncio.create_task(heartbeat())
-        self.provider.stream_sink = observe
+        if self.streams:
+            self.provider.stream_sink = observe
         try:
             response = await self.provider.complete(
                 prompt, json_schema=wire_schema, cls=Class.BATCH, model=self.model, pin_model=True
             )
         finally:
-            self.provider.stream_sink = None
+            if self.streams:
+                self.provider.stream_sink = None
             reporter.cancel()
             try:
                 await reporter
@@ -383,7 +472,7 @@ class EventEngine:
             "event": "inference_finished", "elapsed_seconds": round(time.monotonic() - started, 1),
             "streamed_characters": progress["characters"],
         }), file=sys.stderr, flush=True)
-        if response.served_provider != "ollama" or response.served_model != self.model:
+        if response.served_provider != self.served_provider or response.served_model != self.model:
             raise RuntimeError("event serving identity changed")
         body = json.loads(response.text)
         parsed = contract.materialize("propose", internal_schema, body, {})
@@ -432,24 +521,24 @@ class EventEngine:
             batches.append(set(current))
         accepted: list[dict] = []
         rejected: list[dict] = []
-        groups: dict[str, list[dict]] = {}
-        for event in self.revision["event_schema"].get("types", []):
-            groups.setdefault(event.get("group", "general"), []).append(event)
+        # One call per batch against the whole schema. Splitting the schema into per-group
+        # calls (v12) was measured worse, not better: recall stayed flat while each group
+        # independently re-extracted the same act under its own frame, and cross-frame
+        # restatements are invisible to ``deduplicate_events``, which keys on event_type.
+        # See docs/event-extraction-pilot-metrics.md.
         for batch in batches:
             available = [row for row in linked if any(
                 p["id"] in batch and row["surface"] in p["text"] for p in contract.passages
             )]
-            for group, types in groups.items():
-                group_schema = {"types": types}
-                result = await self._call(f"extract_{group}", EventProposals, dict(
-                    source=source, event_schema=group_schema, target_event_group=group,
-                    target_language=target_language, linked_mentions=available,
-                ), batch)
-                batch_accepted, batch_rejected = validate_events(
-                    source, result, self.revision["event_schema"], linked_by_id,
-                )
-                accepted.extend(batch_accepted)
-                rejected.extend(batch_rejected)
+            result = await self._call("extract", EventProposals, dict(
+                source=source, event_schema=self.revision["event_schema"],
+                target_language=target_language, linked_mentions=available,
+            ), batch)
+            batch_accepted, batch_rejected = validate_events(
+                source, result, self.revision["event_schema"], linked_by_id,
+            )
+            accepted.extend(batch_accepted)
+            rejected.extend(batch_rejected)
         accepted = deduplicate_events(accepted)
         # The resource budget permits one generation pass, not a second verifier call.
         # Literal passage reconstruction, schema/role checks, exact argument surfaces,

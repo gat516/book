@@ -50,10 +50,12 @@ type novelSettingsReq struct {
 }
 
 type providerConfigReq struct {
-	Provider string `json:"provider"` // anthropic|deepseek|gemini|ollama
-	Model    string `json:"model,omitempty"`
-	BaseURL  string `json:"base_url,omitempty"`
-	APIKey   string `json:"api_key,omitempty"` // plaintext in the request; never stored as such
+	Provider       string `json:"provider"` // anthropic|deepseek|gemini|ollama
+	Model          string `json:"model,omitempty"`
+	TranslateModel string `json:"translate_model,omitempty"`
+	ExtractModel   string `json:"extract_model,omitempty"`
+	BaseURL        string `json:"base_url,omitempty"`
+	APIKey         string `json:"api_key,omitempty"` // plaintext in the request; never stored as such
 }
 
 type createNovelResp struct {
@@ -167,8 +169,21 @@ func (a *API) buildProviderConfigInput(req providerConfigReq) (ProviderConfigInp
 	default:
 		return ProviderConfigInput{}, fmt.Errorf("provider must be one of anthropic, deepseek, gemini, ollama")
 	}
+	if req.Provider == "ollama" && req.BaseURL != "" {
+		if err := validateOllamaBaseURL(req.BaseURL, a.cfg.OllamaAllowedHosts); err != nil {
+			return ProviderConfigInput{}, err
+		}
+	}
 
-	in := ProviderConfigInput{Provider: req.Provider, Model: req.Model, BaseURL: req.BaseURL}
+	// model is the legacy one-model field. Retain it for old clients, but when the new
+	// stage fields are omitted it deliberately configures both paths identically.
+	if req.TranslateModel == "" {
+		req.TranslateModel = req.Model
+	}
+	if req.ExtractModel == "" {
+		req.ExtractModel = req.Model
+	}
+	in := ProviderConfigInput{Provider: req.Provider, Model: req.Model, TranslateModel: req.TranslateModel, ExtractModel: req.ExtractModel, BaseURL: req.BaseURL}
 	if req.APIKey != "" {
 		if !a.cfg.ProviderConfigKeySet {
 			return ProviderConfigInput{}, ErrProviderConfigKeyNotSet

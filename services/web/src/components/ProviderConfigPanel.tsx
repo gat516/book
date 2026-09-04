@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getProviderConfig, saveProviderConfig } from "../api";
+import { getProviderConfig, listOllamaModels, saveProviderConfig } from "../api";
 import {
   CUSTOM_MODEL,
   DEFAULT_MODEL,
@@ -23,15 +23,19 @@ export function ProviderConfigPanel({ novelId }: Props) {
   const [current, setCurrent] = useState<ProviderConfigView | null>(null);
   const [loading, setLoading] = useState(true);
   const [provider, setProvider] = useState<ProviderName>("gemini");
-  const [model, setModel] = useState("");
+  const [translationModel, setTranslationModel] = useState("");
+  const [extractionModel, setExtractionModel] = useState("");
   // A saved model that is not in the catalog must stay editable rather than being
   // silently rewritten to a listed one on the next save.
   const [custom, setCustom] = useState(false);
+  const [extractionCustom, setExtractionCustom] = useState(false);
   const [baseURL, setBaseURL] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+	const [ollamaStatus, setOllamaStatus] = useState<"checking" | "connected" | "unreachable" | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -41,11 +45,27 @@ export function ProviderConfigPanel({ novelId }: Props) {
       setCurrent(config);
       if (config) {
         setProvider(config.provider);
-        setModel(config.model ?? "");
+      setTranslationModel(config.translate_model ?? config.model ?? "");
+      setExtractionModel(config.extract_model ?? config.model ?? "");
         setCustom(
-          !!config.model && !MODEL_OPTIONS[config.provider].some((m) => m.id === config.model),
+          !!(config.translate_model ?? config.model) && !MODEL_OPTIONS[config.provider].some((m) => m.id === (config.translate_model ?? config.model)),
+        );
+        setExtractionCustom(
+          !!(config.extract_model ?? config.model) && !MODEL_OPTIONS[config.provider].some((m) => m.id === (config.extract_model ?? config.model)),
         );
         setBaseURL(config.base_url ?? "");
+		if (config.provider === "ollama") {
+			setOllamaStatus("checking");
+			try {
+				const models = await listOllamaModels(novelId);
+				setAvailableModels(models);
+				setOllamaStatus("connected");
+			} catch {
+				setOllamaStatus("unreachable");
+			}
+		} else {
+			setOllamaStatus(null);
+		}
       }
     } catch (err) {
       setError(String(err));
@@ -62,17 +82,29 @@ export function ProviderConfigPanel({ novelId }: Props) {
     setProvider(next);
     // Model ids do not carry across providers, so a stale one would just 404 at call
     // time. Always reset to the new provider's default.
-    setModel(DEFAULT_MODEL[next] ?? "");
+    setTranslationModel(DEFAULT_MODEL[next] ?? "");
+    setExtractionModel(DEFAULT_MODEL[next] ?? "");
     setCustom(false);
+    setExtractionCustom(false);
   }
 
   function chooseModel(value: string) {
     if (value === CUSTOM_MODEL) {
       setCustom(true);
-      setModel("");
+      setTranslationModel("");
     } else {
       setCustom(false);
-      setModel(value);
+      setTranslationModel(value);
+    }
+  }
+
+  function chooseExtractionModel(value: string) {
+    if (value === CUSTOM_MODEL) {
+      setExtractionCustom(true);
+      setExtractionModel("");
+    } else {
+      setExtractionCustom(false);
+      setExtractionModel(value);
     }
   }
 
@@ -84,7 +116,8 @@ export function ProviderConfigPanel({ novelId }: Props) {
     try {
       const view = await saveProviderConfig(novelId, {
         provider,
-        model: model.trim() || undefined,
+        translate_model: translationModel.trim() || undefined,
+        extract_model: extractionModel.trim() || undefined,
         base_url: baseURL.trim() || undefined,
         // Omitted rather than sent empty: the server preserves the stored key when this is
         // absent, so an edit that only changes the model keeps working.
@@ -100,8 +133,21 @@ export function ProviderConfigPanel({ novelId }: Props) {
     }
   }
 
+  async function loadOllamaModels() {
+    setError(null);
+		setOllamaStatus("checking");
+    try {
+      const models = await listOllamaModels(novelId);
+      setAvailableModels(models);
+		setOllamaStatus("connected");
+    } catch (err) {
+		setOllamaStatus("unreachable");
+      setError(String(err));
+    }
+  }
+
   const needsKey = NEEDS_API_KEY[provider];
-  const selectedNote = MODEL_OPTIONS[provider].find((m) => m.id === model)?.note;
+  const selectedNote = MODEL_OPTIONS[provider].find((m) => m.id === translationModel)?.note;
   const missingKey = needsKey && !current?.api_key_set && !apiKey.trim();
 
   return (
@@ -113,7 +159,7 @@ export function ProviderConfigPanel({ novelId }: Props) {
         <form onSubmit={submit}>
           <p>
             {current
-              ? `This novel uses ${PROVIDER_LABELS[current.provider]}${current.model ? ` (${current.model})` : ""}.`
+              ? `This novel uses ${PROVIDER_LABELS[current.provider]}. Translation: ${current.translate_model ?? current.model ?? "server default"}; extraction: ${current.extract_model ?? current.model ?? "server default"}.`
               : "This novel has no provider of its own and uses the server default."}
           </p>
 
@@ -129,8 +175,8 @@ export function ProviderConfigPanel({ novelId }: Props) {
           </label>
 
           <label>
-            Model{" "}
-            <select value={custom ? CUSTOM_MODEL : model} onChange={(e) => chooseModel(e.target.value)}>
+            Translation model{" "}
+            <select value={custom ? CUSTOM_MODEL : translationModel} onChange={(e) => chooseModel(e.target.value)}>
               {MODEL_OPTIONS[provider].map((option) => (
                 <option key={option.id} value={option.id}>
                   {option.label}
@@ -143,13 +189,34 @@ export function ProviderConfigPanel({ novelId }: Props) {
             <label>
               Model name{" "}
               <input
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
+                value={translationModel}
+                onChange={(e) => setTranslationModel(e.target.value)}
                 placeholder="exact model id"
               />
             </label>
           )}
           {!custom && selectedNote && <p className="novel-create-form-hint">{selectedNote}</p>}
+          <label>
+            Extraction model{" "}
+            <select value={extractionCustom ? CUSTOM_MODEL : extractionModel} onChange={(e) => chooseExtractionModel(e.target.value)}>
+              {MODEL_OPTIONS[provider].map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+              <option value={CUSTOM_MODEL}>Other…</option>
+            </select>
+          </label>
+          {extractionCustom && (
+            <label>
+              Extraction model name{" "}
+              <input
+                value={extractionModel}
+                onChange={(e) => setExtractionModel(e.target.value)}
+                placeholder="exact model id"
+              />
+            </label>
+          )}
           {MODEL_LIST_IS_ADVISORY[provider] && (
             <p className="novel-create-form-hint">
               Ollama serves whatever is pulled on the host, so this list is a hint — a model
@@ -165,6 +232,24 @@ export function ProviderConfigPanel({ novelId }: Props) {
               placeholder="provider default"
             />
           </label>
+
+          {provider === "ollama" && (
+            <>
+              <button type="button" onClick={() => void loadOllamaModels()}>
+                Load models from this Ollama server
+              </button>
+              <p className="novel-create-form-hint">
+                Save the Ollama URL first. The server queries its fixed <code>/api/tags</code> endpoint;
+                only hosts allowed by the server administrator can be queried.
+              </p>
+              {availableModels.length > 0 && (
+                <p className="novel-create-form-hint">Available: {availableModels.join(", ")}</p>
+              )}
+			  {ollamaStatus === "checking" && <p className="novel-create-form-hint">Checking Ollama connection…</p>}
+			  {ollamaStatus === "connected" && <p role="status" className="novel-create-form-hint">Ollama connected — {availableModels.length} model(s) available.</p>}
+			  {ollamaStatus === "unreachable" && <p role="alert" className="chapter-list-error">Ollama server could not be reached. Check its URL, Tailscale connection, and server allowlist.</p>}
+            </>
+          )}
 
           {needsKey && (
             <label>

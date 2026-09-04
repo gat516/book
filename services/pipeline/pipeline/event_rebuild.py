@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 import psycopg
@@ -17,8 +18,11 @@ from psycopg.types.json import Jsonb
 
 from pipeline.config import Config
 from pipeline.evidence import digest
-from pipeline.events import DEFAULT_EVENT_SCHEMA, EVENT_PROMPT_VERSION, EventEngine
-from pipeline.graph_rebuild import local_model, objects, read_object
+from pipeline.failures import failure_category
+from pipeline.events import (
+    DEFAULT_EVENT_SCHEMA, EVENT_PROMPT_VERSION, EXTRACTION_PROVIDERS, EventEngine,
+)
+from pipeline.graph_rebuild import local_model, model_drift, objects, read_object
 from pipeline.llm.provider import AdmissionRejected
 
 
@@ -33,6 +37,28 @@ async def revision(db, rid: str, *, lock: bool = False) -> dict:
         raise ValueError("event revision not found")
     row["id"], row["novel_id"] = str(row["id"]), str(row["novel_id"])
     return row
+
+
+async def extraction_model(cfg, provider: str, name: str) -> dict:
+    """Pin the model an event revision is bound to, per provider.
+
+    Ollama keeps the strong form: the model must be installed locally, and the recorded
+    digest plus generation-affecting runtime settings let ``resume`` refuse to continue a
+    revision whose weights changed underneath it.
+
+    A hosted provider cannot offer that -- there is no digest to read, and a vendor may
+    change what serves a stable model name.  Rather than fake an identity that implies a
+    guarantee we do not have, record only provider and name, and lean on the two checks
+    that still hold: EventEngine rejects a completion whose served provider/model is not
+    the pinned pair, and served_model is part of event_completion's primary key, so a
+    rename can never silently reuse another model's cached responses.  See migration
+    0040 and docs/event-extraction-pilot-metrics.md.
+    """
+    if provider == "ollama":
+        return await local_model(cfg, name)
+    if provider not in EXTRACTION_PROVIDERS:
+        raise ValueError(f"unsupported event extraction provider: {provider}")
+    return dict(provider=provider, name=name, identity={})
 
 
 def qualified(metrics: dict) -> bool:
@@ -50,8 +76,9 @@ def qualified(metrics: dict) -> bool:
     )
 
 
-async def prepare(db, cfg, novel: str, model: str, schema: dict | None = None) -> str:
-    identity = await local_model(cfg, model)
+async def prepare(db, cfg, novel: str, model: str, schema: dict | None = None,
+                  provider: str = "ollama") -> str:
+    identity = await extraction_model(cfg, provider, model)
     client = objects(cfg)
     if not await (await db.execute("SELECT 1 FROM novel WHERE id=%s", (novel,))).fetchone():
         raise ValueError("novel not found")
@@ -104,8 +131,12 @@ async def resume(db, cfg, rid: str, *, limit: int | None = None, chapter: int | 
         r = await revision(db, rid)
         if r["state"] == "archived":
             raise ValueError("archived event revision cannot be rebuilt")
-        if await local_model(cfg, r["model"]["name"]) != r["model"]:
-            raise ValueError("installed model changed; create a new event revision")
+        live = await extraction_model(cfg, r["model"]["provider"], r["model"]["name"])
+        if live != r["model"]:
+            raise ValueError(
+                "pinned model or inference configuration changed; create a new event "
+                f"revision ({model_drift(r['model'], live)})"
+            )
         engine = EventEngine(db, cfg, r)
         target = (await (await db.execute(
             "SELECT target_lang FROM novel WHERE id=%s", (r["novel_id"],)
@@ -116,6 +147,12 @@ async def resume(db, cfg, rid: str, *, limit: int | None = None, chapter: int | 
         )).fetchall()
         selected = jobs[:limit] if limit else jobs
         client = objects(cfg)
+        # A chapter that fails is recorded and skipped rather than ending the run: the
+        # event_job state='failed'/retry_at machinery exists precisely so one bad chapter
+        # does not cost the other twenty. Consecutive failures are different -- they mean
+        # the model or the connection is gone, not that one chapter is awkward -- so the
+        # run still stops rather than marking every remaining chapter failed in turn.
+        consecutive_failures = 0
         for (index,) in selected:
             chapter = next(c for c in r["snapshot"]["chapters"] if c["chapter"] == index)
             source = await asyncio.to_thread(
@@ -201,7 +238,7 @@ async def preview(db, cfg, rid: str) -> dict:
             chapter["raw_uri"], chapter.get("translated_uri"), chapter["raw_hash"]
         )
     jobs = await (await db.execute(
-        "SELECT chapter_index,state,error FROM event_job WHERE revision_id=%s ORDER BY chapter_index",
+        "SELECT chapter_index,state,error,output FROM event_job WHERE revision_id=%s ORDER BY chapter_index",
         (rid,),
     )).fetchall()
     rows = await (await db.execute(
@@ -238,6 +275,13 @@ async def preview(db, cfg, rid: str) -> dict:
         "events": events,
         "failures": [{"chapter": j[0], "state": j[1], "error": j[2]}
                      for j in jobs if j[1] != "done"],
+        # Already stored in event_job.output, just never surfaced. A report that shows only
+        # what was ACCEPTED cannot answer the question a review actually asks -- whether the
+        # gate threw away something true -- and the graph path has surfaced its rejections
+        # all along (graph_rebuild.preview). Reasons are the diagnostic: across this repo's
+        # revisions, 41 of 53 rejections are missing roles or invalid arguments.
+        "rejected": [dict(chapter=j[0], **x)
+                     for j in jobs if j[3] for x in j[3].get("rejected", [])],
     }
     report["activation_eligible"] = (
         r["prompt_version"] == EVENT_PROMPT_VERSION and qualified(r["evaluation"])
@@ -436,7 +480,8 @@ async def main(args) -> None:
     async with await psycopg.AsyncConnection.connect(cfg.database_url, autocommit=True) as db:
         if args.command == "prepare":
             schema = json.loads(Path(args.schema).read_text()) if args.schema else None
-            result = {"revision": await prepare(db, cfg, args.novel, args.model, schema),
+            result = {"revision": await prepare(db, cfg, args.novel, args.model, schema,
+                                                provider=args.provider),
                       "status": "staging; active graph and events unchanged"}
         elif args.command == "resume":
             await resume(db, cfg, args.revision, limit=args.limit, chapter=args.chapter)
@@ -463,6 +508,7 @@ if __name__ == "__main__":
     command = commands.add_parser("prepare")
     command.add_argument("--novel", required=True)
     command.add_argument("--model", required=True)
+    command.add_argument("--provider", default="ollama", choices=EXTRACTION_PROVIDERS)
     command.add_argument("--schema")
     for name in ["resume", "preview", "review", "activate", "rollback"]:
         command = commands.add_parser(name)
