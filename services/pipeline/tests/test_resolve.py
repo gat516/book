@@ -774,3 +774,27 @@ async def test_lock_glossary_declines_a_single_character_source_term(db_conn):
         assert count[0] == 0
     finally:
         await delete_novel(db_conn, novel_id)
+
+
+def test_entity_canonical_rejects_the_half_translated_names_the_graph_actually_stored():
+    """_target_term_problem now also guards EntityRow.canonical in _decide, not just a
+    locked glossary term.
+
+    These are real canonicals from this repo's own entity table for chapter 1. They were
+    stored because the check was applied to the glossary only, so the glossary was
+    structurally protected from a string the entity table accepted — the same value,
+    refused in one place and kept in the other. A half-translated canonical is entity
+    drift (§12 risk #2) with no crash to announce it.
+    """
+    from pipeline.stages.resolve import _target_term_problem
+
+    # Half English, half Chinese: 六纪星 was substituted and 莲 was orphaned.
+    assert _target_term_problem("Hexalinear Star莲", "en") is not None
+    # A fully rendered name of the same concept stays acceptable.
+    assert _target_term_problem("Sixth Era Star Lotus", "en") is None
+    # The orphaned character transliterated rather than translated is NOT caught by the
+    # script check — it is pure ASCII. Recorded so the limit of this guard is explicit:
+    # it catches "failed to translate at all", not "translated the wrong way".
+    assert _target_term_problem("Hexalinear Star Lian", "en") is None
+    # A CJK target language keeps CJK canonicals, so the guard stays language-relative.
+    assert _target_term_problem("六纪星莲", "zh") is None

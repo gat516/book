@@ -222,6 +222,15 @@ class GraphWriter:
         comment can say approximate search is acceptable for this lookup and not for
         chunks. Exact match is the safety net under the approximation.
         """
+        # Scoped to the revision this novel actually serves. Without it the candidate pool
+        # spans every staging and archived rebuild, so RESOLVE can bind a live mention to an
+        # entity from an experiment -- and comparing models is exactly when spare revisions
+        # exist. Falls back to unscoped only when the novel has no active revision, so a
+        # novel mid-migration keeps its previous behaviour rather than losing every
+        # candidate and minting a new entity for every surface.
+        active = (await (await self.db.execute(
+            "SELECT active_graph_revision FROM novel WHERE id = %s", (novel_id,)
+        )).fetchone() or (None,))[0]
         rows = await (
             await self.db.execute(
                 """
@@ -230,8 +239,9 @@ class GraphWriter:
                 LEFT JOIN alias a ON a.entity_id = e.id
                 WHERE e.novel_id = %s AND (a.surface = %s OR e.canonical = %s)
                   AND (%s::text IS NULL OR e.kind = %s::text)
+                  AND (%s::uuid IS NULL OR e.revision_id = %s::uuid)
                 """,
-                (novel_id, surface, surface, kind, kind),
+                (novel_id, surface, surface, kind, kind, active, active),
             )
         ).fetchall()
         return [CandidateRow(id=str(r[0]), canonical=r[1], kind=r[2]) for r in rows]

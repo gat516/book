@@ -1,4 +1,32 @@
 // Labeled mentions for entity-resolution accuracy. See README.md for the format.
-// Empty on purpose: labels come from real ingested chapters, not invented ones — a
-// fabricated eval set measures nothing and hides the fact that nothing is measured yet.
-// Add ~20 whenever you test resolution against a real novel.
+//
+// Provenance: surfaces taken from the locked glossary and the chapter source for
+// `chaotic heavenly emperor technique` (9305a18f-1617-4e41-a6d2-3877df98eb7e);
+// expected_canonical confirmed by the owner. Deliberately NOT bootstrapped from the
+// alias/entity tables — the runner reads those same rows, so generated labels would score
+// correct by construction and freeze the existing bifurcation as the target.
+//
+// Several expectations disagree with the CURRENTLY locked glossary target, on purpose.
+// The glossary maps 阿瑞斯 (Ares) to "An Ruosi", 智慧女神 ("Goddess of Wisdom") to
+// "Ling Feng", and 流萤之河 ("River of Fireflies") to "Lotus Pool". These labels record
+// what resolution SHOULD produce, which is what makes them a test rather than a mirror.
+{"chapter": 1, "surface": "凌峰", "expected_canonical": "Ling Feng"}
+{"chapter": 1, "surface": "安若素", "expected_canonical": "An Ruosu"}
+{"chapter": 1, "surface": "契科夫", "expected_canonical": "Chekov"}
+{"chapter": 1, "surface": "劳伦斯", "expected_canonical": "Lawrence"}
+{"chapter": 7, "surface": "龙飞", "expected_canonical": "Long Fei"}
+{"chapter": 7, "surface": "阿瑞斯", "expected_canonical": "Ares"}
+{"chapter": 6, "surface": "芙蕾雅", "expected_canonical": "Freya"}
+{"chapter": 8, "surface": "亚巴顿", "expected_canonical": "Abaddon"}
+{"chapter": 1, "surface": "碎星滩", "expected_canonical": "Wasted Star Trough"}
+{"chapter": 7, "surface": "流萤之河", "expected_canonical": "River of Fireflies"}
+{"chapter": 3, "surface": "武盟", "expected_canonical": "Martial Alliance"}
+{"chapter": 7, "surface": "北冥军神", "expected_canonical": "Beimeng Junshen"}
+{"chapter": 3, "surface": "星莲", "expected_canonical": "Star Lotus"}
+{"chapter": 3, "surface": "三纪星莲", "expected_canonical": "Triassic Star Lotus"}
+{"chapter": 6, "surface": "六纪星莲", "expected_canonical": "Sixth Era Star Lotus"}
+{"chapter": 3, "surface": "星源兽", "expected_canonical": "Star Origin Beast"}
+{"chapter": 12, "surface": "混沌本源", "expected_canonical": "Primordial Chaos Essence"}
+{"chapter": 7, "surface": "十方俱灭", "expected_canonical": "All-Space Annihilator"}
+{"chapter": 12, "surface": "弑神枪法", "expected_canonical": "Butcher God Gun Skill"}
+{"chapter": 12, "surface": "紫玲", "expected_canonical": "Zilin"}

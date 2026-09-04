@@ -45,3 +45,24 @@ regression like any failing test. Three outcomes, failing differently:
 
 `unresolved` also shows up at ingest time as graph-write's `unresolved=` count, which is
 the same signal seen from the writing side.
+
+## Baseline
+
+`chaotic heavenly emperor technique` (`9305a18f-1617-4e41-a6d2-3877df98eb7e`), active graph
+revision `a6622fa8` (the auto-created `legacy` revision from migration 0023 — note
+`evidence-v1` is that migration's column DEFAULT, never a real prompt version):
+
+**30.0%** — 6 correct, 11 wrong, 3 unresolved, over 20 labels.
+
+Two failure shapes dominate, and neither is model quality:
+
+- **Alias collapse.** One source surface claims several entities: `劳伦斯` and `阿瑞斯`
+  each resolve to four, `亚巴顿` to five. Distinct characters share alias rows.
+- **Glossary poisoning.** Several locked terms map to the wrong target, so resolution
+  faithfully reproduces them: `阿瑞斯` (Ares) is locked to `An Ruosi`, `智慧女神`
+  ("Goddess of Wisdom") to `Ling Feng`, `流萤之河` ("River of Fireflies") to `Lotus Pool`.
+  Correcting these is forward-only and does not touch already-translated chapters.
+
+The runner also reports duplicate canonicals (the same bifurcation seen from the graph
+side). Five groups exist, all `artifact`, which is why a `UNIQUE` index on
+`(revision_id, kind, canonical)` cannot be added until a clean rebuild.

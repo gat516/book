@@ -236,6 +236,28 @@ def parse_decision(text: str, offered: list[Candidate]) -> Decision:
     decision = Decision.model_validate(json.loads(_strip_fence(text)))
 
     if decision.decision == NEW_ENTITY:
+        # A NEW entity may not be named after one it was just shown. The prompt lists every
+        # candidate's canonical, so a weak model can answer "new" and then reuse a name from
+        # that list -- which is the same identity fabrication the `confirm` branch guards
+        # against, expressed as a name instead of an id, and previously unchecked here.
+        #
+        # It is not hypothetical. This novel's glossary locked 阿瑞斯 (Ares) to "An Ruosi",
+        # 智慧女神 ("Goddess of Wisdom") to "Ling Feng", and 流萤之河 ("River of Fireflies")
+        # to "Lotus Pool" -- in each case the name of a DIFFERENT entity offered in the same
+        # prompt. Locked terms are immutable and primed into every later chapter, so each one
+        # corrupted the translation and the graph from that chapter on.
+        proposed = (decision.target_term or "").strip().casefold()
+        collision = next(
+            (c for c in offered if proposed and c.canonical.strip().casefold() == proposed),
+            None,
+        )
+        if collision is not None:
+            raise FreeGeneratedEntity(
+                f"disambiguator answered 'new' but named it {decision.target_term!r}, "
+                f"the canonical of offered candidate {collision.entity_id!r}. A genuinely "
+                "new entity needs its own name; if it IS that entity the answer is "
+                "'confirm' (§12 risk #2)"
+            )
         return Decision(
             decision=NEW_ENTITY, entity_id=None, target_term=decision.target_term
         )

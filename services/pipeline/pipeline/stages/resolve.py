@@ -86,6 +86,11 @@ _CJK_RANGE = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
 _CJK_LANGS = frozenset({"zh", "ja"})
 
 
+class _OccurrencesDisagree(Exception):
+    """Raised to roll back every entity minted for a surface whose occurrences disagree."""
+
+
+
 def _target_term_problem(target_term: str, target_lang: str) -> str | None:
     """Return why this target term is unusable, or None if it looks plausible.
 
@@ -519,15 +524,30 @@ class ResolveStage:
             kind=proposed_kind or self._kind_of(candidates) or UNKNOWN_KIND
             contexts=_contexts_around(text,surface)
             separately=len(contexts)>1 and bool(candidates)
-            decisions=[]
-            for context in contexts if separately else [(_context_around(text,surface))]:
-                current=await self._candidates(writer,ctx.novel.id,surface,vector,kind=proposed_kind)
-                decisions.append(await self._decide(ctx,writer,surface,current,vector,text=text,
-                    chapter=envelope.chapter_index,kind=kind,context=context))
-            ids={decision[0] for decision in decisions}
+            # Every decision for this surface commits inside ONE transaction, so a set of
+            # occurrences that cannot agree leaves nothing behind. Previously each "new"
+            # answer inserted its own entity and the disagreement check ran afterwards:
+            # the surface was left unbound while its entities stayed committed, which is
+            # how one concept became several orphan rows bound to no mention at all.
+            # Re-reading candidates inside the transaction is deliberate — a later
+            # occurrence should still be able to bind to an entity an earlier one minted.
+            ids: set = set()
+            try:
+                async with ctx.db.transaction():
+                    decisions=[]
+                    for context in contexts if separately else [(_context_around(text,surface))]:
+                        current=await self._candidates(writer,ctx.novel.id,surface,vector,kind=proposed_kind)
+                        decisions.append(await self._decide(ctx,writer,surface,current,vector,text=text,
+                            chapter=envelope.chapter_index,kind=kind,context=context))
+                    ids={decision[0] for decision in decisions}
+                    if len(ids)>1:
+                        raise _OccurrencesDisagree
+            except _OccurrencesDisagree:
+                log.warning(
+                    "resolve: repeated occurrences of %r disagree; discarded their entities "
+                    "and left the surface unbound",surface)
+                continue
             entity_id=next(iter(ids)) if len(ids)==1 else None
-            if len(ids)>1:
-                log.warning("resolve: repeated occurrences of %r disagree; leaving surface unbound",surface)
             if entity_id is None:
                 continue
             if not any(c.entity_id == entity_id for c in candidates):
@@ -649,6 +669,18 @@ class ResolveStage:
         if ctx.novel.source_lang != ctx.novel.target_lang and not target_term:
             log.warning("resolve: missing target term for translated entity %r", surface)
             return None, None
+        if ctx.novel.source_lang != ctx.novel.target_lang:
+            # The same shape checks _lock_glossary already applies to a locked term. Without
+            # them entity.canonical stored whatever the model emitted, so the glossary was
+            # structurally protected from 'Hexalinear Star莲' while the entity table was not
+            # -- and a half-translated canonical is exactly the entity drift of §12 risk #2.
+            problem = _target_term_problem(target_term, ctx.novel.target_lang)
+            if problem is not None:
+                log.warning(
+                    "resolve: refusing entity canonical %r for surface %r (%s)",
+                    target_term, surface, problem,
+                )
+                return None, None
 
         entity_id = str(uuid.uuid4())
         entity = EntityRow(

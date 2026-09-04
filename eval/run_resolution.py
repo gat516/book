@@ -56,12 +56,56 @@ def load_labels(path: Path) -> list[dict]:
     return labels
 
 
-def resolve_surface(conn, novel_id: str, surface: str) -> list[str]:
+def active_graph_revision(conn, novel_id: str) -> str:
+    """The revision this novel currently serves to readers."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT active_graph_revision FROM novel WHERE id = %s", (novel_id,))
+        row = cur.fetchone()
+    if not row:
+        raise SystemExit(f"novel {novel_id} not found")
+    if not row[0]:
+        raise SystemExit(
+            f"novel {novel_id} has no active graph revision; pass --revision-id to score a "
+            "staging candidate"
+        )
+    return str(row[0])
+
+
+def duplicate_canonicals(conn, novel_id: str, revision_id: str) -> list[tuple[str, str, int]]:
+    """Canonical names carried by more than one entity in this revision.
+
+    The same defect `resolve_surface` reports, seen from the other side. That function
+    catches it per labeled mention ("this surface claims four entities"); this one catches
+    it across the whole graph, including concepts nobody thought to label. Reported rather
+    than enforced: a UNIQUE index on (revision_id, kind, canonical) is the real fix, but it
+    cannot be created while duplicates exist, so this is the detector that says when it can.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT canonical, kind, count(*)
+            FROM entity
+            WHERE novel_id = %s AND revision_id = %s
+            GROUP BY canonical, kind
+            HAVING count(*) > 1
+            ORDER BY count(*) DESC, canonical
+            """,
+            (novel_id, revision_id),
+        )
+        return [(r[0], r[1], r[2]) for r in cur.fetchall()]
+
+
+def resolve_surface(conn, novel_id: str, revision_id: str, surface: str) -> list[str]:
     """Canonical names of every entity claiming this surface, via alias or canonical.
 
     Returns a LIST, not one name, because more than one hit is itself the finding: it
     means the surface is ambiguous in the graph, which is the shape entity bifurcation
     takes when you look at it from the mention side.
+
+    Scoped to ONE revision. Without that filter every staging and archived rebuild joins
+    the result set, so a leftover experimental revision turns `correct` into `wrong` with
+    no drift having occurred -- and comparing models is exactly when spare revisions exist.
+    Mirrors the scoping production reads already use (askai/retrieval.py).
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -69,9 +113,10 @@ def resolve_surface(conn, novel_id: str, surface: str) -> list[str]:
             SELECT DISTINCT e.canonical
             FROM entity e
             LEFT JOIN alias a ON a.entity_id = e.id
-            WHERE e.novel_id = %s AND (a.surface = %s OR e.canonical = %s)
+            WHERE e.novel_id = %s AND e.revision_id = %s
+              AND (a.surface = %s OR e.canonical = %s)
             """,
-            (novel_id, surface, surface),
+            (novel_id, revision_id, surface, surface),
         )
         return [r[0] for r in cur.fetchall()]
 
@@ -81,6 +126,11 @@ def main() -> int:
     parser.add_argument("--novel-id", required=True)
     parser.add_argument("--file", type=Path, default=DEFAULT_FILE)
     parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL", DEFAULT_DB))
+    parser.add_argument(
+        "--revision-id",
+        default=None,
+        help="score this graph revision instead of the novel's active one",
+    )
     parser.add_argument(
         "--min-accuracy",
         type=float,
@@ -92,16 +142,21 @@ def main() -> int:
     labels = load_labels(args.file)
     if not labels:
         print(f"no labels in {args.file} — add some while testing resolution (workstream A)")
-        return 0
+        # An unmeasured metric must not read as a passing one. A caller that asked for a
+        # floor asked for a guarantee, and zero labels cannot supply it -- returning 0 here
+        # is how CI stays green while measuring nothing.
+        return 1 if args.min_accuracy is not None else 0
 
     outcomes: Counter[str] = Counter()
     failures: list[str] = []
 
     with psycopg.connect(args.database_url) as conn:
+        revision_id = args.revision_id or active_graph_revision(conn, args.novel_id)
+        print(f"graph revision: {revision_id}")
         for label in labels:
             surface = label["surface"]
             expected = label["expected_canonical"]
-            found = resolve_surface(conn, args.novel_id, surface)
+            found = resolve_surface(conn, args.novel_id, revision_id, surface)
 
             if not found:
                 outcomes["unresolved"] += 1
@@ -115,8 +170,17 @@ def main() -> int:
                     f" -> {found} (expected {expected!r})"
                 )
 
+        duplicates = duplicate_canonicals(conn, args.novel_id, revision_id)
+
     total = sum(outcomes.values())
     accuracy = outcomes["correct"] / total
+
+    if duplicates:
+        print("duplicate canonicals (one name, several entities — bifurcation from the")
+        print("graph side; blocks a UNIQUE index on (revision_id, kind, canonical)):")
+        for canonical, kind, count in duplicates:
+            print(f"  {count}x  {kind:<10} {canonical!r}")
+        print()
 
     if failures:
         print("failures:")
