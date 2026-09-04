@@ -40,7 +40,7 @@ LLM_STAGES = ("extract", "character_names", "resolve", "translate", "state")
 _UNIT_SEPARATOR = "\x1f"
 
 
-def model_for_stage(stage: str, cfg: Config, override: str | None = None) -> str:
+def model_for_stage(stage: str, cfg: Config, override: dict[str, str] | str | None = None) -> str:
     """The bare model name (no provider prefix) a stage should ask the provider for.
 
     THE single source of truth for stage→model selection. Stage code MUST call this
@@ -58,6 +58,10 @@ def model_for_stage(stage: str, cfg: Config, override: str | None = None) -> str
     the provider instance never applied, and a novel pinned to Gemini was still sent the
     env's Ollama model name (a 404 on every call).
     """
+    if isinstance(override, dict):
+        if stage == "translate":
+            return override.get("translate") or cfg.llm_model_translate
+        return override.get("extract") or cfg.llm_model_extract
     if override:
         return override
     return cfg.llm_model_translate if stage == "translate" else cfg.llm_model_extract
@@ -112,7 +116,7 @@ def stage_config_version(
 
 
 def model_id_for_stage(stage: str, cfg: Config, provider: str | None = None,
-                      override: str | None = None) -> str:
+                       override: dict[str, str] | str | None = None) -> str:
     """provider:model for a stage. translate uses the stronger model; the rest the cheap
     extraction model (§10 / .env.example).
 

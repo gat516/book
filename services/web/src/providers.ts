@@ -37,6 +37,7 @@ export const MODEL_OPTIONS: Record<ProviderName, ModelOption[]> = {
   ],
   ollama: [
     { id: "qwen2.5:7b-instruct", label: "qwen2.5:7b-instruct", note: "Produces valid JSON here, but needs ~6GB RAM" },
+    { id: "qwen3:4b-instruct-2507-q8_0", label: "Qwen3 4B Instruct (Q8)", note: "Fast structured extraction; facts are evidence-gated." },
     { id: "llama3.2:3b", label: "llama3.2:3b", note: "Fits easily; fails this pipeline's schema validation" },
   ],
 };

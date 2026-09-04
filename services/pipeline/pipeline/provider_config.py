@@ -27,6 +27,8 @@ from pipeline.config import Config, names_runtime, resolve_runtime
 class ProviderConfigRow:
     provider: str
     model: str | None
+    translate_model: str | None
+    extract_model: str | None
     base_url: str | None
     api_key: str | None
 
@@ -50,14 +52,14 @@ async def load_provider_config(db, novel_id: str) -> ProviderConfigRow | None:
     """Fetch and decrypt novel_id's provider config, or None if it has none."""
     row = await (
         await db.execute(
-            "SELECT provider, model, base_url, api_key_cipher, api_key_nonce "
+            "SELECT provider, model, translate_model, extract_model, base_url, api_key_cipher, api_key_nonce "
             "FROM novel_provider_config WHERE novel_id = %s",
             (novel_id,),
         )
     ).fetchone()
     if row is None:
         return None
-    provider, model, base_url, cipher, nonce = row
+    provider, model, translate_model, extract_model, base_url, cipher, nonce = row
     api_key = None
     if cipher is not None:
         # AESGCM.decrypt raises on truncated/tampered ciphertext — deliberately not
@@ -65,7 +67,8 @@ async def load_provider_config(db, novel_id: str) -> ProviderConfigRow | None:
         # (raising out of _handle, chapter marked "error") rather than silently falling
         # back to the process default and translating under the wrong credentials.
         api_key = AESGCM(_decryption_key()).decrypt(bytes(nonce), bytes(cipher), None).decode("utf-8")
-    return ProviderConfigRow(provider=provider, model=model, base_url=base_url, api_key=api_key)
+    return ProviderConfigRow(provider=provider, model=model, translate_model=translate_model,
+                             extract_model=extract_model, base_url=base_url, api_key=api_key)
 
 
 async def load_provider_credential(db, provider: str) -> tuple[str | None, str | None]:
@@ -111,6 +114,8 @@ async def resolve_provider_config(db, novel_id: str, default_provider: str) -> P
     return ProviderConfigRow(
         provider=provider,
         model=row.model if row is not None else None,
+        translate_model=row.translate_model if row is not None else None,
+        extract_model=row.extract_model if row is not None else None,
         base_url=(row.base_url if row is not None else None) or global_base_url,
         api_key=(row.api_key if row is not None else None) or global_api_key,
     )
@@ -123,20 +128,20 @@ def build_provider(row: ProviderConfigRow, cfg: Config) -> LLMProvider:
         case "ollama":
             return OllamaProvider(
                 host=row.base_url or cfg.ollama_host,
-                model=row.model or cfg.llm_model_extract,
+                model=row.extract_model or row.model or cfg.llm_model_extract,
                 timeout=cfg.ollama_timeout_seconds,
             )
         case "anthropic":
-            return AnthropicProvider(model=row.model or cfg.llm_model_extract, api_key=row.api_key)
+            return AnthropicProvider(model=row.extract_model or row.model or cfg.llm_model_extract, api_key=row.api_key)
         case "gemini":
             return GeminiProvider(
-                model=row.model or cfg.llm_model_extract,
+                model=row.extract_model or row.model or cfg.llm_model_extract,
                 base_url=row.base_url or cfg.gemini_base_url,
                 api_key=row.api_key,
             )
         case "deepseek":
             return DeepSeekProvider(
-                model=row.model or cfg.llm_model_extract,
+                model=row.extract_model or row.model or cfg.llm_model_extract,
                 base_url=row.base_url or cfg.deepseek_base_url,
                 api_key=row.api_key,
             )
@@ -166,7 +171,7 @@ def build_names_provider(cfg: Config, *, provider_id: str,
     limits, identity = runtime["limits"], runtime["identity"]
     return OllamaProvider(
         host=(row.base_url if row else None) or cfg.ollama_host,
-        model=(row.model if row else None) or cfg.llm_model_extract,
+        model=((row.extract_model or row.model) if row else None) or cfg.llm_model_extract,
         timeout=limits["idle_timeout_seconds"],
         total_timeout=limits["total_timeout_seconds"],
         first_token_timeout=limits["first_token_timeout_seconds"],
@@ -189,7 +194,7 @@ def build_resolve_provider(cfg: Config, *, provider_id: str,
     limits, identity = runtime["limits"], runtime["identity"]
     return OllamaProvider(
         host=(row.base_url if row else None) or cfg.ollama_host,
-        model=(row.model if row else None) or cfg.llm_model_extract,
+        model=((row.extract_model or row.model) if row else None) or cfg.llm_model_extract,
         timeout=limits["idle_timeout_seconds"],
         total_timeout=limits["total_timeout_seconds"],
         first_token_timeout=limits["first_token_timeout_seconds"],

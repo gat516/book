@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/base64"
 	"log"
+	"net/url"
 	"os"
+	"strings"
 )
 
 // Config holds everything the service needs to reach its backing stores. Values come
@@ -32,6 +34,9 @@ type Config struct {
 	// see ErrProviderConfigKeyNotSet.
 	ProviderConfigKey    [32]byte
 	ProviderConfigKeySet bool
+	// OllamaAllowedHosts is an operator-controlled SSRF boundary for the model catalog
+	// probe. The browser can select a saved URL, never an arbitrary request path.
+	OllamaAllowedHosts map[string]bool
 }
 
 // getenv returns the env var if set and non-empty, otherwise the fallback.
@@ -58,6 +63,15 @@ func loadConfig() Config {
 		ObjectUseSSL:    os.Getenv("OBJECT_STORE_USE_SSL") == "true",
 
 		IngestInternalToken: os.Getenv("INGEST_INTERNAL_TOKEN"),
+		OllamaAllowedHosts:  map[string]bool{},
+	}
+	for _, host := range strings.Split(getenv("OLLAMA_ALLOWED_HOSTS", "localhost,127.0.0.1"), ",") {
+		if host = strings.TrimSpace(strings.ToLower(host)); host != "" {
+			cfg.OllamaAllowedHosts[host] = true
+		}
+	}
+	if parsed, err := url.Parse(getenv("OLLAMA_HOST", "http://localhost:11434")); err == nil && parsed.Hostname() != "" {
+		cfg.OllamaAllowedHosts[strings.ToLower(parsed.Hostname())] = true
 	}
 
 	if raw := os.Getenv("INGEST_PROVIDER_CONFIG_KEY"); raw != "" {

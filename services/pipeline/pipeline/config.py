@@ -29,6 +29,25 @@ def _optional_float(key: str) -> float | None:
     return float(v) if v else None
 
 
+def _optional_bool(key: str) -> bool | None:
+    """Tri-state flag: unset stays None so the caller can tell "off" from "unspecified".
+
+    That distinction is load-bearing for anything that joins a revision identity — an
+    omitted key leaves an already-recorded identity untouched, while an explicit False
+    is a deliberate setting worth pinning. Refuses a value it cannot read rather than
+    silently treating a typo as off.
+    """
+    v = os.getenv(key)
+    if not v:
+        return None
+    lowered = v.strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{key} must be a boolean (true/false), got {v!r}")
+
+
 @dataclass(frozen=True)
 class Config:
     # Infra
@@ -99,6 +118,15 @@ class Config:
     graph_ollama_total_timeout_seconds: float = 1800
     graph_ollama_num_ctx: int = 16384
     graph_ollama_num_predict: int = 4096
+    # Reasoning is generation-affecting, so when it is set at all it joins the revision
+    # identity below. Left None the key is omitted entirely, which keeps every identity
+    # already recorded on an existing revision byte-identical.
+    graph_ollama_think: bool | None = None
+
+    # Event extraction served by a hosted provider needs one wall-clock bound, not the
+    # prefill/gap split above: that pair exists because CPU prefill can run for minutes
+    # before the first token, which is not how a remote call behaves or fails.
+    event_remote_timeout_seconds: float = 300
 
     # CHARACTER_NAMES gets the same two-phase treatment as graph inference, and for the
     # same measured reason: it batches up to 8 KB of source per call, so prefill dominates
@@ -155,6 +183,8 @@ class Config:
             graph_ollama_total_timeout_seconds=float(_getenv("GRAPH_OLLAMA_TOTAL_TIMEOUT_SECONDS", "1800")),
             graph_ollama_num_ctx=int(_getenv("GRAPH_OLLAMA_NUM_CTX", "16384")),
             graph_ollama_num_predict=int(_getenv("GRAPH_OLLAMA_NUM_PREDICT", "4096")),
+            graph_ollama_think=_optional_bool("GRAPH_OLLAMA_THINK"),
+            event_remote_timeout_seconds=float(_getenv("EVENT_REMOTE_TIMEOUT_SECONDS", "300")),
             names_ollama_first_token_seconds=float(_getenv("NAMES_OLLAMA_FIRST_TOKEN_SECONDS", "900")),
             names_ollama_timeout_seconds=float(_getenv("NAMES_OLLAMA_TIMEOUT_SECONDS", "120")),
             names_ollama_total_timeout_seconds=float(_getenv("NAMES_OLLAMA_TOTAL_TIMEOUT_SECONDS", "1800")),
@@ -206,9 +236,14 @@ def graph_runtime(cfg: Config) -> dict:
         raise ValueError('graph timeouts must be finite, positive, and total >= first-token and idle')
     if not 0 < cfg.graph_ollama_num_predict < cfg.graph_ollama_num_ctx:
         raise ValueError('graph output budget must be positive and smaller than context')
+    identity = dict(version='stream-admission-v2', stream=True,
+                    num_ctx=cfg.graph_ollama_num_ctx, num_predict=cfg.graph_ollama_num_predict)
+    # Only when explicitly configured, so an identity recorded before this setting existed
+    # still compares equal and its revision stays resumable.
+    if cfg.graph_ollama_think is not None:
+        identity['think'] = cfg.graph_ollama_think
     return dict(
-        identity=dict(version='stream-admission-v2', stream=True,
-                      num_ctx=cfg.graph_ollama_num_ctx, num_predict=cfg.graph_ollama_num_predict),
+        identity=identity,
         limits=dict(first_token_timeout_seconds=first_token, idle_timeout_seconds=idle,
                     total_timeout_seconds=total))
 
