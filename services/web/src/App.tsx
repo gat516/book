@@ -126,6 +126,19 @@ export default function App() {
     setLookingForMore(false);
     setShowGlossary(false);
     setShowTimeline(false);
+    setRepairRequest(0);
+    setShowChapters(true);
+  }
+
+  function backToChapters() {
+    // This is the book-level navigation boundary: close reader-only panels and return
+    // to the chapter index, while leaving the book's provider/settings controls visible.
+    setChapter(null);
+    setPending(null);
+    setAddingChapter(false);
+    setShowGlossary(false);
+    setShowTimeline(false);
+    setRepairRequest(0);
     setShowChapters(true);
   }
 
@@ -277,8 +290,8 @@ export default function App() {
   return (
     <main className="app">
       <QueueControls novelId={novelId} />
-      <button className="app-back" onClick={backToNovels}>
-        ← All novels
+      <button className="app-back" onClick={showChapters ? backToNovels : backToChapters}>
+        {showChapters ? "← All novels" : "← All chapters"}
       </button>
 
       <button className="app-toggle-glossary" onClick={() => { setShowGlossary((v) => !v); setShowTimeline(false); }}>

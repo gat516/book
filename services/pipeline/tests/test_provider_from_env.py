@@ -51,7 +51,7 @@ def test_names_provider_carries_the_stage_budget_and_streams():
 
 
 def test_names_provider_honours_a_novels_own_ollama_host_and_model():
-    row = ProviderConfigRow(provider="ollama", model="qwen2.5:7b-instruct",
+    row = ProviderConfigRow(provider="ollama", model="qwen2.5:7b-instruct", translate_model=None, extract_model=None,
                             base_url="http://elsewhere:11434", api_key=None)
     provider = build_names_provider(make_config(), provider_id="ollama", row=row)
     assert provider._model == "qwen2.5:7b-instruct"
