@@ -47,9 +47,15 @@ func main() {
 	mux.HandleFunc("POST /novels/{id}/glossary/confirm", api.confirmGlossaryTerm)
 	mux.HandleFunc("POST /novels/{id}/name-reviews/{term}/approve", api.approveCharacterName)
 	mux.HandleFunc("POST /novels/{id}/translate-ahead", api.translateAhead)
+	// Knowledge repair intents (0043). Token-gated: these quarantine a book's facts and
+	// activate replacements. reader-api is the only intended caller and checks its own,
+	// weaker operator credential before forwarding.
+	mux.Handle("POST /novels/{id}/repair", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.requestRepair)))
+	mux.Handle("DELETE /novels/{id}/repair/{request}", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.cancelRepair)))
 	mux.HandleFunc("PATCH /novels/{id}/settings", api.patchNovelSettings)
 	mux.HandleFunc("GET /novels/{id}/provider-config", api.getProviderConfig)
 	mux.HandleFunc("PATCH /novels/{id}/provider-config", api.putProviderConfig)
+	mux.HandleFunc("GET /novels/{id}/provider-config/ollama-models", api.listOllamaModels)
 	// Global provider credentials (migration 0035): shared by every novel, so a key is
 	// entered once rather than re-pasted per book. A novel may still override with its own.
 	mux.HandleFunc("GET /provider-credentials", api.listProviderCredentials)

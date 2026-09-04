@@ -273,9 +273,16 @@ class Worker:
     async def _drain_background(self) -> None:
         from pipeline.event_rebuild import drain_active as drain_events
         from pipeline.graph_rebuild import drain_active
+        from pipeline.repair import drain_requests
         control = await self.redis.hgetall(queue.KEYS[5])
         mode, focus = control.get("mode", "all"), control.get("focus_novel_id") or None
         if mode == "paused" or (mode == "focused" and focus is None):
+            return
+        # Repair intents run before enrichment: a pending 'prepare' quarantines the graph
+        # and a pending 'activate' replaces it, so spending this tick enriching a revision
+        # that is about to be superseded is wasted work at best.  One action per tick, so
+        # the loop re-checks the reader queue between them (§0).
+        if await drain_requests(self.cfg, novel_id=focus if mode == "focused" else None):
             return
         # Chapter actions are independently reviewable and substantially cheaper than
         # full identity repair.  Both remain below reader-critical translation work and
@@ -627,7 +634,7 @@ class Worker:
     async def _provider_for_novel(
         self, novel_id: str
     ) -> tuple[
-        LLMProvider, BatchManager, str, LLMProvider | None, LLMProvider | None, str | None
+        LLMProvider, BatchManager, str, LLMProvider | None, LLMProvider | None, dict[str, str] | None
     ]:
         """Return (provider, batch_manager, provider_id) for novel_id, memoized for the
         life of the process (PLAN.md Phase N4). A novel with no novel_provider_config row
@@ -664,7 +671,8 @@ class Worker:
                 row.provider,
                 build_names_provider(self.cfg, provider_id=row.provider, row=row),
                 build_resolve_provider(self.cfg, provider_id=row.provider, row=row),
-                row.model,
+                {"translate": row.translate_model or row.model or self.cfg.llm_model_translate,
+                 "extract": row.extract_model or row.model or self.cfg.llm_model_extract},
             )
         self._provider_cache[novel_id] = result
         return result

@@ -27,6 +27,7 @@ type IngestClient interface {
 	CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
 	DeleteGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
 	GetProviderConfig(ctx context.Context, novelID string) (json.RawMessage, int, error)
+	ListOllamaModels(ctx context.Context, novelID string) (json.RawMessage, int, error)
 	ListProviderCredentials(ctx context.Context) (json.RawMessage, int, error)
 	PutProviderCredential(ctx context.Context, provider string, body json.RawMessage) (json.RawMessage, int, error)
 	DeleteProviderCredential(ctx context.Context, provider string) (json.RawMessage, int, error)
@@ -36,10 +37,23 @@ type IngestClient interface {
 	ApproveCharacterName(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
 	TranslateAhead(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	UpdateNovelSettings(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
+	RequestRepair(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
+	CancelRepair(ctx context.Context, novelID, requestID string) (json.RawMessage, int, error)
 }
 
 func (c *ingestHTTPClient) QueueControl(ctx context.Context, method string, body json.RawMessage) (json.RawMessage, int, error) {
 	return c.send(ctx, method, "/queue", body, true)
+}
+
+// Repair actions quarantine facts and activate replacements, so ingest-api gates them on
+// the internal token. reader-api has already checked its own, weaker operator credential
+// before calling these: the browser never sees the internal token.
+func (c *ingestHTTPClient) RequestRepair(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/repair", body, true)
+}
+
+func (c *ingestHTTPClient) CancelRepair(ctx context.Context, novelID, requestID string) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodDelete, "/novels/"+novelID+"/repair/"+requestID, nil, true)
 }
 
 type ingestHTTPClient struct {
@@ -111,6 +125,10 @@ func (c *ingestHTTPClient) DeleteGlossaryTerm(ctx context.Context, novelID, sour
 
 func (c *ingestHTTPClient) GetProviderConfig(ctx context.Context, novelID string) (json.RawMessage, int, error) {
 	return c.send(ctx, http.MethodGet, "/novels/"+novelID+"/provider-config", nil, false)
+}
+
+func (c *ingestHTTPClient) ListOllamaModels(ctx context.Context, novelID string) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodGet, "/novels/"+novelID+"/provider-config/ollama-models", nil, false)
 }
 
 func (c *ingestHTTPClient) PutProviderConfig(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
