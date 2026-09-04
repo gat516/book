@@ -59,6 +59,10 @@ type fakeStore struct {
 	previewErr        error
 	health            TranslationHealth
 	healthErr2        error
+	repair            RepairStatus
+	repairErr         error
+	repairPreview     RepairPreview
+	repairPreviewErr  error
 }
 
 type fakeIngestClient struct {
@@ -113,6 +117,10 @@ func (f *fakeIngestClient) GetProviderConfig(_ context.Context, _ string) (json.
 	return f.response, f.status, f.err
 }
 
+func (f *fakeIngestClient) ListOllamaModels(_ context.Context, _ string) (json.RawMessage, int, error) {
+	return json.RawMessage(`{"models":["qwen2.5:7b-instruct"]}`), http.StatusOK, nil
+}
+
 func (f *fakeIngestClient) PutProviderConfig(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
 	return f.response, f.status, f.err
@@ -130,6 +138,15 @@ func (f *fakeIngestClient) ConfirmGlossaryTerm(_ context.Context, _ string, body
 
 func (f *fakeIngestClient) ApproveCharacterName(_ context.Context, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
+	return f.response, f.status, f.err
+}
+
+func (f *fakeIngestClient) RequestRepair(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
+}
+
+func (f *fakeIngestClient) CancelRepair(_ context.Context, _, _ string) (json.RawMessage, int, error) {
 	return f.response, f.status, f.err
 }
 
@@ -260,6 +277,16 @@ func (f *fakeStore) TranslationHealth(_ context.Context, novelID string) (Transl
 	health := f.health
 	health.NovelID = novelID
 	return health, f.healthErr2
+}
+
+func (f *fakeStore) RepairPreview(_ context.Context, _, _ string) (RepairPreview, error) {
+	return f.repairPreview, f.repairPreviewErr
+}
+
+func (f *fakeStore) RepairStatus(_ context.Context, novelID string) (RepairStatus, error) {
+	status := f.repair
+	status.NovelID = novelID
+	return status, f.repairErr
 }
 
 func request(t *testing.T, api *API, method, target, body, reader string) *httptest.ResponseRecorder {
@@ -664,9 +691,18 @@ func TestQueueControlProxiesSettingsAndErrors(t *testing.T) {
 		if method == http.MethodPatch {
 			body = `{"mode":"paused"}`
 		}
-		response := request(t, api, method, "/queue", body, "")
-		if response.Code != 200 || string(ingest.lastBody) != body {
+		response := request(t, api, method, "/queue", body, "reader-1")
+		if response.Code != 200 {
 			t.Fatalf("proxy: %d %s", response.Code, response.Body)
+		}
+		if method == http.MethodGet && string(ingest.lastBody) != body {
+			t.Fatalf("GET body forwarded = %q", ingest.lastBody)
+		}
+		if method == http.MethodPatch {
+			var forwarded map[string]string
+			if err := json.Unmarshal(ingest.lastBody, &forwarded); err != nil || forwarded["mode"] != "paused" || forwarded["changed_by"] != "reader-1" {
+				t.Fatalf("PATCH body = %q, err=%v", ingest.lastBody, err)
+			}
 		}
 		ingest.err = ErrIngestUnavailable
 		if got := request(t, api, method, "/queue", body, ""); got.Code != 502 {

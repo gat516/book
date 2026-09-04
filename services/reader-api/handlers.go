@@ -18,6 +18,11 @@ type API struct {
 	store  ReaderStore
 	ask    AskClient
 	ingest IngestClient
+	// operatorToken is Config.RepairOperatorToken. Empty disables repair controls.
+	operatorToken string
+	// throttle bounds guessing of operatorToken. Reach it through limiter(), never
+	// directly: main.go sets it at construction, but tests build API literals without one.
+	throttle *authThrottle
 }
 
 type progressRequest struct {
@@ -44,6 +49,10 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("PATCH /novels/{id}/settings", a.patchNovelSettings)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}/preview", a.getChapterPreview)
 	mux.HandleFunc("GET /novels/{id}/translation-health", a.getTranslationHealth)
+	mux.HandleFunc("GET /novels/{id}/repair", a.getRepairStatus)
+	mux.HandleFunc("GET /novels/{id}/repair/preview", a.getRepairPreview)
+	mux.HandleFunc("POST /novels/{id}/repair", a.postRepair)
+	mux.HandleFunc("DELETE /novels/{id}/repair/{request}", a.deleteRepair)
 	mux.HandleFunc("POST /novels/{id}/ask", a.postAsk)
 	mux.HandleFunc("GET /novels", a.getNovels)
 	mux.HandleFunc("GET /novels/{id}", a.getNovel)
@@ -61,6 +70,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/name-reviews", a.getCharacterNameReviews)
 	mux.HandleFunc("POST /novels/{id}/name-reviews/{term}/approve", a.approveCharacterName)
 	mux.HandleFunc("GET /novels/{id}/provider-config", a.getProviderConfig)
+	mux.HandleFunc("GET /novels/{id}/provider-config/ollama-models", a.getOllamaModels)
 	mux.HandleFunc("GET /provider-credentials", a.listProviderCredentials)
 	mux.HandleFunc("PUT /provider-credentials/{provider}", a.putProviderCredential)
 	mux.HandleFunc("DELETE /provider-credentials/{provider}", a.deleteProviderCredential)
@@ -74,6 +84,22 @@ func (a *API) queueControl(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "could not read queue settings")
 		return
+	}
+	if r.Method == http.MethodPatch {
+		// The UI never chooses the actor itself. This is an audit label for a shared
+		// local reader, not a substitute for administrator authentication.
+		var patch map[string]json.RawMessage
+		if err := json.Unmarshal(body, &patch); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid queue settings")
+			return
+		}
+		actor := "unknown reader"
+		if id, ok := readerID(r); ok {
+			actor = id
+		}
+		encoded, _ := json.Marshal(actor)
+		patch["changed_by"] = encoded
+		body, _ = json.Marshal(patch)
 	}
 	result, status, err := a.ingest.QueueControl(r.Context(), r.Method, body)
 	if err != nil {
@@ -1005,6 +1031,23 @@ func (a *API) getProviderConfig(w http.ResponseWriter, r *http.Request) {
 	result, status, err := a.ingest.GetProviderConfig(r.Context(), novelID)
 	if err != nil {
 		log.Printf("get provider config: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
+}
+
+func (a *API) getOllamaModels(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	result, status, err := a.ingest.ListOllamaModels(r.Context(), novelID)
+	if err != nil {
 		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
 		return
 	}

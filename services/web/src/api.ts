@@ -1,4 +1,5 @@
 import { readerId } from "./readerId";
+import { operatorToken } from "./operator";
 import type {
   AskResponse,
   BootstrapGlossaryRequest,
@@ -25,6 +26,8 @@ import type {
   Progress,
   ScrapeJobView,
   StartScrapeRequest,
+  RepairPreview,
+  RepairStatus,
   TimelineResponse,
 } from "./types";
 
@@ -36,6 +39,14 @@ class ApiError extends Error {
   ) {
     super(code);
   }
+}
+
+// The operator token goes ONLY on the repair endpoints that need it, never on every
+// request. It authorizes quarantining a book's knowledge, and attaching it to unrelated
+// reads put it in far more logs and proxy hops than its job requires.
+function operatorHeaders(): Record<string, string> {
+  const token = operatorToken();
+  return token ? { "X-Operator-Token": token } : {};
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -293,6 +304,11 @@ export function saveProviderConfig(
   });
 }
 
+export async function listOllamaModels(novelId: string): Promise<string[]> {
+  const response = await request<{ models: string[] }>(`/novels/${novelId}/provider-config/ollama-models`);
+  return response.models;
+}
+
 
 // Global provider credentials. Ungated like the other administration routes; reads are
 // masked server-side, so no key ever reaches the browser.
@@ -315,5 +331,59 @@ export async function deleteProviderCredential(provider: string): Promise<void> 
   await fetch(`/api/provider-credentials/${provider}`, {
     method: "DELETE",
     headers: { "X-Reader-ID": readerId() },
+  });
+}
+
+// Knowledge repair status. Ungated and safe for any reader to see: it reports that facts
+// are being withheld and how far a replacement has got, never any story content. The
+// `operator` field is the server's answer about THIS caller, and is what the UI keys the
+// repair controls off — never the presence of a token in this browser.
+export async function getRepairStatus(novelId: string): Promise<RepairStatus> {
+  // Carries the token because its `operator` field is the server's answer about this
+  // caller, and that is what the panel keys its controls off.
+  return request(`/novels/${novelId}/repair`, { headers: operatorHeaders() });
+}
+
+// Repair actions are operator-gated by reader-api, which then forwards to ingest-api's
+// token-gated route. 202 means recorded, not done: the worker picks it up on its next
+// idle tick, and the status endpoint's `requests` is where progress shows up.
+export async function requestRepair(
+  novelId: string,
+  body: { track: string; action: string; revision_id?: string; params?: unknown },
+): Promise<{ id: string; state: string }> {
+  return request(`/novels/${novelId}/repair`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: operatorHeaders(),
+  });
+}
+
+// 204 with an empty body, so this bypasses request() rather than having it parse JSON
+// that isn't there. Same shape as deleteProviderCredential.
+export async function cancelRepair(novelId: string, requestId: string): Promise<void> {
+  const response = await fetch(`/api/novels/${novelId}/repair/${requestId}`, {
+    method: "DELETE",
+    headers: { "X-Reader-ID": readerId(), ...operatorHeaders() },
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    let code = body || response.statusText;
+    try {
+      code = JSON.parse(body).error ?? code;
+    } catch {
+      // non-JSON error body: keep the raw text
+    }
+    throw new ApiError(response.status, code);
+  }
+}
+
+// The frozen review report. Operator-only, and the one repair response that carries story
+// content -- see reader-api's getRepairPreview for why that exception exists.
+export async function getRepairPreview(
+  novelId: string,
+  track: string,
+): Promise<RepairPreview> {
+  return request(`/novels/${novelId}/repair/preview?track=${track}`, {
+    headers: operatorHeaders(),
   });
 }

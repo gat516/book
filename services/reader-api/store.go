@@ -26,6 +26,10 @@ var (
 const (
 	readerRole   = "rls_reader"
 	progressRole = "reader_progress_writer"
+	// operatorRole may execute repair_preview and nothing else. rls_reader is deliberately
+	// NOT a member: askai connects as rls_reader, and the preview carries source quotes
+	// from every snapshotted chapter regardless of reading progress (migration 0046).
+	operatorRole = "repair_operator"
 )
 
 type ReaderStore interface {
@@ -43,6 +47,8 @@ type ReaderStore interface {
 	PipelineStatus(context.Context, string) (PipelineStatusResponse, error)
 	TranslationPreview(context.Context, string, int) (string, bool, string, error)
 	TranslationHealth(context.Context, string) (TranslationHealth, error)
+	RepairStatus(context.Context, string) (RepairStatus, error)
+	RepairPreview(context.Context, string, string) (RepairPreview, error)
 	ListNovels(context.Context) ([]NovelSummary, error)
 	GetNovel(context.Context, string) (NovelSummary, error)
 	CreateScrapeJob(context.Context, string, string, string) (int64, error)
@@ -80,6 +86,9 @@ func (s *Store) ListNameReviews(ctx context.Context, novelID string, chapter *in
 type Store struct {
 	readerDB   *pgxpool.Pool
 	progressDB *pgxpool.Pool
+	// operatorDB is used by exactly one method, RepairPreview. Do not reach for it because
+	// a query is inconvenient on readerDB — its whole value is that it is narrow.
+	operatorDB *pgxpool.Pool
 	objects    *minio.Client
 	bucket     string
 	redis      *redis.Client
@@ -124,18 +133,32 @@ func newRolePool(ctx context.Context, databaseURL, role string) (*pgxpool.Pool, 
 }
 
 func newStore(ctx context.Context, cfg Config, objects *minio.Client, redisClient *redis.Client) (*Store, error) {
-	readerDB, err := newRolePool(ctx, cfg.ReaderDatabaseURL, readerRole)
-	if err != nil {
-		return nil, err
+	// Opened in a loop rather than with a cascade of hand-written Close() calls: with two
+	// pools the cascade was fine, with three it is a shape that silently leaks the day
+	// someone adds a fourth and forgets a branch.
+	specs := []struct {
+		url  string
+		role string
+	}{
+		{cfg.ReaderDatabaseURL, readerRole},
+		{cfg.ProgressDatabaseURL, progressRole},
+		{cfg.RepairOperatorDatabaseURL, operatorRole},
 	}
-	progressDB, err := newRolePool(ctx, cfg.ProgressDatabaseURL, progressRole)
-	if err != nil {
-		readerDB.Close()
-		return nil, err
+	pools := make([]*pgxpool.Pool, 0, len(specs))
+	for _, spec := range specs {
+		pool, err := newRolePool(ctx, spec.url, spec.role)
+		if err != nil {
+			for _, opened := range pools {
+				opened.Close()
+			}
+			return nil, err
+		}
+		pools = append(pools, pool)
 	}
 	return &Store{
-		readerDB:   readerDB,
-		progressDB: progressDB,
+		readerDB:   pools[0],
+		progressDB: pools[1],
+		operatorDB: pools[2],
 		objects:    objects,
 		bucket:     cfg.ObjectBucket,
 		redis:      redisClient,
@@ -145,6 +168,7 @@ func newStore(ctx context.Context, cfg Config, objects *minio.Client, redisClien
 func (s *Store) Close() {
 	s.readerDB.Close()
 	s.progressDB.Close()
+	s.operatorDB.Close()
 }
 
 func (s *Store) Health(ctx context.Context) error {
@@ -153,6 +177,9 @@ func (s *Store) Health(ctx context.Context) error {
 	}
 	if err := s.progressDB.Ping(ctx); err != nil {
 		return fmt.Errorf("progress database: %w", err)
+	}
+	if err := s.operatorDB.Ping(ctx); err != nil {
+		return fmt.Errorf("repair operator database: %w", err)
 	}
 	return nil
 }
@@ -317,6 +344,12 @@ func (s *Store) PipelineStatus(ctx context.Context, novelID string) (PipelineSta
 	// the worker process is stopped.
 	if online, err := s.redis.Exists(ctx, pipelineWorkerHeartbeat).Result(); err == nil {
 		status.WorkerOnline = online > 0
+	}
+	if mode, err := s.redis.HGet(ctx, "jobs:control", "mode").Result(); err == nil {
+		status.QueueMode = mode
+	}
+	if status.QueueMode == "" {
+		status.QueueMode = "all"
 	}
 
 	claims, err := s.redis.LRange(ctx, pipelineProcessingQueue, 0, -1).Result()
@@ -839,10 +872,11 @@ func newFactsInTx(ctx context.Context, tx pgx.Tx, novelID string, n int, view *C
 		   WHERE novel_id = $1
 		     AND source_chapter <= reader_chapter() AND valid_from_chapter <= reader_chapter()
 		 )
-		 SELECT DISTINCT ON (f.entity_id, f.attribute)
-		        f.entity_id::text, f.attribute, f.value, f.valid_from_chapter,
+	 SELECT DISTINCT ON (f.entity_id, f.attribute)
+	        f.entity_id::text, e.canonical, f.attribute, f.value, f.valid_from_chapter,
 		        f.source_chapter, f.confidence
-		 FROM visible f
+	 FROM visible f
+	 JOIN entity e ON e.id = f.entity_id
 		 WHERE f.source_chapter = $2
 		   AND f.entity_id IS NOT NULL
 		   AND f.kind <> 'retraction'
@@ -856,7 +890,7 @@ func newFactsInTx(ctx context.Context, tx pgx.Tx, novelID string, n int, view *C
 	defer rows.Close()
 	for rows.Next() {
 		var fact ChapterFactView
-		if err := rows.Scan(&fact.EntityID, &fact.Attribute, &fact.Value,
+		if err := rows.Scan(&fact.EntityID, &fact.EntityCanonical, &fact.Attribute, &fact.Value,
 			&fact.ValidFromChapter, &fact.SourceChapter, &fact.Confidence); err != nil {
 			return err
 		}

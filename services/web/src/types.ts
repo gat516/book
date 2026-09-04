@@ -402,3 +402,178 @@ export interface SaveProviderCredentialRequest {
   base_url?: string;
   api_key?: string;
 }
+
+
+// Knowledge repair (reader-api's repair.go). Two independent tracks: the entity graph and
+// chapter events each have their own activation pointer, so one can be quarantined while
+// the other is fine.
+export type RepairState =
+  | "ready"
+  | "quarantined"
+  | "rebuilding"
+  | "awaiting_review"
+  | "failed"
+  | "unavailable";
+
+export interface RepairFailure {
+  chapter_index: number;
+  attempts: number;
+  // A safe class, never the stored exception text -- that can carry source prose or a
+  // connection string, so reader-api maps it server-side and `detail` is a fixed sentence.
+  category: string;
+  detail: string;
+  retry_at: string | null;
+  occurred_at: string;
+}
+
+export interface RepairReplacement {
+  revision_id: string;
+  model?: string;
+  prompt_version?: string;
+  created_at?: string;
+  // From the frozen preview report, not the API's own judgement. null = not yet reported.
+  activation_eligible: boolean | null;
+  review_hash?: string;
+  // True once record_review has stored derived metrics. It clears `review` as it does so,
+  // so `reviewed: true` with no review_hash means "reviewed, waiting for a fresh report".
+  reviewed: boolean;
+}
+
+export interface RepairRollbackTarget {
+  revision_id: string;
+  // Rolling back to an untrusted revision does NOT restore its facts -- switch preserves
+  // trust deliberately -- so this has to be visible at the point of choosing.
+  trusted: boolean;
+  created_at: string;
+}
+
+export interface RepairChapters {
+  total: number;
+  done: number;
+  failed: number;
+  running: number;
+}
+
+export interface RepairTrack {
+  state: RepairState;
+  // The server's sentence. Render it rather than re-deriving prose from the numbers, so
+  // every surface says the same thing -- same split as TranslationHealth's `reason`.
+  reason: string;
+  active_revision?: string;
+  active_trusted: boolean;
+  // Claims stored on the active revision that readers currently cannot see. This is the
+  // number that makes "facts unavailable" concrete instead of ambiguous.
+  withheld_claims: number;
+  // Describes whichever revision is currently doing work: the replacement when one is
+  // being built, otherwise the active revision's own enrichment.
+  chapters: RepairChapters;
+  replacement: RepairReplacement | null;
+  // Archived revisions rollback may actually target. switch() refuses anything else, so
+  // the active revision must never appear here.
+  rollback_targets: RepairRollbackTarget[];
+  // Earlier staging revisions superseded by a later restart. A large number is the
+  // "this book keeps needing rebuilds" signal.
+  superseded: number;
+  failures: RepairFailure[];
+  // False once every failure has exhausted its attempts: waiting is no longer a strategy.
+  retryable: boolean;
+}
+
+export type RepairTrackName = "graph" | "events";
+
+export type RepairAction = "prepare" | "review" | "activate" | "rollback";
+
+export interface RepairRequestView {
+  id: string;
+  track: RepairTrackName;
+  action: RepairAction;
+  state: "pending" | "running" | "done" | "failed";
+  attempts: number;
+  category?: string;
+  requested_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RepairAuditEntry {
+  track: RepairTrackName;
+  action: string;
+  created_at: string;
+}
+
+export interface RepairStatus {
+  novel_id: string;
+  // Whether the SERVER accepted this caller's operator token. Repair controls key off
+  // this, never off a token being present in the browser.
+  operator: boolean;
+  // Set when this caller is currently rate-limited. `operator` is false either way, so
+  // without this a blocked operator looks identical to one holding a wrong token -- and
+  // discarding a valid token because someone else tripped the limiter would be worse than
+  // the problem the discarding solves.
+  operator_throttled: boolean;
+  graph: RepairTrack;
+  events: RepairTrack;
+  // Actions asked for through the UI. A click does not act instantly -- repair runs on
+  // the worker's idle tick so it loses to reader-critical translation -- so `pending`
+  // here is the honest thing to show rather than pretending the action already happened.
+  requests: RepairRequestView[];
+  // graph_audit/event_audit: has this book been repaired before, and how often.
+  history: RepairAuditEntry[];
+}
+
+// The frozen review report. Operator-only: it carries source quotes from every chapter in
+// the snapshot regardless of reading progress. Its inner shape is defined by the Python
+// that produces it (graph_rebuild.preview), so it stays loosely typed here rather than
+// becoming a second definition to keep in sync.
+export interface RepairPreview {
+  revision_id: string;
+  version: number;
+  state: string;
+  report: RepairReport | null;
+}
+
+export interface RepairReportMention {
+  id: string;
+  chapter?: number;
+  surface?: string;
+  entity?: string | null;
+  quote?: string;
+}
+
+export interface RepairReportClaim {
+  id: number;
+  entity?: string;
+  attribute?: string;
+  value?: string;
+  chapter?: number;
+  quote?: string;
+}
+
+export interface RepairReport {
+  review_hash?: string;
+  activation_eligible?: boolean;
+  completed_jobs?: number;
+  total_jobs?: number;
+  saved_prose_unchanged?: boolean;
+  glossary_unchanged?: boolean;
+  evidence_valid?: boolean;
+  mention_coverage?: { total: number; linked: number; unresolved: number };
+  mentions?: RepairReportMention[];
+  claims?: RepairReportClaim[];
+  failures?: unknown[];
+  rejected?: unknown[];
+  identity_changes?: unknown[];
+  [key: string]: unknown;
+}
+
+// What the browser submits back. The client collects booleans and nothing else: scores
+// are derived server-side by record_review from these plus the actually-stored bindings,
+// which is what makes the activation gate meaningful.
+export interface RepairReviewDocument {
+  review_hash: string;
+  reviewer: string;
+  approved: boolean;
+  known_merge_regressions: number;
+  mentions: { id: string; correct: boolean; unambiguous: boolean }[];
+  facts: { id: number; correct: boolean }[];
+}

@@ -104,6 +104,100 @@ progress` (404 otherwise). Its response `at` field is always the stored progress
 `n`; the web client uses that value as the entity-hover cache key for spans on that
 chapter (see `services/web/`).
 
+## Knowledge repair status
+
+`GET /novels/{id}/repair` reports whether this novel's knowledge is being withheld and
+what, if anything, is replacing it. Ungated and safe for any reader: it returns counts,
+states and revision identifiers, never quote text or claim values.
+
+```bash
+# Anyone may read it.
+curl localhost:8081/novels/<novel-id>/repair -H 'X-Reader-ID: local-reader'
+
+# An operator additionally presents the repair token; the response's `operator` field is
+# the server's answer, and is what the UI keys its controls off.
+curl localhost:8081/novels/<novel-id>/repair \
+  -H 'X-Reader-ID: local-reader' \
+  -H "X-Operator-Token: $READER_REPAIR_OPERATOR_TOKEN"
+```
+
+Two independent tracks, `graph` and `events`, because event extraction has its own
+activation pointer (migration 0039) — one can be quarantined while the other is fine.
+Each reports a `state` (`ready`, `quarantined`, `rebuilding`, `awaiting_review`, `failed`,
+`unavailable`), a server-authored `reason` sentence clients should render rather than
+re-derive, `withheld_claims`, the `chapters` counts for whichever revision is currently
+doing work, the staging `replacement` if one exists, and a bounded `failures` ledger.
+
+Two things about that ledger are load-bearing:
+
+- `failures[].category` is a safe class and `detail` a fixed sentence. The stored
+  exception text is freeform and can embed source prose or a connection string, so
+  `pipeline/failures.py` classifies it at the moment of failure and stores only the class
+  (migration 0046). The text never leaves the database, and Go only renders the class —
+  `tests/test_repair.py` fails the build if a class Python emits has no sentence here.
+  Migration 0020 kept such text out of the durable failure history for the same reason.
+- `retryable` goes false once every failure has exhausted its attempts.
+  `graph_rebuild.graph_retry_delay_minutes` returns `None` past attempt 3 and `retry_at`
+  is never set again, so the chapter is silently abandoned. This field is how that
+  otherwise-invisible dead end reaches a screen.
+
+`READER_REPAIR_OPERATOR_TOKEN` authorizes repair controls. It is deliberately separate
+from `INGEST_INTERNAL_TOKEN`, which has total authority over the database (including
+novel deletion) and must never be handed to a browser. Unset means repair writes are
+refused with 503 — fail closed; status stays readable either way. It is a shared secret,
+not a user system: there is no per-operator identity, which is a known floor.
+
+Three things bound the damage that floor allows:
+
+- It must be at least 32 characters or reader-api refuses to start (`validateOperatorToken`).
+- Wrong tokens are throttled per client address with exponential backoff and answered with
+  `429` + `Retry-After` (`throttle.go`). A request with *no* operator header is not an
+  attempt — every reader polling status sends none, and counting those would let ordinary
+  traffic lock the operator out. The key is `RemoteAddr`, never `X-Forwarded-For`, which
+  would let an attacker rotate the key for free.
+- The browser sends the header only on the four `/repair*` calls, not on every request.
+
+The preview does not depend on any of this: `repair_preview` is executable only by
+`repair_operator`, and reader-api reaches it through a dedicated pool
+(`REPAIR_OPERATOR_DATABASE_URL`). The handler's operator check is defence in depth, no
+longer the whole defence.
+
+### Driving a repair
+
+Three write routes, all operator-gated here and proxied to ingest-api's token-gated
+`POST /novels/{id}/repair`, which records an intent in `repair_request` (migration 0043).
+Nothing repairs anything on the request path: `pipeline/repair.py` claims the row on the
+worker's idle tick and calls the existing `graph_rebuild` / `event_rebuild` functions.
+
+```bash
+OP="-H 'X-Operator-Token: $READER_REPAIR_OPERATOR_TOKEN'"
+
+# Start a fresh rebuild. Quarantines the current graph and snapshots a replacement.
+curl -X POST localhost:8081/novels/<id>/repair -H 'X-Reader-ID: me' $OP \
+  -d '{"track":"graph","action":"prepare","params":{"model":"qwen3:4b-instruct-2507-q4_K_M"}}'
+
+# Read the frozen review report (operator-only: it carries source quotes from every
+# snapshotted chapter, ignoring reading progress).
+curl "localhost:8081/novels/<id>/repair/preview?track=graph" -H 'X-Reader-ID: me' $OP
+
+# Record a review, then activate with the NEW hash record_review returns.
+curl -X POST localhost:8081/novels/<id>/repair -H 'X-Reader-ID: me' $OP \
+  -d '{"track":"graph","action":"review","revision_id":"<staging>","params":{"document":{...}}}'
+curl -X POST localhost:8081/novels/<id>/repair -H 'X-Reader-ID: me' $OP \
+  -d '{"track":"graph","action":"activate","revision_id":"<staging>","params":{"review_hash":"<hash>"}}'
+
+# Withdraw a request that has not started yet.
+curl -X DELETE localhost:8081/novels/<id>/repair/<request-id> -H 'X-Reader-ID: me' $OP
+```
+
+`requested_by` is taken from `X-Reader-ID` and overwritten if the body supplies it — an
+audit label from the request, like `changed_by` on `PATCH /queue`. A second action for the
+same novel and track while one is in flight is a `409`; a partial unique index enforces it.
+
+Returning `202` means recorded, not done. Progress shows up in the status endpoint's
+`requests`, and the executor is the only thing that runs the gates: `qualified()` and
+`record_review` are never reimplemented in Go.
+
 ## Tests
 
 ```bash
