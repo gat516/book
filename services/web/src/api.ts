@@ -106,6 +106,9 @@ export type QueueMode = "all" | "focused" | "paused";
 export interface QueueControl {
   mode: QueueMode;
   focus_novel_id: string;
+	mode_changed_at?: string;
+	mode_changed_by?: string;
+	mode_reason?: string;
   books: Array<{
     novel_id: string;
     title: string;
@@ -119,7 +122,7 @@ export function getQueueControl(): Promise<QueueControl> {
 // Serialize navigation writes in this tab so a slow response from book A cannot
 // override the newer selection of book B. Other tabs share the same library policy.
 let queueUpdates: Promise<unknown> = Promise.resolve();
-export function updateQueueControl(patch: { mode?: QueueMode; focus_novel_id?: string }): Promise<QueueControl> {
+export function updateQueueControl(patch: { mode?: QueueMode; focus_novel_id?: string; reason?: string }): Promise<QueueControl> {
   const update = queueUpdates.then(() => request<QueueControl>("/queue", {
     method: "PATCH", body: JSON.stringify(patch),
   }));

@@ -199,6 +199,7 @@ export interface PipelineStatusResponse {
   pending_for_novel: number;
   // Published by the worker with a short TTL, including while a model call is running.
   worker_online: boolean;
+  queue_mode: "all" | "focused" | "paused";
   in_flight: InFlightChapter[];
 }
 
@@ -263,6 +264,7 @@ export interface ChapterResponse {
 // chapter response so the reader pane can badge a mention without a round trip per span.
 export interface ChapterFactView {
   entity_id: string;
+	entity_canonical: string;
   attribute: string;
   value: string;
   valid_from_chapter: number;
@@ -365,6 +367,8 @@ export type ProviderName = "anthropic" | "deepseek" | "gemini" | "ollama";
 export interface SaveProviderConfigRequest {
   provider: ProviderName;
   model?: string;
+  translate_model?: string;
+  extract_model?: string;
   base_url?: string;
   api_key?: string;
 }
@@ -374,6 +378,8 @@ export interface SaveProviderConfigRequest {
 export interface ProviderConfigView {
   provider: ProviderName;
   model?: string;
+  translate_model?: string;
+  extract_model?: string;
   base_url?: string;
   api_key_set: boolean;
 }
