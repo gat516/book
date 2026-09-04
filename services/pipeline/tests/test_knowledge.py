@@ -445,3 +445,37 @@ async def test_rollback_never_retrusts_legacy_graph(db_conn):
         status=await(await db.execute('SELECT status FROM reader_knowledge_status(10)')).fetchone()
         assert status==('repair',)
         await db.execute('RESET ROLE')
+
+
+async def test_thinking_joins_identity_only_when_configured(monkeypatch):
+    """Reasoning changes what the model produces, so a set value is pinned. Unset must be
+    OMITTED, not defaulted, or every identity recorded before the flag existed stops
+    comparing equal and its revision becomes unresumable."""
+    from dataclasses import replace
+    from pipeline.config import Config, graph_runtime
+    monkeypatch.setenv('GRAPH_OLLAMA_FIRST_TOKEN_SECONDS','900')
+    monkeypatch.setenv('GRAPH_OLLAMA_TIMEOUT_SECONDS','30')
+    monkeypatch.delenv('GRAPH_OLLAMA_THINK', raising=False)
+    cfg = Config.load()
+    assert cfg.graph_ollama_think is None
+    assert 'think' not in graph_runtime(cfg)['identity']
+    assert graph_runtime(replace(cfg, graph_ollama_think=True))['identity']['think'] is True
+    assert graph_runtime(replace(cfg, graph_ollama_think=False))['identity']['think'] is False
+    # An explicit off is a pinned decision and must not collapse back to "unspecified".
+    assert (graph_runtime(replace(cfg, graph_ollama_think=False))['identity']
+            != graph_runtime(cfg)['identity'])
+
+
+@pytest.mark.parametrize('raw,expected', [('true',True),('1',True),('on',True),
+                                          ('false',False),('0',False),('off',False)])
+async def test_optional_bool_reads_the_usual_spellings(monkeypatch, raw, expected):
+    from pipeline.config import _optional_bool
+    monkeypatch.setenv('BOOK_TEST_FLAG', raw)
+    assert _optional_bool('BOOK_TEST_FLAG') is expected
+
+
+async def test_optional_bool_refuses_a_value_it_cannot_read(monkeypatch):
+    from pipeline.config import _optional_bool
+    monkeypatch.setenv('BOOK_TEST_FLAG', 'ture')
+    with pytest.raises(ValueError, match='must be a boolean'):
+        _optional_bool('BOOK_TEST_FLAG')

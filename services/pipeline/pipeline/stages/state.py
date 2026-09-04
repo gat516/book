@@ -53,7 +53,7 @@ def response_cache_key(job_key: str) -> str:
     The durable job key still guards the graph write (§0.2, §6.1). Only unfinished
     work gets the new prompt; changing its result-cache key must not undo that guard.
     """
-    return hashlib.sha256(f"{job_key}\x1fstate-response-v2".encode()).hexdigest()
+    return hashlib.sha256(f"{job_key}\x1fstate-response-v3".encode()).hexdigest()
 
 
 class StateStage:

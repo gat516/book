@@ -57,6 +57,10 @@ class ExtractedFact(BaseModel):
     entity: NonEmptyText
     attribute: NonEmptyText
     value: NonEmptyText
+    # A fact without a literal anchor is just the model's interpretation.  Keep the
+    # anchor in the transient extraction response so graph-write can verify it against
+    # the chapter before append-only publication (spec §0.2, §5 step 5).
+    evidence: NonEmptyText
     valid_from_chapter: int | None = None
     confidence: float = 1.0
 
@@ -127,7 +131,9 @@ Return a single JSON object, and nothing else, with this shape:
 {{
   "entities": [{{"surface": "<name exactly as written in the chapter>", "kind": "<one of the kinds above>"}}],
   "facts":    [{{"entity": "<a surface listed in entities>", "attribute": "<one of the attributes above>",
-                "value": "<short value>", "valid_from_chapter": <int or null>, "confidence": <0.0-1.0>}}],
+                "value": "<short value in the chapter's language>",
+                "evidence": "<a verbatim source quotation supporting this fact>",
+                "valid_from_chapter": <int or null>, "confidence": <0.0-1.0>}}],
   "edges":    [{{"src": "<a surface>", "dst": "<a surface>", "rel_type": "<one of the relations above>",
                 "valid_from_chapter": <int or null>}}],
   "events":   [{{"summary": "<one sentence>", "entities": ["<a surface>"]}}]
@@ -137,6 +143,13 @@ Rules:
 - Extract assertions supported by this chapter, not a checklist of every attribute
   for every entity. If a value or relationship is unknown or unstated, OMIT that
   entire fact or edge. Never fill it with null, an empty string, or a guess.
+- Every fact MUST include a short, exact quotation copied from this chapter in
+  "evidence". The quotation must directly state the claimed value; do not use a
+  character's action, emotion, or a general scene description as evidence for a
+  rank, status, affiliation, or state. If you cannot quote direct support, omit the
+  fact. Copy "value" verbatim from that evidence quotation; do not normalize,
+  translate, summarize, or infer it. Do not emit "unknown", "none", or an
+  equivalent placeholder as a value.
 - All names, kinds, attributes, values, relation types and event summaries must be
   non-empty strings. Only valid_from_chapter may be null. An entity may have no facts.
 - Example: if a character acts but their rank is not stated, list the character and

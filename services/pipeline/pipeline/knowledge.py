@@ -351,6 +351,18 @@ class KnowledgeEngine:
             ev = await evidence(item['quote'],start=item.get('evidence_start'))
             key = digest([chapter,item['type'],ids,item['attribute'],item['value'],ev])
             if item['type']=='fact':
+                # fact.value is stored in the SOURCE language. Extraction runs on the raw
+                # chapter (graph_rebuild passes `source`, and discover_names is told not to
+                # translate names), so the value carries whatever the source said. The
+                # 'Values should use target language' line in this module's propose prompt
+                # is a request with no validation behind it and does not always hold.
+                #
+                # Storage stays this way on purpose: facts are append-only and anchored to
+                # source evidence, and enforcing a target language at write time would fail
+                # ingestion whenever no glossary term exists yet. Rendering therefore belongs
+                # at DISPLAY time -- and does not exist yet. askai (retrieval.py), reader-api
+                # (store.go FactView) and the web hover card all pass this string through
+                # untouched, so a reader can currently see source-language text here.
                 await self.db.execute('''INSERT INTO fact(novel_id,entity_id,attribute,value,valid_from_chapter,
                     source_chapter,revision_id,evidence_id,claim_key) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING''',
                     (novel,ids[0],item['attribute'],item['value'],chapter,chapter,revision,ev,key))

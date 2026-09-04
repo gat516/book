@@ -107,6 +107,7 @@ def test_parses_a_full_extraction():
                     "entity": "李逍遥",
                     "attribute": "rank",
                     "value": "Foundation Establishment",
+                    "evidence": "李逍遥突破至筑基期",
                     "valid_from_chapter": None,
                     "confidence": 0.9,
                 }
@@ -147,7 +148,7 @@ def test_confidence_is_clamped():
     extraction = parse_extraction(
         _payload(
             entities=[{"surface": "A", "kind": "character"}],
-            facts=[{"entity": "A", "attribute": "status", "value": "alive", "confidence": 1.5}],
+            facts=[{"entity": "A", "attribute": "status", "value": "alive", "evidence": "A is alive", "confidence": 1.5}],
         )
     )
     assert extraction.facts[0].confidence == 1.0
@@ -163,9 +164,9 @@ def test_unknown_assertions_are_discarded_without_losing_valid_knowledge(unknown
     extraction = parse_extraction(_payload(
         entities=[{"surface": "A", "kind": "character"}, {"surface": "B", "kind": "character"}],
         facts=[
-            {"entity": "A", "attribute": "rank", "value": unknown},
-            {"entity": "A", "attribute": "status", "value": "alive"},
-            {"entity": "B", "attribute": unknown, "value": unknown},
+            {"entity": "A", "attribute": "rank", "value": unknown, "evidence": "A"},
+            {"entity": "A", "attribute": "status", "value": "alive", "evidence": "A is alive"},
+            {"entity": "B", "attribute": unknown, "value": unknown, "evidence": "B"},
         ],
         edges=[
             {"src": "A", "dst": "B", "rel_type": unknown},
@@ -200,7 +201,7 @@ def test_native_schema_rejects_null_and_empty_values_but_allows_unknown_story_ti
                 facts=[{"entity": "A", "attribute": "rank", "value": value}],
             ))
     valid = Extraction.model_validate_json(_payload(
-        facts=[{"entity": "A", "attribute": "rank", "value": "novice", "valid_from_chapter": None}],
+        facts=[{"entity": "A", "attribute": "rank", "value": "novice", "evidence": "A is a novice", "valid_from_chapter": None}],
     ))
     assert valid.facts[0].valid_from_chapter is None
 

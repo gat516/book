@@ -74,7 +74,7 @@ class GraphWriteStage:
             written = (0, 0, 0, 0)
             if state.extraction is not None:
                 written = await self._write_extraction(
-                    ctx, writer, state.extraction, chapter_index, state.resolutions
+                    ctx, writer, state.extraction, chapter_index, state.resolutions, state.envelope.raw_text
                 )
                 if state.state_job_key is not None:
                     await mark_job_done(
@@ -100,6 +100,7 @@ class GraphWriteStage:
         extraction: Extraction,
         chapter_index: int,
         bound: dict[str, str],
+        source_text: str,
     ) -> tuple[int, int, int, int]:
         allowed_kinds=set(ctx.novel.ontology.get("kinds",[]))
         declared: dict[str,str] = {}
@@ -132,6 +133,14 @@ class GraphWriteStage:
                 or declared.get(fact.entity) not in attributes.get(fact.attribute,set())):
                 if fact.entity in declared and fact.entity in bound:
                     invalid+=1;log.warning("dropping fact %r.%r: ontology-invalid attribute",fact.entity,fact.attribute)
+                continue
+            # The graph is append-only, so publication needs a deterministic check the
+            # model cannot talk its way around: an alleged source quote must literally
+            # occur in this chapter.  This rejects the common small-model failure mode
+            # of inventing labels such as "unknown" or "cautious" from a scene.
+            if fact.evidence not in source_text or fact.value not in fact.evidence:
+                invalid += 1
+                log.warning("dropping fact %r.%r: value is not literally supported by source evidence", fact.entity, fact.attribute)
                 continue
             facts.append(fact)
         relations=set(ctx.novel.ontology.get("relations",[]))

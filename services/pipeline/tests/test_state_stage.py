@@ -62,6 +62,7 @@ RESPONSE = json.dumps(
                 "entity": "Li Xiaoyao",
                 "attribute": "rank",
                 "value": "Foundation Establishment",
+                "evidence": "Li Xiaoyao broke through to Foundation Establishment at the Azure Cloud Sect.",
                 "confidence": 0.9,
             }
         ],
@@ -97,7 +98,9 @@ def _state() -> PipelineState:
         envelope=ChapterEnvelope(
             novel_id="unused",
             chapter_index=CHAPTER,
-            raw_text="Li Xiaoyao broke through at the Azure Cloud Sect.",
+            raw_text=("Li Xiaoyao broke through to Foundation Establishment at the Azure Cloud Sect. "
+                      "Li Xiaoyao is an expelled disciple. Li Xiaoyao reached Core Formation. "
+                      "Li Xiaoyao is Qi Refining."),
             source_lang="en",
             source_meta=SourceMeta(raw_hash=RAW_HASH),
         )
@@ -313,7 +316,8 @@ async def test_old_prompt_cache_is_bypassed_but_completed_graph_is_not_replayed(
 
 async def test_incomplete_assertions_do_not_abort_valid_graph_writes(db_conn, novel):
     response = json.loads(RESPONSE)
-    response["facts"].append({"entity": "Li Xiaoyao", "attribute": "status", "value": None})
+    response["facts"].append({"entity": "Li Xiaoyao", "attribute": "status", "value": None,
+                              "evidence": "Li Xiaoyao broke through at the Azure Cloud Sect."})
     response["edges"].append({"src": "Li Xiaoyao", "dst": "Azure Cloud Sect", "rel_type": ""})
     provider = FakeProvider(json.dumps(response))
     ctx = _ctx(db_conn, novel, provider, LLMCache(FakeRedis()))
@@ -359,6 +363,36 @@ async def test_unresolved_surface_is_dropped_and_counted(db_conn, novel):
     assert counts["entity"] == 1, "graph-write must not create the missing entity"
 
 
+async def test_fact_with_nonliteral_evidence_is_dropped(db_conn, novel):
+    """Append-only facts need an independently checkable source anchor."""
+    response = json.dumps({
+        "entities": [{"surface": "Li Xiaoyao", "kind": "character"}],
+        "facts": [{"entity": "Li Xiaoyao", "attribute": "rank", "value": "Foundation Establishment",
+                   "evidence": "a made-up supporting quotation"}],
+    })
+    resolutions = await seed_entities(db_conn, novel, {"Li Xiaoyao": "character"})
+    await _run(_ctx(db_conn, novel, FakeProvider(response), LLMCache(FakeRedis())), resolutions=resolutions)
+    assert (await _counts(db_conn, novel))["fact"] == 0
+
+
+async def test_fact_value_must_be_quoted_by_its_evidence(db_conn, novel):
+    response = json.dumps({
+        "entities": [{"surface": "Li Xiaoyao", "kind": "character"}],
+        "facts": [{"entity": "Li Xiaoyao", "attribute": "rank", "value": "Foundation Establishment",
+                   "evidence": "Li Xiaoyao broke through to Foundation Establishment at the Azure Cloud Sect."}],
+    })
+    # A real scene quote is not enough when it does not contain the asserted value.
+    state = _state()
+    state.envelope.raw_text = "Li Xiaoyao broke through at the Azure Cloud Sect."
+    resolutions = await seed_entities(db_conn, novel, {"Li Xiaoyao": "character"})
+    ctx = _ctx(db_conn, novel, FakeProvider(response), LLMCache(FakeRedis()))
+    state.envelope.novel_id = novel
+    state.resolutions = resolutions
+    await StateStage().run(ctx, state)
+    await GraphWriteStage().run(ctx, state)
+    assert (await _counts(db_conn, novel))["fact"] == 0
+
+
 async def test_ontology_edit_forces_re_extraction(db_conn, novel):
     """The ontology is in the key (§3.5), so adding a tracked relation must re-run the
     chapter rather than serve an extraction produced by a prompt that never asked for
@@ -387,7 +421,7 @@ async def test_flashback_story_time_is_preserved(db_conn, novel):
                 {
                     "entity": "Li Xiaoyao",
                     "attribute": "rank",
-                    "value": "expelled disciple",
+                    "value": "expelled disciple", "evidence": "Li Xiaoyao is an expelled disciple.",
                     "valid_from_chapter": 10,
                 }
             ],
@@ -417,7 +451,7 @@ async def test_story_time_after_knowledge_time_is_clamped(db_conn, novel):
                 {
                     "entity": "Li Xiaoyao",
                     "attribute": "rank",
-                    "value": "Core Formation",
+                    "value": "Core Formation", "evidence": "Li Xiaoyao reached Core Formation.",
                     "valid_from_chapter": CHAPTER + 500,
                 }
             ],
@@ -446,8 +480,8 @@ async def test_fact_about_an_undeclared_surface_is_dropped(db_conn, novel):
         {
             "entities": [{"surface": "Li Xiaoyao", "kind": "character"}],
             "facts": [
-                {"entity": "Li Xiaoyao", "attribute": "rank", "value": "Qi Refining"},
-                {"entity": "Someone Unmentioned", "attribute": "rank", "value": "?"},
+                {"entity": "Li Xiaoyao", "attribute": "rank", "value": "Qi Refining", "evidence": "Li Xiaoyao is Qi Refining."},
+                {"entity": "Someone Unmentioned", "attribute": "rank", "value": "?", "evidence": "Li Xiaoyao broke through at the Azure Cloud Sect."},
             ],
         }
     )
@@ -467,9 +501,9 @@ async def test_ontology_invalid_rows_and_partial_events_fail_closed_but_valid_ro
         "entities":[{"surface":"Li Xiaoyao","kind":"character"},
                     {"surface":"Azure Cloud Sect","kind":"sect"},
                     {"surface":"Ghost","kind":"invented-kind"}],
-        "facts":[{"entity":"Li Xiaoyao","attribute":"rank","value":"Qi Refining"},
-                 {"entity":"Azure Cloud Sect","attribute":"rank","value":"invalid kind"},
-                 {"entity":"Li Xiaoyao","attribute":"invented","value":"invalid attr"}],
+        "facts":[{"entity":"Li Xiaoyao","attribute":"rank","value":"Qi Refining","evidence":"Li Xiaoyao is Qi Refining."},
+                 {"entity":"Azure Cloud Sect","attribute":"rank","value":"invalid kind","evidence":"Li Xiaoyao broke through at the Azure Cloud Sect."},
+                 {"entity":"Li Xiaoyao","attribute":"invented","value":"invalid attr","evidence":"Li Xiaoyao broke through at the Azure Cloud Sect."}],
         "edges":[{"src":"Li Xiaoyao","dst":"Azure Cloud Sect","rel_type":"member_of"},
                  {"src":"Li Xiaoyao","dst":"Azure Cloud Sect","rel_type":"invented"}],
         "events":[{"summary":"valid","entities":["Li Xiaoyao"]},

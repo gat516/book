@@ -85,6 +85,14 @@ def test_translate_key_differs_from_extract_key():
     assert model_id_for_stage("state", cfg) == "ollama:claude-haiku-4-5"
 
 
+def test_per_book_stage_models_route_and_key_independently():
+    cfg = _cfg()
+    models = {"translate": "qwen2.5:7b-instruct", "extract": "qwen3:4b-instruct-2507-q8_0"}
+    assert model_for_stage("translate", cfg, models) == models["translate"]
+    assert model_for_stage("state", cfg, models) == models["extract"]
+    assert model_id_for_stage("translate", cfg, "ollama", models) != model_id_for_stage("state", cfg, "ollama", models)
+
+
 def test_different_stage_changes_key():
     cfg = _cfg()
     assert _key("resolve", cfg) != _key("state", cfg)
