@@ -242,6 +242,7 @@ type PipelineStatusResponse struct {
 	Pending         int               `json:"pending"`
 	PendingForNovel int               `json:"pending_for_novel"`
 	WorkerOnline    bool              `json:"worker_online"`
+	QueueMode       string            `json:"queue_mode"`
 	InFlight        []InFlightChapter `json:"in_flight"`
 }
 
@@ -303,6 +304,7 @@ type TranslationHealth struct {
 // may see it.
 type ChapterFactView struct {
 	EntityID         string  `json:"entity_id"`
+	EntityCanonical  string  `json:"entity_canonical"`
 	Attribute        string  `json:"attribute"`
 	Value            string  `json:"value"`
 	ValidFromChapter int     `json:"valid_from_chapter"`

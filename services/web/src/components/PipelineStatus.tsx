@@ -122,7 +122,9 @@ export function PipelineStatus({ novelId, onProgress, onStatus }: Props) {
         })
       ) : (
         <p>
-          {!status.worker_online && status.pending_for_novel > 0
+          {status.queue_mode === "paused" && status.pending_for_novel > 0
+            ? `Queue paused — ${status.pending_for_novel} chapter(s) are intentionally waiting. Resume work in Processing queue.`
+            : !status.worker_online && status.pending_for_novel > 0
             ? `Worker offline — ${status.pending_for_novel} chapter(s) from this book are queued but cannot start.`
             : status.pending_for_novel > 0
               ? `Worker online — ${status.pending_for_novel} chapter(s) from this book are waiting for their turn.`

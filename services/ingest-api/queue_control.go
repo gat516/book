@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -18,6 +20,10 @@ const queueControlKey = "jobs:control"
 type queueControlPatch struct {
 	Mode         *string `json:"mode,omitempty"`
 	FocusNovelID *string `json:"focus_novel_id,omitempty"`
+	// These are operational labels, not authentication. reader-api supplies the reader
+	// id it received so a shared-library pause can be explained to the next reader.
+	ChangedBy string `json:"changed_by,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 func (p *queueControlPatch) validate() error {
@@ -34,6 +40,11 @@ func (p *queueControlPatch) validate() error {
 		}
 		*p.FocusNovelID = id.String()
 	}
+	p.ChangedBy = strings.TrimSpace(p.ChangedBy)
+	p.Reason = strings.TrimSpace(p.Reason)
+	if len(p.ChangedBy) > 200 || len(p.Reason) > 500 {
+		return fmt.Errorf("queue audit details are too long")
+	}
 	return nil
 }
 
@@ -41,6 +52,9 @@ func (s *Store) applyQueueControl(ctx context.Context, key string, p queueContro
 	fields := map[string]interface{}{}
 	if p.Mode != nil {
 		fields["mode"] = *p.Mode
+		fields["mode_changed_at"] = time.Now().UTC().Format(time.RFC3339)
+		fields["mode_changed_by"] = p.ChangedBy
+		fields["mode_reason"] = p.Reason
 	}
 	if p.FocusNovelID != nil {
 		fields["focus_novel_id"] = *p.FocusNovelID
@@ -60,9 +74,12 @@ type queueBook struct {
 	InFlight []queueChapter `json:"in_flight"`
 }
 type queueControlResponse struct {
-	Mode         string       `json:"mode"`
-	FocusNovelID string       `json:"focus_novel_id"`
-	Books        []*queueBook `json:"books"`
+	Mode          string       `json:"mode"`
+	FocusNovelID  string       `json:"focus_novel_id"`
+	ModeChangedAt string       `json:"mode_changed_at,omitempty"`
+	ModeChangedBy string       `json:"mode_changed_by,omitempty"`
+	ModeReason    string       `json:"mode_reason,omitempty"`
+	Books         []*queueBook `json:"books"`
 }
 
 func (s *Store) queueControl(ctx context.Context) (queueControlResponse, error) {
@@ -74,7 +91,11 @@ func (s *Store) queueControl(ctx context.Context) (queueControlResponse, error) 
 	if _, err := pipe.Exec(ctx); err != nil {
 		return queueControlResponse{}, err
 	}
-	result := queueControlResponse{Mode: settings.Val()["mode"], FocusNovelID: settings.Val()["focus_novel_id"], Books: []*queueBook{}}
+	result := queueControlResponse{
+		Mode: settings.Val()["mode"], FocusNovelID: settings.Val()["focus_novel_id"],
+		ModeChangedAt: settings.Val()["mode_changed_at"], ModeChangedBy: settings.Val()["mode_changed_by"],
+		ModeReason: settings.Val()["mode_reason"], Books: []*queueBook{},
+	}
 	if result.Mode == "" {
 		result.Mode = "all"
 	}

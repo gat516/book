@@ -61,6 +61,42 @@ related list by a known source name, but this does not bind graph identities.
 
 Run `npm test` for mention segmentation tests and `npm run build` for the production check.
 
+## Per-book Ollama models over Tailscale
+
+**Book Settings → Model provider** can use one Ollama server for two different jobs:
+set the stronger translation model separately from the evidence-gated graph/extraction
+model. A recommended local pairing is `qwen2.5:7b-instruct` for translation and
+`qwen3:4b-instruct-2507-q8_0` for extraction.
+
+The **Base URL** is the Ollama server URL only — for example
+`http://cj-desktop.taila10bf4.ts.net:11434`. Do not add `/api/tags` or another endpoint
+path. After saving, **Load models from this Ollama server** calls Ollama's fixed
+`GET /api/tags` endpoint and offers the installed model names.
+
+The browser never calls Ollama directly. `ingest-api` does the catalog lookup, and it
+accepts only `http(s)` base URLs whose hostname is in `OLLAMA_ALLOWED_HOSTS` on the API
+machine. Add the Tailnet hostname there, for example:
+
+```dotenv
+OLLAMA_ALLOWED_HOSTS=localhost,127.0.0.1,cj-desktop.taila10bf4.ts.net
+```
+
+Ollama defaults to `127.0.0.1:11434`, which a different Tailnet machine cannot reach.
+On the Ollama host, bind it to that machine's Tailscale IP (not `0.0.0.0`, which would
+also expose it on ordinary LAN interfaces):
+
+```bash
+sudo mkdir -p /etc/systemd/system/ollama.service.d
+printf '[Service]\nEnvironment="OLLAMA_HOST=100.85.184.34:11434"\n' \
+  | sudo tee /etc/systemd/system/ollama.service.d/tailscale.conf >/dev/null
+sudo systemctl daemon-reload
+sudo systemctl restart ollama
+```
+
+Replace the IP with the Ollama host's current Tailscale address. Ollama has no built-in
+authentication on this port, so keep the service private to your Tailnet and do not
+publish the port through a public reverse proxy.
+
 ## Reading and enrichment status
 
 **Processing queue** controls the shared local worker. Opening a book or returning to

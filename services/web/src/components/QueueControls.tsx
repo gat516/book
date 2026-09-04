@@ -24,7 +24,7 @@ export function QueueControls({ novelId }: { novelId: string | null }) {
     }
   }, []);
 
-  const apply = useCallback(async (patch: { mode?: QueueMode; focus_novel_id?: string }) => {
+  const apply = useCallback(async (patch: { mode?: QueueMode; focus_novel_id?: string; reason?: string }) => {
     const version = ++generation.current;
     changing.current = true;
     setBusy(true);
@@ -63,8 +63,13 @@ export function QueueControls({ novelId }: { novelId: string | null }) {
     <h2>Processing queue</h2>
     <label>Work on {" "}
       <select aria-label="Queue mode" value={queue?.mode ?? "all"} disabled={busy || !queue}
-        onChange={(event) => void apply({ mode: event.target.value as QueueMode,
-          ...(novelId ? { focus_novel_id: novelId } : {}) })}>
+        onChange={(event) => {
+          const mode = event.target.value as QueueMode;
+          const reason = mode === "paused"
+            ? "Paused from the reader's processing queue controls"
+            : `Changed to ${mode} from the reader's processing queue controls`;
+          void apply({ mode, reason, ...(novelId ? { focus_novel_id: novelId } : {}) });
+        }}>
         <option value="all">Open book first, then background books</option>
         <option value="focused">Only the focused book</option>
         <option value="paused">Paused — finish current work first</option>
@@ -75,12 +80,24 @@ export function QueueControls({ novelId }: { novelId: string | null }) {
         focused ? `Priority: ${focused.title} (${focused.novel_id.slice(0, 8)}).` : "Open a book to give it priority."}
       {busy && " Saving…"}
     </p>
+    {queue?.mode === "paused" && (
+      <p>
+        {queue.mode_changed_at
+          ? <>Paused {new Date(queue.mode_changed_at).toLocaleString()} by {queue.mode_changed_by || "an unknown reader"}{queue.mode_reason ? ` — ${queue.mode_reason}.` : "."}</>
+          : "This pause was set before pause auditing was added, so its original reason was not recorded."}
+      </p>
+    )}
     {queue?.mode === "paused" && focused && <p>Focused after resume: {focused.title} ({focused.novel_id.slice(0, 8)}).</p>}
     {queue?.mode === "focused" && <p>Other books stay queued until you switch books or enable background work.</p>}
     {active.map(({ book, chapter }) => <p key={`${book.novel_id}:${chapter.chapter_index}`}>
       Running: <strong>{book.title}</strong> ({book.novel_id.slice(0, 8)}), chapter {chapter.chapter_index} — {describeStage(chapter.stage)}.
     </p>)}
     <p className="queue-note">Switching books takes effect after current work finishes. Saved translations and queued chapters are kept. These controls are shared across tabs; the last book you focus wins. Scraping is separate.</p>
+    {queue?.mode === "paused" && <button disabled={busy} onClick={() => void apply({
+      mode: "all",
+      reason: "Resumed from the reader's processing queue controls",
+      ...(novelId ? { focus_novel_id: novelId } : {}),
+    })}>Resume processing</button>}
     {novelId && queue?.focus_novel_id !== novelId && <button disabled={busy} onClick={() => void apply({ focus_novel_id: novelId })}>Prioritize this book</button>}
     {queue && queue.books.length > 0 && <details>
       <summary>Queued by book ({queue.books.reduce((sum, book) => sum + book.pending, 0)} chapters)</summary>
