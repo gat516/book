@@ -1,7 +1,7 @@
 [Unit]
 Description=novel-engine pipeline worker (drains jobs:pending)
-After=network-online.target
-Wants=network-online.target
+After=network-online.target novel-ollama-tunnel.service
+Wants=network-online.target novel-ollama-tunnel.service
 PartOf=novel-engine.target
 # See the note in novel-ingest-api.service: the default start limit would let a
 # restart storm latch this unit into "failed" permanently. This is the worker whose

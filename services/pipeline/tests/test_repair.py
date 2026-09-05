@@ -40,6 +40,8 @@ def test_failure_category_classifies_repair_action_errors():
          "output_truncated"),
         (TimeoutError("timed out"), "timeout"),
         (OSError("connection refused"), "model_unreachable"),
+        # The literal string httpx produces when the endpoint is gone.
+        (ConnectionError("All connection attempts failed"), "model_unreachable"),
         (KeyError("chapters"), "unknown"),
     ]
     for exc, expected in cases:
@@ -634,3 +636,59 @@ async def test_only_the_earliest_unfinished_chapter_gates_a_rebuild(db_conn):
             " WHERE revision_id=%s AND chapter_index=1", (revision,))
         assert await repair._next_staging_revision(
             db_conn, "graph_revision", "graph_job", novel) is None
+
+
+@pytest.mark.db
+async def test_a_blocked_run_is_recorded_on_the_revision_not_a_chapter(db_conn):
+    """A dead endpoint must be visible, and must not cost a chapter its retries.
+
+    resume()'s preamble runs before the per-chapter try block, so a failure there reached
+    no recorder at all: the run died while the panel showed "0 of N done" and an empty
+    failure ledger. Attributing it to a chapter would be worse than silence -- a flapping
+    connection would burn chapter 1's three attempts and strand the whole revision.
+    """
+    from pipeline.failures import clear_blocked, record_blocked
+
+    async with db_conn.transaction(force_rollback=True):
+        novel, revision = await _staging_revision(db_conn)
+
+        category = await record_blocked(
+            db_conn, "graph_revision", revision,
+            OSError("ConnectError: All connection attempts failed"))
+        assert category == "model_unreachable"
+
+        cursor = await db_conn.execute(
+            "SELECT blocked_category, blocked_at IS NOT NULL FROM graph_revision WHERE id=%s",
+            (revision,))
+        assert await cursor.fetchone() == ("model_unreachable", True)
+
+        # The chapter is untouched: no attempt consumed, no failure recorded.
+        cursor = await db_conn.execute(
+            "SELECT state, attempts, category FROM graph_job WHERE revision_id=%s", (revision,))
+        assert await cursor.fetchone() == ("pending", 0, None)
+
+        # And the reader-facing status surfaces it.
+        cursor = await db_conn.execute(
+            "SELECT blocked_category FROM reader_repair_status(%s) WHERE track='graph'", (novel,))
+        assert (await cursor.fetchone())[0] == "model_unreachable"
+
+        # Recovery clears it as soon as the run gets past its preamble.
+        await clear_blocked(db_conn, "graph_revision", revision)
+        cursor = await db_conn.execute(
+            "SELECT blocked_category, blocked_at FROM graph_revision WHERE id=%s", (revision,))
+        assert await cursor.fetchone() == (None, None)
+
+
+@pytest.mark.db
+async def test_status_counts_what_the_rebuild_has_published(db_conn):
+    """A counter that only moves once per chapter cannot show progress within one.
+
+    Chapter 1 takes many inference calls; claims_published is what makes a long rebuild
+    visibly alive between chapter boundaries.
+    """
+    async with db_conn.transaction(force_rollback=True):
+        novel, revision = await _staging_revision(db_conn)
+        cursor = await db_conn.execute(
+            "SELECT claims_published, entities_created FROM reader_repair_status(%s)"
+            " WHERE track='graph'", (novel,))
+        assert await cursor.fetchone() == (0, 0)

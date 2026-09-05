@@ -94,6 +94,42 @@ def failure_category(exc: BaseException) -> str:
         return "not_found"
     if "timeout" in text or "timed out" in text or "deadline" in text:
         return "timeout"
-    if "connection refused" in text or "could not connect" in text or "unreachable" in text:
+    # httpx raises ConnectError("All connection attempts failed"), which matched none of
+    # the phrases below and classified as unknown -- observed live when the SSH forward to
+    # the GPU host dropped. The type name is part of `text`, so match it directly.
+    if ("connecterror" in text or "connection refused" in text
+            or "connection attempts failed" in text
+            or "could not connect" in text or "unreachable" in text):
         return "model_unreachable"
     return "unknown"
+
+
+async def record_blocked(db, table: str, rid: str, exc: BaseException) -> str:
+    """Record why a whole revision cannot proceed, on the revision itself.
+
+    resume() checks the model pin and opens its connections BEFORE the per-chapter try
+    block, so a failure there never reaches the per-chapter recorder: the run dies and the
+    panel keeps showing "0 of N done" with an empty failure ledger. This is what makes
+    "unreachable endpoint" or "model not installed" visible instead of silent.
+
+    Not attributed to a chapter on purpose. The cause is not any chapter's fault, and
+    spending one of a chapter's three retries on an infrastructure problem would let a
+    flapping connection permanently strand it.
+    """
+    category = failure_category(exc)
+    # table is a literal supplied by this package, never caller input.
+    await db.execute(
+        f"UPDATE {table} SET blocked_category=%s, blocked_at=now() WHERE id=%s", (category, rid))
+    return category
+
+
+async def clear_blocked(db, table: str, rid: str) -> None:
+    """Clear the blocked marker once a run gets past its preamble.
+
+    Cleared as soon as the run can start rather than when a chapter finishes: a chapter
+    takes minutes, and leaving a stale "unreachable" banner up that long after the
+    endpoint came back is its own kind of lie.
+    """
+    await db.execute(
+        f"UPDATE {table} SET blocked_category=NULL, blocked_at=NULL"
+        " WHERE id=%s AND blocked_category IS NOT NULL", (rid,))

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { cancelRepair, getRepairStatus, listOllamaModels, requestRepair } from "../api";
+import { cancelRepair, getRepairProgress, getRepairStatus, listOllamaModels, requestRepair } from "../api";
 import { clearOperatorToken, operatorToken, setOperatorToken } from "../operator";
 import { usePolling } from "../usePolling";
-import type { RepairStatus, RepairTrack, RepairTrackName } from "../types";
+import type { RepairProgressFact, RepairStatus, RepairTrack, RepairTrackName } from "../types";
 import { RepairReview } from "./RepairReview";
 
 interface Props {
@@ -65,6 +65,7 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   const [notice, setNotice] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState<RepairTrackName | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [found, setFound] = useState<RepairProgressFact[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -115,6 +116,20 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
     container.current.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [openSignal]);
 
+  // Only an operator may see these: unreviewed claims quoted from anywhere in the book.
+  const watching =
+    status?.operator === true &&
+    (status.graph.state === "rebuilding" || status.graph.state === "awaiting_review");
+  useEffect(() => {
+    if (!watching) {
+      setFound([]);
+      return;
+    }
+    void getRepairProgress(novelId)
+      .then(setFound)
+      .catch(() => setFound([]));
+  }, [novelId, watching, status?.graph.published.claims]);
+
   useEffect(() => {
     if (!status?.operator) return;
     void listOllamaModels(novelId)
@@ -163,6 +178,25 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
         </h4>
         <p className="repair-reason">{track.reason}</p>
 
+        {track.blocked && (
+          <p className="chapter-list-error" role="alert">
+            Stalled: {track.blocked.detail}
+            {track.blocked.since &&
+              ` (since ${new Date(track.blocked.since).toLocaleTimeString()})`}
+          </p>
+        )}
+
+        {track.state === "rebuilding" && !track.blocked && (
+          <p className="repair-live" role="status">
+            {track.published.calls} model call
+            {track.published.calls === 1 ? "" : "s"} completed
+            {track.published.claims > 0 &&
+              `, ${track.published.claims} claim${track.published.claims === 1 ? "" : "s"} published`}
+            . A chapter needs many calls before any of it is published, so the call count
+            is what moves while a chapter is in flight.
+          </p>
+        )}
+
         {track.state !== "ready" && track.withheld_claims > 0 && (
           <p className="novel-create-form-hint">
             {track.withheld_claims} stored {name === "graph" ? "facts" : "events"} are
@@ -206,6 +240,34 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
               </div>
             )}
           </dl>
+        )}
+
+        {name === "graph" && track.state === "rebuilding" && !track.blocked && found.length === 0 && (
+          <p className="novel-create-form-hint">
+            Nothing published yet — claims appear a chapter at a time, when the whole
+            chapter finishes.
+          </p>
+        )}
+
+        {name === "graph" && found.length > 0 && (
+          <details className="repair-found">
+            <summary>What it has extracted so far ({found.length} most recent)</summary>
+            <ul>
+              {found.map((fact) => (
+                <li key={fact.id}>
+                  <span className="repair-found-claim">
+                    {fact.entity} · {fact.attribute}: {fact.value}
+                  </span>
+                  <small> — chapter {fact.chapter_index}</small>
+                  {fact.quote && <blockquote>{fact.quote}</blockquote>}
+                </li>
+              ))}
+            </ul>
+            <p className="novel-create-form-hint">
+              Unreviewed and not visible to readers. Values appear in the source language:
+              extraction runs on the raw chapter, not the translation.
+            </p>
+          </details>
         )}
 
         {track.failures.length > 0 && (

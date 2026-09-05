@@ -541,3 +541,50 @@ func repairStatusFor(t *testing.T, api *API, token, addr string) RepairStatus {
 	}
 	return status
 }
+
+// A stalled rebuild must not read like a healthy one. This is the case that sent someone
+// to journalctl: a dead model endpoint showed "Rebuilding: 0 of 26 done" with an empty
+// failure ledger, because the failure happened in resume()'s preamble and was recorded
+// nowhere the panel could see.
+func TestBlockedRebuildReadsDifferentlyFromASlowOne(t *testing.T) {
+	active := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	staging := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	cause := repairUnreachable
+	since := time.Now().Add(-5 * time.Minute)
+
+	slow := buildTrack(repairRow{activeRevision: &active, replacementID: &staging,
+		total: 26, done: 0, claims: 4, calls: 9}, nil, nil, "facts")
+	stalled := buildTrack(repairRow{activeRevision: &active, replacementID: &staging,
+		total: 26, done: 0, blockedCat: &cause, blockedAt: &since}, nil, nil, "facts")
+
+	if slow.Blocked != nil {
+		t.Error("a healthy rebuild must not report a blockage")
+	}
+	if stalled.Blocked == nil {
+		t.Fatal("a blocked rebuild must report why")
+	}
+	if stalled.Blocked.Category != repairUnreachable || stalled.Blocked.Detail == "" {
+		t.Errorf("blocked = %+v, want a category and a sentence", stalled.Blocked)
+	}
+	if stalled.Blocked.Since.IsZero() {
+		t.Error("blocked must carry since, so the reader can see how long it has been stuck")
+	}
+	if stalled.Reason == slow.Reason {
+		t.Fatal("a stalled rebuild must not read identically to a slow one")
+	}
+	if !strings.Contains(stalled.Reason, "Stalled") {
+		t.Errorf("stalled reason should lead with the blockage: %q", stalled.Reason)
+	}
+	// And a healthy one should show that it is finding things between chapter boundaries.
+	// Model calls, not claims: claims only land per chapter, so they would move exactly
+	// when the chapter counter does and say nothing about the chapter in flight.
+	if !strings.Contains(slow.Reason, "9 model calls") {
+		t.Errorf("a slow rebuild should report completed model calls: %q", slow.Reason)
+	}
+	if slow.Published.Calls != 9 {
+		t.Errorf("published calls = %d, want 9", slow.Published.Calls)
+	}
+	if slow.Published.Claims != 4 {
+		t.Errorf("published claims = %d, want 4", slow.Published.Claims)
+	}
+}

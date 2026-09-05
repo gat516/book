@@ -51,6 +51,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/translation-health", a.getTranslationHealth)
 	mux.HandleFunc("GET /novels/{id}/repair", a.getRepairStatus)
 	mux.HandleFunc("GET /novels/{id}/repair/preview", a.getRepairPreview)
+	mux.HandleFunc("GET /novels/{id}/repair/progress", a.getRepairProgress)
 	mux.HandleFunc("POST /novels/{id}/repair", a.postRepair)
 	mux.HandleFunc("DELETE /novels/{id}/repair/{request}", a.deleteRepair)
 	mux.HandleFunc("POST /novels/{id}/ask", a.postAsk)

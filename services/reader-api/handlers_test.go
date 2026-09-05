@@ -63,6 +63,8 @@ type fakeStore struct {
 	repairErr         error
 	repairPreview     RepairPreview
 	repairPreviewErr  error
+	repairProgress    []RepairProgressFact
+	repairProgressErr error
 }
 
 type fakeIngestClient struct {
@@ -281,6 +283,10 @@ func (f *fakeStore) TranslationHealth(_ context.Context, novelID string) (Transl
 
 func (f *fakeStore) RepairPreview(_ context.Context, _, _ string) (RepairPreview, error) {
 	return f.repairPreview, f.repairPreviewErr
+}
+
+func (f *fakeStore) RepairProgress(_ context.Context, _ string) ([]RepairProgressFact, error) {
+	return f.repairProgress, f.repairProgressErr
 }
 
 func (f *fakeStore) RepairStatus(_ context.Context, novelID string) (RepairStatus, error) {

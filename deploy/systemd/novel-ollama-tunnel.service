@@ -1,0 +1,27 @@
+[Unit]
+Description=novel-engine loopback forward to a remote Ollama (:11435)
+After=network-online.target
+Wants=network-online.target
+PartOf=novel-engine.target
+# Same reasoning as the other units: the default start limit would latch this into
+# "failed" after a few drops, and an SSH forward across a tailnet drops routinely --
+# a laptop sleeping, a link flapping. This is the process whose absence makes every
+# graph-repair inference fail with ConnectError, so it must never stop being restarted.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=@REPO@/.env
+# Why a forward at all: graph repair refuses a non-loopback Ollama endpoint
+# (knowledge.py, graph_rebuild.local_model), so the remote GPU is reached through a
+# loopback port rather than by pointing OLLAMA_HOST across the network.
+ExecStart=/usr/bin/ssh -N -T \
+  -o BatchMode=yes -o ExitOnForwardFailure=yes -o StrictHostKeyChecking=accept-new \
+  -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
+  -L 127.0.0.1:${OLLAMA_TUNNEL_LOCAL_PORT}:${OLLAMA_TUNNEL_REMOTE} \
+  ${OLLAMA_TUNNEL_SSH_TARGET}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=novel-engine.target

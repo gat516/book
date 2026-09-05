@@ -477,6 +477,32 @@ export interface RepairTrack {
   failures: RepairFailure[];
   // False once every failure has exhausted its attempts: waiting is no longer a strategy.
   retryable: boolean;
+  // Why the run cannot proceed at all, as opposed to one chapter failing. Its absence
+  // used to be indistinguishable from "working slowly".
+  blocked: RepairBlocked | null;
+  // claims/entities only land when a WHOLE chapter publishes, so they move at the same
+  // moment chapters.done does. calls is one per completed model call, several per
+  // chapter -- the only counter that moves *inside* a chapter, and so the only honest
+  // "still alive" signal on hardware where one call can take ten minutes.
+  published: { claims: number; entities: number; calls: number };
+}
+
+export interface RepairBlocked {
+  category: string;
+  detail: string;
+  since: string;
+}
+
+// One claim the running rebuild has already published. Operator-only: unreviewed, and
+// quoted from anywhere in the book.
+export interface RepairProgressFact {
+  id: number;
+  entity: string;
+  kind: string;
+  attribute: string;
+  value: string;
+  chapter_index: number;
+  quote?: string;
 }
 
 export type RepairTrackName = "graph" | "events";

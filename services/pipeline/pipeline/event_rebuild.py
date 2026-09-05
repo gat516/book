@@ -18,7 +18,7 @@ from psycopg.types.json import Jsonb
 
 from pipeline.config import Config
 from pipeline.evidence import digest
-from pipeline.failures import failure_category
+from pipeline.failures import clear_blocked, failure_category, record_blocked
 from pipeline.events import (
     DEFAULT_EVENT_SCHEMA, EVENT_PROMPT_VERSION, EXTRACTION_PROVIDERS, EventEngine,
 )
@@ -157,25 +157,32 @@ async def resume(db, cfg, rid: str, *, limit: int | None = None, chapter: int | 
         raise RuntimeError("another worker is already enriching this event revision")
     engine = None
     try:
-        r = await revision(db, rid)
-        if r["state"] == "archived":
-            raise ValueError("archived event revision cannot be rebuilt")
-        live = await extraction_model(cfg, r["model"]["provider"], r["model"]["name"])
-        if live != r["model"]:
-            raise ValueError(
-                "pinned model or inference configuration changed; create a new event "
-                f"revision ({model_drift(r['model'], live)})"
-            )
-        engine = EventEngine(db, cfg, r)
-        target = (await (await db.execute(
-            "SELECT target_lang FROM novel WHERE id=%s", (r["novel_id"],)
-        )).fetchone())[0]
-        jobs = await (await db.execute(
-            "SELECT chapter_index FROM event_job WHERE revision_id=%s AND state<>'done' "
-            "AND (%s::int IS NULL OR chapter_index=%s) ORDER BY chapter_index", (rid, chapter, chapter)
-        )).fetchall()
-        selected = jobs[:limit] if limit else jobs
-        client = objects(cfg)
+        # Preamble: fails for reasons that belong to the run rather than to any chapter,
+        # and used to die without ever reaching the per-chapter recorder.
+        try:
+            r = await revision(db, rid)
+            if r["state"] == "archived":
+                raise ValueError("archived event revision cannot be rebuilt")
+            live = await extraction_model(cfg, r["model"]["provider"], r["model"]["name"])
+            if live != r["model"]:
+                raise ValueError(
+                    "pinned model or inference configuration changed; create a new event "
+                    f"revision ({model_drift(r['model'], live)})"
+                )
+            engine = EventEngine(db, cfg, r)
+            target = (await (await db.execute(
+                "SELECT target_lang FROM novel WHERE id=%s", (r["novel_id"],)
+            )).fetchone())[0]
+            jobs = await (await db.execute(
+                "SELECT chapter_index FROM event_job WHERE revision_id=%s AND state<>'done' "
+                "AND (%s::int IS NULL OR chapter_index=%s) ORDER BY chapter_index", (rid, chapter, chapter)
+            )).fetchall()
+            selected = jobs[:limit] if limit else jobs
+            client = objects(cfg)
+        except Exception as exc:
+            await record_blocked(db, "event_revision", rid, exc)
+            raise
+        await clear_blocked(db, "event_revision", rid)
         # A chapter that fails is recorded and skipped rather than ending the run: the
         # event_job state='failed'/retry_at machinery exists precisely so one bad chapter
         # does not cost the other twenty. Consecutive failures are different -- they mean

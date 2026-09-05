@@ -27,6 +27,7 @@ import type {
   ScrapeJobView,
   StartScrapeRequest,
   RepairPreview,
+  RepairProgressFact,
   RepairStatus,
   TimelineResponse,
 } from "./types";
@@ -386,4 +387,14 @@ export async function getRepairPreview(
   return request(`/novels/${novelId}/repair/preview?track=${track}`, {
     headers: operatorHeaders(),
   });
+}
+
+// What the running rebuild has extracted so far. Operator-only for the same reason as the
+// preview: unreviewed claims carrying source quotes from anywhere in the book.
+export async function getRepairProgress(novelId: string): Promise<RepairProgressFact[]> {
+  const response = await request<{ facts: RepairProgressFact[] }>(
+    `/novels/${novelId}/repair/progress`,
+    { headers: operatorHeaders() },
+  );
+  return response.facts ?? [];
 }

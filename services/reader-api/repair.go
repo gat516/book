@@ -142,6 +142,43 @@ type RepairTrack struct {
 	// Retryable is false once every failure has exhausted its attempts, which is the
 	// point at which waiting stops being a strategy.
 	Retryable bool `json:"retryable"`
+	// Blocked is why the run cannot proceed AT ALL, as opposed to one chapter failing.
+	// Its absence used to be indistinguishable from "working slowly": a dead endpoint
+	// left the panel showing 0 done and an empty failure ledger for as long as it lasted.
+	Blocked *RepairBlocked `json:"blocked"`
+	// Published is what the rebuild has produced so far. The chapter counter only moves
+	// once per chapter, and a chapter is many inference calls, so this is what shows a
+	// long rebuild is alive between those boundaries.
+	Published RepairPublished `json:"published"`
+}
+
+type RepairBlocked struct {
+	Category string    `json:"category"`
+	Detail   string    `json:"detail"`
+	Since    time.Time `json:"since"`
+}
+
+type RepairPublished struct {
+	// Claims and Entities only appear when a WHOLE chapter publishes, so they move at the
+	// same moment the chapter counter does. They answer "what has it found".
+	Claims   int `json:"claims"`
+	Entities int `json:"entities"`
+	// Calls is one per completed model call, several per chapter — the only counter that
+	// moves inside a chapter, and so the only honest liveness signal. On this hardware a
+	// single call can take ten minutes, which is long enough to look hung.
+	Calls int `json:"calls"`
+}
+
+// RepairProgressFact is one claim the running rebuild has already published. Operator-only:
+// unreviewed, and quoted from anywhere in the book (migration 0047).
+type RepairProgressFact struct {
+	ID        int64  `json:"id"`
+	Entity    string `json:"entity"`
+	Kind      string `json:"kind"`
+	Attribute string `json:"attribute"`
+	Value     string `json:"value"`
+	Chapter   int    `json:"chapter_index"`
+	Quote     string `json:"quote,omitempty"`
 }
 
 type RepairChapters struct {
@@ -254,6 +291,11 @@ type repairRow struct {
 	retryable      bool
 	reviewed       bool
 	superseded     int
+	blockedCat     *string
+	blockedAt      *time.Time
+	claims         int
+	entities       int
+	calls          int
 }
 
 func (s *Store) RepairStatus(ctx context.Context, novelID string) (RepairStatus, error) {
@@ -263,7 +305,9 @@ func (s *Store) RepairStatus(ctx context.Context, novelID string) (RepairStatus,
 		`SELECT track, active_revision::text, active_trusted, active_legacy, withheld_claims,
 		        replacement_id::text, replacement_model, replacement_prompt, replacement_created,
 		        chapters_total, chapters_done, chapters_failed, chapters_running,
-		        activation_eligible, review_hash, retryable, reviewed, superseded
+		        activation_eligible, review_hash, retryable, reviewed, superseded,
+		        blocked_category, blocked_at, claims_published, entities_created,
+		        calls_completed
 		   FROM reader_repair_status($1)`, novelID)
 	if err != nil {
 		return RepairStatus{}, fmt.Errorf("read repair status: %w", err)
@@ -277,7 +321,9 @@ func (s *Store) RepairStatus(ctx context.Context, novelID string) (RepairStatus,
 			&row.withheldClaims, &row.replacementID, &row.model, &row.promptVersion, &row.createdAt,
 			&row.total, &row.done, &row.failed, &row.running,
 			&row.eligible, &row.reviewHash, &row.retryable,
-			&row.reviewed, &row.superseded); err != nil {
+			&row.reviewed, &row.superseded,
+			&row.blockedCat, &row.blockedAt, &row.claims, &row.entities,
+			&row.calls); err != nil {
 			return RepairStatus{}, fmt.Errorf("scan repair status: %w", err)
 		}
 		byTrack[row.track] = row
@@ -370,6 +416,33 @@ func (s *Store) repairHistory(ctx context.Context, novelID string) ([]RepairAudi
 	return history, rows.Err()
 }
 
+// RepairProgress lists what the running rebuild has published so far. Operator-only and
+// on operatorDB for the same reason as RepairPreview: unreviewed claims with source
+// quotes, ungated by reading progress.
+func (s *Store) RepairProgress(ctx context.Context, novelID string) ([]RepairProgressFact, error) {
+	rows, err := s.operatorDB.Query(ctx,
+		`SELECT fact_id, entity, kind, attribute, value, chapter_index, quote
+		   FROM repair_progress($1)`, novelID)
+	if err != nil {
+		return nil, fmt.Errorf("read repair progress: %w", err)
+	}
+	defer rows.Close()
+	facts := []RepairProgressFact{}
+	for rows.Next() {
+		var fact RepairProgressFact
+		var quote *string
+		if err := rows.Scan(&fact.ID, &fact.Entity, &fact.Kind, &fact.Attribute,
+			&fact.Value, &fact.Chapter, &quote); err != nil {
+			return nil, fmt.Errorf("scan repair progress: %w", err)
+		}
+		if quote != nil {
+			fact.Quote = *quote
+		}
+		facts = append(facts, fact)
+	}
+	return facts, rows.Err()
+}
+
 // RepairPreview reads the frozen report. It returns story content — source quotes from
 // every snapshotted chapter, ignoring reading progress — so it is the ONLY method that uses
 // operatorDB, whose role is the only one Postgres will let call repair_preview (0046).
@@ -428,6 +501,7 @@ func buildTrack(row repairRow, failures []RepairFailure, targets []RepairRollbac
 		WithheldClaims:  0,
 		Chapters:        RepairChapters{Total: row.total, Done: row.done, Failed: row.failed, Running: row.running},
 		Failures:        failures,
+		Published:       RepairPublished{Claims: row.claims, Entities: row.entities, Calls: row.calls},
 		RollbackTargets: targets,
 		Superseded:      row.superseded,
 		Retryable:       row.retryable,
@@ -458,6 +532,17 @@ func buildTrack(row repairRow, failures []RepairFailure, targets []RepairRollbac
 		}
 		replacement.Reviewed = row.reviewed
 		track.Replacement = replacement
+	}
+
+	if row.blockedCat != nil {
+		detail := repairFailureDetail[*row.blockedCat]
+		if detail == "" {
+			detail = repairFailureDetail[repairUnknownCause]
+		}
+		track.Blocked = &RepairBlocked{Category: *row.blockedCat, Detail: detail}
+		if row.blockedAt != nil {
+			track.Blocked.Since = *row.blockedAt
+		}
 	}
 
 	// A trusted active revision is the ordinary case and says nothing about repair.
@@ -522,9 +607,20 @@ func buildTrack(row repairRow, failures []RepairFailure, targets []RepairRollbac
 			row.failed, row.total, capitalise(noun))
 	default:
 		track.State = repairRebuilding
+		if track.Blocked != nil {
+			// Leading with the blockage: "Rebuilding: 0 of 26" next to a dead endpoint is
+			// the exact reading that sent someone to the journal to find out why.
+			track.Reason = fmt.Sprintf(
+				"Stalled at %d of %d chapters — %s. %s stay withheld until this is resolved.",
+				row.done, row.total, track.Blocked.Detail, capitalise(noun))
+			break
+		}
+		// Model calls, not claims: a claim only lands when a whole chapter publishes, so
+		// quoting claims here would move at exactly the same time as the chapter counter
+		// and tell the reader nothing about whether the current chapter is progressing.
 		track.Reason = fmt.Sprintf(
-			"Rebuilding: %d of %d chapters done%s. %s stay withheld until the rebuild is reviewed.",
-			row.done, row.total, failedSuffix(row.failed), capitalise(noun))
+			"Rebuilding: %d of %d chapters done%s, %d model calls completed. %s stay withheld until the rebuild is reviewed.",
+			row.done, row.total, failedSuffix(row.failed), row.calls, capitalise(noun))
 	}
 	return track
 }
@@ -723,6 +819,29 @@ func (a *API) deleteRepair(w http.ResponseWriter, r *http.Request) {
 // quotes up to their own reading position could not assess the claims they are being
 // asked to approve — and it is why the operator check above is a hard requirement here
 // rather than the advisory flag it is on the status endpoint.
+// getRepairProgress shows what the rebuild has published so far. Operator-gated for the
+// same reason as the preview: these are unreviewed claims carrying source quotes from
+// anywhere in the book, so they are not spoiler-safe for an ordinary reader.
+func (a *API) getRepairProgress(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	if !a.requireOperator(w, r) {
+		return
+	}
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	facts, err := a.store.RepairProgress(r.Context(), novelID)
+	if err != nil {
+		log.Printf("repair progress: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load repair progress")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"facts": facts})
+}
+
 func (a *API) getRepairPreview(w http.ResponseWriter, r *http.Request) {
 	prepareReaderResponse(w)
 	if !a.requireOperator(w, r) {

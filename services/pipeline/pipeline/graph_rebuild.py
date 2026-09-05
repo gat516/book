@@ -24,7 +24,7 @@ from pipeline.config import Config
 from pipeline.context import PipelineState
 from pipeline.envelope import ChapterEnvelope, SourceMeta
 from pipeline.evidence import PROMPT_VERSION, digest
-from pipeline.failures import failure_category
+from pipeline.failures import clear_blocked, failure_category, record_blocked
 from pipeline.knowledge import KnowledgeEngine
 from pipeline.llm.provider import AdmissionRejected
 from pipeline.stages.resolve import _lock_glossary
@@ -193,18 +193,25 @@ async def resume(db,cfg,rid, *, limit=None):
         raise RuntimeError('another worker is already enriching this revision')
     engine = None
     try:
-        r = await revision(db,rid)
-        if r['state']=='archived' or r['legacy']:
-            raise ValueError('revision cannot be rebuilt')
-        live = await local_model(cfg,r['model']['name'])
-        if live != r['model']:
-            raise ValueError('installed model or inference configuration changed since snapshot; '
-                             f'create a new revision ({model_drift(r["model"], live)})')
-        engine = KnowledgeEngine(db,cfg,r)
-        client = objects(cfg)
-        lang = await (await db.execute('SELECT source_lang,target_lang FROM novel WHERE id=%s',(r['novel_id'],))).fetchone()
-        jobs = await (await db.execute('SELECT chapter_index FROM graph_job WHERE revision_id=%s AND state<>%s ORDER BY chapter_index',
-                                      (rid,'done'))).fetchall()
+        # Everything up to the chapter loop is the preamble: it can fail for reasons that
+        # belong to the run, not to any chapter, and used to die invisibly.
+        try:
+            r = await revision(db,rid)
+            if r['state']=='archived' or r['legacy']:
+                raise ValueError('revision cannot be rebuilt')
+            live = await local_model(cfg,r['model']['name'])
+            if live != r['model']:
+                raise ValueError('installed model or inference configuration changed since snapshot; '
+                                 f'create a new revision ({model_drift(r["model"], live)})')
+            engine = KnowledgeEngine(db,cfg,r)
+            client = objects(cfg)
+            lang = await (await db.execute('SELECT source_lang,target_lang FROM novel WHERE id=%s',(r['novel_id'],))).fetchone()
+            jobs = await (await db.execute('SELECT chapter_index FROM graph_job WHERE revision_id=%s AND state<>%s ORDER BY chapter_index',
+                                          (rid,'done'))).fetchall()
+        except Exception as exc:
+            await record_blocked(db,'graph_revision',rid,exc)
+            raise
+        await clear_blocked(db,'graph_revision',rid)
         for (index,) in jobs[:limit] if limit else jobs:
             c = next(c for c in r['snapshot']['chapters'] if c['chapter']==index)
             source = await asyncio.to_thread(read_object,client,cfg,c['raw_uri'])
