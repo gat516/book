@@ -108,9 +108,9 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
     container.current.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [openSignal]);
 
-  const watching =
-    status !== null &&
-    (status.graph.state === "rebuilding" || status.graph.state === "awaiting_review");
+  // Always fetch. Whatever the model has already produced is worth showing, whether the
+  // run is mid-chapter, finished, stalled or waiting for review.
+  const watching = status !== null;
   useEffect(() => {
     if (!watching) {
       setFound([]);
@@ -266,14 +266,26 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
           <div className="repair-actions">
             <label className="repair-rollback">
               Model
-              <input
-                list="repair-models"
+              {/* A select, not a free-text box: local_model refuses to substitute or
+                  download, so a name that is not on the endpoint can only produce a
+                  rebuild that never runs. Offering exactly what is installed makes that
+                  failure unreachable. */}
+              <select
                 value={model[name]}
                 onChange={(event) =>
                   setModel((current) => ({ ...current, [name]: event.target.value }))
                 }
-                placeholder={name === "graph" ? "qwen3:4b-instruct-2507-q4_K_M" : "granite4.2:8b"}
-              />
+                disabled={models.length === 0}
+              >
+                <option value="">
+                  {models.length === 0 ? "No models found" : "Choose a model…"}
+                </option>
+                {models.map((installed) => (
+                  <option key={installed} value={installed}>
+                    {installed}
+                  </option>
+                ))}
+              </select>
             </label>
             {name === "events" && (
               // Event extraction accepts a hosted provider; the entity graph does not
@@ -301,7 +313,7 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
             >
               Start fresh rebuild
             </button>
-            {replacement && (
+            {replacement?.review_hash && (
               <button type="button" disabled={busy} onClick={() => setReviewing(name)}>
                 Review claims
               </button>
@@ -468,16 +480,10 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
             </details>
           )}
 
-          <datalist id="repair-models">
-            {models.map((name) => (
-              <option key={name} value={name} />
-            ))}
-          </datalist>
-
           {/* Extraction sits at the bottom: it is the longest section and the one you
               scroll to for detail, while the state and controls above are what you check
               at a glance. */}
-          {watching && (
+          {(seen.length > 0 || found.length > 0 || status.graph.current) && (
             <section className="repair-extraction" aria-label="Live extraction">
               <h4>
                 Being extracted

@@ -158,8 +158,15 @@ export function RepairReview({ novelId, track, onSubmitted, onClose }: Props) {
     return (
       <section className="repair-review" aria-label="Review rebuilt knowledge">
         <p role="status">
-          No review report has been taken yet. One is frozen automatically once every
-          chapter of the rebuild has finished.
+          No review report yet. A report is a frozen snapshot used for the activation
+          gate: <code>record_review</code> matches a hash against it, and publishing a
+          chapter clears it — so one taken mid-rebuild would be invalidated by the very
+          next chapter. It is written once every chapter has finished.
+        </p>
+        <p className="novel-create-form-hint">
+          To watch progress meanwhile, close this and look at{" "}
+          <strong>Being extracted</strong> at the bottom of the repair panel — it lists the
+          terms and facts as each model call completes, without waiting for a chapter.
         </p>
         <button type="button" onClick={onClose}>
           Close
