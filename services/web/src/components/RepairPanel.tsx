@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cancelRepair, getRepairProgress, getRepairStatus, listOllamaModels, requestRepair } from "../api";
-import { clearOperatorToken, operatorToken, setOperatorToken } from "../operator";
 import { usePolling } from "../usePolling";
 import type {
   RepairExtractedName,
@@ -44,13 +43,14 @@ function stateLabel(state: string): string {
 }
 
 /**
- * Knowledge repair: what is being withheld, and — for an operator — what to do about it.
+ * Knowledge repair: what is being withheld, and what to do about it.
  *
- * The split here is deliberate. Everything above the operator line is visible to any
- * reader, because "facts are missing" is something they can already see and deserve an
- * explanation for. Everything below it can quarantine a book's knowledge or replace it,
- * so it appears only when the SERVER has accepted an operator token — never merely
- * because this browser has one stored.
+ * Ungated by choice on this deployment. The extraction list carries source quotes from
+ * chapters ahead of the reader, and the controls can quarantine a book's knowledge, so
+ * this suits a single-operator install. If it ever serves readers who are not the
+ * operator, the gate belongs on READING PROGRESS — show a chapter's names once that
+ * chapter has been read — rather than on an admin credential, which answers a different
+ * question than the one that matters.
  *
  * Nothing here decides anything about quality. Starting a rebuild, reviewing it and
  * activating it are three separate, explicit actions, and the thresholds that gate the
@@ -60,7 +60,6 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   const container = useRef<HTMLDetailsElement>(null);
   const [status, setStatus] = useState<RepairStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [token, setToken] = useState(operatorToken());
   // Per track: the graph and event extractors are separately reviewable and routinely
   // want different models, so one shared input was wrong.
   const [model, setModel] = useState<Record<RepairTrackName, string>>({ graph: "", events: "" });
@@ -79,21 +78,7 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
       const next = await getRepairStatus(novelId);
       setStatus(next);
       setError(null);
-      // A stored token the server rejects is worse than no token: the controls stay
-      // hidden with no explanation, and every poll counts as a failed attempt against the
-      // throttle and writes a log line. Drop it and ask for it again -- but NOT while
-      // throttled, where a correct token also reports operator:false and discarding it
-      // would punish the operator for someone else's failed guesses.
-      if (!next.operator && !next.operator_throttled && operatorToken()) {
-        clearOperatorToken();
-        setToken("");
-        setNotice("That operator token was not accepted. Sign in again to use repair controls.");
-      } else if (next.operator_throttled) {
-        setNotice("Too many failed operator attempts from this address. Controls unlock shortly; your token is unchanged.");
-      }
     } catch (err) {
-      // Deliberately does NOT clear the token: a network failure or a 429 says nothing
-      // about whether the token is right.
       setError(String(err));
     }
   }, [novelId]);
@@ -123,9 +108,8 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
     container.current.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [openSignal]);
 
-  // Only an operator may see these: unreviewed claims quoted from anywhere in the book.
   const watching =
-    status?.operator === true &&
+    status !== null &&
     (status.graph.state === "rebuilding" || status.graph.state === "awaiting_review");
   useEffect(() => {
     if (!watching) {
@@ -146,17 +130,10 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   }, [novelId, watching, status?.graph.published.calls]);
 
   useEffect(() => {
-    if (!status?.operator) return;
     void listOllamaModels(novelId)
       .then(setModels)
       .catch(() => setModels([]));
-  }, [novelId, status?.operator]);
-
-  function saveToken(next: string) {
-    setOperatorToken(next.trim());
-    setToken(next.trim());
-    void load();
-  }
+  }, [novelId]);
 
   async function act(
     track: RepairTrackName,
@@ -257,57 +234,6 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
           </dl>
         )}
 
-        {name === "graph" && seen.length > 0 && (
-          <details className="repair-found" open>
-            <summary>
-              Names found so far ({seen.length})
-              {track.current && ` — reading chapter ${track.current.chapter}`}
-            </summary>
-            <ul className="repair-seen">
-              {seen.map((n) => (
-                <li key={n.surface}>
-                  <span className="repair-found-claim">{n.surface}</span>
-                  <small> · {n.kind}</small>
-                  {n.quote && <blockquote>{n.quote}</blockquote>}
-                </li>
-              ))}
-            </ul>
-            <p className="novel-create-form-hint">
-              Proposed by the model, not yet published: none of this has passed the checks
-              that decide whether a name becomes an entity.
-            </p>
-          </details>
-        )}
-
-        {name === "graph" && track.state === "rebuilding" && !track.blocked
-          && found.length === 0 && seen.length === 0 && (
-          <p className="novel-create-form-hint">
-            Nothing extracted yet — the first model call of a chapter has to finish before
-            anything appears here.
-          </p>
-        )}
-
-        {name === "graph" && found.length > 0 && (
-          <details className="repair-found">
-            <summary>What it has extracted so far ({found.length} most recent)</summary>
-            <ul>
-              {found.map((fact) => (
-                <li key={fact.id}>
-                  <span className="repair-found-claim">
-                    {fact.entity} · {fact.attribute}: {fact.value}
-                  </span>
-                  <small> — chapter {fact.chapter_index}</small>
-                  {fact.quote && <blockquote>{fact.quote}</blockquote>}
-                </li>
-              ))}
-            </ul>
-            <p className="novel-create-form-hint">
-              Unreviewed and not visible to readers. Values appear in the source language:
-              extraction runs on the raw chapter, not the translation.
-            </p>
-          </details>
-        )}
-
         {track.failures.length > 0 && (
           <details className="repair-failures">
             <summary>
@@ -336,7 +262,7 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
           </details>
         )}
 
-        {status?.operator && (
+        {(
           <div className="repair-actions">
             <label className="repair-rollback">
               Model
@@ -470,7 +396,6 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   const quiet =
     status !== null &&
     !openSignal &&
-    !status.operator &&
     status.graph.state === "ready" &&
     (status.events.state === "ready" || status.events.state === "unavailable") &&
     status.requests.length === 0;
@@ -506,7 +431,7 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
                     {request.category ? ` (${request.category})` : ""} · asked by{" "}
                     {request.requested_by} at{" "}
                     {new Date(request.created_at).toLocaleString()}
-                    {status.operator && request.state === "pending" && (
+                    {request.state === "pending" && (
                       <button
                         type="button"
                         disabled={busy}
@@ -543,37 +468,71 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
             </details>
           )}
 
-          {status.operator ? (
-            <div className="repair-operator">
-              <datalist id="repair-models">
-                {models.map((name) => (
-                  <option key={name} value={name} />
-                ))}
-              </datalist>
-              <button type="button" onClick={() => saveToken("")}>
-                Sign out of operator mode
-              </button>
-            </div>
-          ) : (
-            <details className="repair-operator">
-              <summary>Operator sign-in</summary>
-              <p className="novel-create-form-hint">
-                Repair controls need the operator token this server was started with
-                (READER_REPAIR_OPERATOR_TOKEN). It is kept for this tab only.
-              </p>
-              <label>
-                Operator token
-                <input
-                  type="password"
-                  value={token}
-                  onChange={(event) => setToken(event.target.value)}
-                />
-              </label>
-              <button type="button" onClick={() => saveToken(token)}>
-                Unlock repair controls
-              </button>
-            </details>
+          <datalist id="repair-models">
+            {models.map((name) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
+
+          {/* Extraction sits at the bottom: it is the longest section and the one you
+              scroll to for detail, while the state and controls above are what you check
+              at a glance. */}
+          {watching && (
+            <section className="repair-extraction" aria-label="Live extraction">
+              <h4>
+                Being extracted
+                {status.graph.current && ` — chapter ${status.graph.current.chapter}`}
+              </h4>
+
+              {seen.length === 0 && found.length === 0 && (
+                <p className="novel-create-form-hint">
+                  Nothing yet — the first model call of a chapter has to finish before
+                  anything appears here.
+                </p>
+              )}
+
+              {seen.length > 0 && (
+                <details className="repair-found" open>
+                  <summary>Terms found ({seen.length})</summary>
+                  <ul className="repair-seen">
+                    {seen.map((n) => (
+                      <li key={n.surface}>
+                        <span className="repair-found-claim">{n.surface}</span>
+                        <small> · {n.kind}</small>
+                        {n.quote && <blockquote>{n.quote}</blockquote>}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="novel-create-form-hint">
+                    Proposed by the model, not yet published: none of this has passed the
+                    checks that decide whether a name becomes an entity.
+                  </p>
+                </details>
+              )}
+
+              {found.length > 0 && (
+                <details className="repair-found" open>
+                  <summary>Facts published ({found.length} most recent)</summary>
+                  <ul>
+                    {found.map((fact) => (
+                      <li key={fact.id}>
+                        <span className="repair-found-claim">
+                          {fact.entity} · {fact.attribute}: {fact.value}
+                        </span>
+                        <small> — chapter {fact.chapter_index}</small>
+                        {fact.quote && <blockquote>{fact.quote}</blockquote>}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="novel-create-form-hint">
+                    Values appear in the source language: extraction runs on the raw
+                    chapter, not the translation.
+                  </p>
+                </details>
+              )}
+            </section>
           )}
+
         </>
       )}
     </details>

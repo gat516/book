@@ -18,11 +18,6 @@ type API struct {
 	store  ReaderStore
 	ask    AskClient
 	ingest IngestClient
-	// operatorToken is Config.RepairOperatorToken. Empty disables repair controls.
-	operatorToken string
-	// throttle bounds guessing of operatorToken. Reach it through limiter(), never
-	// directly: main.go sets it at construction, but tests build API literals without one.
-	throttle *authThrottle
 }
 
 type progressRequest struct {

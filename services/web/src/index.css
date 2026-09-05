@@ -721,3 +721,5 @@ body {
 .repair-found-claim { font-weight: 500; }
 .repair-found blockquote { margin: 0.25rem 0 0; padding-left: 0.6rem; border-left: 2px solid #e6e1d7; color: #555; }
 .repair-seen { max-height: 20rem; overflow-y: auto; }
+.repair-extraction { margin-top: 1rem; padding-top: 0.7rem; border-top: 1px solid #e6e1d7; }
+.repair-extraction h4 { margin: 0 0 0.4rem; font-size: 0.9rem; }

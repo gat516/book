@@ -19,14 +19,12 @@ package main
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -37,18 +35,9 @@ import (
 // design (see 0039's header): event extraction has its own activation pointer, and
 // preparing an event revision never quarantines the entity graph.
 type RepairStatus struct {
-	NovelID string `json:"novel_id"`
-	// Operator reports whether THIS caller presented a valid operator token. The status
-	// itself is visible to everyone; the controls that act on it are not.
-	Operator bool `json:"operator"`
-	// OperatorThrottled separates "your token is wrong" from "you are currently blocked",
-	// which Operator alone cannot: a blocked caller reports false even with the right
-	// token. Without this the client cannot tell whether to discard a stored token, and
-	// would throw away a valid one after someone else tripped the limiter from the same
-	// address.
-	OperatorThrottled bool        `json:"operator_throttled"`
-	Graph             RepairTrack `json:"graph"`
-	Events            RepairTrack `json:"events"`
+	NovelID string      `json:"novel_id"`
+	Graph   RepairTrack `json:"graph"`
+	Events  RepairTrack `json:"events"`
 	// Requests are the repair actions asked for through the UI, newest first: what was
 	// asked, by whom, and whether the worker has picked it up yet. A click does not act
 	// instantly — repair runs on the worker's idle tick, because it must lose to
@@ -91,6 +80,12 @@ type RepairPreview struct {
 }
 
 // Repair states. A reader sees the state and the reason; only an operator sees controls.
+// NOTE: repair reads and writes are ungated on this deployment, by choice. The panel shows
+// unreviewed claims and their source quotes from chapters ahead of the reader, and anyone
+// who can reach the page can start, activate or roll back a rebuild. That suits a
+// single-operator install; the server-to-server token to ingest-api still applies, and the
+// repair_operator database role still keeps these rows away from askai.
+//
 // paramsRequestLimit bounds a repair body. A review document — 60 mention assessments and
 // 30 fact assessments — is a few KiB; ingest-api enforces its own limit on params again.
 const paramsRequestLimit = 1 << 20
@@ -497,7 +492,6 @@ func (s *Store) RepairExtraction(ctx context.Context, novelID string) ([]RepairE
 // RepairPreview reads the frozen report. It returns story content — source quotes from
 // every snapshotted chapter, ignoring reading progress — so it is the ONLY method that uses
 // operatorDB, whose role is the only one Postgres will let call repair_preview (0046).
-// The operator check in the handler is now defence in depth rather than the whole defence.
 func (s *Store) RepairPreview(ctx context.Context, novelID, track string) (RepairPreview, error) {
 	var preview RepairPreview
 	var report *[]byte
@@ -701,87 +695,6 @@ func capitalise(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
-// operatorOutcome distinguishes the three states that matter for throttling. Absent is
-// NOT a failure: it is what every ordinary reader polling repair status looks like, and
-// counting it would let normal traffic lock the operator out.
-type operatorOutcome int
-
-const (
-	operatorAbsent operatorOutcome = iota
-	operatorValid
-	operatorInvalid
-)
-
-// checkOperator evaluates the credential and maintains the throttle. It writes no
-// response, so the advisory use (the status endpoint's `operator` field) and the enforcing
-// use (repair writes) share exactly one implementation.
-//
-// This is a shared secret, not a user system — there is no per-operator identity here.
-// It exists because reader identity is an unauthenticated X-Reader-ID header, and the
-// only real credential in the system, INGEST_INTERNAL_TOKEN, has total authority over
-// the database (including novel deletion) and must never reach a browser.
-// limiter returns the throttle, constructing one on first use. main.go always supplies
-// it, so the lazy path exists only for tests that build an API literal; it is not
-// goroutine-safe on that first call and does not need to be.
-func (a *API) limiter() *authThrottle {
-	if a.throttle == nil {
-		a.throttle = newAuthThrottle()
-	}
-	return a.throttle
-}
-
-func (a *API) checkOperator(r *http.Request) (operatorOutcome, time.Duration) {
-	presented := strings.TrimSpace(r.Header.Get("X-Operator-Token"))
-	if presented == "" {
-		return operatorAbsent, 0
-	}
-	key := clientKey(r)
-	if a.operatorToken == "" {
-		// Nothing to compare against. Still a presented credential, so it is still an
-		// attempt worth counting — a scan does not know the feature is disabled.
-		return operatorInvalid, a.limiter().recordFailure(key)
-	}
-	// Check the block BEFORE comparing, so a throttled caller learns nothing from timing.
-	if wait := a.limiter().blockedFor(key); wait > 0 {
-		return operatorInvalid, wait
-	}
-	if subtle.ConstantTimeCompare([]byte(presented), []byte(a.operatorToken)) != 1 {
-		return operatorInvalid, a.limiter().recordFailure(key)
-	}
-	a.limiter().recordSuccess(key)
-	return operatorValid, 0
-}
-
-// operatorAllowed is the advisory form used by the status endpoint.
-func (a *API) operatorAllowed(r *http.Request) bool {
-	outcome, _ := a.checkOperator(r)
-	return outcome == operatorValid
-}
-
-// requireOperator gates a repair write. Fails closed when no token is configured, so a
-// deployment that never set one cannot be driven by an empty header.
-func (a *API) requireOperator(w http.ResponseWriter, r *http.Request) bool {
-	outcome, retryAfter := a.checkOperator(r)
-	if outcome == operatorValid {
-		return true
-	}
-	if retryAfter > 0 {
-		seconds := int(retryAfter.Seconds())
-		if seconds < 1 {
-			seconds = 1
-		}
-		w.Header().Set("Retry-After", strconv.Itoa(seconds))
-		writeError(w, http.StatusTooManyRequests, "too many failed operator attempts; try again later")
-		return false
-	}
-	if a.operatorToken == "" {
-		writeError(w, http.StatusServiceUnavailable, "repair operator access is not configured")
-		return false
-	}
-	writeError(w, http.StatusForbidden, "operator access required")
-	return false
-}
-
 func (a *API) getRepairStatus(w http.ResponseWriter, r *http.Request) {
 	prepareReaderResponse(w)
 	novelID, ok := pathUUID(r, "id")
@@ -795,9 +708,6 @@ func (a *API) getRepairStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load repair status")
 		return
 	}
-	outcome, retryAfter := a.checkOperator(r)
-	status.Operator = outcome == operatorValid
-	status.OperatorThrottled = retryAfter > 0
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, status)
 }
@@ -807,9 +717,6 @@ func (a *API) getRepairStatus(w http.ResponseWriter, r *http.Request) {
 // token. Mirrors postTranslateAhead's proxy shape.
 func (a *API) postRepair(w http.ResponseWriter, r *http.Request) {
 	prepareReaderResponse(w)
-	if !a.requireOperator(w, r) {
-		return
-	}
 	novelID, ok := pathUUID(r, "id")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid novel id")
@@ -848,9 +755,6 @@ func (a *API) postRepair(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) deleteRepair(w http.ResponseWriter, r *http.Request) {
 	prepareReaderResponse(w)
-	if !a.requireOperator(w, r) {
-		return
-	}
 	novelID, ok := pathUUID(r, "id")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid novel id")
@@ -886,9 +790,6 @@ func (a *API) deleteRepair(w http.ResponseWriter, r *http.Request) {
 // anywhere in the book, so they are not spoiler-safe for an ordinary reader.
 func (a *API) getRepairProgress(w http.ResponseWriter, r *http.Request) {
 	prepareReaderResponse(w)
-	if !a.requireOperator(w, r) {
-		return
-	}
 	novelID, ok := pathUUID(r, "id")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid novel id")
@@ -912,9 +813,6 @@ func (a *API) getRepairProgress(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) getRepairPreview(w http.ResponseWriter, r *http.Request) {
 	prepareReaderResponse(w)
-	if !a.requireOperator(w, r) {
-		return
-	}
 	novelID, ok := pathUUID(r, "id")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid novel id")

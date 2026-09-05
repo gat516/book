@@ -141,62 +141,20 @@ Two things about that ledger are load-bearing:
   is never set again, so the chapter is silently abandoned. This field is how that
   otherwise-invisible dead end reaches a screen.
 
-`READER_REPAIR_OPERATOR_TOKEN` authorizes repair controls. It is deliberately separate
-from `INGEST_INTERNAL_TOKEN`, which has total authority over the database (including
-novel deletion) and must never be handed to a browser. Unset means repair writes are
-refused with 503 — fail closed; status stays readable either way. It is a shared secret,
-not a user system: there is no per-operator identity, which is a known floor.
+Repair reads and writes are **ungated** on this deployment. The panel shows unreviewed
+claims and their source quotes from chapters ahead of the reader, and anyone who can reach
+the page can start, activate or roll back a rebuild. That is a deliberate choice for a
+single-operator install.
 
-Three things bound the damage that floor allows:
+Two things still hold. The server-to-server bearer token to ingest-api is unchanged, so a
+browser still cannot reach ingest-api directly. And `repair_preview` / `repair_progress` /
+`repair_extraction` remain executable only by the `repair_operator` role, reached through
+its own pool (`REPAIR_OPERATOR_DATABASE_URL`) — that keeps spoiler-bearing rows away from
+`rls_reader`, which askai connects as, without asking anyone to sign in.
 
-- It must be at least 32 characters or reader-api refuses to start (`validateOperatorToken`).
-- Wrong tokens are throttled per client address with exponential backoff and answered with
-  `429` + `Retry-After` (`throttle.go`). A request with *no* operator header is not an
-  attempt — every reader polling status sends none, and counting those would let ordinary
-  traffic lock the operator out. The key is `RemoteAddr`, never `X-Forwarded-For`, which
-  would let an attacker rotate the key for free.
-- The browser sends the header only on the four `/repair*` calls, not on every request.
-
-The preview does not depend on any of this: `repair_preview` is executable only by
-`repair_operator`, and reader-api reaches it through a dedicated pool
-(`REPAIR_OPERATOR_DATABASE_URL`). The handler's operator check is defence in depth, no
-longer the whole defence.
-
-### Driving a repair
-
-Three write routes, all operator-gated here and proxied to ingest-api's token-gated
-`POST /novels/{id}/repair`, which records an intent in `repair_request` (migration 0043).
-Nothing repairs anything on the request path: `pipeline/repair.py` claims the row on the
-worker's idle tick and calls the existing `graph_rebuild` / `event_rebuild` functions.
-
-```bash
-OP="-H 'X-Operator-Token: $READER_REPAIR_OPERATOR_TOKEN'"
-
-# Start a fresh rebuild. Quarantines the current graph and snapshots a replacement.
-curl -X POST localhost:8081/novels/<id>/repair -H 'X-Reader-ID: me' $OP \
-  -d '{"track":"graph","action":"prepare","params":{"model":"qwen3:4b-instruct-2507-q4_K_M"}}'
-
-# Read the frozen review report (operator-only: it carries source quotes from every
-# snapshotted chapter, ignoring reading progress).
-curl "localhost:8081/novels/<id>/repair/preview?track=graph" -H 'X-Reader-ID: me' $OP
-
-# Record a review, then activate with the NEW hash record_review returns.
-curl -X POST localhost:8081/novels/<id>/repair -H 'X-Reader-ID: me' $OP \
-  -d '{"track":"graph","action":"review","revision_id":"<staging>","params":{"document":{...}}}'
-curl -X POST localhost:8081/novels/<id>/repair -H 'X-Reader-ID: me' $OP \
-  -d '{"track":"graph","action":"activate","revision_id":"<staging>","params":{"review_hash":"<hash>"}}'
-
-# Withdraw a request that has not started yet.
-curl -X DELETE localhost:8081/novels/<id>/repair/<request-id> -H 'X-Reader-ID: me' $OP
-```
-
-`requested_by` is taken from `X-Reader-ID` and overwritten if the body supplies it — an
-audit label from the request, like `changed_by` on `PATCH /queue`. A second action for the
-same novel and track while one is in flight is a `409`; a partial unique index enforces it.
-
-Returning `202` means recorded, not done. Progress shows up in the status endpoint's
-`requests`, and the executor is the only thing that runs the gates: `qualified()` and
-`record_review` are never reimplemented in Go.
+If this ever serves readers who are not the operator, the gate belongs on **reading
+progress** — show a chapter's names once that chapter has been read — rather than on an
+admin credential, which answers a different question than the one that matters.
 
 ## Tests
 

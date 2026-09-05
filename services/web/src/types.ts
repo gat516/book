@@ -541,14 +541,6 @@ export interface RepairAuditEntry {
 
 export interface RepairStatus {
   novel_id: string;
-  // Whether the SERVER accepted this caller's operator token. Repair controls key off
-  // this, never off a token being present in the browser.
-  operator: boolean;
-  // Set when this caller is currently rate-limited. `operator` is false either way, so
-  // without this a blocked operator looks identical to one holding a wrong token -- and
-  // discarding a valid token because someone else tripped the limiter would be worse than
-  // the problem the discarding solves.
-  operator_throttled: boolean;
   graph: RepairTrack;
   events: RepairTrack;
   // Actions asked for through the UI. A click does not act instantly -- repair runs on
