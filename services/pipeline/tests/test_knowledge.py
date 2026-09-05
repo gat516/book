@@ -23,6 +23,9 @@ async def test_graph_uses_configured_runtime_and_keeps_deadlines_out_of_identity
     from pipeline.config import Config, graph_runtime
     monkeypatch.setenv('GRAPH_OLLAMA_FIRST_TOKEN_SECONDS','900')
     monkeypatch.setenv('GRAPH_OLLAMA_TIMEOUT_SECONDS','30')
+    # Pinned too: this test asserts 1800 below, and inheriting a real deployment's tuned
+    # deadline from .env made it fail the moment that value was raised.
+    monkeypatch.setenv('GRAPH_OLLAMA_TOTAL_TIMEOUT_SECONDS','1800')
     cfg=Config.load()
     runtime=graph_runtime(cfg)
     engine=KnowledgeEngine(None,cfg,dict(id='test',model=dict(provider='ollama',name='test')))
@@ -455,6 +458,9 @@ async def test_thinking_joins_identity_only_when_configured(monkeypatch):
     from pipeline.config import Config, graph_runtime
     monkeypatch.setenv('GRAPH_OLLAMA_FIRST_TOKEN_SECONDS','900')
     monkeypatch.setenv('GRAPH_OLLAMA_TIMEOUT_SECONDS','30')
+    # Pinned too: this test asserts 1800 below, and inheriting a real deployment's tuned
+    # deadline from .env made it fail the moment that value was raised.
+    monkeypatch.setenv('GRAPH_OLLAMA_TOTAL_TIMEOUT_SECONDS','1800')
     monkeypatch.delenv('GRAPH_OLLAMA_THINK', raising=False)
     cfg = Config.load()
     assert cfg.graph_ollama_think is None

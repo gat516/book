@@ -47,11 +47,13 @@ type RepairRequestView struct {
 }
 
 type repairRequestBody struct {
-	Track       string          `json:"track"`
-	Action      string          `json:"action"`
-	RevisionID  string          `json:"revision_id"`
-	Params      json.RawMessage `json:"params"`
-	RequestedBy string          `json:"requested_by"`
+	Track      string `json:"track"`
+	Action     string `json:"action"`
+	RevisionID string `json:"revision_id"`
+	// Set only for reextract: which chapter to redo against the live graph.
+	ChapterIndex *int            `json:"chapter_index"`
+	Params       json.RawMessage `json:"params"`
+	RequestedBy  string          `json:"requested_by"`
 }
 
 // paramsLimit keeps a review document — the only genuinely large params payload — from
@@ -65,7 +67,7 @@ func validRepairTrack(track string) bool {
 
 func validRepairAction(action string) bool {
 	switch action {
-	case "prepare", "review", "activate", "rollback":
+	case "prepare", "review", "activate", "rollback", "reextract":
 		return true
 	}
 	return false
@@ -92,13 +94,24 @@ func (s *Store) RequestRepair(ctx context.Context, novelID string, body repairRe
 		return RepairRequestView{}, fmt.Errorf("%w: requested_by is required", ErrRepairInvalid)
 	}
 
+	// reextract is chapter-scoped and targets whatever revision is currently active, so it
+	// names a chapter instead of a revision. The two are mutually exclusive, and the table
+	// has a CHECK saying so.
+	if (body.Action == "reextract") != (body.ChapterIndex != nil) {
+		return RepairRequestView{}, fmt.Errorf(
+			"%w: reextract requires chapter_index, and only reextract may set it", ErrRepairInvalid)
+	}
+	if body.ChapterIndex != nil && *body.ChapterIndex < 0 {
+		return RepairRequestView{}, fmt.Errorf("%w: chapter_index must be nonnegative", ErrRepairInvalid)
+	}
+
 	revisionID := strings.TrimSpace(body.RevisionID)
 	// prepare is the action that CREATES a revision, so it cannot name one; every other
 	// action operates on a revision that already exists.
-	if action == "prepare" && revisionID != "" {
+	if (action == "prepare" || action == "reextract") && revisionID != "" {
 		return RepairRequestView{}, fmt.Errorf("%w: prepare creates a revision and must not name one", ErrRepairInvalid)
 	}
-	if action != "prepare" {
+	if action != "prepare" && action != "reextract" {
 		if _, err := uuid.Parse(revisionID); err != nil {
 			return RepairRequestView{}, fmt.Errorf("%w: %s requires a revision_id", ErrRepairInvalid, action)
 		}
@@ -165,9 +178,9 @@ func (s *Store) RequestRepair(ctx context.Context, novelID string, body repairRe
 		revisionArg = revisionID
 	}
 	err = tx.QueryRow(ctx, `INSERT INTO repair_request
-		(novel_id, track, action, revision_id, params, requested_by)
-		VALUES($1,$2,$3,$4,$5,$6) RETURNING id::text`,
-		novelID, track, action, revisionArg, params, requestedBy).Scan(&view.ID)
+		(novel_id, track, action, revision_id, params, requested_by, chapter_index)
+		VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id::text`,
+		novelID, track, action, revisionArg, params, requestedBy, body.ChapterIndex).Scan(&view.ID)
 	if err != nil {
 		// repair_request_one_active: one outstanding action per novel per track. A second
 		// click while a rebuild is starting is a duplicate key, not a race.

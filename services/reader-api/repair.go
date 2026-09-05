@@ -137,6 +137,12 @@ type RepairTrack struct {
 	// Retryable is false once every failure has exhausted its attempts, which is the
 	// point at which waiting stops being a strategy.
 	Retryable bool `json:"retryable"`
+	// CanReextract reports whether a SINGLE chapter can be redone. That needs a graph
+	// readers are actually served — active, trusted and managed. A quarantined or legacy
+	// graph has no such revision to append to, so per-chapter work has no destination and
+	// the only route back is a full rebuild. The rule lives here so the UI cannot invent
+	// its own version of it.
+	CanReextract bool `json:"can_reextract"`
 	// Blocked is why the run cannot proceed AT ALL, as opposed to one chapter failing.
 	// Its absence used to be indistinguishable from "working slowly": a dead endpoint
 	// left the panel showing 0 done and an empty failure ledger for as long as it lasted.
@@ -617,6 +623,8 @@ func buildTrack(row repairRow, failures []RepairFailure, targets []RepairRollbac
 		replacement.Reviewed = row.reviewed
 		track.Replacement = replacement
 	}
+
+	track.CanReextract = row.activeTrusted && !row.activeLegacy
 
 	if row.currentChapter != nil {
 		track.Current = &RepairCurrent{Chapter: *row.currentChapter}

@@ -477,6 +477,9 @@ export interface RepairTrack {
   failures: RepairFailure[];
   // False once every failure has exhausted its attempts: waiting is no longer a strategy.
   retryable: boolean;
+  // Whether ONE chapter can be redone. Needs a graph readers are served: active, trusted
+  // and managed. A quarantined graph has nowhere to append a chapter's facts to.
+  can_reextract: boolean;
   // Why the run cannot proceed at all, as opposed to one chapter failing. Its absence
   // used to be indistinguishable from "working slowly".
   blocked: RepairBlocked | null;

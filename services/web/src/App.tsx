@@ -310,7 +310,12 @@ export default function App() {
         Settings
       </button>
       <ProviderConfigPanel key={`provider-${novelId}`} novelId={novelId} />
-      <RepairPanel key={`repair-${novelId}`} novelId={novelId} openSignal={repairRequest} />
+      <RepairPanel
+        key={`repair-${novelId}`}
+        novelId={novelId}
+        openSignal={repairRequest}
+        chapterIndex={chapter ? chapterIndex : undefined}
+      />
       {showGlossary && <GlossaryView key={novelId} novelId={novelId} at={chapter?.at} />}
       {showTimeline && <TimelineView key={`timeline-${novelId}`} novelId={novelId} onClose={() => setShowTimeline(false)} />}
       <div hidden={showGlossary || showTimeline}>

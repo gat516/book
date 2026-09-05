@@ -341,7 +341,13 @@ export async function getRepairStatus(novelId: string): Promise<RepairStatus> {
 // idle tick, and the status endpoint's `requests` is where progress shows up.
 export async function requestRepair(
   novelId: string,
-  body: { track: string; action: string; revision_id?: string; params?: unknown },
+  body: {
+    track: string;
+    action: string;
+    revision_id?: string;
+    chapter_index?: number;
+    params?: unknown;
+  },
 ): Promise<{ id: string; state: string }> {
   return request(`/novels/${novelId}/repair`, {
     method: "POST",

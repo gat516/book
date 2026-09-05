@@ -118,7 +118,7 @@ async def test_claim_marks_running_then_done(db_conn, monkeypatch):
         prepared = AsyncMock(return_value=str(uuid.uuid4()))
         monkeypatch.setattr(graph_rebuild, "prepare", prepared)
 
-        row = await repair._claim(db_conn, None)
+        row = await repair._claim(db_conn, novel)
         assert row["id"] == request_id
         assert (await _state(db_conn, request_id))[0] == "running"
 
@@ -150,7 +150,7 @@ async def test_deterministic_failure_is_not_retried(db_conn):
         novel = await make_novel(db_conn)
         request_id = await _request(db_conn, novel, action="review",
                                     revision=str(uuid.uuid4()), params={})
-        row = await repair._claim(db_conn, None)
+        row = await repair._claim(db_conn, novel)
         await repair._fail(db_conn, row, ValueError("review must assess every published fact"))
 
         state, attempts, category, retry_at = await _state(db_conn, request_id)
@@ -165,7 +165,7 @@ async def test_transient_failure_is_retried_with_backoff(db_conn):
     async with db_conn.transaction(force_rollback=True):
         novel = await make_novel(db_conn)
         request_id = await _request(db_conn, novel, params={"model": "m"})
-        row = await repair._claim(db_conn, None)
+        row = await repair._claim(db_conn, novel)
         await repair._fail(db_conn, row, OSError("connection refused"))
 
         state, attempts, category, retry_at = await _state(db_conn, request_id)
@@ -180,7 +180,7 @@ async def test_retries_are_bounded(db_conn):
         novel = await make_novel(db_conn)
         request_id = await _request(db_conn, novel, params={"model": "m"})
         await db_conn.execute("UPDATE repair_request SET attempts=3 WHERE id=%s", (request_id,))
-        row = await repair._claim(db_conn, None)
+        row = await repair._claim(db_conn, novel)
         await repair._fail(db_conn, row, OSError("connection refused"))
 
         state, attempts, _, retry_at = await _state(db_conn, request_id)
@@ -203,7 +203,7 @@ async def test_admission_rejection_returns_the_request_unconsumed(db_conn, monke
         monkeypatch.setattr(graph_rebuild, "prepare",
                             AsyncMock(side_effect=AdmissionRejected("busy")))
 
-        row = await repair._claim(db_conn, None)
+        row = await repair._claim(db_conn, novel)
         assert (await _state(db_conn, request_id))[1] == 1
         with pytest.raises(AdmissionRejected):
             await repair._run(db_conn, object(), row)
@@ -240,7 +240,7 @@ async def test_activate_requires_the_recorded_review_hash(db_conn):
     async with db_conn.transaction(force_rollback=True):
         novel = await make_novel(db_conn)
         await _request(db_conn, novel, action="activate", revision=str(uuid.uuid4()), params={})
-        row = await repair._claim(db_conn, None)
+        row = await repair._claim(db_conn, novel)
         with pytest.raises(ValueError, match="review hash"):
             await repair._run(db_conn, object(), row)
 
@@ -250,7 +250,7 @@ async def test_prepare_rejects_a_missing_model(db_conn):
     async with db_conn.transaction(force_rollback=True):
         novel = await make_novel(db_conn)
         await _request(db_conn, novel, params={})
-        row = await repair._claim(db_conn, None)
+        row = await repair._claim(db_conn, novel)
         with pytest.raises(ValueError, match="model name"):
             await repair._run(db_conn, object(), row)
 
@@ -265,7 +265,7 @@ async def test_abandoned_running_request_unblocks_the_book(db_conn):
     async with db_conn.transaction(force_rollback=True):
         novel = await make_novel(db_conn)
         request_id = await _request(db_conn, novel, params={"model": "m"})
-        await repair._claim(db_conn, None)
+        await repair._claim(db_conn, novel)
         assert (await _state(db_conn, request_id))[0] == "running"
 
         # Nothing is reclaimed while the claim is still fresh.
@@ -295,7 +295,7 @@ async def test_abandoned_request_is_never_requeued(db_conn):
     async with db_conn.transaction(force_rollback=True):
         novel = await make_novel(db_conn)
         request_id = await _request(db_conn, novel, params={"model": "m"})
-        await repair._claim(db_conn, None)
+        await repair._claim(db_conn, novel)
         await db_conn.execute(
             "UPDATE repair_request SET started_at = now() - interval '31 minutes' WHERE id=%s",
             (request_id,))
@@ -342,7 +342,7 @@ async def test_settled_requests_clear_their_claim_timestamp(db_conn):
     async with db_conn.transaction(force_rollback=True):
         novel = await make_novel(db_conn)
         request_id = await _request(db_conn, novel, params={"model": "m"})
-        row = await repair._claim(db_conn, None)
+        row = await repair._claim(db_conn, novel)
         await repair._finish(db_conn, request_id, {"revision": "x"})
 
         cursor = await db_conn.execute(

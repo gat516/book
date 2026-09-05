@@ -23,6 +23,8 @@ interface Props {
   // Increments when something elsewhere (the reader's "facts are withheld" notice) wants
   // this panel opened. A counter rather than a boolean so repeated clicks re-open it.
   openSignal?: number;
+  /** The chapter being read, when one is open. Enables the chapter-scoped action. */
+  chapterIndex?: number;
 }
 
 const BUSY_STATES = new Set(["rebuilding", "awaiting_review"]);
@@ -64,7 +66,7 @@ function stateLabel(state: string): string {
  * activating it are three separate, explicit actions, and the thresholds that gate the
  * last one live in Python (graph_rebuild.qualified).
  */
-export function RepairPanel({ novelId, openSignal = 0 }: Props) {
+export function RepairPanel({ novelId, openSignal = 0, chapterIndex }: Props) {
   const container = useRef<HTMLDetailsElement>(null);
   const [status, setStatus] = useState<RepairStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -165,13 +167,22 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
     action: string,
     params?: unknown,
     revisionId?: string,
+    chapter?: number,
   ) {
     setBusy(true);
     setNotice(null);
     try {
-      await requestRepair(novelId, { track, action, revision_id: revisionId, params });
+      await requestRepair(novelId, {
+        track,
+        action,
+        revision_id: revisionId,
+        chapter_index: chapter,
+        params,
+      });
       setNotice(
-        "Recorded. Repair runs when the worker is not busy with chapters someone is waiting to read, so this may not start immediately.",
+        chapter !== undefined
+          ? `Chapter ${chapter} queued for re-extraction. It runs when the worker is not busy with chapters someone is waiting to read.`
+          : "Recorded. Repair runs when the worker is not busy with chapters someone is waiting to read, so this may not start immediately.",
       );
       setConfirming(null);
       await load();
@@ -323,6 +334,17 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
                 </select>
               </label>
             )}
+            {name === "graph" && chapterIndex !== undefined && track.can_reextract && (
+              // Redoing one chapter and rebuilding a novel are different operations with
+              // wildly different costs. Offer the cheap one first when a chapter is open.
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void act(name, "reextract", undefined, undefined, chapterIndex)}
+              >
+                Re-extract chapter {chapterIndex}
+              </button>
+            )}
             <button
               type="button"
               disabled={busy || !model[name]}
@@ -407,6 +429,16 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
             )}
           </div>
         )}
+        {name === "graph" && chapterIndex !== undefined && !track.can_reextract && (
+          <p className="novel-create-form-hint">
+            Chapter {chapterIndex} cannot be re-extracted on its own: this book has no
+            active trusted graph to append it to, which is what the quarantine means. One
+            rebuild has to be reviewed and activated first — after that, single chapters
+            are extracted individually as they arrive, and a full rebuild is not needed
+            again.
+          </p>
+        )}
+
         {confirming === `prepare-${name}` && (
           <p className="novel-create-form-hint">
             A rebuild is whole-book by construction: identity resolution for a chapter

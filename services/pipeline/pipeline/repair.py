@@ -93,7 +93,7 @@ async def _claim(db, novel_id: str | None) -> dict | None:
         async with db.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 """SELECT id::text AS id, novel_id::text AS novel_id, track, action,
-                          revision_id::text AS revision_id, params, attempts
+                          revision_id::text AS revision_id, params, attempts, chapter_index
                      FROM repair_request
                     WHERE state = 'pending' AND (retry_at IS NULL OR retry_at <= now())
                       AND (%s::uuid IS NULL OR novel_id = %s::uuid)
@@ -138,6 +138,37 @@ async def _run(db, cfg, row: dict) -> dict:
             revision = await module.prepare(db, cfg, row["novel_id"], model.strip(),
                                             params.get("schema"), provider=provider)
         return {"revision": str(revision)}
+
+    if action == "reextract":
+        # Chapter-scoped, and only ever against the graph readers are actually served.
+        # enqueue_completed first so a chapter that became readable since the last append
+        # gets its job row; then reset that one job and let drain_active redo exactly it.
+        if row["track"] != "graph":
+            raise ValueError("re-extraction applies to the entity graph")
+        chapter = row["chapter_index"]
+        cursor = await db.execute(
+            """SELECT r.id::text FROM graph_revision r JOIN novel n
+                    ON n.active_graph_revision = r.id
+                WHERE n.id = %s AND r.trusted AND NOT r.legacy""",
+            (row["novel_id"],))
+        active = await cursor.fetchone()
+        if not active:
+            # A quarantined or legacy graph has no trusted revision to append to. Say so
+            # rather than resetting a job on a revision no reader can see.
+            raise ValueError(
+                "no active trusted graph for this book; a rebuild must be reviewed and "
+                "activated before a single chapter can be re-extracted")
+        revision_id = active[0]
+        await graph_rebuild.enqueue_completed(db, cfg, row["novel_id"])
+        cursor = await db.execute(
+            """UPDATE graph_job SET state='pending', attempts=0, error=NULL, category=NULL,
+                      retry_at=NULL, updated_at=now()
+                WHERE revision_id=%s AND chapter_index=%s
+             RETURNING chapter_index""", (revision_id, chapter))
+        if not await cursor.fetchone():
+            raise ValueError(f"chapter {chapter} is not part of the active graph snapshot")
+        return {"status": "queued for re-extraction",
+                "revision": revision_id, "chapter": chapter}
 
     if not row["revision_id"]:
         raise ValueError(f"{action} requires a revision")
