@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { cancelRepair, getRepairProgress, getRepairStatus, listOllamaModels, requestRepair } from "../api";
+import {
+  cancelRepair,
+  getProviderConfig,
+  getRepairProgress,
+  getRepairStatus,
+  listOllamaModels,
+  requestRepair,
+} from "../api";
 import { usePolling } from "../usePolling";
 import type {
   RepairExtractedName,
@@ -133,6 +140,19 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
     void listOllamaModels(novelId)
       .then(setModels)
       .catch(() => setModels([]));
+    // Default to the book's own configured extraction model rather than making the
+    // reader choose again. A rebuild that disagrees with the book's settings is almost
+    // never what anyone wanted, and picking one by hand is how this novel ended up
+    // rebuilding under a model its provider config never named.
+    void getProviderConfig(novelId)
+      .then((config) => {
+        if (!config?.extract_model) return;
+        setModel((current) => ({
+          graph: current.graph || config.extract_model || "",
+          events: current.events || config.extract_model || "",
+        }));
+      })
+      .catch(() => undefined);
   }, [novelId]);
 
   async function act(
@@ -302,16 +322,20 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
               type="button"
               disabled={busy || !model[name]}
               onClick={() =>
-                void act(
-                  name,
-                  "prepare",
-                  name === "events"
-                    ? { model: model[name], provider }
-                    : { model: model[name] },
-                )
+                confirming === `prepare-${name}`
+                  ? void act(
+                      name,
+                      "prepare",
+                      name === "events"
+                        ? { model: model[name], provider }
+                        : { model: model[name] },
+                    )
+                  : setConfirming(`prepare-${name}`)
               }
             >
-              Start fresh rebuild
+              {confirming === `prepare-${name}`
+                ? `Confirm — re-extract all ${track.chapters.total || "?"} chapters`
+                : "Start fresh rebuild"}
             </button>
             {replacement?.review_hash && (
               <button type="button" disabled={busy} onClick={() => setReviewing(name)}>
@@ -378,6 +402,19 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
             )}
           </div>
         )}
+        {confirming === `prepare-${name}` && (
+          <p className="novel-create-form-hint">
+            A rebuild is whole-book by construction: identity resolution for a chapter
+            draws on the entities every earlier chapter established, so there is no way to
+            redo one chapter in isolation. This re-extracts all{" "}
+            {track.chapters.total || "?"} chapters from scratch with{" "}
+            <strong>{model[name] || "the chosen model"}</strong>, quarantines the current
+            {name === "graph" ? " facts" : " events"} until the result is reviewed, and
+            supersedes any rebuild already in progress. On local hardware that is hours to
+            days, not minutes.
+          </p>
+        )}
+
         {confirming === `rollback-${name}` && (
           <p className="novel-create-form-hint">
             {chosen && !chosen.trusted
