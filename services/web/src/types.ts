@@ -485,6 +485,9 @@ export interface RepairTrack {
   // chapter -- the only counter that moves *inside* a chapter, and so the only honest
   // "still alive" signal on hardware where one call can take ten minutes.
   published: { claims: number; entities: number; calls: number };
+  // Which chapter is being read right now. "0 of 26" cannot tell you whether it is stuck
+  // on the first chapter or working through the twentieth.
+  current: { chapter: number; since: string } | null;
 }
 
 export interface RepairBlocked {
@@ -495,6 +498,15 @@ export interface RepairBlocked {
 
 // One claim the running rebuild has already published. Operator-only: unreviewed, and
 // quoted from anywhere in the book.
+// A surface the model proposed that nothing has published yet -- unreviewed, with its
+// source quote. Operator-only.
+export interface RepairExtractedName {
+  surface: string;
+  kind: string;
+  named: boolean;
+  quote?: string;
+}
+
 export interface RepairProgressFact {
   id: number;
   entity: string;

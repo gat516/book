@@ -26,6 +26,7 @@ import type {
   Progress,
   ScrapeJobView,
   StartScrapeRequest,
+  RepairExtractedName,
   RepairPreview,
   RepairProgressFact,
   RepairStatus,
@@ -391,10 +392,12 @@ export async function getRepairPreview(
 
 // What the running rebuild has extracted so far. Operator-only for the same reason as the
 // preview: unreviewed claims carrying source quotes from anywhere in the book.
-export async function getRepairProgress(novelId: string): Promise<RepairProgressFact[]> {
-  const response = await request<{ facts: RepairProgressFact[] }>(
-    `/novels/${novelId}/repair/progress`,
-    { headers: operatorHeaders() },
-  );
-  return response.facts ?? [];
+export async function getRepairProgress(
+  novelId: string,
+): Promise<{ facts: RepairProgressFact[]; names: RepairExtractedName[] }> {
+  const response = await request<{
+    facts: RepairProgressFact[];
+    names: RepairExtractedName[];
+  }>(`/novels/${novelId}/repair/progress`, { headers: operatorHeaders() });
+  return { facts: response.facts ?? [], names: response.names ?? [] };
 }

@@ -289,6 +289,10 @@ func (f *fakeStore) RepairProgress(_ context.Context, _ string) ([]RepairProgres
 	return f.repairProgress, f.repairProgressErr
 }
 
+func (f *fakeStore) RepairExtraction(_ context.Context, _ string) ([]RepairExtractedName, error) {
+	return nil, nil
+}
+
 func (f *fakeStore) RepairStatus(_ context.Context, novelID string) (RepairStatus, error) {
 	status := f.repair
 	status.NovelID = novelID

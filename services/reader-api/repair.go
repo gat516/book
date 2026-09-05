@@ -146,6 +146,9 @@ type RepairTrack struct {
 	// Its absence used to be indistinguishable from "working slowly": a dead endpoint
 	// left the panel showing 0 done and an empty failure ledger for as long as it lasted.
 	Blocked *RepairBlocked `json:"blocked"`
+	// Current is the chapter actually being read right now. "0 of 26" cannot distinguish
+	// stuck on the first chapter from working through the twentieth.
+	Current *RepairCurrent `json:"current"`
 	// Published is what the rebuild has produced so far. The chapter counter only moves
 	// once per chapter, and a chapter is many inference calls, so this is what shows a
 	// long rebuild is alive between those boundaries.
@@ -156,6 +159,20 @@ type RepairBlocked struct {
 	Category string    `json:"category"`
 	Detail   string    `json:"detail"`
 	Since    time.Time `json:"since"`
+}
+
+type RepairCurrent struct {
+	Chapter int       `json:"chapter"`
+	Since   time.Time `json:"since"`
+}
+
+// RepairExtractedName is a surface the model has proposed but that nothing has published
+// yet. Operator-only: unreviewed, carrying its source quote.
+type RepairExtractedName struct {
+	Surface string `json:"surface"`
+	Kind    string `json:"kind"`
+	Named   bool   `json:"named"`
+	Quote   string `json:"quote,omitempty"`
 }
 
 type RepairPublished struct {
@@ -296,6 +313,8 @@ type repairRow struct {
 	claims         int
 	entities       int
 	calls          int
+	currentChapter *int
+	currentSince   *time.Time
 }
 
 func (s *Store) RepairStatus(ctx context.Context, novelID string) (RepairStatus, error) {
@@ -307,7 +326,7 @@ func (s *Store) RepairStatus(ctx context.Context, novelID string) (RepairStatus,
 		        chapters_total, chapters_done, chapters_failed, chapters_running,
 		        activation_eligible, review_hash, retryable, reviewed, superseded,
 		        blocked_category, blocked_at, claims_published, entities_created,
-		        calls_completed
+		        calls_completed, current_chapter, current_since
 		   FROM reader_repair_status($1)`, novelID)
 	if err != nil {
 		return RepairStatus{}, fmt.Errorf("read repair status: %w", err)
@@ -323,7 +342,7 @@ func (s *Store) RepairStatus(ctx context.Context, novelID string) (RepairStatus,
 			&row.eligible, &row.reviewHash, &row.retryable,
 			&row.reviewed, &row.superseded,
 			&row.blockedCat, &row.blockedAt, &row.claims, &row.entities,
-			&row.calls); err != nil {
+			&row.calls, &row.currentChapter, &row.currentSince); err != nil {
 			return RepairStatus{}, fmt.Errorf("scan repair status: %w", err)
 		}
 		byTrack[row.track] = row
@@ -443,6 +462,38 @@ func (s *Store) RepairProgress(ctx context.Context, novelID string) ([]RepairPro
 	return facts, rows.Err()
 }
 
+// RepairExtraction lists surfaces the model has proposed but not published. Operator-only
+// and on operatorDB: nothing here has passed the checks that decide whether a name becomes
+// an entity, and each carries its source quote.
+func (s *Store) RepairExtraction(ctx context.Context, novelID string) ([]RepairExtractedName, error) {
+	rows, err := s.operatorDB.Query(ctx,
+		`SELECT surface, kind, named, quote FROM repair_extraction($1)`, novelID)
+	if err != nil {
+		return nil, fmt.Errorf("read repair extraction: %w", err)
+	}
+	defer rows.Close()
+	names := []RepairExtractedName{}
+	for rows.Next() {
+		var name RepairExtractedName
+		var kind, quote *string
+		var named *bool
+		if err := rows.Scan(&name.Surface, &kind, &named, &quote); err != nil {
+			return nil, fmt.Errorf("scan repair extraction: %w", err)
+		}
+		if kind != nil {
+			name.Kind = *kind
+		}
+		if named != nil {
+			name.Named = *named
+		}
+		if quote != nil {
+			name.Quote = *quote
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
 // RepairPreview reads the frozen report. It returns story content — source quotes from
 // every snapshotted chapter, ignoring reading progress — so it is the ONLY method that uses
 // operatorDB, whose role is the only one Postgres will let call repair_preview (0046).
@@ -534,6 +585,13 @@ func buildTrack(row repairRow, failures []RepairFailure, targets []RepairRollbac
 		track.Replacement = replacement
 	}
 
+	if row.currentChapter != nil {
+		track.Current = &RepairCurrent{Chapter: *row.currentChapter}
+		if row.currentSince != nil {
+			track.Current.Since = *row.currentSince
+		}
+	}
+
 	if row.blockedCat != nil {
 		detail := repairFailureDetail[*row.blockedCat]
 		if detail == "" {
@@ -618,9 +676,13 @@ func buildTrack(row repairRow, failures []RepairFailure, targets []RepairRollbac
 		// Model calls, not claims: a claim only lands when a whole chapter publishes, so
 		// quoting claims here would move at exactly the same time as the chapter counter
 		// and tell the reader nothing about whether the current chapter is progressing.
+		where := ""
+		if track.Current != nil {
+			where = fmt.Sprintf(" Reading chapter %d.", track.Current.Chapter)
+		}
 		track.Reason = fmt.Sprintf(
-			"Rebuilding: %d of %d chapters done%s, %d model calls completed. %s stay withheld until the rebuild is reviewed.",
-			row.done, row.total, failedSuffix(row.failed), row.calls, capitalise(noun))
+			"Rebuilding: %d of %d chapters done%s, %d model calls completed.%s %s stay withheld until the rebuild is reviewed.",
+			row.done, row.total, failedSuffix(row.failed), row.calls, where, capitalise(noun))
 	}
 	return track
 }
@@ -838,8 +900,14 @@ func (a *API) getRepairProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load repair progress")
 		return
 	}
+	names, err := a.store.RepairExtraction(r.Context(), novelID)
+	if err != nil {
+		log.Printf("repair extraction: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load repair progress")
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, map[string]any{"facts": facts})
+	writeJSON(w, http.StatusOK, map[string]any{"facts": facts, "names": names})
 }
 
 func (a *API) getRepairPreview(w http.ResponseWriter, r *http.Request) {

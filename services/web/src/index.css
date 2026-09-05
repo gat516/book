@@ -720,3 +720,4 @@ body {
 .repair-found li:first-child { border-top: 0; }
 .repair-found-claim { font-weight: 500; }
 .repair-found blockquote { margin: 0.25rem 0 0; padding-left: 0.6rem; border-left: 2px solid #e6e1d7; color: #555; }
+.repair-seen { max-height: 20rem; overflow-y: auto; }

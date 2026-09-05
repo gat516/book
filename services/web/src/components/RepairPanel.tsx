@@ -2,7 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { cancelRepair, getRepairProgress, getRepairStatus, listOllamaModels, requestRepair } from "../api";
 import { clearOperatorToken, operatorToken, setOperatorToken } from "../operator";
 import { usePolling } from "../usePolling";
-import type { RepairProgressFact, RepairStatus, RepairTrack, RepairTrackName } from "../types";
+import type {
+  RepairExtractedName,
+  RepairProgressFact,
+  RepairStatus,
+  RepairTrack,
+  RepairTrackName,
+} from "../types";
 import { RepairReview } from "./RepairReview";
 
 interface Props {
@@ -66,6 +72,7 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   const [reviewing, setReviewing] = useState<RepairTrackName | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [found, setFound] = useState<RepairProgressFact[]>([]);
+  const [seen, setSeen] = useState<RepairExtractedName[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -123,12 +130,20 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   useEffect(() => {
     if (!watching) {
       setFound([]);
+      setSeen([]);
       return;
     }
     void getRepairProgress(novelId)
-      .then(setFound)
-      .catch(() => setFound([]));
-  }, [novelId, watching, status?.graph.published.claims]);
+      .then((p) => {
+        setFound(p.facts);
+        setSeen(p.names);
+      })
+      .catch(() => {
+        setFound([]);
+        setSeen([]);
+      });
+    // Re-fetch as the model completes calls, not only when a whole chapter publishes.
+  }, [novelId, watching, status?.graph.published.calls]);
 
   useEffect(() => {
     if (!status?.operator) return;
@@ -242,10 +257,33 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
           </dl>
         )}
 
-        {name === "graph" && track.state === "rebuilding" && !track.blocked && found.length === 0 && (
+        {name === "graph" && seen.length > 0 && (
+          <details className="repair-found" open>
+            <summary>
+              Names found so far ({seen.length})
+              {track.current && ` — reading chapter ${track.current.chapter}`}
+            </summary>
+            <ul className="repair-seen">
+              {seen.map((n) => (
+                <li key={n.surface}>
+                  <span className="repair-found-claim">{n.surface}</span>
+                  <small> · {n.kind}</small>
+                  {n.quote && <blockquote>{n.quote}</blockquote>}
+                </li>
+              ))}
+            </ul>
+            <p className="novel-create-form-hint">
+              Proposed by the model, not yet published: none of this has passed the checks
+              that decide whether a name becomes an entity.
+            </p>
+          </details>
+        )}
+
+        {name === "graph" && track.state === "rebuilding" && !track.blocked
+          && found.length === 0 && seen.length === 0 && (
           <p className="novel-create-form-hint">
-            Nothing published yet — claims appear a chapter at a time, when the whole
-            chapter finishes.
+            Nothing extracted yet — the first model call of a chapter has to finish before
+            anything appears here.
           </p>
         )}
 
