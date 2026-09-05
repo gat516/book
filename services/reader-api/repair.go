@@ -213,6 +213,7 @@ const (
 	repairNotFound       = "not_found"
 	repairCancelled      = "cancelled"
 	repairAbandoned      = "abandoned"
+	repairModelMissing   = "model_not_installed"
 )
 
 var repairFailureDetail = map[string]string{
@@ -230,6 +231,7 @@ var repairFailureDetail = map[string]string{
 	repairNotFound:       "the book or revision this action referred to no longer exists",
 	repairCancelled:      "the request was withdrawn before it started",
 	repairAbandoned:      "the worker stopped while running this action and it had no attempts left to retry",
+	repairModelMissing:   "the model this rebuild is pinned to is not installed on the configured Ollama endpoint; it cannot be substituted, so start a fresh rebuild pinned to a model that is there",
 }
 
 // repairRow is one row of reader_repair_status, before the API decides what it means.

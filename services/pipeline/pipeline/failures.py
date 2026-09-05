@@ -81,6 +81,11 @@ def failure_category(exc: BaseException) -> str:
         return "fenced"
     if "revision cannot be rebuilt" in text:
         return "revision_not_rebuildable"
+    # local_model refuses to substitute or download, so a revision pinned to a model that
+    # is not on this Ollama endpoint can never advance. Common when the endpoint is a
+    # tunnel to another machine whose model set differs from the one prepare saw.
+    if "model is not installed" in text:
+        return "model_not_installed"
     # Bounded to the phrases record_review actually raises. A bare "review" would also
     # match unrelated errors that merely mention the review column.
     if "review must" in text or "must assess" in text:
