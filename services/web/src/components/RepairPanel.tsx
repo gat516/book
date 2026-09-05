@@ -11,6 +11,7 @@ import { usePolling } from "../usePolling";
 import type {
   RepairExtractedName,
   RepairProgressFact,
+  RepairProposedClaim,
   RepairStatus,
   RepairTrack,
   RepairTrackName,
@@ -79,6 +80,7 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   const [confirming, setConfirming] = useState<string | null>(null);
   const [found, setFound] = useState<RepairProgressFact[]>([]);
   const [seen, setSeen] = useState<RepairExtractedName[]>([]);
+  const [proposed, setProposed] = useState<RepairProposedClaim[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -122,16 +124,19 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
     if (!watching) {
       setFound([]);
       setSeen([]);
+      setProposed([]);
       return;
     }
     void getRepairProgress(novelId)
       .then((p) => {
         setFound(p.facts);
         setSeen(p.names);
+        setProposed(p.proposed);
       })
       .catch(() => {
         setFound([]);
         setSeen([]);
+        setProposed([]);
       });
     // Re-fetch as the model completes calls, not only when a whole chapter publishes.
   }, [novelId, watching, status?.graph.published.calls]);
@@ -520,14 +525,14 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
           {/* Extraction sits at the bottom: it is the longest section and the one you
               scroll to for detail, while the state and controls above are what you check
               at a glance. */}
-          {(seen.length > 0 || found.length > 0 || status.graph.current) && (
+          {(seen.length > 0 || found.length > 0 || proposed.length > 0 || status.graph.current) && (
             <section className="repair-extraction" aria-label="Live extraction">
               <h4>
                 Being extracted
                 {status.graph.current && ` — chapter ${status.graph.current.chapter}`}
               </h4>
 
-              {seen.length === 0 && found.length === 0 && (
+              {seen.length === 0 && found.length === 0 && proposed.length === 0 && (
                 <p className="novel-create-form-hint">
                   Nothing yet — the first model call of a chapter has to finish before
                   anything appears here.
@@ -549,6 +554,27 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
                   <p className="novel-create-form-hint">
                     Proposed by the model, not yet published: none of this has passed the
                     checks that decide whether a name becomes an entity.
+                  </p>
+                </details>
+              )}
+
+              {proposed.length > 0 && (
+                <details className="repair-found" open>
+                  <summary>Facts proposed ({proposed.length})</summary>
+                  <ul>
+                    {proposed.map((claim, i) => (
+                      <li key={`${claim.attribute}-${claim.value}-${i}`}>
+                        <span className="repair-found-claim">
+                          {claim.attribute}: {claim.value}
+                        </span>
+                        <small> · {claim.kind}</small>
+                        {claim.quote && <blockquote>{claim.quote}</blockquote>}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="novel-create-form-hint">
+                    Proposed by the model this chapter. Still to pass mention resolution and
+                    the literal-evidence check before any of it becomes a fact.
                   </p>
                 </details>
               )}

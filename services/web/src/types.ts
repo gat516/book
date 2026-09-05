@@ -507,6 +507,16 @@ export interface RepairExtractedName {
   quote?: string;
 }
 
+// A fact the model has proposed but that nothing has published. It has not passed mention
+// resolution, graph_write's literal-evidence check, or review; some never become facts.
+export interface RepairProposedClaim {
+  kind: string;
+  attribute: string;
+  value: string;
+  quote?: string;
+  mentions: number;
+}
+
 export interface RepairProgressFact {
   id: number;
   entity: string;

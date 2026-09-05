@@ -170,6 +170,17 @@ type RepairExtractedName struct {
 	Quote   string `json:"quote,omitempty"`
 }
 
+// RepairProposedClaim is a fact the model has proposed but that nothing has published.
+// It has not passed mention resolution, graph_write's literal-evidence check, or review;
+// some of these will never become facts.
+type RepairProposedClaim struct {
+	Kind      string `json:"kind"`
+	Attribute string `json:"attribute"`
+	Value     string `json:"value"`
+	Quote     string `json:"quote,omitempty"`
+	Mentions  int    `json:"mentions"`
+}
+
 type RepairPublished struct {
 	// Claims and Entities only appear when a WHOLE chapter publishes, so they move at the
 	// same moment the chapter counter does. They answer "what has it found".
@@ -487,6 +498,34 @@ func (s *Store) RepairExtraction(ctx context.Context, novelID string) ([]RepairE
 		names = append(names, name)
 	}
 	return names, rows.Err()
+}
+
+// RepairProposedClaims reads facts out of the per-call cache, so "it has proposed nothing"
+// is visible after the first call rather than after the whole chapter.
+func (s *Store) RepairProposedClaims(ctx context.Context, novelID string) ([]RepairProposedClaim, error) {
+	rows, err := s.operatorDB.Query(ctx,
+		`SELECT kind, attribute, value, quote, mentions FROM repair_proposed_claims($1)`, novelID)
+	if err != nil {
+		return nil, fmt.Errorf("read proposed claims: %w", err)
+	}
+	defer rows.Close()
+	claims := []RepairProposedClaim{}
+	for rows.Next() {
+		var claim RepairProposedClaim
+		var kind, attribute, value, quote *string
+		if err := rows.Scan(&kind, &attribute, &value, &quote, &claim.Mentions); err != nil {
+			return nil, fmt.Errorf("scan proposed claim: %w", err)
+		}
+		for target, src := range map[*string]*string{
+			&claim.Kind: kind, &claim.Attribute: attribute, &claim.Value: value, &claim.Quote: quote,
+		} {
+			if src != nil {
+				*target = *src
+			}
+		}
+		claims = append(claims, claim)
+	}
+	return claims, rows.Err()
 }
 
 // RepairPreview reads the frozen report. It returns story content — source quotes from
@@ -807,8 +846,16 @@ func (a *API) getRepairProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load repair progress")
 		return
 	}
+	proposed, err := a.store.RepairProposedClaims(r.Context(), novelID)
+	if err != nil {
+		log.Printf("repair proposed claims: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load repair progress")
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, map[string]any{"facts": facts, "names": names})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"facts": facts, "names": names, "proposed": proposed,
+	})
 }
 
 func (a *API) getRepairPreview(w http.ResponseWriter, r *http.Request) {

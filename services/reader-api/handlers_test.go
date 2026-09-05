@@ -293,6 +293,10 @@ func (f *fakeStore) RepairExtraction(_ context.Context, _ string) ([]RepairExtra
 	return nil, nil
 }
 
+func (f *fakeStore) RepairProposedClaims(_ context.Context, _ string) ([]RepairProposedClaim, error) {
+	return nil, nil
+}
+
 func (f *fakeStore) RepairStatus(_ context.Context, novelID string) (RepairStatus, error) {
 	status := f.repair
 	status.NovelID = novelID

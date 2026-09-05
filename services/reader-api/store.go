@@ -51,6 +51,7 @@ type ReaderStore interface {
 	RepairPreview(context.Context, string, string) (RepairPreview, error)
 	RepairProgress(context.Context, string) ([]RepairProgressFact, error)
 	RepairExtraction(context.Context, string) ([]RepairExtractedName, error)
+	RepairProposedClaims(context.Context, string) ([]RepairProposedClaim, error)
 	ListNovels(context.Context) ([]NovelSummary, error)
 	GetNovel(context.Context, string) (NovelSummary, error)
 	CreateScrapeJob(context.Context, string, string, string) (int64, error)

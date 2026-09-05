@@ -28,6 +28,7 @@ import type {
   RepairExtractedName,
   RepairPreview,
   RepairProgressFact,
+  RepairProposedClaim,
   RepairStatus,
   TimelineResponse,
 } from "./types";
@@ -380,10 +381,19 @@ export async function getRepairPreview(
 // preview: unreviewed claims carrying source quotes from anywhere in the book.
 export async function getRepairProgress(
   novelId: string,
-): Promise<{ facts: RepairProgressFact[]; names: RepairExtractedName[] }> {
+): Promise<{
+  facts: RepairProgressFact[];
+  names: RepairExtractedName[];
+  proposed: RepairProposedClaim[];
+}> {
   const response = await request<{
     facts: RepairProgressFact[];
     names: RepairExtractedName[];
+    proposed: RepairProposedClaim[];
   }>(`/novels/${novelId}/repair/progress`);
-  return { facts: response.facts ?? [], names: response.names ?? [] };
+  return {
+    facts: response.facts ?? [],
+    names: response.names ?? [],
+    proposed: response.proposed ?? [],
+  };
 }
