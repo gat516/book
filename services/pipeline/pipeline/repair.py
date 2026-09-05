@@ -237,6 +237,70 @@ async def refresh_reports(db, cfg, novel_id: str | None = None) -> str | None:
     return None
 
 
+async def _next_staging_revision(db, revision_table: str, job_table: str,
+                                 novel_id: str | None) -> str | None:
+    """The newest staging revision per novel that has a chapter ready to run.
+
+    Newest only: preparing again supersedes an earlier attempt, and draining an abandoned
+    one would spend the model on a rebuild nobody is looking at -- the panel reports the
+    newest as the replacement, so that is the one that must advance.
+
+    The same fencing rule as the active drain: only the EARLIEST unfinished chapter may
+    move, so a terminal failure holds the rest of the revision rather than letting later
+    chapters publish identity state built on a gap.
+    """
+    cursor = await db.execute(
+        f"""WITH newest AS (
+              SELECT DISTINCT ON (r.novel_id) r.id, r.novel_id, r.created_at
+                FROM {revision_table} r
+               WHERE r.state = 'staging'
+                 AND (%s::uuid IS NULL OR r.novel_id = %s::uuid)
+               ORDER BY r.novel_id, r.created_at DESC
+            )
+            SELECT n.id::text FROM newest n
+              JOIN LATERAL (SELECT state, attempts, retry_at FROM {job_table}
+                             WHERE revision_id = n.id AND state <> 'done'
+                             ORDER BY chapter_index LIMIT 1) j ON true
+             WHERE j.state IN ('pending', 'processing')
+                OR (j.state = 'failed' AND j.attempts <= 3 AND j.retry_at <= now())
+             ORDER BY n.created_at LIMIT 1""",
+        (novel_id, novel_id),
+    )
+    row = await cursor.fetchone()
+    return row[0] if row else None
+
+
+async def drain_staging(cfg: Config, novel_id: str | None = None) -> str | None:
+    """Advance one chapter of a prepared rebuild.
+
+    Without this, pressing "Start fresh rebuild" quarantines the graph, snapshots the
+    chapters, writes the job rows -- and then nothing ever runs them. graph_rebuild's and
+    event_rebuild's own drains only advance a revision that is already ``state='active'
+    AND trusted``, because their job is to keep an ACTIVATED graph up to date as new
+    chapters arrive. A revision that prepare just created is ``staging`` and untrusted, so
+    it matched neither, and resume stayed a command someone had to type at a shell.
+
+    One chapter per tick, like every other background drain, so a rebuild can never hold
+    the worker away from a chapter a reader is waiting to read.
+    """
+    from pipeline import event_rebuild, graph_rebuild
+
+    async with await psycopg.AsyncConnection.connect(cfg.database_url, autocommit=True) as db:
+        for track, module, revision_table, job_table in (
+            ("graph", graph_rebuild, "graph_revision", "graph_job"),
+            ("events", event_rebuild, "event_revision", "event_job"),
+        ):
+            rid = await _next_staging_revision(db, revision_table, job_table, novel_id)
+            if not rid:
+                continue
+            # resume takes its own per-revision advisory lock, re-checks the model pin and
+            # the saved prose against the snapshot, and records a failure with its safe
+            # class before re-raising. The worker logs and keeps going.
+            await module.resume(db, cfg, rid, limit=1)
+            return f"{track}:{rid}"
+    return None
+
+
 async def drain_requests(cfg: Config, novel_id: str | None = None) -> str | None:
     """Run at most one repair action, then at most one report refresh.
 

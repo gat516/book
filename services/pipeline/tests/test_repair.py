@@ -542,3 +542,92 @@ async def test_event_failure_records_a_class_and_schedules_a_retry(db_conn):
             "SELECT state, category, retry_at IS NOT NULL FROM event_job"
             " WHERE revision_id=%s AND chapter_index=1", (revision,))
         assert await cursor.fetchone() == ("failed", "timeout", True)
+
+
+async def _staging_revision(conn, *, novel=None, state="pending", attempts=0, chapters=1):
+    """A staging graph revision with jobs, exactly as prepare() leaves one."""
+    from psycopg.types.json import Jsonb
+
+    if novel is None:
+        novel = await make_novel(conn, ontology='{"kinds":[],"attributes":[],"relations":[]}')
+    cursor = await conn.execute(
+        "INSERT INTO graph_revision(novel_id, state, trusted, ontology)"
+        " VALUES(%s,'staging',false,%s) RETURNING id::text", (novel, Jsonb({})))
+    revision = (await cursor.fetchone())[0]
+    for chapter in range(1, chapters + 1):
+        await conn.execute(
+            """INSERT INTO graph_job(revision_id, chapter_index, state, input_hash,
+                                     model_identity, generation, attempts, retry_at)
+               VALUES(%s,%s,%s,'h','m',1,%s,
+                      CASE WHEN %s='failed' THEN now() - interval '1 minute' END)""",
+            (revision, chapter, state, attempts, state))
+    return novel, revision
+
+
+@pytest.mark.db
+async def test_a_prepared_rebuild_is_picked_up_by_the_worker(db_conn):
+    """The regression this whole function exists for.
+
+    prepare() leaves a revision state='staging', trusted=false. graph_rebuild's and
+    event_rebuild's own drains only advance a revision that is already active AND trusted
+    -- their job is keeping an activated graph current -- so a freshly prepared rebuild
+    matched neither and sat at 0 chapters done forever. "Start fresh rebuild" quarantined
+    the book and then nothing ran.
+    """
+    async with db_conn.transaction(force_rollback=True):
+        novel, revision = await _staging_revision(db_conn)
+        picked = await repair._next_staging_revision(
+            db_conn, "graph_revision", "graph_job", novel)
+        assert picked == revision
+
+
+@pytest.mark.db
+async def test_only_the_newest_staging_revision_is_drained(db_conn):
+    """Preparing again supersedes an earlier attempt.
+
+    Draining an abandoned rebuild would spend the model on work nobody is looking at --
+    the panel reports the newest staging revision as the replacement.
+    """
+    async with db_conn.transaction(force_rollback=True):
+        novel, superseded = await _staging_revision(db_conn)
+        await db_conn.execute(
+            "UPDATE graph_revision SET created_at = now() - interval '1 hour' WHERE id=%s",
+            (superseded,))
+        _, newest = await _staging_revision(db_conn, novel=novel)
+
+        picked = await repair._next_staging_revision(
+            db_conn, "graph_revision", "graph_job", novel)
+        assert picked == newest, "the superseded rebuild must not be resumed"
+
+
+@pytest.mark.db
+async def test_a_staging_chapter_out_of_attempts_is_left_alone(db_conn):
+    """Past the retry bound the chapter is abandoned, and it fences the rest of the run."""
+    async with db_conn.transaction(force_rollback=True):
+        novel, _ = await _staging_revision(db_conn, state="failed", attempts=4)
+        assert await repair._next_staging_revision(
+            db_conn, "graph_revision", "graph_job", novel) is None
+
+
+@pytest.mark.db
+async def test_a_finished_rebuild_is_not_resumed_again(db_conn):
+    async with db_conn.transaction(force_rollback=True):
+        novel, revision = await _staging_revision(db_conn, state="done")
+        assert await repair._next_staging_revision(
+            db_conn, "graph_revision", "graph_job", novel) is None
+
+
+@pytest.mark.db
+async def test_only_the_earliest_unfinished_chapter_gates_a_rebuild(db_conn):
+    """Same fencing as the active drain: a terminal failure holds the rest of the run.
+
+    Otherwise later chapters publish identity state built on a gap.
+    """
+    async with db_conn.transaction(force_rollback=True):
+        novel, revision = await _staging_revision(db_conn, chapters=3)
+        # Chapter 1 is exhausted; 2 and 3 are ready. Nothing may move.
+        await db_conn.execute(
+            "UPDATE graph_job SET state='failed', attempts=9, retry_at=NULL"
+            " WHERE revision_id=%s AND chapter_index=1", (revision,))
+        assert await repair._next_staging_revision(
+            db_conn, "graph_revision", "graph_job", novel) is None

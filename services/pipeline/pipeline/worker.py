@@ -273,7 +273,7 @@ class Worker:
     async def _drain_background(self) -> None:
         from pipeline.event_rebuild import drain_active as drain_events
         from pipeline.graph_rebuild import drain_active
-        from pipeline.repair import drain_requests
+        from pipeline.repair import drain_requests, drain_staging
         control = await self.redis.hgetall(queue.KEYS[5])
         mode, focus = control.get("mode", "all"), control.get("focus_novel_id") or None
         if mode == "paused" or (mode == "focused" and focus is None):
@@ -283,6 +283,11 @@ class Worker:
         # that is about to be superseded is wasted work at best.  One action per tick, so
         # the loop re-checks the reader queue between them (§0).
         if await drain_requests(self.cfg, novel_id=focus if mode == "focused" else None):
+            return
+        # A prepared rebuild advances before ordinary enrichment: a quarantined book shows
+        # its reader no facts at all, while an active revision already has some. This can
+        # hold enrichment back for the length of a rebuild, which is the intended trade.
+        if await drain_staging(self.cfg, novel_id=focus if mode == "focused" else None):
             return
         # Chapter actions are independently reviewable and substantially cheaper than
         # full identity repair.  Both remain below reader-critical translation work and
