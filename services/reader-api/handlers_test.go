@@ -48,23 +48,38 @@ type fakeStore struct {
 	lastChapter     int
 	lastChapterArg  int
 
-	chapterList       []ChapterListItem
-	chapterListTotal  int
-	chapterListErr    error
-	lastChapterLimit  int
-	lastChapterOffset int
-	pipelineStatusErr error
-	previewText       string
-	previewStatus     string
-	previewErr        error
-	health            TranslationHealth
-	healthErr2        error
-	repair            RepairStatus
-	repairErr         error
-	repairPreview     RepairPreview
-	repairPreviewErr  error
-	repairProgress    []RepairProgressFact
-	repairProgressErr error
+	chapterList          []ChapterListItem
+	chapterListTotal     int
+	chapterListErr       error
+	lastChapterLimit     int
+	lastChapterOffset    int
+	pipelineStatusErr    error
+	previewText          string
+	previewStatus        string
+	previewErr           error
+	health               TranslationHealth
+	healthErr2           error
+	repair               RepairStatus
+	repairErr            error
+	repairPreview        RepairPreview
+	repairPreviewErr     error
+	repairProgress       []RepairProgressFact
+	repairProgressErr    error
+	chapterKnowledge     ChapterKnowledgeView
+	chapterKnowledgeErr  error
+	knowledgeActivity    []ChapterKnowledgeActivity
+	knowledgeActivityErr error
+}
+
+func (f *fakeStore) ChapterKnowledge(_ context.Context, _ string, chapter, at int) (ChapterKnowledgeView, error) {
+	f.lastChapter = chapter
+	f.lastAt = at
+	return f.chapterKnowledge, f.chapterKnowledgeErr
+}
+func (f *fakeStore) ChapterKnowledgeActivity(_ context.Context, _ string, chapter, at int, _ string, _ int64) ([]ChapterKnowledgeActivity, error) {
+	f.lastChapter = chapter
+	f.lastAt = at
+	return f.knowledgeActivity, f.knowledgeActivityErr
 }
 
 type fakeIngestClient struct {
@@ -99,6 +114,15 @@ func (f *fakeIngestClient) CorrectGlossaryTerm(_ context.Context, _, _ string, b
 }
 
 func (f *fakeIngestClient) DeleteGlossaryTerm(_ context.Context, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
+}
+
+func (f *fakeIngestClient) MutateFact(_ context.Context, _, _, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
+}
+func (f *fakeIngestClient) ChapterKnowledgeMutation(_ context.Context, _, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
 	return f.response, f.status, f.err
 }

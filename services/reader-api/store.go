@@ -59,6 +59,8 @@ type ReaderStore interface {
 	RequestScrapeCancel(context.Context, string) error
 	ListGlossary(context.Context, string, int) ([]GlossaryTermView, error)
 	ListNameReviews(context.Context, string, *int) ([]CharacterNameReview, error)
+	ChapterKnowledge(context.Context, string, int, int) (ChapterKnowledgeView, error)
+	ChapterKnowledgeActivity(context.Context, string, int, int, string, int64) ([]ChapterKnowledgeActivity, error)
 }
 
 func (s *Store) ListNameReviews(ctx context.Context, novelID string, chapter *int) ([]CharacterNameReview, error) {
@@ -608,9 +610,12 @@ func (s *Store) GetEntity(
 		}
 
 		factRows, err := tx.Query(ctx,
+			// COALESCE, not a second column: value_en is a display gloss of the
+			// source-language value (migration 0051) and is NULL for every fact
+			// extracted before it existed, which must still render.
 			`WITH visible AS (
-			   SELECT id, attribute, value, kind, supersedes, valid_from_chapter,
-			          source_chapter, confidence, evidence_id
+			   SELECT id, attribute, COALESCE(value_en, value) AS value, kind, supersedes,
+			          valid_from_chapter, source_chapter, confidence, evidence_id
 			   FROM fact
 			   WHERE novel_id = $1 AND entity_id = $2
 			     AND source_chapter <= $3 AND valid_from_chapter <= $3
@@ -869,7 +874,7 @@ func (s *Store) readObject(ctx context.Context, key string) (string, error) {
 func newFactsInTx(ctx context.Context, tx pgx.Tx, novelID string, n int, view *ChapterView) error {
 	rows, err := tx.Query(ctx,
 		`WITH visible AS (
-		   SELECT id, entity_id, attribute, value, kind, supersedes,
+		   SELECT id, entity_id, attribute, COALESCE(value_en, value) AS value, kind, supersedes,
 		          valid_from_chapter, source_chapter, confidence
 		   FROM fact
 		   WHERE novel_id = $1

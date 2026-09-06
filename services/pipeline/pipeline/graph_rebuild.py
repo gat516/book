@@ -24,7 +24,7 @@ from pipeline.config import Config
 from pipeline.context import PipelineState
 from pipeline.envelope import ChapterEnvelope, SourceMeta
 from pipeline.evidence import PROMPT_VERSION, digest
-from pipeline.failures import clear_blocked, failure_category, record_blocked
+from pipeline.failures import CANCELLED, clear_blocked, failure_category, record_blocked
 from pipeline.knowledge import KnowledgeEngine
 from pipeline.llm.provider import AdmissionRejected
 from pipeline.stages.resolve import _lock_glossary
@@ -185,6 +185,14 @@ async def record_job_failure(db,rid,index,exc):
     return delay
 
 
+async def record_job_interruption(db,rid,index):
+    """Make an interrupted chapter visible and immediately resumable."""
+    await db.execute("""UPDATE graph_job SET state='failed',
+        error='CancelledError: extraction interrupted',category=%s,
+        retry_at=now(),updated_at=now()
+        WHERE revision_id=%s AND chapter_index=%s""",(CANCELLED,rid,index))
+
+
 async def resume(db,cfg,rid, *, limit=None):
     # Session advisory lock means interrupted jobs can be retried immediately, while
     # two resume processes cannot independently advance a revision out of order.
@@ -246,9 +254,23 @@ async def resume(db,cfg,rid, *, limit=None):
                     await db.execute('UPDATE graph_revision SET version=version+1,review=NULL WHERE id=%s',(rid,))
                 print(json.dumps(dict(revision=rid,chapter=index,state='done',linked=len(state.resolutions))),flush=True)
             except AdmissionRejected:
+                if engine.run_id:
+                    await db.execute("UPDATE chapter_knowledge_run SET state='pending',updated_at=now() WHERE id=%s",(engine.run_id,))
                 await db.execute("UPDATE graph_job SET state='pending',error=NULL,category=NULL,retry_at=NULL,updated_at=now() WHERE revision_id=%s AND chapter_index=%s",(rid,index))
                 raise
+            except asyncio.CancelledError:
+                # SIGINT/SIGTERM must not leave a dead process looking like active work.
+                # The completed graph_completion rows remain reusable; this chapter can
+                # resume immediately from its first incomplete request (§0, §5.4).
+                if engine.run_id:
+                    await engine._activity('run','run','rejected',{'reason':'extraction interrupted'})
+                    await db.execute("UPDATE chapter_knowledge_run SET state='failed',error='extraction interrupted',updated_at=now() WHERE id=%s",(engine.run_id,))
+                await record_job_interruption(db,rid,index)
+                raise
             except Exception as exc:
+                if engine.run_id:
+                    await engine._activity('run','run','rejected',{'reason':str(exc)[:500]})
+                    await db.execute("UPDATE chapter_knowledge_run SET state='failed',error=%s,updated_at=now() WHERE id=%s",(str(exc)[:2000],engine.run_id))
                 await record_job_failure(db,rid,index,exc)
                 raise
     finally:

@@ -174,6 +174,10 @@ type RepairExtractedName struct {
 	Kind    string `json:"kind"`
 	Named   bool   `json:"named"`
 	Quote   string `json:"quote,omitempty"`
+	// TargetTerm is the locked glossary rendering for this surface, when one already
+	// exists. Empty for a name nobody has glossed yet — RESOLVE has not run at this
+	// point, so there is no entity to ask, only whatever glossary already locked earlier.
+	TargetTerm string `json:"target_term,omitempty"`
 }
 
 // RepairProposedClaim is a fact the model has proposed but that nothing has published.
@@ -479,7 +483,7 @@ func (s *Store) RepairProgress(ctx context.Context, novelID string) ([]RepairPro
 // an entity, and each carries its source quote.
 func (s *Store) RepairExtraction(ctx context.Context, novelID string) ([]RepairExtractedName, error) {
 	rows, err := s.operatorDB.Query(ctx,
-		`SELECT surface, kind, named, quote FROM repair_extraction($1)`, novelID)
+		`SELECT surface, kind, named, quote, target_term FROM repair_extraction($1)`, novelID)
 	if err != nil {
 		return nil, fmt.Errorf("read repair extraction: %w", err)
 	}
@@ -487,9 +491,9 @@ func (s *Store) RepairExtraction(ctx context.Context, novelID string) ([]RepairE
 	names := []RepairExtractedName{}
 	for rows.Next() {
 		var name RepairExtractedName
-		var kind, quote *string
+		var kind, quote, targetTerm *string
 		var named *bool
-		if err := rows.Scan(&name.Surface, &kind, &named, &quote); err != nil {
+		if err := rows.Scan(&name.Surface, &kind, &named, &quote, &targetTerm); err != nil {
 			return nil, fmt.Errorf("scan repair extraction: %w", err)
 		}
 		if kind != nil {
@@ -500,6 +504,9 @@ func (s *Store) RepairExtraction(ctx context.Context, novelID string) ([]RepairE
 		}
 		if quote != nil {
 			name.Quote = *quote
+		}
+		if targetTerm != nil {
+			name.TargetTerm = *targetTerm
 		}
 		names = append(names, name)
 	}

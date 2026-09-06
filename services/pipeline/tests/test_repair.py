@@ -524,6 +524,20 @@ async def test_graph_failure_past_the_retry_bound_schedules_nothing(db_conn):
 
 
 @pytest.mark.db
+async def test_graph_interruption_is_visible_and_immediately_resumable(db_conn):
+    from pipeline import graph_rebuild
+
+    async with db_conn.transaction(force_rollback=True):
+        _, revision = await _graph_job(db_conn, attempts=1)
+        await graph_rebuild.record_job_interruption(db_conn,revision,1)
+        cursor=await db_conn.execute(
+            "SELECT state,category,error,retry_at<=now() FROM graph_job "
+            "WHERE revision_id=%s AND chapter_index=1",(revision,))
+        assert await cursor.fetchone()==(
+            'failed','cancelled','CancelledError: extraction interrupted',True)
+
+
+@pytest.mark.db
 async def test_event_failure_records_a_class_and_schedules_a_retry(db_conn):
     from psycopg.types.json import Jsonb
 

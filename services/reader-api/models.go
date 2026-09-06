@@ -1,7 +1,9 @@
 package main
 
-import "time"
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 type Progress struct {
 	NovelID        string    `json:"novel_id"`
@@ -303,13 +305,60 @@ type TranslationHealth struct {
 // for display only — it is when the fact became true in-story and says nothing about who
 // may see it.
 type ChapterFactView struct {
-	EntityID         string  `json:"entity_id"`
-	EntityCanonical  string  `json:"entity_canonical"`
-	Attribute        string  `json:"attribute"`
-	Value            string  `json:"value"`
-	ValidFromChapter int     `json:"valid_from_chapter"`
-	SourceChapter    int     `json:"source_chapter"`
-	Confidence       float64 `json:"confidence"`
+	ID               int64           `json:"id"`
+	EntityID         string          `json:"entity_id"`
+	EntityCanonical  string          `json:"entity_canonical"`
+	Attribute        string          `json:"attribute"`
+	Value            string          `json:"value"`
+	ValueSource      string          `json:"value_source"`
+	ValueEN          *string         `json:"value_en"`
+	Kind             string          `json:"kind"`
+	Supersedes       *int64          `json:"supersedes,omitempty"`
+	Status           string          `json:"status"`
+	Evidence         json.RawMessage `json:"evidence"`
+	ValidFromChapter int             `json:"valid_from_chapter"`
+	SourceChapter    int             `json:"source_chapter"`
+	Confidence       float64         `json:"confidence"`
+}
+
+type ChapterTermView struct {
+	SourceTerm   string `json:"source_term"`
+	TargetTerm   string `json:"target_term"`
+	CharStart    int    `json:"char_start"`
+	CharEnd      int    `json:"char_end"`
+	NewInChapter bool   `json:"new_in_chapter"`
+	Deleted      bool   `json:"deleted"`
+}
+
+type ChapterKnowledgeRunView struct {
+	ID        string          `json:"id"`
+	Mode      string          `json:"mode"`
+	Scope     string          `json:"scope"`
+	State     string          `json:"state"`
+	CreatedAt time.Time       `json:"created_at"`
+	Preview   json.RawMessage `json:"preview,omitempty"`
+}
+
+type ChapterKnowledgeView struct {
+	NovelID      string                   `json:"novel_id"`
+	ChapterIndex int                      `json:"chapter_index"`
+	RevisionID   string                   `json:"revision_id"`
+	Version      int64                    `json:"version"`
+	Trusted      bool                     `json:"trusted"`
+	Status       string                   `json:"status"`
+	Facts        []ChapterFactView        `json:"facts"`
+	Terms        []ChapterTermView        `json:"terms"`
+	Run          *ChapterKnowledgeRunView `json:"run,omitempty"`
+}
+
+type ChapterKnowledgeActivity struct {
+	Sequence  int64           `json:"sequence"`
+	RunID     string          `json:"run_id"`
+	ItemKind  string          `json:"item_kind"`
+	ItemKey   string          `json:"item_key"`
+	Phase     string          `json:"phase"`
+	Payload   json.RawMessage `json:"payload"`
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 type ChapterView struct {

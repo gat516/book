@@ -17,7 +17,9 @@ rebuild must never delay a chapter someone is waiting to read.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+from copy import deepcopy
 
 import psycopg
 from psycopg.rows import dict_row
@@ -26,6 +28,172 @@ from psycopg.types.json import Jsonb
 from pipeline.config import Config
 from pipeline.failures import ABANDONED, failure_category
 from pipeline.llm.provider import AdmissionRejected
+
+
+async def _reextract_preview(db, cfg, graph_rebuild, row, run_id):
+    from pipeline.evidence import digest, stable_id
+    run=await(await db.execute('''SELECT r.id::text,r.novel_id::text,r.chapter_index,r.revision_id::text,
+        r.input_hash,r.display_hash,r.model_identity,r.graph_generation,r.graph_version,r.scope
+        FROM chapter_knowledge_run r WHERE r.id=%s AND r.novel_id=%s AND r.chapter_index=%s
+          AND r.mode='reextract' AND r.state IN ('pending','processing')''',
+        (run_id,row['novel_id'],row['chapter_index']))).fetchone()
+    if not run: raise ValueError('re-extraction run is stale or unavailable')
+    _,novel,chapter,rid,input_hash,display_hash,model_identity,generation,version,scope=run
+    revision=await graph_rebuild.revision(db,rid)
+    if revision['state']!='active' or not revision['trusted'] or revision['legacy'] or revision['generation']!=generation or revision['version']!=version:
+        raise ValueError('active graph changed after re-extraction was requested')
+    live=await graph_rebuild.local_model(cfg,revision['model']['name'])
+    if digest(live)!=model_identity:
+        raise ValueError('model identity changed after re-extraction was requested')
+    saved=next((c for c in revision['snapshot']['chapters'] if c['chapter']==chapter),None)
+    if not saved: raise ValueError('chapter is not in the active graph snapshot')
+    client=graph_rebuild.objects(cfg)
+    source=await asyncio.to_thread(graph_rebuild.read_object,client,cfg,saved['raw_uri'])
+    display=await asyncio.to_thread(graph_rebuild.read_object,client,cfg,saved['translated_uri'] or saved['raw_uri'])
+    if digest(source)!=input_hash or digest(display)!=display_hash:
+        raise ValueError('chapter input changed after re-extraction was requested')
+    lang=(await(await db.execute('SELECT target_lang FROM novel WHERE id=%s',(novel,))).fetchone())[0]
+    engine=graph_rebuild.KnowledgeEngine(db,cfg,revision,run_id=run_id)
+    try: output=await engine.extract(novel,chapter,source,display,lang,
+                                     include_terms=scope != 'facts', include_facts=scope != 'terms')
+    finally: await engine.close()
+    identities={i['mention_id']:i for i in output['items'] if i['id'].startswith('identity:')}
+    resolved={}
+    for mid,item in identities.items():
+        if item['outcome']=='existing': resolved[mid]=item['target_id']
+        elif item['outcome']=='new': resolved[mid]=stable_id(rid,'entity',item['target_id'])
+    existing_rows=await(await db.execute('''SELECT f.id,f.entity_id::text,f.attribute,f.value,f.value_en
+        FROM fact f WHERE f.revision_id=%s AND f.source_chapter=%s AND f.kind<>'retraction'
+        AND NOT EXISTS(SELECT 1 FROM fact s WHERE s.revision_id=f.revision_id AND s.supersedes=f.id)''',(rid,chapter))).fetchall()
+    existing=[dict(id=r[0],entity_id=r[1],attribute=r[2],value=r[3],value_en=r[4]) for r in existing_rows] if scope != 'terms' else []
+    matched=set();items=[]
+    for claim in (i for i in output['items'] if i['id'].startswith('claim:') and i['type']=='fact'):
+        entity=resolved.get(claim['mention_ids'][0]); exact=next((f for f in existing if f['entity_id']==entity and f['attribute']==claim['attribute'] and f['value']==claim['value']),None)
+        replacement=next((f for f in existing if f['entity_id']==entity and f['attribute']==claim['attribute']),None)
+        if exact:
+            matched.add(exact['id']); classification='unchanged' if (exact['value_en'] or exact['value'])==(claim.get('value_en') or claim['value']) else 'display_update'; old=exact['id']
+        elif replacement: matched.add(replacement['id']);classification='possible_replacement';old=replacement['id']
+        else: classification='new';old=None
+        items.append(dict(item_key=claim['id'],item_kind='fact',classification=classification,
+                          existing_fact_id=old,proposal=claim))
+    for fact in existing:
+        if fact['id'] not in matched:
+            items.append(dict(item_key=f"missing:{fact['id']}",item_kind='fact',classification='missing',existing_fact_id=fact['id'],proposal=None))
+    mentions={m['id']:m for m in output['mentions']}
+    seen=set()
+    for span in output['spans'] if scope != 'facts' else []:
+        mid=span.get('mention_id')
+        if not mid or mid not in mentions: continue
+        source_term=mentions[mid]['surface'];key=(source_term,span['phrase'])
+        if key in seen: continue
+        seen.add(key)
+        glossary=await(await db.execute('SELECT target_term,deleted FROM glossary WHERE novel_id=%s AND source_term=%s',(novel,source_term))).fetchone()
+        classification='new' if not glossary or glossary[1] else ('unchanged' if glossary[0]==span['phrase'] else 'display_update')
+        items.append(dict(item_key=f'term:{source_term}',item_kind='term',classification=classification,
+                          proposal=dict(source_term=source_term,target_term=span['phrase'])))
+    preview=dict(run_id=run_id,scope=scope,revision_id=rid,version=version,chapter_index=chapter,
+                 model_identity=model_identity,items=items,output=output)
+    await db.execute("UPDATE chapter_knowledge_run SET state='awaiting_review',preview=%s,updated_at=now() WHERE id=%s",(Jsonb(preview),run_id))
+    await db.execute('''INSERT INTO chapter_knowledge_activity
+        (run_id,novel_id,chapter_index,item_kind,item_key,phase,payload,idempotency_key)
+        VALUES(%s,%s,%s,'run','run','verified',%s,'run:awaiting-review')
+        ON CONFLICT(run_id,idempotency_key) DO NOTHING''',(run_id,novel,chapter,Jsonb({'items':len(items)})))
+    return {'run_id':run_id,'state':'awaiting_review','items':len(items)}
+
+
+async def _reextract_apply(db,cfg,graph_rebuild,row,run_id,decisions):
+    from pipeline.context import PipelineState
+    from pipeline.envelope import ChapterEnvelope,SourceMeta
+    from pipeline.evidence import digest
+    run=await(await db.execute('''SELECT r.revision_id::text,r.graph_generation,r.graph_version,r.input_hash,
+        r.display_hash,r.model_identity,r.preview,r.requested_by,r.scope FROM chapter_knowledge_run r
+        WHERE r.id=%s AND r.novel_id=%s AND r.chapter_index=%s AND r.state='applying' FOR UPDATE''',
+        (run_id,row['novel_id'],row['chapter_index']))).fetchone()
+    if not run: raise ValueError('re-extraction preview is stale or unavailable')
+    rid,generation,version,input_hash,display_hash,model_identity,preview,requested_by,scope=run
+    revision=await graph_rebuild.revision(db,rid,lock=True)
+    if revision['state']!='active' or not revision['trusted'] or revision['generation']!=generation or revision['version']!=version:
+        raise ValueError('active graph changed after preview')
+    live=await graph_rebuild.local_model(cfg,revision['model']['name'])
+    if digest(live)!=model_identity:
+        raise ValueError('model identity changed after preview')
+    saved=next((c for c in revision['snapshot']['chapters'] if c['chapter']==row['chapter_index']),None)
+    client=graph_rebuild.objects(cfg)
+    source=await asyncio.to_thread(graph_rebuild.read_object,client,cfg,saved['raw_uri'])
+    display=await asyncio.to_thread(graph_rebuild.read_object,client,cfg,saved['translated_uri'] or saved['raw_uri'])
+    if digest(source)!=input_hash or digest(display)!=display_hash: raise ValueError('chapter input changed after preview')
+    if isinstance(decisions,list):
+        choices={d.get('item_key'):d.get('action','retain') for d in decisions if isinstance(d,dict)}
+    elif isinstance(decisions,dict): choices=decisions
+    else: raise ValueError('decisions must be an object or list')
+    allowed={'retain','approve','update_display','replace','remove'}
+    if any(action not in allowed for action in choices.values()): raise ValueError('unknown re-extraction decision')
+    items={item['item_key']:item for item in preview['items']}
+    if not set(choices)<=set(items): raise ValueError('decision names an unknown preview item')
+    if scope != 'terms' and not any(action!='retain' for action in choices.values()):
+        await db.execute("UPDATE chapter_knowledge_run SET state='rejected',updated_at=now() WHERE id=%s",(run_id,))
+        await db.execute('''INSERT INTO chapter_knowledge_activity
+            (run_id,novel_id,chapter_index,item_kind,item_key,phase,payload,idempotency_key)
+            VALUES(%s,%s,%s,'run','run','rejected','{"reason":"review completed with no selected changes"}','run:review-retained')
+            ON CONFLICT(run_id,idempotency_key) DO NOTHING''',(run_id,row['novel_id'],row['chapter_index']))
+        return {'run_id':run_id,'state':'rejected','revision_id':rid,'version':version}
+    output=deepcopy(preview['output'])
+    selected=[]
+    for item in preview['items']:
+        if item['item_kind']!='fact': continue
+        action=choices.get(item['item_key'],'retain')
+        if item['classification']=='new' and action=='approve': selected.append(item['proposal'])
+        elif item['classification']=='possible_replacement' and action=='replace':
+            proposal=deepcopy(item['proposal']);proposal['kind']='correction';proposal['supersedes']=item['existing_fact_id'];selected.append(proposal)
+    output['items']=[i for i in output['items'] if i['id'].startswith('identity:')]+selected
+    source_lang,target_lang=(await(await db.execute('SELECT source_lang,target_lang FROM novel WHERE id=%s',(row['novel_id'],))).fetchone())
+    state=PipelineState(envelope=ChapterEnvelope(novel_id=row['novel_id'],chapter_index=row['chapter_index'],raw_text=source,source_lang=source_lang,source_meta=SourceMeta()))
+    engine=graph_rebuild.KnowledgeEngine(db,cfg,revision,run_id=run_id)
+    engine.current_chapter=row['chapter_index']
+    try:
+        async with db.transaction():
+            current=await graph_rebuild.revision(db,rid,lock=True)
+            current_input=await(await db.execute('SELECT raw_hash FROM chapter WHERE novel_id=%s AND chapter_index=%s FOR SHARE',(row['novel_id'],row['chapter_index']))).fetchone()
+            if current['state']!='active' or not current['trusted'] or current['generation']!=generation or current['version']!=version or not current_input:
+                raise ValueError('active graph or chapter changed while applying preview')
+            await db.execute("UPDATE chapter_knowledge_run SET state='applying',updated_at=now() WHERE id=%s",(run_id,))
+            await db.execute("SELECT set_config('app.graph_revision',%s,true),set_config('app.graph_generation',%s,true)",(rid,str(generation)))
+            await engine.publish(state,output,source,publish_terms=scope != 'facts',publish_facts=scope != 'terms')
+            if scope != 'facts':
+                await graph_rebuild.promote_verified_glossary(db,current,row['chapter_index'],target_lang)
+            actor=row.get('requested_by') or requested_by or 'unknown operator'
+            for item in preview['items']:
+                if item['item_kind']!='fact': continue
+                action=choices.get(item['item_key'],'retain');fid=item.get('existing_fact_id')
+                if item['classification']=='display_update' and action=='update_display':
+                    value_en=item['proposal'].get('value_en') or item['proposal']['value']
+                    old=await(await db.execute('SELECT COALESCE(value_en,value) FROM fact WHERE id=%s',(fid,))).fetchone()
+                    await db.execute('UPDATE fact SET value_en=%s WHERE id=%s',(value_en,fid))
+                    await db.execute('''INSERT INTO fact_edit_audit(novel_id,revision_id,fact_id,action,actor,old_display,new_display,note)
+                        VALUES(%s,%s,%s,'display',%s,%s,%s,'approved chapter re-extraction preview')''',(row['novel_id'],rid,fid,actor,old[0],value_en))
+                elif item['classification']=='missing' and action=='remove':
+                    old=await(await db.execute('''SELECT entity_id,attribute,value,value_en,valid_from_chapter,source_chapter,
+                        confidence,evidence_id FROM fact WHERE id=%s''',(fid,))).fetchone()
+                    successor=(await(await db.execute('''INSERT INTO fact(novel_id,entity_id,attribute,value,value_en,
+                        valid_from_chapter,source_chapter,confidence,kind,supersedes,revision_id,evidence_id,claim_key)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'retraction',%s,%s,%s,%s) RETURNING id''',
+                        (row['novel_id'],*old[:7],fid,rid,old[7],digest(['retraction',rid,fid,run_id])))).fetchone())[0]
+                    await db.execute('''INSERT INTO fact_edit_audit(novel_id,revision_id,fact_id,action,actor,old_display,successor_fact_id,note)
+                        VALUES(%s,%s,%s,'retraction',%s,%s,%s,'approved chapter re-extraction preview')''',
+                        (row['novel_id'],rid,fid,actor,old[3] or old[2],successor))
+                elif item['classification']=='possible_replacement' and action=='replace':
+                    successor=await(await db.execute('''SELECT id,COALESCE(value_en,value) FROM fact
+                        WHERE revision_id=%s AND supersedes=%s ORDER BY id DESC LIMIT 1''',(rid,fid))).fetchone()
+                    old=await(await db.execute('SELECT COALESCE(value_en,value) FROM fact WHERE id=%s',(fid,))).fetchone()
+                    if successor:
+                        await db.execute('''INSERT INTO fact_edit_audit(novel_id,revision_id,fact_id,action,actor,
+                            old_display,new_display,successor_fact_id,note)
+                            VALUES(%s,%s,%s,'correction',%s,%s,%s,%s,'approved chapter re-extraction preview')''',
+                            (row['novel_id'],rid,fid,actor,old[0],successor[1],successor[0]))
+            new_version=(await(await db.execute('UPDATE graph_revision SET version=version+1,review=NULL WHERE id=%s RETURNING version',(rid,))).fetchone())[0]
+            await db.execute("UPDATE chapter_knowledge_run SET state='published',updated_at=now() WHERE id=%s",(run_id,))
+    finally: await engine.close()
+    return {'run_id':run_id,'state':'published','revision_id':rid,'version':new_version}
 
 # How long a claimed request may stay 'running' before another worker may take it back.
 # A worker that dies mid-action leaves state='running', and repair_request_one_active
@@ -140,35 +308,18 @@ async def _run(db, cfg, row: dict) -> dict:
         return {"revision": str(revision)}
 
     if action == "reextract":
-        # Chapter-scoped, and only ever against the graph readers are actually served.
-        # enqueue_completed first so a chapter that became readable since the last append
-        # gets its job row; then reset that one job and let drain_active redo exactly it.
         if row["track"] != "graph":
             raise ValueError("re-extraction applies to the entity graph")
-        chapter = row["chapter_index"]
-        cursor = await db.execute(
-            """SELECT r.id::text FROM graph_revision r JOIN novel n
-                    ON n.active_graph_revision = r.id
-                WHERE n.id = %s AND r.trusted AND NOT r.legacy""",
-            (row["novel_id"],))
-        active = await cursor.fetchone()
-        if not active:
-            # A quarantined or legacy graph has no trusted revision to append to. Say so
-            # rather than resetting a job on a revision no reader can see.
-            raise ValueError(
-                "no active trusted graph for this book; a rebuild must be reviewed and "
-                "activated before a single chapter can be re-extracted")
-        revision_id = active[0]
-        await graph_rebuild.enqueue_completed(db, cfg, row["novel_id"])
-        cursor = await db.execute(
-            """UPDATE graph_job SET state='pending', attempts=0, error=NULL, category=NULL,
-                      retry_at=NULL, updated_at=now()
-                WHERE revision_id=%s AND chapter_index=%s
-             RETURNING chapter_index""", (revision_id, chapter))
-        if not await cursor.fetchone():
-            raise ValueError(f"chapter {chapter} is not part of the active graph snapshot")
-        return {"status": "queued for re-extraction",
-                "revision": revision_id, "chapter": chapter}
+        run_id=params.get('run_id')
+        if not isinstance(run_id,str) or not run_id:
+            raise ValueError('reextract requires a run_id')
+        return await _reextract_preview(db,cfg,graph_rebuild,row,run_id)
+
+    if action == 'reextract_apply':
+        if row['track']!='graph': raise ValueError('re-extraction applies to the entity graph')
+        run_id=params.get('run_id');decisions=params.get('decisions')
+        if not isinstance(run_id,str) or not run_id: raise ValueError('reextract_apply requires a run_id')
+        return await _reextract_apply(db,cfg,graph_rebuild,row,run_id,decisions)
 
     if not row["revision_id"]:
         raise ValueError(f"{action} requires a revision")
@@ -220,6 +371,17 @@ async def _fail(db, row: dict, exc: BaseException) -> None:
                   started_at=NULL, updated_at=now() WHERE id=%s""",
         (state, f"{type(exc).__name__}: {exc}"[:2000], category, delay, delay, row["id"]),
     )
+    run_id=(row.get('params') or {}).get('run_id')
+    if run_id and row.get('action') in {'reextract','reextract_apply'}:
+        terminal=('applying' if row.get('action')=='reextract_apply' else 'pending') if state=='pending' else 'failed'
+        await db.execute("UPDATE chapter_knowledge_run SET state=%s,error=%s,updated_at=now() WHERE id=%s",
+                         (terminal,f"{type(exc).__name__}: {exc}"[:2000],run_id))
+        if terminal=='failed':
+            await db.execute('''INSERT INTO chapter_knowledge_activity
+                (run_id,novel_id,chapter_index,item_kind,item_key,phase,payload,idempotency_key)
+                VALUES(%s,%s,%s,'run','run','rejected',%s,'run:rejected')
+                ON CONFLICT(run_id,idempotency_key) DO NOTHING''',
+                (run_id,row['novel_id'],row['chapter_index'],Jsonb({'error':str(exc)[:500]})))
 
 
 async def refresh_reports(db, cfg, novel_id: str | None = None) -> str | None:

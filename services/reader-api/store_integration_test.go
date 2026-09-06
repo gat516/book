@@ -52,6 +52,7 @@ func integrationDatabase(t *testing.T) (*Store, *pgxpool.Pool) {
 	// for that coverage.
 	store, err := newStore(ctx, Config{
 		ReaderDatabaseURL: databaseURL, ProgressDatabaseURL: databaseURL,
+		RepairOperatorDatabaseURL: databaseURL,
 	}, nil, nil)
 	if err != nil {
 		admin.Close()
@@ -340,6 +341,60 @@ func TestSpoilerGateEndToEnd(t *testing.T) {
 	}
 	if _, exists := facts["role"]; exists {
 		t.Fatalf("retracted role still visible: %#v", facts)
+	}
+}
+
+func TestChapterKnowledgeActivityIsIncrementalAndSpoilerGated(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	fixture := seedIntegrationFixture(t, admin)
+	ctx := context.Background()
+	if _, err := store.AdvanceProgress(ctx, "chapter-knowledge-reader", fixture.novelID, 220); err != nil {
+		t.Fatal(err)
+	}
+	var revision string
+	var generation, version int64
+	if err := admin.QueryRow(ctx, `SELECT active_graph_revision::text,generation,version FROM novel n JOIN graph_revision r ON r.id=n.active_graph_revision WHERE n.id=$1`, fixture.novelID).Scan(&revision, &generation, &version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO term_rendering_occurrence(novel_id,chapter_index,char_start,char_end,source_term,display_term,method)
+		VALUES($1,100,0,4,'Hero','Hero','aligned'),($1,500,0,6,'Secret','Secret','aligned')`, fixture.novelID); err != nil {
+		t.Fatal(err)
+	}
+	var visibleRun, futureRun string
+	for _, row := range []struct {
+		chapter int
+		target  *string
+	}{{100, &visibleRun}, {500, &futureRun}} {
+		if err := admin.QueryRow(ctx, `INSERT INTO chapter_knowledge_run(novel_id,chapter_index,revision_id,mode,state,input_hash,display_hash,model_identity,graph_generation,graph_version)
+			VALUES($1,$2,$3,'ordinary','published','source','display','model',$4,$5) RETURNING id::text`, fixture.novelID, row.chapter, revision, generation, version).Scan(row.target); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := admin.Exec(ctx, `INSERT INTO chapter_knowledge_activity(run_id,novel_id,chapter_index,item_kind,item_key,phase,payload,idempotency_key)
+			VALUES($1,$2,$3,'fact','fact:1','proposed','{}','proposal'),($1,$2,$3,'fact','fact:1','published','{}','publication')`, *row.target, fixture.novelID, row.chapter); err != nil {
+			t.Fatal(err)
+		}
+	}
+	view, err := store.ChapterKnowledge(ctx, fixture.novelID, 100, 220)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Terms) != 1 || view.Terms[0].SourceTerm != "Hero" {
+		t.Fatalf("terms=%+v", view.Terms)
+	}
+	first, err := store.ChapterKnowledgeActivity(ctx, fixture.novelID, 100, 220, visibleRun, 0)
+	if err != nil || len(first) != 2 {
+		t.Fatalf("activity=%+v err=%v", first, err)
+	}
+	second, err := store.ChapterKnowledgeActivity(ctx, fixture.novelID, 100, 220, visibleRun, first[0].Sequence)
+	if err != nil || len(second) != 1 || second[0].Phase != "published" {
+		t.Fatalf("incremental=%+v err=%v", second, err)
+	}
+	leaked, err := store.ChapterKnowledgeActivity(ctx, fixture.novelID, 500, 220, futureRun, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leaked) != 0 {
+		t.Fatalf("future activity leaked: %+v", leaked)
 	}
 }
 

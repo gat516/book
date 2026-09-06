@@ -52,6 +52,11 @@ func main() {
 	// weaker operator credential before forwarding.
 	mux.Handle("POST /novels/{id}/repair", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.requestRepair)))
 	mux.Handle("DELETE /novels/{id}/repair/{request}", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.cancelRepair)))
+	mux.Handle("PATCH /novels/{id}/facts/{fact}/display", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.mutateFact)))
+	mux.Handle("POST /novels/{id}/facts/{fact}/corrections", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.mutateFact)))
+	mux.Handle("DELETE /novels/{id}/facts/{fact}", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.mutateFact)))
+	mux.Handle("POST /novels/{id}/chapter/{n}/knowledge/reextract", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.chapterKnowledgeReextract)))
+	mux.Handle("POST /novels/{id}/chapter/{n}/knowledge/reextract/{run}/apply", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.chapterKnowledgeApply)))
 	mux.HandleFunc("PATCH /novels/{id}/settings", api.patchNovelSettings)
 	mux.HandleFunc("GET /novels/{id}/provider-config", api.getProviderConfig)
 	mux.HandleFunc("PATCH /novels/{id}/provider-config", api.putProviderConfig)

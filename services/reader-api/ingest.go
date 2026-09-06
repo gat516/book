@@ -39,6 +39,20 @@ type IngestClient interface {
 	UpdateNovelSettings(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	RequestRepair(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	CancelRepair(ctx context.Context, novelID, requestID string) (json.RawMessage, int, error)
+	MutateFact(ctx context.Context, method, novelID, factID, suffix string, body json.RawMessage) (json.RawMessage, int, error)
+	ChapterKnowledgeMutation(ctx context.Context, novelID, chapter, runID string, body json.RawMessage) (json.RawMessage, int, error)
+}
+
+func (c *ingestHTTPClient) ChapterKnowledgeMutation(ctx context.Context, novelID, chapter, runID string, body json.RawMessage) (json.RawMessage, int, error) {
+	path := "/novels/" + novelID + "/chapter/" + chapter + "/knowledge/reextract"
+	if runID != "" {
+		path += "/" + runID + "/apply"
+	}
+	return c.send(ctx, http.MethodPost, path, body, true)
+}
+
+func (c *ingestHTTPClient) MutateFact(ctx context.Context, method, novelID, factID, suffix string, body json.RawMessage) (json.RawMessage, int, error) {
+	return c.send(ctx, method, "/novels/"+novelID+"/facts/"+factID+suffix, body, true)
 }
 
 func (c *ingestHTTPClient) QueueControl(ctx context.Context, method string, body json.RawMessage) (json.RawMessage, int, error) {
