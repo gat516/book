@@ -706,3 +706,103 @@ async def test_status_counts_what_the_rebuild_has_published(db_conn):
             "SELECT claims_published, entities_created FROM reader_repair_status(%s)"
             " WHERE track='graph'", (novel,))
         assert await cursor.fetchone() == (0, 0)
+
+
+async def _quarantined_novel(conn):
+    """A book exactly as prepare() leaves it: an active, now-untrusted `old` revision and
+    a fresh staging `rid`, linked by the quarantine audit row prepare itself writes."""
+    from psycopg.types.json import Jsonb
+
+    novel, rid = await _staging_revision(conn)
+    old = (await (await conn.execute(
+        "SELECT active_graph_revision FROM novel WHERE id=%s", (novel,))).fetchone())[0]
+    await conn.execute("UPDATE graph_revision SET trusted=false WHERE id=%s", (old,))
+    await conn.execute(
+        "INSERT INTO graph_audit(novel_id,revision_id,action,detail) VALUES(%s,%s,'quarantine',%s)",
+        (novel, old, Jsonb(dict(replacement=rid))))
+    return novel, str(old), rid
+
+
+@pytest.mark.db
+async def test_discard_restores_trust_on_the_audited_quarantine_target(db_conn):
+    """The missing escape: undo prepare()'s own precaution, identified by its audit row.
+
+    Unlike rollback, this is not "give up on a real decision" — the staging revision
+    never published anything, so there is nothing to distrust the old revision over.
+    """
+    from pipeline.graph_rebuild import discard
+
+    async with db_conn.transaction(force_rollback=True):
+        novel, old, rid = await _quarantined_novel(db_conn)
+        result = await discard(db_conn, None, rid)
+        assert result == {"revision": rid, "restored": old}
+
+        row = await (await db_conn.execute(
+            "SELECT state, trusted FROM graph_revision WHERE id=%s", (rid,))).fetchone()
+        assert row == ("archived", False)
+        row = await (await db_conn.execute(
+            "SELECT trusted FROM graph_revision WHERE id=%s", (old,))).fetchone()
+        assert row == (True,)
+        audit = await (await db_conn.execute(
+            "SELECT detail FROM graph_audit WHERE novel_id=%s AND action='discard'",
+            (novel,))).fetchone()
+        assert audit[0] == {"restored": old}
+
+
+@pytest.mark.db
+async def test_discard_does_not_restore_trust_when_a_second_quarantine_intervened(db_conn):
+    """§0: trusted=false stays a human decision. A later prepare() re-quarantined the same
+    old revision for a different reason, so THIS discard must not silently re-trust it."""
+    from psycopg.types.json import Jsonb
+
+    from pipeline.graph_rebuild import discard
+
+    async with db_conn.transaction(force_rollback=True):
+        novel, old, rid = await _quarantined_novel(db_conn)
+        _, rid2 = await _staging_revision(db_conn, novel=novel)
+        await db_conn.execute(
+            "INSERT INTO graph_audit(novel_id,revision_id,action,detail) VALUES(%s,%s,'quarantine',%s)",
+            (novel, old, Jsonb(dict(replacement=rid2))))
+
+        result = await discard(db_conn, None, rid)
+        assert result == {"revision": rid, "restored": None}
+
+        row = await (await db_conn.execute(
+            "SELECT trusted FROM graph_revision WHERE id=%s", (old,))).fetchone()
+        assert row == (False,), "a second quarantine intervened; trust stays withheld"
+
+
+@pytest.mark.db
+async def test_discard_refuses_a_non_staging_revision(db_conn):
+    from pipeline.graph_rebuild import discard
+
+    async with db_conn.transaction(force_rollback=True):
+        novel, old, rid = await _quarantined_novel(db_conn)
+        await db_conn.execute("UPDATE graph_revision SET state='archived' WHERE id=%s", (rid,))
+        with pytest.raises(ValueError, match="only a staging revision can be discarded"):
+            await discard(db_conn, None, rid)
+
+
+@pytest.mark.db
+async def test_discard_cancels_live_chapter_knowledge_runs(db_conn):
+    """0054's partial unique index allows one live run per (novel, chapter, scope). A
+    discarded staging revision must not leave one dangling and block a later run."""
+    from pipeline.graph_rebuild import discard
+
+    async with db_conn.transaction(force_rollback=True):
+        novel, old, rid = await _quarantined_novel(db_conn)
+        await db_conn.execute(
+            "INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status) "
+            "VALUES (%s,1,%s,'raw/test.txt','{}','done')", (novel, f"sha256:{novel}"))
+        run = await (await db_conn.execute(
+            """INSERT INTO chapter_knowledge_run
+                 (novel_id,chapter_index,revision_id,mode,input_hash,display_hash,
+                  model_identity,graph_generation,graph_version)
+               VALUES(%s,1,%s,'ordinary','h','h','m',1,1) RETURNING id::text""",
+            (novel, rid))).fetchone()
+
+        await discard(db_conn, None, rid)
+
+        row = await (await db_conn.execute(
+            "SELECT state FROM chapter_knowledge_run WHERE id=%s", (run[0],))).fetchone()
+        assert row == ("rejected",)

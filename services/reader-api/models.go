@@ -346,9 +346,18 @@ type ChapterKnowledgeView struct {
 	Version      int64                    `json:"version"`
 	Trusted      bool                     `json:"trusted"`
 	Status       string                   `json:"status"`
-	Facts        []ChapterFactView        `json:"facts"`
-	Terms        []ChapterTermView        `json:"terms"`
-	Run          *ChapterKnowledgeRunView `json:"run,omitempty"`
+	// Legacy, ChapterSnapshotted and CanExtract mirror KnowledgeStatus's fields of the
+	// same name (migration 0058) — the real predicate ingest-api enforces, not just
+	// Trusted, decides whether this chapter is writable.
+	Legacy             bool `json:"legacy"`
+	ChapterSnapshotted bool `json:"chapter_snapshotted"`
+	CanExtract         bool `json:"can_extract"`
+	// BlockedReason names the one cause CanExtract is false, so the client can render an
+	// accurate sentence per cause instead of one banner for all of them. "" when writable.
+	BlockedReason string                   `json:"blocked_reason"`
+	Facts         []ChapterFactView        `json:"facts"`
+	Terms         []ChapterTermView        `json:"terms"`
+	Run           *ChapterKnowledgeRunView `json:"run,omitempty"`
 }
 
 type ChapterKnowledgeActivity struct {

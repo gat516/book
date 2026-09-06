@@ -23,6 +23,12 @@ var (
 	ErrFactNotFound = errors.New("no such active fact")
 	ErrFactStale    = errors.New("knowledge changed; reload before editing")
 	ErrFactInvalid  = errors.New("invalid fact edit")
+	// ErrNoManagedGraph is the OTHER reason a write like this can find no row to act on:
+	// the active revision is legacy or quarantined, so there is no managed graph to
+	// append to at all. ErrFactStale used to mean both this and "the version moved under
+	// you"; the two need different reader sentences (409 either way, but one says "reload
+	// and retry" and the other says "build or repair the graph first").
+	ErrNoManagedGraph = errors.New("this book has no active trusted chapter-knowledge graph")
 )
 
 type factEditRequest struct {
@@ -96,7 +102,10 @@ func (s *Store) editFact(ctx context.Context, novelID string, factID int64, acti
 	if err != nil {
 		return factEditResponse{}, err
 	}
-	if currentRevision != body.RevisionID || currentVersion != body.Version || !trusted || legacy {
+	if !trusted || legacy {
+		return factEditResponse{}, ErrNoManagedGraph
+	}
+	if currentRevision != body.RevisionID || currentVersion != body.Version {
 		return factEditResponse{}, ErrFactStale
 	}
 
@@ -234,6 +243,8 @@ func (a *API) mutateFact(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, ErrFactNotFound):
 		writeErr(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, ErrNoManagedGraph):
+		writeErr(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrFactStale):
 		writeErr(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrFactInvalid):

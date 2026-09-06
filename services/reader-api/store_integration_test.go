@@ -666,3 +666,85 @@ func TestGlossaryEntityLinksRespectKnowledgeTime(t *testing.T) {
 		t.Fatalf("later entity link: %v %v", terms, err)
 	}
 }
+
+// TestChapterKnowledgeCanExtractReflectsTheRealGate is migration 0058's regression: a
+// never-rebuilt novel's active revision is legacy=true, trusted=true (0023's
+// initialize_graph_revision trigger), so `Trusted` alone used to say "writable" for a
+// book that cannot take a per-chapter extraction at all, and said nothing during an
+// unfinished rebuild beyond "not trusted" — the one state that most needs to name its
+// cause and its escape (`discard`).
+func TestChapterKnowledgeCanExtractReflectsTheRealGate(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	fixture := seedIntegrationFixture(t, admin)
+	ctx := context.Background()
+
+	// A fresh novel: legacy, trusted, and — the bug this migration fixes — NOT
+	// extractable, because KnowledgeEngine requires a pinned model a legacy revision
+	// never recorded.
+	view, err := store.ChapterKnowledge(ctx, fixture.novelID, 100, 220)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.Legacy || !view.Trusted || view.CanExtract || view.BlockedReason != "never_built" {
+		t.Fatalf("fresh legacy novel: legacy=%v trusted=%v can_extract=%v blocked_reason=%q",
+			view.Legacy, view.Trusted, view.CanExtract, view.BlockedReason)
+	}
+
+	var legacyRevision string
+	if err := admin.QueryRow(ctx, `SELECT active_graph_revision::text FROM novel WHERE id=$1`, fixture.novelID).Scan(&legacyRevision); err != nil {
+		t.Fatal(err)
+	}
+
+	// prepare()'s own quarantine: the active revision goes untrusted the instant a
+	// rebuild starts, with nothing published yet on its replacement.
+	if _, err := admin.Exec(ctx, `UPDATE graph_revision SET trusted=false WHERE id=$1`, legacyRevision); err != nil {
+		t.Fatal(err)
+	}
+	view, err = store.ChapterKnowledge(ctx, fixture.novelID, 100, 220)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Trusted || view.CanExtract || view.BlockedReason != "quarantined" {
+		t.Fatalf("quarantined novel: trusted=%v can_extract=%v blocked_reason=%q",
+			view.Trusted, view.CanExtract, view.BlockedReason)
+	}
+
+	// An activated managed revision with this chapter in its snapshot: the one case
+	// per-chapter extraction is actually permitted.
+	managedRevision := uuid.NewString()
+	if _, err := admin.Exec(ctx, `UPDATE graph_revision SET state='archived' WHERE id=$1`, legacyRevision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO graph_revision(id,novel_id,state,trusted,legacy,ontology,model,snapshot)
+		VALUES($1,$2,'active',true,false,'{}','{"provider":"ollama","name":"test"}',$3)`,
+		managedRevision, fixture.novelID, `{"chapters":[{"chapter":100,"source_hash":"h"}]}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE novel SET active_graph_revision=$1 WHERE id=$2`, managedRevision, fixture.novelID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		admin.Exec(context.Background(), `UPDATE novel SET active_graph_revision=$1 WHERE id=$2`, legacyRevision, fixture.novelID)
+		admin.Exec(context.Background(), `DELETE FROM graph_revision WHERE id=$1`, managedRevision)
+		admin.Exec(context.Background(), `UPDATE graph_revision SET state='active',trusted=true WHERE id=$1`, legacyRevision)
+	})
+
+	view, err = store.ChapterKnowledge(ctx, fixture.novelID, 100, 220)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Legacy || !view.Trusted || !view.ChapterSnapshotted || !view.CanExtract || view.BlockedReason != "" {
+		t.Fatalf("managed activated revision: legacy=%v trusted=%v snapshotted=%v can_extract=%v blocked_reason=%q",
+			view.Legacy, view.Trusted, view.ChapterSnapshotted, view.CanExtract, view.BlockedReason)
+	}
+
+	// The same managed revision, asked about a chapter it never snapshotted.
+	view, err = store.ChapterKnowledge(ctx, fixture.novelID, 220, 220)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.ChapterSnapshotted || view.CanExtract || view.BlockedReason != "chapter_not_snapshotted" {
+		t.Fatalf("un-snapshotted chapter: snapshotted=%v can_extract=%v blocked_reason=%q",
+			view.ChapterSnapshotted, view.CanExtract, view.BlockedReason)
+	}
+}

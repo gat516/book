@@ -67,7 +67,7 @@ func validRepairTrack(track string) bool {
 
 func validRepairAction(action string) bool {
 	switch action {
-	case "prepare", "review", "activate", "rollback", "reextract":
+	case "prepare", "review", "activate", "rollback", "reextract", "discard":
 		return true
 	}
 	return false

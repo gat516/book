@@ -348,6 +348,17 @@ async def _run(db, cfg, row: dict) -> dict:
         return {"status": "rolled back", "revision": row["revision_id"],
                 "note": "trust is not restored by rollback; facts stay withheld"}
 
+    if action == "discard":
+        if row["track"] != "graph":
+            raise ValueError("discard applies to the entity graph")
+        # discard() itself decides whether trust could honestly be restored (the audited
+        # quarantine target may have been re-quarantined since); say which happened
+        # rather than letting the UI assume the best case.
+        result = await module.discard(db, cfg, row["revision_id"])
+        note = ("facts return on the restored revision" if result.get("restored")
+                else "trust was not restored; facts on the earlier revision stay withheld")
+        return {"status": "discarded", **result, "note": note}
+
     raise ValueError(f"unknown repair action {action!r}")
 
 

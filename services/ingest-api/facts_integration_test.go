@@ -93,3 +93,34 @@ func TestFactEditsPreserveSourceAndAppendSemanticSuccessors(t *testing.T) {
 		t.Fatalf("stale edit=%v", err)
 	}
 }
+
+// A never-rebuilt novel's active revision is legacy=true, trusted=true (the
+// initialize_graph_revision trigger's default). Before migration 0058 this returned
+// ErrFactStale, the same 409 as "the version moved under you" — indistinguishable from a
+// caller who just needed to reload and retry. There is nothing to reload here: the book
+// has no managed graph to append a chapter's facts to until it is built.
+func TestLegacyNovelReextractReturnsNoManagedGraph(t *testing.T) {
+	store := integrationStore(t)
+	ctx := context.Background()
+	novelID := uuid.NewString()
+	if _, err := store.db.Exec(ctx, `INSERT INTO novel(id,title,source_lang,target_lang,ontology) VALUES($1,'Legacy novel','zh','en','{}')`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		store.db.Exec(context.Background(), `UPDATE novel SET active_graph_revision=NULL WHERE id=$1`, novelID)
+		store.db.Exec(context.Background(), `DELETE FROM graph_revision WHERE novel_id=$1`, novelID)
+		store.db.Exec(context.Background(), `DELETE FROM novel WHERE id=$1`, novelID)
+	})
+
+	var legacy bool
+	if err := store.db.QueryRow(ctx, `SELECT r.legacy FROM novel n JOIN graph_revision r ON r.id=n.active_graph_revision WHERE n.id=$1`, novelID).Scan(&legacy); err != nil {
+		t.Fatal(err)
+	}
+	if !legacy {
+		t.Fatal("a fresh novel's active revision must be legacy")
+	}
+
+	if _, err := store.startChapterReextract(ctx, novelID, 1, "reader", "all"); err != ErrNoManagedGraph {
+		t.Fatalf("legacy reextract error=%v, want ErrNoManagedGraph", err)
+	}
+}

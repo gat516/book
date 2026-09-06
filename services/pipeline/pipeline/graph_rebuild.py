@@ -410,6 +410,73 @@ async def switch(db,cfg,rid,review_hash=None, *, rollback=False):
         await enqueue_completed(db,cfg,r['novel_id'])
 
 
+async def discard(db,cfg,rid):
+    """Undo prepare()'s precautionary quarantine of the revision this one replaced.
+
+    prepare() flips the OLD active revision to trusted=false the instant a rebuild
+    starts -- a precaution, not a verdict on that revision's own facts. rollback()
+    deliberately does NOT restore trust, because its target was distrusted for a reason
+    (it was itself once an active revision someone rolled back from). Discard is the
+    opposite case: the staging revision it targets never published anything, so there is
+    nothing to distrust the OLD revision over. Undoing a precaution one has not yet acted
+    on is a different operation from undoing a real decision, so it gets its own verb
+    instead of overloading rollback.
+
+    Restoring trust is conditional, not automatic (§0: trusted=false stays a human
+    decision) -- only if the revision prepare quarantined is STILL the novel's active
+    revision, identified by the audit trail prepare itself wrote, and nothing has
+    quarantined it again since. Otherwise the discard still removes the abandoned staging
+    revision, but says plainly that trust was not restored, the same honesty discipline
+    as rollback's own note (repair.py's "trust is not restored by rollback").
+    """
+    async with db.transaction():
+        # Lock order is prepare()'s and switch()'s, in that order: the novel row first,
+        # then the revisions by id. Reversing either half deadlocks against a concurrent
+        # cutover. The novel row lock is also what makes the quarantine audit read below
+        # correct -- prepare() takes this same row lock before writing the audit row this
+        # function reads, so holding it means no rebuild can start underneath us.
+        r = await revision(db,rid)
+        await db.execute('SELECT active_graph_revision FROM novel WHERE id=%s FOR UPDATE',(r['novel_id'],))
+        quarantined = await (await db.execute(
+            "SELECT revision_id FROM graph_audit WHERE novel_id=%s AND action='quarantine'"
+            " AND detail->>'replacement'=%s ORDER BY id DESC LIMIT 1",
+            (r['novel_id'],rid))).fetchone()
+        target = str(quarantined[0]) if quarantined else None
+        await db.execute('SELECT id FROM graph_revision WHERE id=ANY(%s::uuid[]) ORDER BY id FOR UPDATE',
+                         ([target,rid] if target else [rid],))
+        # Re-read under the locks: state is only trustworthy once nothing else can move it.
+        r = await revision(db,rid)
+        if r['state']!='staging':
+            raise ValueError('only a staging revision can be discarded')
+        restored = None
+        if target:
+            still_active = await (await db.execute(
+                'SELECT active_graph_revision FROM novel WHERE id=%s',(r['novel_id'],))).fetchone()
+            reharmed = await (await db.execute(
+                "SELECT 1 FROM graph_audit WHERE revision_id=%s AND action='quarantine' AND id>"
+                " (SELECT id FROM graph_audit WHERE novel_id=%s AND action='quarantine'"
+                "  AND detail->>'replacement'=%s ORDER BY id DESC LIMIT 1)",
+                (target,r['novel_id'],rid))).fetchone()
+            if still_active and str(still_active[0])==target and not reharmed:
+                await db.execute(
+                    'UPDATE graph_revision SET trusted=true,generation=generation+1,version=version+1 WHERE id=%s',
+                    (target,))
+                restored = target
+        await db.execute(
+            "UPDATE graph_revision SET state='archived',generation=generation+1,version=version+1 WHERE id=%s",
+            (rid,))
+        # 0054's partial unique index (novel_id,chapter_index,scope) covers a live run per
+        # scope; abandoning the staging revision without settling its runs would leave
+        # that index blocking a fresh run against whatever revision replaces it next.
+        await db.execute(
+            "UPDATE chapter_knowledge_run SET state='rejected',updated_at=now()"
+            " WHERE revision_id=%s AND state IN ('pending','processing','awaiting_review')",
+            (rid,))
+        await db.execute('INSERT INTO graph_audit(novel_id,revision_id,action,detail) VALUES(%s,%s,%s,%s)',
+                         (r['novel_id'],rid,'discard',Jsonb(dict(restored=restored))))
+    return dict(revision=rid,restored=restored)
+
+
 async def enqueue_completed(db,cfg,novel):
     row=await (await db.execute("SELECT r.id FROM graph_revision r JOIN novel n ON n.active_graph_revision=r.id WHERE n.id=%s AND r.trusted AND NOT r.legacy",(novel,))).fetchone()
     if not row:

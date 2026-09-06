@@ -15,6 +15,45 @@ type KnowledgeStatus struct {
 	Version    int64  `json:"version"`
 	Trusted    bool   `json:"trusted"`
 	Status     string `json:"status"`
+	// Legacy is true for a revision nobody has ever rebuilt (0023's initialize trigger
+	// creates every novel's first revision this way: active, trusted AND legacy). A
+	// legacy revision is trusted but cannot take a per-chapter extraction — KnowledgeEngine
+	// requires a pinned model a legacy revision never recorded — so Trusted alone is not
+	// "writable" (migration 0058).
+	Legacy bool `json:"legacy"`
+	// ChapterSnapshotted reports whether this chapter is one prepare() actually read when
+	// it built the active managed revision's snapshot. A chapter added afterward has
+	// nothing to append its facts to until the graph is rebuilt again.
+	ChapterSnapshotted bool `json:"chapter_snapshotted"`
+	// CanExtract is the real predicate ingest-api enforces before running a per-chapter
+	// extraction: trusted, managed (not legacy) and snapshotted. Derived in SQL
+	// (reader_knowledge_status) so Go reports it rather than reimplementing a gate.
+	CanExtract bool `json:"can_extract"`
+}
+
+// blockedReason names the one cause chapter-scoped extraction is unavailable, so the
+// client can render an accurate sentence instead of "read-only because not trusted" for
+// every book that has never been rebuilt. Presentation only — CanExtract already carries
+// the policy; this only picks among the mutually exclusive reasons it can be false.
+// Order matters: an unfinished rebuild (not trusted) is reported before "never built"
+// even for a book whose only revision is both legacy and quarantined, because a rebuild
+// in progress needs Review/Activate/Discard, not "Build chapter knowledge" again.
+func blockedReason(k KnowledgeStatus) string {
+	switch {
+	case k.CanExtract:
+		return ""
+	case !k.Trusted:
+		return "quarantined"
+	case k.Legacy:
+		return "never_built"
+	default:
+		// The three cases above exhaust the ways CanExtract can be false today
+		// (trusted AND NOT legacy AND snapshotted), so this is the missing-chapter
+		// one. It stays a non-empty reason rather than a bare "" default: an empty
+		// string means "not blocked", and reporting that while CanExtract is false
+		// would hand the client a writable-looking gate it must not render.
+		return "chapter_not_snapshotted"
+	}
 }
 
 func (s *Store) ChapterKnowledge(ctx context.Context, novel string, chapter, at int) (ChapterKnowledgeView, error) {
@@ -28,6 +67,10 @@ func (s *Store) ChapterKnowledge(ctx context.Context, novel string, chapter, at 
 		view.Version = status.Version
 		view.Trusted = status.Trusted
 		view.Status = status.Status
+		view.Legacy = status.Legacy
+		view.ChapterSnapshotted = status.ChapterSnapshotted
+		view.CanExtract = status.CanExtract
+		view.BlockedReason = blockedReason(status)
 		rows, err := tx.Query(ctx, `SELECT f.id,f.entity_id::text,e.canonical,f.attribute,
 			COALESCE(f.value_en,f.value),f.value,f.value_en,f.kind,f.supersedes,
 			CASE WHEN EXISTS(SELECT 1 FROM fact s WHERE s.revision_id=f.revision_id AND s.supersedes=f.id)
@@ -172,8 +215,9 @@ func (a *API) getChapterKnowledgeActivity(w http.ResponseWriter, r *http.Request
 
 func knowledgeInTx(ctx context.Context, tx pgx.Tx, chapter int) (KnowledgeStatus, error) {
 	var k KnowledgeStatus
-	err := tx.QueryRow(ctx, `SELECT revision_id::text,version,trusted,status FROM reader_knowledge_status($1)`, chapter).
-		Scan(&k.RevisionID, &k.Version, &k.Trusted, &k.Status)
+	err := tx.QueryRow(ctx, `SELECT revision_id::text,version,trusted,status,legacy,chapter_snapshotted,can_extract
+		FROM reader_knowledge_status($1)`, chapter).
+		Scan(&k.RevisionID, &k.Version, &k.Trusted, &k.Status, &k.Legacy, &k.ChapterSnapshotted, &k.CanExtract)
 	return k, err
 }
 

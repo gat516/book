@@ -52,7 +52,12 @@ func (s *Store) startChapterReextract(ctx context.Context, novelID string, chapt
 	 WHERE n.id=$1 AND r.state='active' AND r.trusted AND NOT r.legacy`, novelID, chapter).
 		Scan(&revision, &inputHash, &displayHash, &modelIdentity, &generation, &version)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrFactStale
+		// No row here means either there is no active, trusted, managed revision at all
+		// (legacy or quarantined), or this chapter is not in that revision's snapshot.
+		// Either way there is genuinely nothing to append to yet -- distinct from
+		// ErrFactStale, which means the graph moved out from under a caller who read it
+		// a moment ago.
+		return nil, ErrNoManagedGraph
 	}
 	if err != nil {
 		return nil, err
@@ -160,6 +165,8 @@ func writeKnowledgeMutation(w http.ResponseWriter, result map[string]any, err er
 	}
 	var pgErr *pgconn.PgError
 	switch {
+	case errors.Is(err, ErrNoManagedGraph):
+		writeErr(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrFactStale):
 		writeErr(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrFactInvalid):
