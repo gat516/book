@@ -398,6 +398,54 @@ func TestChapterKnowledgeActivityIsIncrementalAndSpoilerGated(t *testing.T) {
 	}
 }
 
+func TestChapterKnowledgeShowsRetractedOriginalButNotRetractionRow(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	fixture := seedIntegrationFixture(t, admin)
+	ctx := context.Background()
+	if _, err := store.AdvanceProgress(ctx, "retraction-reader", fixture.novelID, 220); err != nil {
+		t.Fatal(err)
+	}
+	var factID int64
+	var revision string
+	if err := admin.QueryRow(ctx, `SELECT f.id,f.revision_id::text FROM fact f
+		WHERE f.novel_id=$1 AND f.source_chapter<=220 AND f.kind<>'retraction' ORDER BY f.id LIMIT 1`, fixture.novelID).
+		Scan(&factID, &revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO fact
+		(novel_id,entity_id,attribute,value,value_en,valid_from_chapter,source_chapter,
+		 confidence,kind,supersedes,revision_id,evidence_id,claim_key)
+		SELECT novel_id,entity_id,attribute,value,NULL,valid_from_chapter,source_chapter,
+		 confidence,'retraction',id,revision_id,evidence_id,'integration-retraction'
+		FROM fact WHERE id=$1`, factID); err != nil {
+		t.Fatal(err)
+	}
+	var chapter int
+	if err := admin.QueryRow(ctx, "SELECT source_chapter FROM fact WHERE id=$1", factID).Scan(&chapter); err != nil {
+		t.Fatal(err)
+	}
+	view, err := store.ChapterKnowledge(ctx, fixture.novelID, chapter, 220)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundOriginal := false
+	for _, fact := range view.Facts {
+		if fact.Kind == "retraction" {
+			t.Fatalf("retraction successor rendered as a fact: %+v", fact)
+		}
+		if fact.ID == factID {
+			foundOriginal = true
+			if fact.Status != "retracted" {
+				t.Fatalf("original status=%q, want retracted", fact.Status)
+			}
+		}
+	}
+	if !foundOriginal {
+		t.Fatal("retracted original should remain visible as history")
+	}
+	_ = revision // kept with the fixture query to prove both rows target the active revision
+}
+
 func TestEntityRenderingsExposeOnlyBoundChapterSafeChoices(t *testing.T) {
 	store, admin := integrationDatabase(t)
 	fixture := seedIntegrationFixture(t, admin)

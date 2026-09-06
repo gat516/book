@@ -79,8 +79,8 @@ func (s *Store) ChapterKnowledge(ctx context.Context, novel string, chapter, at 
 			COALESCE(jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,
 			 'source_hash',v.source_hash,'char_start',v.char_start,'char_end',v.char_end),'null'::jsonb),
 			f.valid_from_chapter,f.source_chapter,f.confidence
-		 FROM fact f JOIN entity e ON e.id=f.entity_id LEFT JOIN graph_evidence v ON v.id=f.evidence_id
-		 WHERE f.novel_id=$1 AND f.source_chapter=$2 ORDER BY f.id`, novel, chapter)
+			 FROM fact f JOIN entity e ON e.id=f.entity_id LEFT JOIN graph_evidence v ON v.id=f.evidence_id
+			 WHERE f.novel_id=$1 AND f.source_chapter=$2 AND f.kind<>'retraction' ORDER BY f.id`, novel, chapter)
 		if err != nil {
 			return err
 		}
