@@ -456,8 +456,9 @@ async def _next_staging_revision(db, revision_table: str, job_table: str,
     cursor = await db.execute(
         f"""WITH newest AS (
               SELECT DISTINCT ON (r.novel_id) r.id, r.novel_id, r.created_at
-                FROM {revision_table} r
+               FROM {revision_table} r
                WHERE r.state = 'staging'
+                 AND r.blocked_at IS NULL
                  AND (%s::uuid IS NULL OR r.novel_id = %s::uuid)
                ORDER BY r.novel_id, r.created_at DESC
             )

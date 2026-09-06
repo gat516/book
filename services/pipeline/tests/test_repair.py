@@ -620,6 +620,22 @@ async def test_only_the_newest_staging_revision_is_drained(db_conn):
 
 
 @pytest.mark.db
+async def test_blocked_staging_revision_is_not_hot_looped(db_conn):
+    """A revision-level preflight failure stays visible until an operator replaces it.
+
+    Selecting it on every idle tick both floods logs and prevents the active-revision
+    drains later in Worker._drain_background from ever running.
+    """
+    async with db_conn.transaction(force_rollback=True):
+        novel, revision = await _staging_revision(db_conn)
+        await db_conn.execute(
+            "UPDATE graph_revision SET blocked_category='model_unreachable',blocked_at=now() WHERE id=%s",
+            (revision,))
+        assert await repair._next_staging_revision(
+            db_conn, "graph_revision", "graph_job", novel) is None
+
+
+@pytest.mark.db
 async def test_a_staging_chapter_out_of_attempts_is_left_alone(db_conn):
     """Past the retry bound the chapter is abandoned, and it fences the rest of the run."""
     async with db_conn.transaction(force_rollback=True):
