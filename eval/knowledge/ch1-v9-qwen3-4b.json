@@ -1,0 +1,211 @@
+{
+  "revision": "59085ac0-a6c7-4b00-8bc1-270bd476afb0",
+  "driver_failure": "ValueError: every claim must cite a focus passage containing its assertion",
+  "wall_seconds": 63.05610718400567,
+  "job": {
+    "state": "failed",
+    "category": "unknown",
+    "error": "ValueError: every claim must cite a focus passage containing its assertion",
+    "attempts": 3,
+    "output": null
+  },
+  "entity_count": 0,
+  "entities": [],
+  "source_mentions": 0,
+  "bindings": 0,
+  "fact_count": 0,
+  "facts": [],
+  "calls": [
+    {
+      "stage": "verify",
+      "batch_id": "verify-identity-1",
+      "elapsed_seconds": 2.434866323004826,
+      "input_tokens": "676",
+      "output_tokens": "42"
+    },
+    {
+      "stage": "names",
+      "batch_id": "45a34ac0e767",
+      "elapsed_seconds": 2.6129659340076614,
+      "input_tokens": "496",
+      "output_tokens": "44"
+    },
+    {
+      "stage": "identity_slots",
+      "batch_id": "identity-12",
+      "elapsed_seconds": 4.333409975995892,
+      "input_tokens": "1798",
+      "output_tokens": "72"
+    },
+    {
+      "stage": "claims",
+      "batch_id": "claims-0-400",
+      "elapsed_seconds": 10.397567310996237,
+      "input_tokens": "910",
+      "output_tokens": "262"
+    },
+    {
+      "stage": "verify",
+      "batch_id": "verify-identity-1",
+      "elapsed_seconds": 10.66366327200376,
+      "input_tokens": "2189",
+      "output_tokens": "210"
+    },
+    {
+      "stage": "verify",
+      "batch_id": "verify-identity-1",
+      "elapsed_seconds": 10.978464688989334,
+      "input_tokens": "2194",
+      "output_tokens": "217"
+    },
+    {
+      "stage": "verify",
+      "batch_id": "verify-identity-1",
+      "elapsed_seconds": 11.975313875009306,
+      "input_tokens": "1928",
+      "output_tokens": "247"
+    },
+    {
+      "stage": "verify",
+      "batch_id": "verify-identity-1",
+      "elapsed_seconds": 12.436602484987816,
+      "input_tokens": "2371",
+      "output_tokens": "235"
+    },
+    {
+      "stage": "verify",
+      "batch_id": "verify-identity-1",
+      "elapsed_seconds": 12.640540633990895,
+      "input_tokens": "2022",
+      "output_tokens": "268"
+    },
+    {
+      "stage": "verify",
+      "batch_id": "verify-identity-1",
+      "elapsed_seconds": 13.180922340005054,
+      "input_tokens": "2114",
+      "output_tokens": "262"
+    },
+    {
+      "stage": "verify",
+      "batch_id": "verify-identity-1",
+      "elapsed_seconds": 14.112840159010375,
+      "input_tokens": "2590",
+      "output_tokens": "243"
+    },
+    {
+      "stage": "verify",
+      "batch_id": "verify-identity-1",
+      "elapsed_seconds": 14.620792214001995,
+      "input_tokens": "2370",
+      "output_tokens": "282"
+    },
+    {
+      "stage": "verify",
+      "batch_id": "verify-identity-1",
+      "elapsed_seconds": 14.733029988012277,
+      "input_tokens": "2413",
+      "output_tokens": "280"
+    },
+    {
+      "stage": "verify",
+      "batch_id": "verify-identity-1",
+      "elapsed_seconds": 15.869613638002193,
+      "input_tokens": "2134",
+      "output_tokens": "271"
+    },
+    {
+      "stage": "identity_slots",
+      "batch_id": "identity-8",
+      "elapsed_seconds": 23.783203778002644,
+      "input_tokens": "5753",
+      "output_tokens": "405"
+    },
+    {
+      "stage": "identity_slots",
+      "batch_id": "identity-9",
+      "elapsed_seconds": 23.963469052003347,
+      "input_tokens": "5932",
+      "output_tokens": "402"
+    },
+    {
+      "stage": "identity_slots",
+      "batch_id": "identity-3",
+      "elapsed_seconds": 25.470023661007872,
+      "input_tokens": "4046",
+      "output_tokens": "403"
+    },
+    {
+      "stage": "identity_slots",
+      "batch_id": "identity-10",
+      "elapsed_seconds": 27.261346744999173,
+      "input_tokens": "7787",
+      "output_tokens": "408"
+    },
+    {
+      "stage": "identity_slots",
+      "batch_id": "identity-11",
+      "elapsed_seconds": 28.233351885995944,
+      "input_tokens": "8281",
+      "output_tokens": "412"
+    },
+    {
+      "stage": "identity_slots",
+      "batch_id": "identity-1",
+      "elapsed_seconds": 28.70994265700574,
+      "input_tokens": "5224",
+      "output_tokens": "382"
+    },
+    {
+      "stage": "identity_slots",
+      "batch_id": "identity-4",
+      "elapsed_seconds": 29.551051525995717,
+      "input_tokens": "5239",
+      "output_tokens": "384"
+    },
+    {
+      "stage": "identity_slots",
+      "batch_id": "identity-2",
+      "elapsed_seconds": 29.824940425998648,
+      "input_tokens": "4911",
+      "output_tokens": "407"
+    },
+    {
+      "stage": "identity_slots",
+      "batch_id": "identity-5",
+      "elapsed_seconds": 30.58868600099231,
+      "input_tokens": "4693",
+      "output_tokens": "424"
+    },
+    {
+      "stage": "identity_slots",
+      "batch_id": "identity-6",
+      "elapsed_seconds": 33.40629970599548,
+      "input_tokens": "5273",
+      "output_tokens": "422"
+    },
+    {
+      "stage": "identity_slots",
+      "batch_id": "identity-7",
+      "elapsed_seconds": 33.64037599800213,
+      "input_tokens": "6034",
+      "output_tokens": "409"
+    },
+    {
+      "stage": "verify",
+      "batch_id": "verify-identity-1",
+      "elapsed_seconds": 34.73694292799337,
+      "input_tokens": "2052",
+      "output_tokens": "264"
+    },
+    {
+      "stage": "names",
+      "batch_id": "672fa0f32f7b",
+      "elapsed_seconds": 94.08624205700471,
+      "input_tokens": "2594",
+      "output_tokens": "1484"
+    }
+  ],
+  "call_count": 27,
+  "inference_seconds": 594.2464692590147
+}

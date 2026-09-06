@@ -72,7 +72,7 @@ class PassageContract:
         self.by_id={p['id']:p for p in self.passages}
 
     def prompt_payload(self, payload: dict) -> dict:
-        result={k:v for k,v in payload.items() if k not in {'source','_passage_ids'}}
+        result={k:v for k,v in payload.items() if not k.startswith('_') and k != 'source'}
         result['passages']=[dict(id=p['id'],text=p['text']) for p in self.passages]
         # IDs are attached only to current-chapter occurrences. Reconciliation's
         # earlier mentions have their own context, not current-source offsets.
@@ -95,7 +95,7 @@ class PassageContract:
             return dict(type='object',additionalProperties=False,required=['reviewed','names'],properties={
                 'reviewed':dict(type='object',additionalProperties=False,required=kinds,
                                 properties={k:dict(type='boolean',const=True) for k in kinds}),
-                'names':dict(type='array',maxItems=64,items=item)})
+                'names':dict(type='array',maxItems=12,items=item)})
         result=deepcopy(internal_schema.model_json_schema())
         for definition in result.get('$defs',{}).values():
             fields=definition.get('properties',{})
@@ -104,6 +104,15 @@ class PassageContract:
             fields.pop('quote');fields.pop('evidence_start',None)
             fields['passage_id']=reference
             definition['required']=[k for k in definition.get('required',[]) if k not in {'quote','evidence_start'}]+['passage_id']
+        if stage == 'identity':
+            result['$defs']['IdentityDecision']['properties']['passage_id'] = dict(type='string',enum=ids)
+        if stage == 'claims':
+            definition = result['$defs']['ClaimProposal']
+            fields = definition['properties']
+            fields.pop('passage_id', None)
+            fields['passage_ids'] = dict(type='array',minItems=1,maxItems=3,
+                                         items=dict(type='string',enum=ids))
+            definition['required']=[k for k in definition['required'] if k != 'passage_id']+['passage_ids']
         return result
 
     def resolve(self, reference) -> dict | None:
@@ -125,7 +134,7 @@ class PassageContract:
             if (set(body)!= {'reviewed','names'} or not isinstance(reviewed,dict)
                 or set(reviewed)!=set(kinds) or not all(value is True for value in reviewed.values())):
                 raise ValueError('name discovery must explicitly review every ontology kind')
-            if not isinstance(items,list) or len(items)>64:
+            if not isinstance(items,list) or len(items)>12:
                 raise ValueError('invalid names list')
             names=[];rejected=[]
             for item in items:
@@ -139,16 +148,31 @@ class PassageContract:
                     continue
                 names.append(dict(surface=surface,kind=kind,named=True,**evidence))
             return Names(names=names,reviewed_kinds=list(kinds),rejected=rejected)
-        if stage not in {'propose','align'}:
+        if stage not in {'propose','identity','claims','align'}:
             return internal_schema.model_validate(body)
         result=deepcopy(body)
         # Event extraction shares this evidence contract with graph proposals: the model
         # selects an offered passage_id but never supplies a quote or offset (§0.2).
-        for key in (['decisions','claims','events'] if stage=='propose' else ['alignments']):
+        keys = {'propose':['decisions','claims','events'], 'identity':['decisions'],
+                'claims':['claims'], 'align':['alignments']}[stage]
+        for key in keys:
             for item in result.get(key,[]):
-                if 'quote' in item or 'evidence_start' in item or 'passage_id' not in item:
+                reference_key = 'passage_ids' if stage == 'claims' else 'passage_id'
+                if 'quote' in item or 'evidence_start' in item or reference_key not in item:
                     raise ValueError('model must cite offered passages, not generate evidence text or offsets')
-                ev=self.resolve(item.pop('passage_id'))
+                refs=item.pop(reference_key)
+                if stage == 'claims':
+                    if not isinstance(refs,list) or not 1 <= len(refs) <= 3 or len(set(refs)) != len(refs):
+                        raise ValueError('claims must cite one to three distinct offered passages')
+                    evidence=[self.resolve(ref) for ref in refs]
+                    if all(evidence):
+                        lo=min(ev['evidence_start'] for ev in evidence)
+                        hi=max(ev['evidence_start']+len(ev['quote']) for ev in evidence)
+                        ev=dict(quote=self.source[lo:hi],evidence_start=lo)
+                    else:
+                        ev=None
+                else:
+                    ev=self.resolve(refs)
                 # Invalid/unlinked references retain empty evidence. Existing literal
                 # validation rejects claims/links; unaligned cards stay clickable.
                 item.update(ev or dict(quote='',evidence_start=None))

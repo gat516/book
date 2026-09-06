@@ -13,7 +13,14 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 
-PROMPT_VERSION = 'evidence-v5-source-name-authority'
+PROMPT_VERSION = 'evidence-v13-display-gloss'
+
+MAX_EXPLANATION_CHARS = 200
+MAX_FACT_VALUE_CHARS = 400
+# The display gloss is deliberately shorter than the value it renders: it exists to be
+# readable in a hover card, and every extra output token it costs is a token closer to
+# the response cap that would truncate the whole claims batch into a contract rejection.
+MAX_FACT_GLOSS_CHARS = 200
 
 
 def digest(value) -> str:
@@ -43,7 +50,7 @@ class Name(Supported):
 
 
 class Names(Strict):
-    # Each model request is capped at 64 names by its wire schema. Application-owned
+    # Each model request is capped at 12 names by its wire schema. Application-owned
     # aggregation spans as many bounded passage batches as a long chapter needs.
     names: list[Name]
     reviewed_kinds: list[str] = Field(default_factory=list)
@@ -56,20 +63,62 @@ class Decision(Supported):
     # Existing: offered entity ID. New: offered representative mention ID.
     target_id: str | None
     quote: str
-    reason: str
+    reason: str = Field(max_length=MAX_EXPLANATION_CHARS)
 
 
 class Claim(Supported):
     type: Literal['fact', 'relationship', 'event']
     mention_ids: list[str] = Field(min_length=1)
     attribute: str
-    value: str
+    value: str = Field(max_length=MAX_FACT_VALUE_CHARS)
+    # Display only. `value` stays source-language and is the only thing verification
+    # checks against the evidence; an absent or wrong gloss never blocks publication.
+    value_en: str = Field(default='', max_length=MAX_FACT_GLOSS_CHARS)
     quote: str
 
 
 class Proposals(Strict):
     decisions: list[Decision]
     claims: list[Claim]
+
+
+class IdentityDecision(Strict):
+    """Bounded model wire decision; refs exist only for one request."""
+
+    occurrence_ref: str
+    outcome: Literal['existing', 'new', 'unresolved']
+    target_ref: str | None
+    reason_code: Literal[
+        'existing_evidence', 'new_first_appearance', 'new_coreference',
+        'ambiguous', 'insufficient_evidence',
+    ]
+    explanation: str = Field(max_length=MAX_EXPLANATION_CHARS)
+    # Materialized from an application-offered passage reference.
+    quote: str
+    evidence_start: int | None = Field(default=None, ge=0)
+
+
+class IdentityDecisions(Strict):
+    decisions: list[IdentityDecision]
+
+
+class ClaimProposal(Strict):
+    """Bounded model wire claim; occurrence refs exist only for one request."""
+
+    type: Literal['fact', 'relationship', 'event']
+    occurrence_refs: list[str] = Field(min_length=1)
+    attribute: str
+    value: str = Field(max_length=MAX_FACT_VALUE_CHARS)
+    # Required on the wire, unlike on Claim: an optional property is one the model can
+    # quietly stop emitting, and a grammar slot it must fill is the cheapest guarantee
+    # that a gloss actually arrives. Empty string is the honest "cannot render this".
+    value_en: str = Field(max_length=MAX_FACT_GLOSS_CHARS)
+    quote: str
+    evidence_start: int | None = Field(default=None, ge=0)
+
+
+class ClaimProposals(Strict):
+    claims: list[ClaimProposal] = Field(max_length=12)
 
 
 class Alignment(Supported):
@@ -86,7 +135,7 @@ class Alignments(Strict):
 class Verdict(Strict):
     id: str
     supported: bool
-    reason: str
+    reason: str = Field(max_length=MAX_EXPLANATION_CHARS)
 
 
 class Verification(Strict):
