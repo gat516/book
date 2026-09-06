@@ -81,6 +81,8 @@ def failure_category(exc: BaseException) -> str:
         return "fenced"
     if "revision cannot be rebuilt" in text:
         return "revision_not_rebuildable"
+    if "no configured api key" in text or "provider credential is missing" in text:
+        return "credential_missing"
     # local_model refuses to substitute or download, so a revision pinned to a model that
     # is not on this Ollama endpoint can never advance. Common when the endpoint is a
     # tunnel to another machine whose model set differs from the one prepare saw.

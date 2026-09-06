@@ -16,7 +16,7 @@ from pipeline.events import (
 )
 from pipeline.passages import PassageContract
 from pipeline.passages import source_windows
-from pipeline.event_rebuild import extraction_model, qualified, retry_delay_minutes
+from pipeline.event_rebuild import extraction_model, provider_connection, qualified, retry_delay_minutes
 
 
 SOURCE = "阿瑞斯将三株星莲连根采摘，又把六纪星莲交给亚巴顿。"
@@ -254,6 +254,46 @@ def test_hosted_provider_revision_builds_without_local_ollama():
     # The streaming heartbeat and stream_sink handshake are Ollama-only; a hosted call
     # returns one whole body, so nothing may claim to observe partial output.
     assert engine.streams is False
+
+
+def test_hosted_event_engine_uses_resolved_credentials(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("pipeline.events.GeminiProvider",
+                        lambda **kwargs: captured.update(kwargs) or object())
+    EventEngine(None, _Cfg(), _revision("gemini"), provider_connection={
+        "base_url": "https://saved.example/v1", "api_key": "saved-key",
+    })
+    assert captured["base_url"] == "https://saved.example/v1"
+    assert captured["api_key"] == "saved-key"
+
+
+@pytest.mark.asyncio
+async def test_event_connection_prefers_book_key_then_account_key(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr("pipeline.event_rebuild.load_provider_config",
+                        lambda *_: _async_value(SimpleNamespace(
+                            provider="gemini", base_url="https://book.example/v1", api_key="book-key")))
+    monkeypatch.setattr("pipeline.event_rebuild.load_provider_credential",
+                        lambda *_: _async_value(("https://account.example/v1", "account-key")))
+    connection = await provider_connection(None, _Cfg(), "novel", "gemini")
+    assert connection == {"base_url": "https://book.example/v1", "api_key": "book-key"}
+
+
+@pytest.mark.asyncio
+async def test_event_connection_uses_account_key_when_book_is_on_another_provider(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr("pipeline.event_rebuild.load_provider_config",
+                        lambda *_: _async_value(SimpleNamespace(
+                            provider="ollama", base_url="http://localhost:11434",
+                            api_key="wrong-provider-key")))
+    monkeypatch.setattr("pipeline.event_rebuild.load_provider_credential",
+                        lambda *_: _async_value(("https://account.example/v1", "account-key")))
+    connection = await provider_connection(None, _Cfg(), "novel", "gemini")
+    assert connection == {"base_url": "https://account.example/v1", "api_key": "account-key"}
+
+
+async def _async_value(value):
+    return value
 
 
 def test_unsupported_extraction_provider_fails_closed():

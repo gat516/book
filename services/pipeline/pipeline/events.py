@@ -303,7 +303,7 @@ def deduplicate_events(items: list[dict]) -> list[dict]:
 
 
 class EventEngine:
-    def __init__(self, db, cfg, revision: dict):
+    def __init__(self, db, cfg, revision: dict, *, provider_connection: dict | None = None):
         self.db, self.cfg, self.revision = db, cfg, revision
         if revision["prompt_version"] != EVENT_PROMPT_VERSION:
             raise ValueError("event prompt changed; create a new event revision")
@@ -340,10 +340,11 @@ class EventEngine:
             # graph_ollama_* pair exists to bound (see config.py) is not how a remote call
             # fails. One wall-clock timeout is the whole story, and a free-tier 429 comes
             # back as backpressure so ``resume`` requeues the chapter rather than failing it.
+            connection = provider_connection or {}
             self.provider = GeminiProvider(
                 model=self.model,
-                base_url=cfg.gemini_base_url,
-                api_key=cfg.gemini_api_key or None,
+                base_url=connection.get("base_url") or cfg.gemini_base_url,
+                api_key=connection.get("api_key") or cfg.gemini_api_key or None,
                 timeout=cfg.event_remote_timeout_seconds,
             )
 

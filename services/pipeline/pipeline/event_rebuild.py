@@ -24,6 +24,7 @@ from pipeline.events import (
 )
 from pipeline.graph_rebuild import local_model, model_drift, objects, read_object
 from pipeline.llm.provider import AdmissionRejected
+from pipeline.provider_config import load_provider_config, load_provider_credential
 
 
 async def revision(db, rid: str, *, lock: bool = False) -> dict:
@@ -61,6 +62,30 @@ async def extraction_model(cfg, provider: str, name: str) -> dict:
     return dict(provider=provider, name=name, identity={})
 
 
+async def provider_connection(db, cfg, novel: str, provider: str) -> dict:
+    """Resolve secrets for the provider pinned by an event revision.
+
+    Revisions pin provider+model but never credentials. Credentials remain rotatable and
+    come from the same per-book-over-account hierarchy as the ordinary pipeline (§5.4).
+    If the book has since switched providers, only the account credential for the pinned
+    provider is eligible; silently borrowing another provider's secret would cross trust
+    boundaries.
+    """
+    if provider == "ollama":
+        return {}
+    book = await load_provider_config(db, novel)
+    account_base_url, account_api_key = await load_provider_credential(db, provider)
+    book_matches = book is not None and book.provider == provider
+    base_url = (book.base_url if book_matches else None) or account_base_url
+    api_key = (book.api_key if book_matches else None) or account_api_key
+    if provider == "gemini":
+        api_key = api_key or cfg.gemini_api_key or None
+        base_url = base_url or cfg.gemini_base_url
+        if not api_key:
+            raise RuntimeError("Gemini event extraction has no configured API key")
+    return {"base_url": base_url, "api_key": api_key}
+
+
 def qualified(metrics: dict) -> bool:
     return (
         metrics.get("reviewed_expected_events", 0) >= 30
@@ -82,6 +107,9 @@ async def prepare(db, cfg, novel: str, model: str, schema: dict | None = None,
     client = objects(cfg)
     if not await (await db.execute("SELECT 1 FROM novel WHERE id=%s", (novel,))).fetchone():
         raise ValueError("novel not found")
+    # Fail before creating a permanently blocked staging revision when a hosted provider
+    # has no usable credentials. Secrets are resolved but never copied into the snapshot.
+    await provider_connection(db, cfg, novel, provider)
     rows = await (await db.execute(
         """SELECT chapter_index,raw_uri,translated_uri,raw_hash FROM chapter
              WHERE novel_id=%s AND translation_ready ORDER BY chapter_index""",
@@ -169,7 +197,9 @@ async def resume(db, cfg, rid: str, *, limit: int | None = None, chapter: int | 
                     "pinned model or inference configuration changed; create a new event "
                     f"revision ({model_drift(r['model'], live)})"
                 )
-            engine = EventEngine(db, cfg, r)
+            connection = await provider_connection(
+                db, cfg, r["novel_id"], r["model"]["provider"])
+            engine = EventEngine(db, cfg, r, provider_connection=connection)
             target = (await (await db.execute(
                 "SELECT target_lang FROM novel WHERE id=%s", (r["novel_id"],)
             )).fetchone())[0]

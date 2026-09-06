@@ -273,6 +273,7 @@ const (
 	repairTimeout       = "timeout"
 	repairUnreachable   = "model_unreachable"
 	repairTruncated     = "output_truncated"
+	repairCredentialErr = "credential_missing"
 	repairUnknownCause  = "unknown"
 	repairNotRebuildErr = "revision_not_rebuildable"
 	// These three are only ever produced by pipeline/repair.py, for failures of a repair
@@ -294,6 +295,7 @@ var repairFailureDetail = map[string]string{
 	repairFenced:         "the rebuild was superseded by a newer revision while this chapter was running",
 	repairTimeout:        "the local model did not finish this chapter within the deadline",
 	repairTruncated:      "the local model hit its output limit mid-answer; a partial extraction is never published",
+	repairCredentialErr:  "the configured extraction provider has no usable API credential; add the book or account credential, then start a fresh rebuild",
 	repairUnreachable:    "the local model could not be reached",
 	repairNotRebuildErr:  "this revision cannot be rebuilt",
 	repairUnknownCause:   "processing failed; the cause was not recognised",

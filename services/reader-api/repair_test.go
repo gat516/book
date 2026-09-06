@@ -29,7 +29,7 @@ func TestEveryFailureCategoryHasDetail(t *testing.T) {
 		repairModelChanged, repairInputChanged, repairPromptTooBig, repairServingDrift,
 		repairFenced, repairTimeout, repairUnreachable, repairUnknownCause, repairNotRebuildErr,
 		repairTruncated, repairReviewRejected, repairNotFound, repairCancelled,
-		repairAbandoned, repairModelMissing,
+		repairAbandoned, repairModelMissing, repairCredentialErr,
 	}
 	for _, category := range categories {
 		if strings.TrimSpace(repairFailureDetail[category]) == "" {
