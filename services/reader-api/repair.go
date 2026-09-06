@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,9 +36,12 @@ import (
 // design (see 0039's header): event extraction has its own activation pointer, and
 // preparing an event revision never quarantines the entity graph.
 type RepairStatus struct {
-	NovelID string      `json:"novel_id"`
-	Graph   RepairTrack `json:"graph"`
-	Events  RepairTrack `json:"events"`
+	NovelID string `json:"novel_id"`
+	// True only when this request supplied the configured operator credential. Status is
+	// safe for readers; controls and story-bearing reports key off this server decision.
+	Operator bool        `json:"operator"`
+	Graph    RepairTrack `json:"graph"`
+	Events   RepairTrack `json:"events"`
 	// Requests are the repair actions asked for through the UI, newest first: what was
 	// asked, by whom, and whether the worker has picked it up yet. A click does not act
 	// instantly — repair runs on the worker's idle tick, because it must lose to
@@ -79,12 +83,9 @@ type RepairPreview struct {
 	Report json.RawMessage `json:"report"`
 }
 
-// Repair states. A reader sees the state and the reason; only an operator sees controls.
-// NOTE: repair reads and writes are ungated on this deployment, by choice. The panel shows
-// unreviewed claims and their source quotes from chapters ahead of the reader, and anyone
-// who can reach the page can start, activate or roll back a rebuild. That suits a
-// single-operator install; the server-to-server token to ingest-api still applies, and the
-// repair_operator database role still keeps these rows away from askai.
+// Repair states. A reader sees the safe state and reason; only an authenticated operator
+// may see whole-book quotes or mutate repair state. This is an authorization boundary,
+// not a prompt convention (spec §0.3).
 //
 // paramsRequestLimit bounds a repair body. A review document — 60 mention assessments and
 // 30 fact assessments — is a few KiB; ingest-api enforces its own limit on params again.
@@ -751,6 +752,33 @@ func capitalise(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
+const minRepairOperatorToken = 32
+
+func validateOperatorToken(token string) error {
+	if token != "" && len(token) < minRepairOperatorToken {
+		return fmt.Errorf("READER_REPAIR_OPERATOR_TOKEN must be at least %d characters", minRepairOperatorToken)
+	}
+	return nil
+}
+
+func (a *API) operatorAllowed(r *http.Request) bool {
+	presented := strings.TrimSpace(r.Header.Get("X-Operator-Token"))
+	return a.operatorToken != "" && presented != "" &&
+		subtle.ConstantTimeCompare([]byte(presented), []byte(a.operatorToken)) == 1
+}
+
+func (a *API) requireOperator(w http.ResponseWriter, r *http.Request) bool {
+	if a.operatorToken == "" {
+		writeError(w, http.StatusServiceUnavailable, "repair operator access is not configured")
+		return false
+	}
+	if !a.operatorAllowed(r) {
+		writeError(w, http.StatusForbidden, "operator access required")
+		return false
+	}
+	return true
+}
+
 func (a *API) getRepairStatus(w http.ResponseWriter, r *http.Request) {
 	prepareReaderResponse(w)
 	novelID, ok := pathUUID(r, "id")
@@ -764,6 +792,7 @@ func (a *API) getRepairStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load repair status")
 		return
 	}
+	status.Operator = a.operatorAllowed(r)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, status)
 }
@@ -773,6 +802,9 @@ func (a *API) getRepairStatus(w http.ResponseWriter, r *http.Request) {
 // token. Mirrors postTranslateAhead's proxy shape.
 func (a *API) postRepair(w http.ResponseWriter, r *http.Request) {
 	prepareReaderResponse(w)
+	if !a.requireOperator(w, r) {
+		return
+	}
 	novelID, ok := pathUUID(r, "id")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid novel id")
@@ -811,6 +843,9 @@ func (a *API) postRepair(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) deleteRepair(w http.ResponseWriter, r *http.Request) {
 	prepareReaderResponse(w)
+	if !a.requireOperator(w, r) {
+		return
+	}
 	novelID, ok := pathUUID(r, "id")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid novel id")
@@ -846,6 +881,9 @@ func (a *API) deleteRepair(w http.ResponseWriter, r *http.Request) {
 // anywhere in the book, so they are not spoiler-safe for an ordinary reader.
 func (a *API) getRepairProgress(w http.ResponseWriter, r *http.Request) {
 	prepareReaderResponse(w)
+	if !a.requireOperator(w, r) {
+		return
+	}
 	novelID, ok := pathUUID(r, "id")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid novel id")
@@ -877,6 +915,9 @@ func (a *API) getRepairProgress(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) getRepairPreview(w http.ResponseWriter, r *http.Request) {
 	prepareReaderResponse(w)
+	if !a.requireOperator(w, r) {
+		return
+	}
 	novelID, ok := pathUUID(r, "id")
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid novel id")

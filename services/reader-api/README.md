@@ -141,20 +141,17 @@ Two things about that ledger are load-bearing:
   is never set again, so the chapter is silently abandoned. This field is how that
   otherwise-invisible dead end reaches a screen.
 
-Repair reads and writes are **ungated** on this deployment. The panel shows unreviewed
-claims and their source quotes from chapters ahead of the reader, and anyone who can reach
-the page can start, activate or roll back a rebuild. That is a deliberate choice for a
-single-operator install.
+Repair status is safe for ordinary readers, but repair previews, live extracted claims,
+and repair writes require `READER_REPAIR_OPERATOR_TOKEN`. Those responses can contain
+source quotes from chapters ahead of the reader, so they cannot be authorized by ordinary
+reading progress. The web client sends this token only to repair endpoints and keeps it in
+session storage rather than exposing the ingest service's broader credential.
 
 Two things still hold. The server-to-server bearer token to ingest-api is unchanged, so a
 browser still cannot reach ingest-api directly. And `repair_preview` / `repair_progress` /
 `repair_extraction` remain executable only by the `repair_operator` role, reached through
 its own pool (`REPAIR_OPERATOR_DATABASE_URL`) — that keeps spoiler-bearing rows away from
-`rls_reader`, which askai connects as, without asking anyone to sign in.
-
-If this ever serves readers who are not the operator, the gate belongs on **reading
-progress** — show a chapter's names once that chapter has been read — rather than on an
-admin credential, which answers a different question than the one that matters.
+`rls_reader`, which askai connects as, even if an HTTP authorization check regresses.
 
 ## Tests
 

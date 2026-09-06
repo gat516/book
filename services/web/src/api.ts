@@ -1,4 +1,5 @@
 import { readerId } from "./readerId";
+import { operatorToken } from "./operator";
 import type {
   AskResponse,
   BootstrapGlossaryRequest,
@@ -43,6 +44,11 @@ class ApiError extends Error {
   ) {
     super(code);
   }
+}
+
+function operatorHeaders(): Record<string, string> {
+  const token = operatorToken();
+  return token ? { "X-Operator-Token": token } : {};
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -357,7 +363,7 @@ export async function deleteProviderCredential(provider: string): Promise<void> 
 // `operator` field is the server's answer about THIS caller, and is what the UI keys the
 // repair controls off — never the presence of a token in this browser.
 export async function getRepairStatus(novelId: string): Promise<RepairStatus> {
-  return request(`/novels/${novelId}/repair`);
+  return request(`/novels/${novelId}/repair`, { headers: operatorHeaders() });
 }
 
 // Repair actions are operator-gated by reader-api, which then forwards to ingest-api's
@@ -376,6 +382,7 @@ export async function requestRepair(
   return request(`/novels/${novelId}/repair`, {
     method: "POST",
     body: JSON.stringify(body),
+    headers: operatorHeaders(),
   });
 }
 
@@ -384,7 +391,7 @@ export async function requestRepair(
 export async function cancelRepair(novelId: string, requestId: string): Promise<void> {
   const response = await fetch(`/api/novels/${novelId}/repair/${requestId}`, {
     method: "DELETE",
-    headers: { "X-Reader-ID": readerId() },
+    headers: { "X-Reader-ID": readerId(), ...operatorHeaders() },
   });
   if (!response.ok) {
     const body = await response.text();
@@ -404,7 +411,9 @@ export async function getRepairPreview(
   novelId: string,
   track: string,
 ): Promise<RepairPreview> {
-  return request(`/novels/${novelId}/repair/preview?track=${track}`);
+  return request(`/novels/${novelId}/repair/preview?track=${track}`, {
+    headers: operatorHeaders(),
+  });
 }
 
 // What the running rebuild has extracted so far. Operator-only for the same reason as the
@@ -420,7 +429,7 @@ export async function getRepairProgress(
     facts: RepairProgressFact[];
     names: RepairExtractedName[];
     proposed: RepairProposedClaim[];
-  }>(`/novels/${novelId}/repair/progress`);
+  }>(`/novels/${novelId}/repair/progress`, { headers: operatorHeaders() });
   return {
     facts: response.facts ?? [],
     names: response.names ?? [],

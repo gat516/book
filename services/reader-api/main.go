@@ -21,6 +21,9 @@ func main() {
 	if cfg.AskAIInternalToken == "" {
 		log.Fatal("startup: ASKAI_INTERNAL_TOKEN is required")
 	}
+	if err := validateOperatorToken(cfg.RepairOperatorToken); err != nil {
+		log.Fatalf("startup: %v", err)
+	}
 
 	objects, err := minio.New(cfg.ObjectEndpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.ObjectAccessKey, cfg.ObjectSecretKey, ""),
@@ -47,9 +50,10 @@ func main() {
 	server := &http.Server{
 		Addr: cfg.ListenAddr,
 		Handler: (&API{
-			store:  store,
-			ask:    newAskClient(cfg),
-			ingest: newIngestClient(cfg),
+			store:         store,
+			ask:           newAskClient(cfg),
+			ingest:        newIngestClient(cfg),
+			operatorToken: cfg.RepairOperatorToken,
 		}).routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

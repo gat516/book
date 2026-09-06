@@ -15,9 +15,10 @@ import (
 )
 
 type API struct {
-	store  ReaderStore
-	ask    AskClient
-	ingest IngestClient
+	store         ReaderStore
+	ask           AskClient
+	ingest        IngestClient
+	operatorToken string
 }
 
 type progressRequest struct {

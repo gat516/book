@@ -20,6 +20,9 @@ type Config struct {
 	IngestAPIURL        string
 	IngestInternalToken string
 	RedisURL            string
+	// Separate from the ingest token: this secret authorizes whole-book repair reports
+	// and cutovers without exposing the writer service's broader credential to a browser.
+	RepairOperatorToken string
 
 	// Object store (MinIO locally, S3 in prod) — for GET /chapter, which reads chapter
 	// bodies pipeline already wrote. Same field names/env vars/defaults as ingest-api.
@@ -55,6 +58,7 @@ func loadConfig() Config {
 		IngestAPIURL:        getenv("INGEST_API_URL", "http://localhost:8080"),
 		IngestInternalToken: os.Getenv("INGEST_INTERNAL_TOKEN"),
 		RedisURL:            getenv("REDIS_URL", "redis://localhost:6379"),
+		RepairOperatorToken: os.Getenv("READER_REPAIR_OPERATOR_TOKEN"),
 
 		ObjectEndpoint:  getenv("OBJECT_STORE_ENDPOINT", "localhost:9000"),
 		ObjectAccessKey: getenv("OBJECT_STORE_ACCESS_KEY", "minio"),
