@@ -17,6 +17,7 @@ from novel_llm.admission import ollama_session
 # Called with the text accumulated SO FAR (not the latest token), so a consumer can simply
 # overwrite whatever it stored last rather than reassembling a token stream.
 StreamSink = Callable[[str], Awaitable[None]]
+ProgressSink = Callable[[dict], Awaitable[None]]
 
 
 class OllamaProvider(SequentialBatchMixin):
@@ -24,7 +25,7 @@ class OllamaProvider(SequentialBatchMixin):
                  num_ctx: int | None = None, num_predict: int | None = None,
                  stream: bool = False, total_timeout: float | None = None,
                  first_token_timeout: float | None = None,
-                 think: bool | None = None) -> None:
+                 think: bool | None = None, progress_interval: float = 15.0) -> None:
         super().__init__()
         self._host = host.rstrip("/")
         self._model = model
@@ -42,6 +43,9 @@ class OllamaProvider(SequentialBatchMixin):
             raise ValueError("Ollama timeouts must be positive")
         self._stream = stream
         self._total_timeout = total_timeout
+        if progress_interval <= 0:
+            raise ValueError("Ollama progress interval must be positive")
+        self._progress_interval = progress_interval
         # Prefill and inter-token stalls are different failures with different healthy
         # durations. Ollama sends no bytes at all while processing the prompt, so a single
         # read timeout covering both has to be sized for the slowest prefill — which makes
@@ -64,6 +68,8 @@ class OllamaProvider(SequentialBatchMixin):
         # it instead — the worker sets it around the one stage whose output is prose and
         # clears it afterwards, so JSON-emitting stages never feed it.
         self.stream_sink: StreamSink | None = None
+        self.progress_sink: ProgressSink | None = None
+        self.last_stream_diagnostics: dict = {}
 
     async def complete(self, prompt: str, *, system: str = "", json_mode: bool = False,
                        cls: Class = Class.BATCH, pin_model: bool = False,
@@ -160,72 +166,121 @@ class OllamaProvider(SequentialBatchMixin):
         final = None
         started = time.monotonic()
         first_token = None
+        first_content = None
+        last_record = started
+        records = content_fragments = whitespace_fragments = characters = 0
+
+        def snapshot(*, event: str, rejected: bool = False) -> dict:
+            now = time.monotonic()
+            partial = "".join(pieces) or "".join(reasoning)
+            result = dict(event=event, phase='generation' if first_token is not None else 'prefill',
+                elapsed_seconds=now-started, first_content_seconds=first_content,
+                seconds_since_last_record=now-last_record, stream_records=records,
+                content_fragments=content_fragments, whitespace_fragments=whitespace_fragments,
+                characters=characters)
+            if rejected and partial:
+                result['rejected_output'] = self._rejected_window(partial)
+            return result
+
+        async def emit(update: dict) -> None:
+            self.last_stream_diagnostics = update
+            if self.progress_sink is not None:
+                try:
+                    await self.progress_sink(update)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        async def report_progress() -> None:
+            while True:
+                await asyncio.sleep(self._progress_interval)
+                await emit(snapshot(event='inference_progress'))
+
+        reporter = asyncio.create_task(report_progress())
         # Covers the whole read loop on purpose: when llama-server is OOM-killed
         # mid-generation the stream dies as a transport error, which is backpressure,
         # not a bad chapter. The budget's own TimeoutError is a builtin and passes
         # through untouched -- "too slow" stays a real failure.
-        async with (
-            transient_as_backpressure(),
-            self._client.stream("POST", "/api/chat", json=payload) as resp,
-        ):
-            resp.raise_for_status()
-            lines = resp.aiter_lines().__aiter__()
-            while True:
+        try:
+            async with (
+                transient_as_backpressure(),
+                self._client.stream("POST", "/api/chat", json=payload) as resp,
+            ):
+                resp.raise_for_status()
+                lines = resp.aiter_lines().__aiter__()
+                while True:
                 # Arm the prefill budget until the model actually speaks, the idle budget
                 # after. Whichever expires names itself, so a stalled run is diagnosable
                 # from the failure alone.
-                phase = "generation" if first_token is not None else "prefill"
-                budget = self._idle_timeout if first_token is not None else self._first_token_timeout
-                try:
-                    line = await asyncio.wait_for(anext(lines), budget)
-                except StopAsyncIteration:
-                    break
-                except TimeoutError as exc:
-                    raise TimeoutError(
-                        f"Ollama {use_model} exceeded its {budget}s {phase} budget after "
-                        f"{time.monotonic() - started:.1f}s with {len(pieces)} tokens received"
-                    ) from exc
-                if not line.strip():
-                    continue
-                body = json.loads(line)
+                    phase = "generation" if first_token is not None else "prefill"
+                    budget = self._idle_timeout if first_token is not None else self._first_token_timeout
+                    try:
+                        line = await asyncio.wait_for(anext(lines), budget)
+                    except StopAsyncIteration:
+                        break
+                    except TimeoutError as exc:
+                        raise TimeoutError(
+                            f"Ollama {use_model} exceeded its {budget}s {phase} budget after "
+                            f"{time.monotonic() - started:.1f}s with {content_fragments} content fragments received"
+                        ) from exc
+                    last_record = time.monotonic()
+                    records += 1
+                    if not line.strip():
+                        whitespace_fragments += 1
+                        continue
+                    body = json.loads(line)
                 # Reasoning counts as partial output here: a thinking model that loops
                 # never reaches content, so `pieces` would be empty and the evidence lost.
-                self._check_body(body, "".join(pieces) or "".join(reasoning))
-                message = body.get("message", {})
-                thought = message.get("thinking") or ""
-                if thought:
+                    self._check_body(body, "".join(pieces) or "".join(reasoning))
+                    message = body.get("message", {})
+                    thought = message.get("thinking") or ""
+                    if thought:
                     # A reasoning model emits here and nowhere else until it starts
                     # answering. Counting it ends the prefill budget and gives the sink
                     # something to show; without this the call is indistinguishable from
                     # a hang for as long as the model reasons.
-                    if first_token is None:
-                        first_token = time.monotonic() - started
-                    reasoning.append(thought)
-                    if sink is not None and not pieces:
-                        try:
-                            await sink("".join(reasoning))
-                        except Exception:  # noqa: BLE001
-                            pass
-                piece = message.get("content", "")
-                if piece:
-                    if first_token is None:
-                        first_token = time.monotonic() - started
-                    pieces.append(piece)
+                        if first_token is None:
+                            first_token = time.monotonic() - started
+                        reasoning.append(thought)
+                        if sink is not None and not pieces:
+                            try:
+                                await sink("".join(reasoning))
+                            except Exception:  # noqa: BLE001
+                                pass
+                    piece = message.get("content", "")
+                    if piece:
+                        if first_token is None:
+                            first_token = time.monotonic() - started
+                        if first_content is None:
+                            first_content = time.monotonic() - started
+                        content_fragments += 1
+                        characters += len(piece)
+                        if piece.isspace():
+                            whitespace_fragments += 1
+                        pieces.append(piece)
                     # Sink failures must never fail the completion: this is an observer,
                     # and losing a preview update is not a reason to lose the translation.
-                    if sink is not None:
-                        try:
-                            await sink("".join(pieces))
-                        except Exception:  # noqa: BLE001
-                            pass
-                if body.get("done"):
-                    final = body
-                    break
+                        if sink is not None:
+                            try:
+                                await sink("".join(pieces))
+                            except Exception:  # noqa: BLE001
+                                pass
+                    if body.get("done"):
+                        final = body
+                        break
+        except BaseException:
+            await emit(snapshot(event='inference_rejected', rejected=True))
+            raise
+        finally:
+            reporter.cancel()
+            await asyncio.gather(reporter, return_exceptions=True)
         if final is None:
             raise RuntimeError("Ollama stream ended without done=true; refusing partial output")
         timings = self._timings(final)
         if first_token is not None:
             timings['first_token_seconds'] = first_token
+        timings.update(stream_records=records, content_fragments=content_fragments,
+                       whitespace_fragments=whitespace_fragments, characters=characters)
+        await emit(snapshot(event='inference_stream_completed'))
         return Completion(text="".join(pieces), served_provider="ollama",
                           served_model=final.get("model", use_model), input_tokens=final.get("prompt_eval_count", 0),
                           output_tokens=final.get("eval_count", 0), timings=timings)

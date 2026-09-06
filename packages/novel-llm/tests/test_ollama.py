@@ -120,6 +120,8 @@ async def test_internal_streaming_without_preview_collects_metrics():
         assert result.served_model=='actual' and result.input_tokens==10 and result.output_tokens==5
         assert result.timings['load_seconds']==1 and result.timings['eval_seconds']==6
         assert result.timings['first_token_seconds']>0
+        assert result.timings['content_fragments']==2
+        assert provider.last_stream_diagnostics['event']=='inference_stream_completed'
     finally:
         await provider.aclose()
 
@@ -162,11 +164,57 @@ async def test_total_deadline_bounds_a_healthy_but_endless_stream():
     try:
         with pytest.raises(TimeoutError,match='total inference deadline'):
             await provider.complete('source')
+        assert provider.last_stream_diagnostics['event']=='inference_rejected'
+        rejected=provider.last_stream_diagnostics['rejected_output']
+        assert 'rejected output' in rejected and 'token' in rejected
         # HTTP cancellation also releases admission for another task.
         async def available():
             async with ollama_session('http://test',timeout=0):
                 pass
         await asyncio.create_task(available())
+    finally:
+        await provider.aclose()
+
+
+async def test_progress_reports_whitespace_and_cancellation_diagnostics():
+    provider=OllamaProvider(host='http://test',model='model',stream=True,
+                            timeout=3,total_timeout=3,progress_interval=.01)
+    await provider._client.aclose()
+    provider._client=httpx.AsyncClient(base_url='http://test',transport=httpx.MockTransport(
+        lambda request:httpx.Response(200,stream=SlowStream([
+            dict(message=dict(content=' ')),dict(message=dict(content='x')),
+            dict(done=True,model='model')],delay=.03))))
+    updates=[]
+    async def progress(update):
+        updates.append(update)
+    provider.progress_sink=progress
+    try:
+        result=await provider.complete('source')
+        assert result.text==' x'
+        assert result.timings['whitespace_fragments']==1
+        assert any(update['event']=='inference_progress' for update in updates)
+        assert updates[-1]['event']=='inference_stream_completed'
+    finally:
+        await provider.aclose()
+
+
+async def test_cancellation_closes_stream_and_keeps_bounded_rejected_output():
+    provider=OllamaProvider(host='http://test',model='model',stream=True,
+                            timeout=3,total_timeout=3,progress_interval=.01)
+    await provider._client.aclose()
+    provider._client=httpx.AsyncClient(base_url='http://test',transport=httpx.MockTransport(
+        lambda request:httpx.Response(200,stream=SlowStream(
+            [dict(message=dict(content='partial'))]*100,delay=.03))))
+    try:
+        task=asyncio.create_task(provider.complete('source'))
+        await asyncio.sleep(.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        diagnostic=provider.last_stream_diagnostics
+        assert diagnostic['event']=='inference_rejected'
+        assert diagnostic['characters']<=len('partial')*2
+        assert 'partial' in diagnostic['rejected_output']
     finally:
         await provider.aclose()
 
