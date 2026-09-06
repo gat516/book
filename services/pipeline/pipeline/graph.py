@@ -70,6 +70,7 @@ class FactRow:
     value: str
     valid_from_chapter: int
     source_chapter: int
+    value_en: str | None = None
     confidence: float = 1.0
     kind: str = "assertion"  # assertion|retraction|correction (0005)
     supersedes: int | None = None
@@ -152,9 +153,9 @@ class GraphWriter:
                 await cur.execute(
                     """
                     INSERT INTO fact
-                        (novel_id, entity_id, attribute, value, valid_from_chapter,
+                        (novel_id, entity_id, attribute, value, value_en, valid_from_chapter,
                          source_chapter, confidence, kind, supersedes)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
@@ -162,6 +163,7 @@ class GraphWriter:
                         r.entity_id,
                         r.attribute,
                         r.value,
+                        r.value_en,
                         r.valid_from_chapter,
                         r.source_chapter,
                         r.confidence,

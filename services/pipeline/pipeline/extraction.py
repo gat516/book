@@ -57,6 +57,9 @@ class ExtractedFact(BaseModel):
     entity: NonEmptyText
     attribute: NonEmptyText
     value: NonEmptyText
+    # Display-only English rendering. `value` remains source-language evidence (§0.2);
+    # an empty value keeps legacy cached responses readable during the 0051 rollout.
+    value_en: str = Field(default="", max_length=200)
     # A fact without a literal anchor is just the model's interpretation.  Keep the
     # anchor in the transient extraction response so graph-write can verify it against
     # the chapter before append-only publication (spec §0.2, §5 step 5).
@@ -132,6 +135,7 @@ Return a single JSON object, and nothing else, with this shape:
   "entities": [{{"surface": "<name exactly as written in the chapter>", "kind": "<one of the kinds above>"}}],
   "facts":    [{{"entity": "<a surface listed in entities>", "attribute": "<one of the attributes above>",
                 "value": "<short value in the chapter's language>",
+                "value_en": "<short English display rendering of value>",
                 "evidence": "<a verbatim source quotation supporting this fact>",
                 "valid_from_chapter": <int or null>, "confidence": <0.0-1.0>}}],
   "edges":    [{{"src": "<a surface>", "dst": "<a surface>", "rel_type": "<one of the relations above>",
@@ -150,6 +154,8 @@ Rules:
   fact. Copy "value" verbatim from that evidence quotation; do not normalize,
   translate, summarize, or infer it. Do not emit "unknown", "none", or an
   equivalent placeholder as a value.
+- Fill "value_en" with a concise English rendering of value. It is display text, never
+  evidence. Use an empty string only when a faithful rendering is not possible.
 - All names, kinds, attributes, values, relation types and event summaries must be
   non-empty strings. Only valid_from_chapter may be null. An entity may have no facts.
 - Example: if a character acts but their rank is not stated, list the character and

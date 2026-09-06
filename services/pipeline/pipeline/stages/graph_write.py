@@ -163,6 +163,7 @@ class GraphWriteStage:
                 entity_id=bound[f.entity],
                 attribute=f.attribute,
                 value=f.value,
+                value_en=f.value_en or None,
                 # source_chapter is knowledge-time and is set HERE from the chapter being
                 # processed — never taken from the model, which has no way to know it and
                 # every opportunity to get it wrong (§0.2, §0.3).
