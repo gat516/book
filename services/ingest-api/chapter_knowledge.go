@@ -137,7 +137,10 @@ func (a *API) chapterKnowledgeReextract(w http.ResponseWriter, r *http.Request) 
 	}
 	body := reextractStartBody{RequestedBy: "unknown operator"}
 	if r.Body != nil {
-		_ = decodeJSONBody(r, &body)
+		if err = decodeJSONBody(r, &body); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
 	}
 	result, err := a.store.startChapterReextract(r.Context(), r.PathValue("id"), chapter, strings.TrimSpace(body.RequestedBy), body.Scope)
 	writeKnowledgeMutation(w, result, err)

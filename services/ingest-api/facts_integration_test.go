@@ -2,10 +2,24 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 )
+
+func TestChapterReextractRejectsMalformedJSON(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/novels/id/chapter/1/knowledge/reextract", strings.NewReader(`{"scope":`))
+	req.SetPathValue("id", uuid.NewString())
+	req.SetPathValue("n", "1")
+	recorder := httptest.NewRecorder()
+	(&API{}).chapterKnowledgeReextract(recorder, req)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
 
 func TestFactEditsPreserveSourceAndAppendSemanticSuccessors(t *testing.T) {
 	store := integrationStore(t)
