@@ -37,6 +37,9 @@ type Config struct {
 	// OllamaAllowedHosts is an operator-controlled SSRF boundary for the model catalog
 	// probe. The browser can select a saved URL, never an arbitrary request path.
 	OllamaAllowedHosts map[string]bool
+	// OllamaHost is the operator-selected server endpoint. It may be a loopback SSH
+	// tunnel to a GPU host; model discovery must use the same endpoint as the pipeline.
+	OllamaHost string
 }
 
 // getenv returns the env var if set and non-empty, otherwise the fallback.
@@ -64,13 +67,14 @@ func loadConfig() Config {
 
 		IngestInternalToken: os.Getenv("INGEST_INTERNAL_TOKEN"),
 		OllamaAllowedHosts:  map[string]bool{},
+		OllamaHost:          getenv("OLLAMA_HOST", "http://localhost:11434"),
 	}
 	for _, host := range strings.Split(getenv("OLLAMA_ALLOWED_HOSTS", "localhost,127.0.0.1"), ",") {
 		if host = strings.TrimSpace(strings.ToLower(host)); host != "" {
 			cfg.OllamaAllowedHosts[host] = true
 		}
 	}
-	if parsed, err := url.Parse(getenv("OLLAMA_HOST", "http://localhost:11434")); err == nil && parsed.Hostname() != "" {
+	if parsed, err := url.Parse(cfg.OllamaHost); err == nil && parsed.Hostname() != "" {
 		cfg.OllamaAllowedHosts[strings.ToLower(parsed.Hostname())] = true
 	}
 

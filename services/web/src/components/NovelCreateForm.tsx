@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { createNovel } from "../api";
+import { useEffect, useState } from "react";
+import { createNovel, listProviderCredentials } from "../api";
 import type { ProviderName } from "../types";
 import { CUSTOM_MODEL, DEFAULT_MODEL, MODEL_OPTIONS } from "../providers";
 
@@ -23,6 +23,20 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
   const [translateLookahead, setTranslateLookahead] = useState("5");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Providers that already have an account-level key saved in Settings (migration 0035).
+  // A novel with no key of its own falls back to it, so the box is optional there.
+  const [sharedKeyProviders, setSharedKeyProviders] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    // Advisory: if this fails the form just shows the key box without the reassurance.
+    listProviderCredentials()
+      .then((res) =>
+        setSharedKeyProviders(
+          new Set(res.credentials.filter((c) => c.api_key_set).map((c) => c.provider)),
+        ),
+      )
+      .catch(() => undefined);
+  }, []);
 
   function chooseProvider(next: string) {
     setProvider(next);
@@ -129,13 +143,18 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
               <label>
                 API key{" "}
                 <span className="novel-create-form-hint">
-                  (encrypted before storage; never shown again)
+                  {sharedKeyProviders.has(provider)
+                    ? "(optional — a key saved in Settings is used unless you enter one here)"
+                    : "(encrypted before storage; never shown again)"}
                 </span>
                 <input
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   autoComplete="off"
+                  placeholder={
+                    sharedKeyProviders.has(provider) ? "using the account key" : undefined
+                  }
                 />
               </label>
             ) : (

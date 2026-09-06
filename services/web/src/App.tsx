@@ -11,8 +11,7 @@ import { ProgressControls } from "./components/ProgressControls";
 import { ReaderPane } from "./components/ReaderPane";
 import { TranslationNotice } from "./components/TranslationNotice";
 import { TimelineView } from "./components/TimelineView";
-import { ProviderConfigPanel } from "./components/ProviderConfigPanel";
-import { RepairPanel } from "./components/RepairPanel";
+import { BookSettingsView } from "./components/BookSettingsView";
 import { SettingsView } from "./components/SettingsView";
 import { QueueControls } from "./components/QueueControls";
 import { usePolling } from "./usePolling";
@@ -66,6 +65,9 @@ export default function App() {
   const [showGlossary, setShowGlossary] = useState(false);
   const [showTimeline, setShowTimeline] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  // Book-level settings (provider/model config, knowledge repair) — separate from the
+  // account-level SettingsView above, which every book shares.
+  const [showBookSettings, setShowBookSettings] = useState(false);
   const [showChapters, setShowChapters] = useState(true);
   // Bumping this scrolls the repair panel into view and opens it, so the reader's
   // "facts are withheld" notice can lead somewhere instead of dead-ending.
@@ -118,6 +120,7 @@ export default function App() {
     setShowGlossary(false);
     setShowTimeline(false);
     setRepairRequest(0);
+    setShowBookSettings(false);
     setShowChapters(true);
   }
 
@@ -132,12 +135,13 @@ export default function App() {
     setShowGlossary(false);
     setShowTimeline(false);
     setRepairRequest(0);
+    setShowBookSettings(false);
     setShowChapters(true);
   }
 
   function backToChapters() {
     // This is the book-level navigation boundary: close reader-only panels and return
-    // to the chapter index, while leaving the book's provider/settings controls visible.
+    // to the chapter index.
     setChapter(null);
     setPending(null);
     setAddingChapter(false);
@@ -293,6 +297,17 @@ export default function App() {
     );
   }
 
+  // Book-level, so it takes precedence over the reader but not over account Settings above.
+  if (showBookSettings) {
+    return (
+      <BookSettingsView
+        novelId={novelId}
+        repairOpenSignal={repairRequest}
+        onClose={() => setShowBookSettings(false)}
+      />
+    );
+  }
+
   return (
     <main className="app">
       <QueueControls novelId={novelId} />
@@ -306,16 +321,12 @@ export default function App() {
       <button className="app-toggle-glossary" onClick={() => { setShowTimeline((v) => !v); setShowGlossary(false); }}>
         {showTimeline ? "← Close timeline" : "Timeline"}
       </button>
-      <button className="app-back" onClick={() => setShowSettings(true)}>
-        Settings
+      <button className="app-back" onClick={() => setShowBookSettings(true)}>
+        Book settings
       </button>
-      <ProviderConfigPanel key={`provider-${novelId}`} novelId={novelId} />
-      <RepairPanel
-        key={`repair-${novelId}`}
-        novelId={novelId}
-        openSignal={repairRequest}
-        chapterIndex={chapter ? chapterIndex : undefined}
-      />
+      <button className="app-back" onClick={() => setShowSettings(true)}>
+        Account settings
+      </button>
       {showGlossary && <GlossaryView key={novelId} novelId={novelId} at={chapter?.at} />}
       {showTimeline && <TimelineView key={`timeline-${novelId}`} novelId={novelId} onClose={() => setShowTimeline(false)} />}
       <div hidden={showGlossary || showTimeline}>
@@ -360,7 +371,10 @@ export default function App() {
                 clickableEntities={clickableEntities}
                 onChapterLoaded={chapterLoaded}
                 onNoChapter={handleNoChapter}
-                onOpenRepair={() => setRepairRequest((count) => count + 1)}
+                onOpenRepair={() => {
+                  setRepairRequest((count) => count + 1);
+                  setShowBookSettings(true);
+                }}
               />
             </div>
             <ProgressControls

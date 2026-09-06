@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getProviderConfig, listOllamaModels, saveProviderConfig } from "../api";
+import { getProviderConfig, listOllamaModels, listProviderCredentials, saveProviderConfig } from "../api";
 import {
   CUSTOM_MODEL,
   DEFAULT_MODEL,
@@ -35,6 +35,10 @@ export function ProviderConfigPanel({ novelId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  // Providers with an account-level key saved in Settings (migration 0035). A book with
+  // no key of its own falls back to that one, so requiring a key here would be asking for
+  // a secret the server already has.
+  const [sharedKeyProviders, setSharedKeyProviders] = useState<Set<string>>(new Set());
 	const [ollamaStatus, setOllamaStatus] = useState<"checking" | "connected" | "unreachable" | null>(null);
 
   const load = useCallback(async () => {
@@ -77,6 +81,18 @@ export function ProviderConfigPanel({ novelId }: Props) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    // Advisory only: a failure here just means the panel falls back to demanding a
+    // per-novel key, which still works.
+    listProviderCredentials()
+      .then((res) =>
+        setSharedKeyProviders(
+          new Set(res.credentials.filter((c) => c.api_key_set).map((c) => c.provider)),
+        ),
+      )
+      .catch(() => undefined);
+  }, []);
 
   function chooseProvider(next: ProviderName) {
     setProvider(next);
@@ -148,10 +164,11 @@ export function ProviderConfigPanel({ novelId }: Props) {
 
   const needsKey = NEEDS_API_KEY[provider];
   const selectedNote = MODEL_OPTIONS[provider].find((m) => m.id === translationModel)?.note;
-  const missingKey = needsKey && !current?.api_key_set && !apiKey.trim();
+  const sharedKey = sharedKeyProviders.has(provider);
+  const missingKey = needsKey && !current?.api_key_set && !sharedKey && !apiKey.trim();
 
   return (
-    <details className="reader-settings">
+    <details className="reader-settings" id="provider-config">
       <summary>Model provider</summary>
       {loading ? (
         <p>Loading…</p>
@@ -259,9 +276,22 @@ export function ProviderConfigPanel({ novelId }: Props) {
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 autoComplete="off"
-                placeholder={current?.api_key_set ? "leave blank to keep the saved key" : "required"}
+                placeholder={
+                  current?.api_key_set
+                    ? "leave blank to keep the saved key"
+                    : sharedKey
+                      ? "optional — the account key is used"
+                      : "required"
+                }
               />
             </label>
+          )}
+
+          {needsKey && !current?.api_key_set && sharedKey && (
+            <p className="novel-create-form-hint">
+              The {PROVIDER_LABELS[provider]} key saved in Settings is used for this novel.
+              Enter one here only to bill this book to a different account.
+            </p>
           )}
 
           {needsKey && current?.api_key_set && (

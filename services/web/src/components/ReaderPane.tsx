@@ -6,6 +6,7 @@ import { EntityInspector } from "./EntityInspector";
 import { usePolling } from "../usePolling";
 import { applyRenderingChoices, lastMentionPerEntity, segment } from "../readerSegments";
 import { EventList } from "./EventList";
+import { ChapterKnowledgeWorkspace } from "./ChapterKnowledgeWorkspace";
 
 interface Props {
   novelId: string;
@@ -159,18 +160,8 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
       </p>}
       <section className="chapter-events" aria-labelledby="chapter-events-heading">
         <h2 id="chapter-events-heading">What happened</h2>
-        <EventList events={chapter.events ?? []} knowledge={chapter.event_knowledge ?? { revision_id: "", version: 0, trusted: false, status: "unavailable" }} />
+        <EventList events={chapter.events ?? []} knowledge={chapter.event_knowledge ?? { revision_id: "", version: 0, trusted: false, status: "unavailable", legacy: false, chapter_snapshotted: false, can_extract: false }} />
       </section>
-	  {chapter.new_facts.length > 0 && (
-		<details className="chapter-events">
-		  <summary>Facts extracted from this chapter ({chapter.new_facts.length})</summary>
-		  <ul>
-			{chapter.new_facts.map((fact) => <li key={`${fact.entity_id}:${fact.attribute}`}>
-			  {fact.entity_canonical} — {fact.attribute}: {fact.value}
-			</li>)}
-		  </ul>
-		</details>
-	  )}
       {clickableEntities && chapter.spans.length === 0 && <p className="reader-entity-hint">
         No named mentions are available for this chapter yet. Cards do not require facts or a glossary entry.
       </p>}
@@ -225,6 +216,7 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
           </span>
         );
       })}
+      <ChapterKnowledgeWorkspace novelId={novelId} chapter={chapterIndex} at={chapter.at} />
       {selected && <EntityInspector
         key={`${novelId}:${chapterIndex}:${chapter.at}:${selected.id}`}
         novelId={novelId}

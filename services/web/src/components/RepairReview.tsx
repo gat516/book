@@ -164,9 +164,9 @@ export function RepairReview({ novelId, track, onSubmitted, onClose }: Props) {
           next chapter. It is written once every chapter has finished.
         </p>
         <p className="novel-create-form-hint">
-          To watch progress meanwhile, close this and look at{" "}
-          <strong>Being extracted</strong> at the bottom of the repair panel — it lists the
-          terms and facts as each model call completes, without waiting for a chapter.
+          To watch progress meanwhile, close this and open the chapter's <strong>Chapter
+          knowledge</strong> panel in the reader — its Activity feed lists terms and facts
+          as each model call completes, without waiting for a chapter.
         </p>
         <button type="button" onClick={onClose}>
           Close

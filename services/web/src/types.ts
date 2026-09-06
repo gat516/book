@@ -215,7 +215,13 @@ export interface TranslationHealth {
   reason?: string;
 }
 
-export interface KnowledgeStatus { revision_id: string; version: number; trusted: boolean; status: string; }
+export interface KnowledgeStatus {
+  revision_id: string; version: number; trusted: boolean; status: string;
+  // Mirror reader-api's KnowledgeStatus (migration 0058). Meaningful only for the entity
+  // graph's own `knowledge` field -- `event_knowledge` shares this type but always reads
+  // false here, since events have no per-chapter extraction gate of their own.
+  legacy: boolean; chapter_snapshotted: boolean; can_extract: boolean;
+}
 export interface Evidence { id: string; chapter: number; quote: string; source_hash: string; char_start: number; char_end: number; }
 export interface Relationship { id: number; relation: string; direction: string; entity: EntitySummary; source_chapter: number; evidence?: Evidence | null; }
 export interface SpanView {
@@ -263,13 +269,53 @@ export interface ChapterResponse {
 // One fact introduced by this chapter, keyed to the entity it describes. Served on the
 // chapter response so the reader pane can badge a mention without a round trip per span.
 export interface ChapterFactView {
+	id: number;
   entity_id: string;
 	entity_canonical: string;
   attribute: string;
   value: string;
+	value_source: string;
+	value_en: string | null;
+	kind: "assertion" | "correction" | "retraction";
+	supersedes?: number;
+	status: "active" | "superseded" | "retracted";
+	evidence: Evidence | null;
   valid_from_chapter: number;
   source_chapter: number;
   confidence: number;
+}
+
+export interface ChapterTermView {
+  source_term: string; target_term: string; char_start: number; char_end: number;
+  new_in_chapter: boolean; deleted: boolean;
+}
+export interface ChapterKnowledgeRun {
+  id: string; mode: "ordinary" | "reextract";
+  scope: "all" | "terms" | "facts";
+  state: "pending" | "processing" | "awaiting_review" | "applying" | "published" | "rejected" | "failed";
+  created_at: string; preview?: { items: ReextractPreviewItem[] };
+}
+export interface ReextractPreviewItem {
+  item_key: string; item_kind: "fact" | "term";
+  classification: "unchanged" | "display_update" | "new" | "possible_replacement" | "missing";
+  existing_fact_id?: number; proposal?: Record<string, unknown>;
+}
+export interface ChapterKnowledgeResponse {
+  novel_id: string; chapter_index: number; revision_id: string; version: number;
+  trusted: boolean; status: string;
+  // The real predicate ingest-api enforces before a per-chapter extraction may run
+  // (migration 0058): trusted alone says "readable", not "writable" -- every never-
+  // rebuilt book is legacy=true, trusted=true, and cannot take one yet.
+  legacy: boolean; chapter_snapshotted: boolean; can_extract: boolean;
+  // "" when writable; otherwise the one cause, matched to a KnowledgeGate case:
+  // "never_built" | "quarantined" | "chapter_not_snapshotted".
+  blocked_reason: string;
+  facts: ChapterFactView[]; terms: ChapterTermView[]; run?: ChapterKnowledgeRun;
+}
+export interface ChapterKnowledgeActivity {
+  sequence: number; run_id: string; item_kind: "fact" | "term" | "run";
+  item_key: string; phase: "detected" | "proposed" | "verified" | "published" | "rejected";
+  payload: Record<string, unknown>; created_at: string;
 }
 
 export interface FactView {
@@ -477,9 +523,6 @@ export interface RepairTrack {
   failures: RepairFailure[];
   // False once every failure has exhausted its attempts: waiting is no longer a strategy.
   retryable: boolean;
-  // Whether ONE chapter can be redone. Needs a graph readers are served: active, trusted
-  // and managed. A quarantined graph has nowhere to append a chapter's facts to.
-  can_reextract: boolean;
   // Why the run cannot proceed at all, as opposed to one chapter failing. Its absence
   // used to be indistinguishable from "working slowly".
   blocked: RepairBlocked | null;
@@ -508,6 +551,9 @@ export interface RepairExtractedName {
   kind: string;
   named: boolean;
   quote?: string;
+  // The locked glossary rendering for this surface, when one already exists. Absent for
+  // a name nobody has glossed yet.
+  target_term?: string;
 }
 
 // A fact the model has proposed but that nothing has published. It has not passed mention
@@ -532,7 +578,7 @@ export interface RepairProgressFact {
 
 export type RepairTrackName = "graph" | "events";
 
-export type RepairAction = "prepare" | "review" | "activate" | "rollback";
+export type RepairAction = "prepare" | "review" | "activate" | "rollback" | "discard";
 
 export interface RepairRequestView {
   id: string;

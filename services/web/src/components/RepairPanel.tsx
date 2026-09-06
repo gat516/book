@@ -2,16 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   cancelRepair,
   getProviderConfig,
-  getRepairProgress,
   getRepairStatus,
-  listOllamaModels,
   requestRepair,
 } from "../api";
+import { defaultGraphExtractModel } from "../providers";
 import { usePolling } from "../usePolling";
 import type {
-  RepairExtractedName,
-  RepairProgressFact,
-  RepairProposedClaim,
   RepairStatus,
   RepairTrack,
   RepairTrackName,
@@ -23,8 +19,6 @@ interface Props {
   // Increments when something elsewhere (the reader's "facts are withheld" notice) wants
   // this panel opened. A counter rather than a boolean so repeated clicks re-open it.
   openSignal?: number;
-  /** The chapter being read, when one is open. Enables the chapter-scoped action. */
-  chapterIndex?: number;
 }
 
 const BUSY_STATES = new Set(["rebuilding", "awaiting_review"]);
@@ -66,7 +60,7 @@ function stateLabel(state: string): string {
  * activating it are three separate, explicit actions, and the thresholds that gate the
  * last one live in Python (graph_rebuild.qualified).
  */
-export function RepairPanel({ novelId, openSignal = 0, chapterIndex }: Props) {
+export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   const container = useRef<HTMLDetailsElement>(null);
   const [status, setStatus] = useState<RepairStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -75,14 +69,10 @@ export function RepairPanel({ novelId, openSignal = 0, chapterIndex }: Props) {
   const [model, setModel] = useState<Record<RepairTrackName, string>>({ graph: "", events: "" });
   const [provider, setProvider] = useState("ollama");
   const [rollbackTo, setRollbackTo] = useState<Record<RepairTrackName, string>>({ graph: "", events: "" });
-  const [models, setModels] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState<RepairTrackName | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
-  const [found, setFound] = useState<RepairProgressFact[]>([]);
-  const [seen, setSeen] = useState<RepairExtractedName[]>([]);
-  const [proposed, setProposed] = useState<RepairProposedClaim[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -119,45 +109,22 @@ export function RepairPanel({ novelId, openSignal = 0, chapterIndex }: Props) {
     container.current.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [openSignal]);
 
-  // Always fetch. Whatever the model has already produced is worth showing, whether the
-  // run is mid-chapter, finished, stalled or waiting for review.
-  const watching = status !== null;
   useEffect(() => {
-    if (!watching) {
-      setFound([]);
-      setSeen([]);
-      setProposed([]);
-      return;
-    }
-    void getRepairProgress(novelId)
-      .then((p) => {
-        setFound(p.facts);
-        setSeen(p.names);
-        setProposed(p.proposed);
-      })
-      .catch(() => {
-        setFound([]);
-        setSeen([]);
-        setProposed([]);
-      });
-    // Re-fetch as the model completes calls, not only when a whole chapter publishes.
-  }, [novelId, watching, status?.graph.published.calls]);
-
-  useEffect(() => {
-    void listOllamaModels(novelId)
-      .then(setModels)
-      .catch(() => setModels([]));
-    // Default to the book's own configured extraction model rather than making the
-    // reader choose again. A rebuild that disagrees with the book's settings is almost
-    // never what anyone wanted, and picking one by hand is how this novel ended up
-    // rebuilding under a model its provider config never named.
+    // The model a rebuild uses is the book's own configured extraction model, full stop
+    // -- there is no separate choice here to seed and then forget to write back to. The
+    // book's provider only ever means something to the EVENTS track: the graph track
+    // cannot use it at all (KnowledgeEngine refuses anything but a loopback Ollama), so a
+    // Gemini-configured book simply has no graph model until one is set up locally.
     void getProviderConfig(novelId)
       .then((config) => {
-        if (!config?.extract_model) return;
-        setModel((current) => ({
-          graph: current.graph || config.extract_model || "",
-          events: current.events || config.extract_model || "",
-        }));
+        const graphDefault = defaultGraphExtractModel(config);
+        if (graphDefault) {
+          setModel((current) => ({ ...current, graph: current.graph || graphDefault }));
+        }
+        if (config?.extract_model && (config.provider === "ollama" || config.provider === "gemini")) {
+          setProvider((current) => (current === "ollama" ? config.provider : current));
+          setModel((current) => ({ ...current, events: current.events || config.extract_model || "" }));
+        }
       })
       .catch(() => undefined);
   }, [novelId]);
@@ -167,7 +134,6 @@ export function RepairPanel({ novelId, openSignal = 0, chapterIndex }: Props) {
     action: string,
     params?: unknown,
     revisionId?: string,
-    chapter?: number,
   ) {
     setBusy(true);
     setNotice(null);
@@ -176,13 +142,10 @@ export function RepairPanel({ novelId, openSignal = 0, chapterIndex }: Props) {
         track,
         action,
         revision_id: revisionId,
-        chapter_index: chapter,
         params,
       });
       setNotice(
-        chapter !== undefined
-          ? `Chapter ${chapter} queued for re-extraction. It runs when the worker is not busy with chapters someone is waiting to read.`
-          : "Recorded. Repair runs when the worker is not busy with chapters someone is waiting to read, so this may not start immediately.",
+        "Recorded. Repair runs when the worker is not busy with chapters someone is waiting to read, so this may not start immediately.",
       );
       setConfirming(null);
       await load();
@@ -300,51 +263,17 @@ export function RepairPanel({ novelId, openSignal = 0, chapterIndex }: Props) {
 
         {(
           <div className="repair-actions">
-            <label className="repair-rollback">
-              Model
-              {/* A select, not a free-text box: local_model refuses to substitute or
-                  download, so a name that is not on the endpoint can only produce a
-                  rebuild that never runs. Offering exactly what is installed makes that
-                  failure unreachable. */}
-              <select
-                value={model[name]}
-                onChange={(event) =>
-                  setModel((current) => ({ ...current, [name]: event.target.value }))
-                }
-                disabled={models.length === 0}
-              >
-                <option value="">
-                  {models.length === 0 ? "No models found" : "Choose a model…"}
-                </option>
-                {models.map((installed) => (
-                  <option key={installed} value={installed}>
-                    {installed}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {name === "events" && (
-              // Event extraction accepts a hosted provider; the entity graph does not
-              // (KnowledgeEngine refuses anything but a loopback Ollama).
-              <label className="repair-rollback">
-                Provider
-                <select value={provider} onChange={(event) => setProvider(event.target.value)}>
-                  <option value="ollama">ollama</option>
-                  <option value="gemini">gemini</option>
-                </select>
-              </label>
-            )}
-            {name === "graph" && chapterIndex !== undefined && track.can_reextract && (
-              // Redoing one chapter and rebuilding a novel are different operations with
-              // wildly different costs. Offer the cheap one first when a chapter is open.
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void act(name, "reextract", undefined, undefined, chapterIndex)}
-              >
-                Re-extract chapter {chapterIndex}
-              </button>
-            )}
+            {/* A rebuild always uses the book's own configured extraction model rather
+                than a second, easily-forgotten choice made here -- this used to seed a
+                select from provider config and then never write picks back to it, so the
+                two could quietly disagree. Set the model in Book settings; this only
+                shows what a fresh rebuild would use. */}
+            <p className="novel-create-form-hint">
+              {model[name]
+                ? <>Uses <strong>{model[name]}</strong>{name === "events" && provider !== "ollama" && ` (${provider})`}, the book's configured extraction model.</>
+                : "No extraction model is configured for this book yet."}
+              {" "}<a href="#provider-config">Change it in Book settings</a>.
+            </p>
             <button
               type="button"
               disabled={busy || !model[name]}
@@ -429,16 +358,6 @@ export function RepairPanel({ novelId, openSignal = 0, chapterIndex }: Props) {
             )}
           </div>
         )}
-        {name === "graph" && chapterIndex !== undefined && !track.can_reextract && (
-          <p className="novel-create-form-hint">
-            Chapter {chapterIndex} cannot be re-extracted on its own: this book has no
-            active trusted graph to append it to, which is what the quarantine means. One
-            rebuild has to be reviewed and activated first — after that, single chapters
-            are extracted individually as they arrive, and a full rebuild is not needed
-            again.
-          </p>
-        )}
-
         {confirming === `prepare-${name}` && (
           <p className="novel-create-form-hint">
             A rebuild is whole-book by construction: identity resolution for a chapter
@@ -553,87 +472,6 @@ export function RepairPanel({ novelId, openSignal = 0, chapterIndex }: Props) {
               </p>
             </details>
           )}
-
-          {/* Extraction sits at the bottom: it is the longest section and the one you
-              scroll to for detail, while the state and controls above are what you check
-              at a glance. */}
-          {(seen.length > 0 || found.length > 0 || proposed.length > 0 || status.graph.current) && (
-            <section className="repair-extraction" aria-label="Live extraction">
-              <h4>
-                Being extracted
-                {status.graph.current && ` — chapter ${status.graph.current.chapter}`}
-              </h4>
-
-              {seen.length === 0 && found.length === 0 && proposed.length === 0 && (
-                <p className="novel-create-form-hint">
-                  Nothing yet — the first model call of a chapter has to finish before
-                  anything appears here.
-                </p>
-              )}
-
-              {seen.length > 0 && (
-                <details className="repair-found" open>
-                  <summary>Terms found ({seen.length})</summary>
-                  <ul className="repair-seen">
-                    {seen.map((n) => (
-                      <li key={n.surface}>
-                        <span className="repair-found-claim">{n.surface}</span>
-                        <small> · {n.kind}</small>
-                        {n.quote && <blockquote>{n.quote}</blockquote>}
-                      </li>
-                    ))}
-                  </ul>
-                  <p className="novel-create-form-hint">
-                    Proposed by the model, not yet published: none of this has passed the
-                    checks that decide whether a name becomes an entity.
-                  </p>
-                </details>
-              )}
-
-              {proposed.length > 0 && (
-                <details className="repair-found" open>
-                  <summary>Facts proposed ({proposed.length})</summary>
-                  <ul>
-                    {proposed.map((claim, i) => (
-                      <li key={`${claim.attribute}-${claim.value}-${i}`}>
-                        <span className="repair-found-claim">
-                          {claim.attribute}: {claim.value}
-                        </span>
-                        <small> · {claim.kind}</small>
-                        {claim.quote && <blockquote>{claim.quote}</blockquote>}
-                      </li>
-                    ))}
-                  </ul>
-                  <p className="novel-create-form-hint">
-                    Proposed by the model this chapter. Still to pass mention resolution and
-                    the literal-evidence check before any of it becomes a fact.
-                  </p>
-                </details>
-              )}
-
-              {found.length > 0 && (
-                <details className="repair-found" open>
-                  <summary>Facts published ({found.length} most recent)</summary>
-                  <ul>
-                    {found.map((fact) => (
-                      <li key={fact.id}>
-                        <span className="repair-found-claim">
-                          {fact.entity} · {fact.attribute}: {fact.value}
-                        </span>
-                        <small> — chapter {fact.chapter_index}</small>
-                        {fact.quote && <blockquote>{fact.quote}</blockquote>}
-                      </li>
-                    ))}
-                  </ul>
-                  <p className="novel-create-form-hint">
-                    Values appear in the source language: extraction runs on the raw
-                    chapter, not the translation.
-                  </p>
-                </details>
-              )}
-            </section>
-          )}
-
         </>
       )}
     </details>

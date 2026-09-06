@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -19,22 +20,23 @@ func validateOllamaBaseURL(raw string, allowed map[string]bool) error {
 	return nil
 }
 
-// listOllamaModels queries only Ollama's documented tags endpoint. It deliberately
-// accepts no caller-supplied path; base_url was saved earlier and its host is checked
-// against the operator's OLLAMA_ALLOWED_HOSTS allowlist before any network request.
+// listOllamaModels queries only Ollama's documented tags endpoint. A novel configured
+// for Ollama uses its saved, allowlisted endpoint. Graph repair always runs against the
+// server-local Ollama (KnowledgeEngine's loopback requirement), even when translation
+// uses Gemini or another hosted provider, so its model picker falls back to that local
+// endpoint instead of falsely treating a non-Ollama novel as an unreachable server.
 func (a *API) listOllamaModels(w http.ResponseWriter, r *http.Request) {
 	view, err := a.store.GetProviderConfig(r.Context(), r.PathValue("id"))
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrProviderConfigNotFound) {
 		writeErr(w, http.StatusNotFound, "no provider config for this novel")
 		return
 	}
-	if view.Provider != "ollama" {
-		writeErr(w, http.StatusBadRequest, "this novel is not configured for Ollama")
-		return
+	base := ""
+	if err == nil && view.Provider == "ollama" {
+		base = view.BaseURL
 	}
-	base := view.BaseURL
 	if base == "" {
-		base = "http://localhost:11434"
+		base = a.cfg.OllamaHost
 	}
 	if err := validateOllamaBaseURL(base, a.cfg.OllamaAllowedHosts); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())

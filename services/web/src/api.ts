@@ -6,6 +6,8 @@ import type {
   ChapterListResponse,
   CharacterNameReviewsResponse,
   ChapterResponse,
+  ChapterKnowledgeResponse,
+  ChapterKnowledgeActivity,
   CorrectGlossaryTermRequest,
   CorrectGlossaryTermResponse,
   CreateNovelRequest,
@@ -73,6 +75,28 @@ export function listNovels(): Promise<NovelListResponse> {
 
 export function getNovel(novelId: string): Promise<NovelSummary> {
   return request(`/novels/${novelId}`);
+}
+
+export function getChapterKnowledge(novelId: string,chapter: number): Promise<ChapterKnowledgeResponse> {
+  return request(`/novels/${novelId}/chapter/${chapter}/knowledge`);
+}
+export function getChapterKnowledgeActivity(novelId:string,chapter:number,runId:string,after:number):Promise<{activity:ChapterKnowledgeActivity[]}>{
+  return request(`/novels/${novelId}/chapter/${chapter}/knowledge/activity?run_id=${encodeURIComponent(runId)}&after=${after}`);
+}
+export function editFactDisplay(novelId:string,factId:number,body:{revision_id:string;version:number;value_en:string}) {
+  return request<{version:number}>(`/novels/${novelId}/facts/${factId}/display`,{method:"PATCH",body:JSON.stringify(body)});
+}
+export function correctFact(novelId:string,factId:number,body:{revision_id:string;version:number;attribute:string;value_en:string;note?:string}) {
+  return request<{version:number}>(`/novels/${novelId}/facts/${factId}/corrections`,{method:"POST",body:JSON.stringify(body)});
+}
+export function removeFact(novelId:string,factId:number,body:{revision_id:string;version:number}) {
+  return request<{version:number}>(`/novels/${novelId}/facts/${factId}`,{method:"DELETE",body:JSON.stringify(body)});
+}
+export function startChapterReextract(novelId:string,chapter:number,scope:"terms"|"facts"|"all"="all") {
+  return request<{run_id:string;state:string}>(`/novels/${novelId}/chapter/${chapter}/knowledge/reextract`,{method:"POST",body:JSON.stringify({scope})});
+}
+export function applyChapterReextract(novelId:string,chapter:number,runId:string,body:{revision_id:string;version:number;decisions:Record<string,string>}) {
+  return request(`/novels/${novelId}/chapter/${chapter}/knowledge/reextract/${runId}/apply`,{method:"POST",body:JSON.stringify(body)});
 }
 
 export function createNovel(body: CreateNovelRequest): Promise<CreateNovelResponse> {
