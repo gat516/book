@@ -7,7 +7,6 @@ import {
   requestRepair,
 } from "../api";
 import { defaultGraphExtractModel } from "../providers";
-import { clearOperatorToken, operatorToken, setOperatorToken } from "../operator";
 import { usePolling } from "../usePolling";
 import type {
   RepairStatus,
@@ -49,8 +48,14 @@ function stateLabel(state: string): string {
 }
 
 /**
- * Knowledge repair: readers see safe status; authenticated operators see controls and
- * whole-book review material that can include future-chapter quotes (spec §0.3).
+ * Knowledge repair: what is being withheld, and what to do about it.
+ *
+ * Ungated by choice on this deployment. The extraction list carries source quotes from
+ * chapters ahead of the reader, and the controls can quarantine a book's knowledge, so
+ * this suits a single-operator install. If it ever serves readers who are not the
+ * operator, the gate belongs on READING PROGRESS — show a chapter's names once that
+ * chapter has been read — rather than on an admin credential, which answers a different
+ * question than the one that matters.
  *
  * Nothing here decides anything about quality. Starting a rebuild, reviewing it and
  * activating it are three separate, explicit actions, and the thresholds that gate the
@@ -60,7 +65,6 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   const container = useRef<HTMLDetailsElement>(null);
   const [status, setStatus] = useState<RepairStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [token, setToken] = useState(operatorToken());
   // Per track: the graph and event extractors are separately reviewable and routinely
   // want different models, so one shared input was wrong.
   const [model, setModel] = useState<Record<RepairTrackName, string>>({ graph: "", events: "" });
@@ -83,11 +87,6 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
       const next = await getRepairStatus(novelId);
       setStatus(next);
       setError(null);
-      if (!next.operator && operatorToken()) {
-        clearOperatorToken();
-        setToken("");
-        setNotice("That operator token was not accepted.");
-      }
     } catch (err) {
       setError(String(err));
     }
@@ -117,11 +116,6 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
     container.current.open = true;
     container.current.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [openSignal]);
-
-  function saveToken() {
-    setOperatorToken(token.trim());
-    void load();
-  }
 
   useEffect(() => {
     void listOllamaModels(novelId).then(setOllamaModels).catch(() => setOllamaModels([]));
@@ -280,7 +274,7 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
           </details>
         )}
 
-        {status?.operator && (
+        {(
           <div className="repair-actions">
             {name === "graph" ? (
               // The graph track cannot use the book's configured provider at all
@@ -462,17 +456,6 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
         </p>
       )}
 
-      {status && !status.operator && (
-        <div className="knowledge-gate-action">
-          <label>
-            Operator token{" "}
-            <input type="password" value={token} onChange={(event) => setToken(event.target.value)} />
-          </label>
-          <button type="button" disabled={!token.trim()} onClick={saveToken}>Unlock repair controls</button>
-          <p className="novel-create-form-hint">Whole-book review can contain future-chapter quotes, so repair controls require separate operator authorization.</p>
-        </div>
-      )}
-
       {status && (
         <>
           {renderTrack("graph", status.graph, "Facts and names")}
@@ -488,7 +471,7 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
                     {request.category ? ` (${request.category})` : ""} · asked by{" "}
                     {request.requested_by} at{" "}
                     {new Date(request.created_at).toLocaleString()}
-                    {status.operator && request.state === "pending" && (
+                    {request.state === "pending" && (
                       <button
                         type="button"
                         disabled={busy}

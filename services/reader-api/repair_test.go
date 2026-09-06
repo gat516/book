@@ -174,59 +174,13 @@ func TestRepairStatusRejectsInvalidNovelID(t *testing.T) {
 }
 
 func TestRepairPreviewRejectsUnknownTrack(t *testing.T) {
-	const token = "0123456789abcdef0123456789abcdef"
-	api := &API{store: readyFake(), operatorToken: token}
+	api := &API{store: readyFake()}
 	req := httptest.NewRequest(http.MethodGet, "/novels/"+testNovelID+"/repair/preview?track=nonsense", nil)
 	req.Header.Set("X-Reader-ID", "reader-a")
-	req.Header.Set("X-Operator-Token", token)
 	recorder := httptest.NewRecorder()
 	api.routes().ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", recorder.Code)
-	}
-}
-
-func TestRepairStoryAndMutationEndpointsRequireOperator(t *testing.T) {
-	const token = "0123456789abcdef0123456789abcdef"
-	api := &API{store: readyFake(), ingest: &fakeIngestClient{status: http.StatusAccepted}, operatorToken: token}
-	for _, test := range []struct {
-		method string
-		target string
-		body   string
-	}{
-		{http.MethodGet, "/novels/" + testNovelID + "/repair/preview", ""},
-		{http.MethodGet, "/novels/" + testNovelID + "/repair/progress", ""},
-		{http.MethodPost, "/novels/" + testNovelID + "/repair", `{}`},
-	} {
-		req := httptest.NewRequest(test.method, test.target, strings.NewReader(test.body))
-		req.Header.Set("X-Reader-ID", "reader-a")
-		recorder := httptest.NewRecorder()
-		api.routes().ServeHTTP(recorder, req)
-		if recorder.Code != http.StatusForbidden {
-			t.Errorf("%s %s status=%d, want 403", test.method, test.target, recorder.Code)
-		}
-	}
-}
-
-func TestRepairStatusReportsServerVerifiedOperator(t *testing.T) {
-	const token = "0123456789abcdef0123456789abcdef"
-	api := &API{store: readyFake(), operatorToken: token}
-	req := httptest.NewRequest(http.MethodGet, "/novels/"+testNovelID+"/repair", nil)
-	req.Header.Set("X-Reader-ID", "reader-a")
-	req.Header.Set("X-Operator-Token", token)
-	recorder := httptest.NewRecorder()
-	api.routes().ServeHTTP(recorder, req)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"operator":true`) {
-		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-}
-
-func TestRepairOperatorTokenValidation(t *testing.T) {
-	if validateOperatorToken("") != nil {
-		t.Fatal("empty token should disable repairs without preventing startup")
-	}
-	if validateOperatorToken("too-short") == nil {
-		t.Fatal("weak configured token must be rejected")
 	}
 }
 

@@ -600,8 +600,6 @@ export interface RepairAuditEntry {
 
 export interface RepairStatus {
   novel_id: string;
-  // Server-authenticated capability, never inferred from browser storage.
-  operator: boolean;
   graph: RepairTrack;
   events: RepairTrack;
   // Actions asked for through the UI. A click does not act instantly -- repair runs on
