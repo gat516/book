@@ -3,6 +3,7 @@ import {
   cancelRepair,
   getProviderConfig,
   getRepairStatus,
+  listOllamaModels,
   requestRepair,
 } from "../api";
 import { defaultGraphExtractModel } from "../providers";
@@ -68,6 +69,13 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   // want different models, so one shared input was wrong.
   const [model, setModel] = useState<Record<RepairTrackName, string>>({ graph: "", events: "" });
   const [provider, setProvider] = useState("ollama");
+  // KnowledgeEngine refuses anything but a loopback Ollama model, independent of the
+  // book's own translate/extract provider (which can be Gemini, DeepSeek or Anthropic).
+  // Deriving the graph model from provider config used to leave it permanently blank --
+  // and the rebuild button permanently disabled -- for every book not itself configured
+  // for Ollama. List what is actually installed locally instead, same as the chapter
+  // workspace's one-time build does.
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [rollbackTo, setRollbackTo] = useState<Record<RepairTrackName, string>>({ graph: "", events: "" });
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -110,11 +118,16 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   }, [openSignal]);
 
   useEffect(() => {
-    // The model a rebuild uses is the book's own configured extraction model, full stop
+    void listOllamaModels(novelId).then(setOllamaModels).catch(() => setOllamaModels([]));
+  }, [novelId]);
+
+  useEffect(() => {
+    // The events track's model is the book's own configured extraction model, full stop
     // -- there is no separate choice here to seed and then forget to write back to. The
-    // book's provider only ever means something to the EVENTS track: the graph track
-    // cannot use it at all (KnowledgeEngine refuses anything but a loopback Ollama), so a
-    // Gemini-configured book simply has no graph model until one is set up locally.
+    // graph track cannot use that provider at all (KnowledgeEngine refuses anything but a
+    // loopback Ollama), so its model is picked from what is actually installed locally
+    // (the ollamaModels effect above), not from provider config. A book's provider only
+    // supplies a starting guess when it happens to already be Ollama.
     void getProviderConfig(novelId)
       .then((config) => {
         const graphDefault = defaultGraphExtractModel(config);
@@ -263,17 +276,39 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
 
         {(
           <div className="repair-actions">
-            {/* A rebuild always uses the book's own configured extraction model rather
-                than a second, easily-forgotten choice made here -- this used to seed a
-                select from provider config and then never write picks back to it, so the
-                two could quietly disagree. Set the model in Book settings; this only
-                shows what a fresh rebuild would use. */}
-            <p className="novel-create-form-hint">
-              {model[name]
-                ? <>Uses <strong>{model[name]}</strong>{name === "events" && provider !== "ollama" && ` (${provider})`}, the book's configured extraction model.</>
-                : "No extraction model is configured for this book yet."}
-              {" "}<a href="#provider-config">Change it in Book settings</a>.
-            </p>
+            {name === "graph" ? (
+              // The graph track cannot use the book's configured provider at all
+              // (KnowledgeEngine refuses anything but a loopback Ollama) -- deriving its
+              // model from provider config left this permanently blank, and the button
+              // permanently disabled, for every book not itself set to Ollama. Pick from
+              // what is actually installed locally instead.
+              <label className="novel-create-form-hint">
+                Model{" "}
+                <select
+                  value={model.graph}
+                  onChange={(e) => setModel((current) => ({ ...current, graph: e.target.value }))}
+                  disabled={ollamaModels.length === 0}
+                >
+                  <option value="">{ollamaModels.length === 0 ? "No local Ollama models found" : "Choose a model…"}</option>
+                  {ollamaModels.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+                {ollamaModels.length === 0 && (
+                  <> — the entity graph always runs on a local Ollama model, regardless of
+                  this book's configured provider.</>
+                )}
+              </label>
+            ) : (
+              // The events track, unlike graph, can use the book's own configured
+              // provider (event_rebuild.EXTRACTION_PROVIDERS includes it) -- so showing
+              // what a fresh rebuild would use, rather than a second choice made here
+              // that could quietly disagree with it, is the right default.
+              <p className="novel-create-form-hint">
+                {model[name]
+                  ? <>Uses <strong>{model[name]}</strong>{provider !== "ollama" && ` (${provider})`}, the book's configured extraction model.</>
+                  : "No extraction model is configured for this book yet."}
+                {" "}<a href="#provider-config">Change it in Book settings</a>.
+              </p>
+            )}
             <button
               type="button"
               disabled={busy || !model[name]}
