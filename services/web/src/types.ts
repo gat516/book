@@ -633,6 +633,7 @@ export interface RepairReportMention {
   id: string;
   chapter?: number;
   surface?: string;
+  surface_target?: string | null;
   kind?: string;
   entity?: string | null;
   entity_source?: string | null;

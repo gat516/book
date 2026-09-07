@@ -422,7 +422,7 @@ async def test_one_fact_exhaustive_review_is_eligible(db_conn, monkeypatch):
 
         report=await graph_rebuild.preview(db_conn,object(),rid)
         assert report["mentions"] == [dict(id=mention,chapter=1,surface="Hero",kind="character",entity="Hero",quote="raw",
-                                           target_context="display-1",entity_source="Hero")]
+                                           target_context="display-1",entity_source="Hero",surface_target="Hero")]
         assert report["claims"][0]["target_context"] == "display-1"
         assert report["claims"][0]["value"] == "awake"
         reviewed=await graph_rebuild.record_review(db_conn,object(),rid,dict(

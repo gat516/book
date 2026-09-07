@@ -410,15 +410,24 @@ async def preview(db,cfg,rid):
         checks.append(digest(source)==c['source_hash'] and digest(display)==c['display_hash']
                       and saved==(c['raw_uri'],c['translated_uri'],c['raw_hash']))
     jobs = await (await db.execute('SELECT chapter_index,state,error,output FROM graph_job WHERE revision_id=%s ORDER BY chapter_index',(rid,))).fetchall()
-    claims = await (await db.execute('''SELECT coalesce(e.canonical_en,e.canonical),f.attribute,coalesce(f.value_en,f.value),f.source_chapter,v.quote,v.source_hash,v.char_start,v.char_end,f.id,e.canonical
-        FROM fact f JOIN entity e ON e.id=f.entity_id LEFT JOIN graph_evidence v ON v.id=f.evidence_id
+    claims = await (await db.execute('''SELECT coalesce(e.canonical_en,CASE WHEN e.kind='character' OR n.source_lang=n.target_lang THEN e.canonical END),f.attribute,coalesce(f.value_en,f.value),f.source_chapter,v.quote,v.source_hash,v.char_start,v.char_end,f.id,e.canonical
+        FROM fact f JOIN entity e ON e.id=f.entity_id JOIN novel n ON n.id=f.novel_id LEFT JOIN graph_evidence v ON v.id=f.evidence_id
         WHERE f.revision_id=%s ORDER BY f.source_chapter,f.id''',(rid,))).fetchall()
-    mention_rows=await(await db.execute('''SELECT m.id::text,m.chapter_index,m.surface,m.kind,coalesce(e.canonical_en,e.canonical),v.quote,v.char_start,v.char_end,e.canonical
+    mention_rows=await(await db.execute('''SELECT m.id::text,m.chapter_index,m.surface,m.kind,
+            coalesce(e.canonical_en,CASE WHEN e.kind='character' OR n.source_lang=n.target_lang THEN e.canonical END),
+            v.quote,v.char_start,v.char_end,e.canonical,
+            coalesce(dm.phrase,m.surface_en,e.canonical_en,
+                     CASE WHEN e.kind='character' THEN e.canonical END,
+                     CASE WHEN n.source_lang=n.target_lang THEN m.surface END)
         FROM source_mention m
+        JOIN novel n ON n.id=m.novel_id
         LEFT JOIN LATERAL (SELECT entity_id FROM mention_binding b
             WHERE b.revision_id=m.revision_id AND b.mention_id=m.id
             ORDER BY known_from_chapter DESC LIMIT 1) b ON true
         LEFT JOIN entity e ON e.revision_id=m.revision_id AND e.id=b.entity_id
+        LEFT JOIN LATERAL (SELECT phrase FROM display_mention d
+            WHERE d.revision_id=m.revision_id AND d.mention_id=m.id
+            ORDER BY d.char_start LIMIT 1) dm ON true
         LEFT JOIN graph_evidence v ON v.id=m.evidence_id
         WHERE m.revision_id=%s ORDER BY m.chapter_index,m.id''',(rid,))).fetchall()
     coverage = (await (await db.execute('''SELECT count(*),count(*) FILTER(WHERE EXISTS(SELECT 1 FROM mention_binding b
@@ -430,7 +439,7 @@ async def preview(db,cfg,rid):
         mention_coverage=dict(total=coverage[0],linked=coverage[1],unresolved=coverage[0]-coverage[1]),
         mentions=[dict(id=m[0],chapter=m[1],surface=m[2],kind=m[3],entity=m[4],quote=m[5],
                        target_context=translated_context(sources[m[1]],displays[m[1]],m[6],m[7]),
-                       entity_source=m[8])
+                       entity_source=m[8],surface_target=m[9])
                   for m in mention_rows],
         claims=[dict(**dict(zip(['entity','attribute','value','chapter','quote','source_hash','start','end','id','entity_source'],c)),
                      target_context=translated_context(sources[c[3]],displays[c[3]],c[6],c[7]))

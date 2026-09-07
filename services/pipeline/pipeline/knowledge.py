@@ -938,6 +938,9 @@ class KnowledgeEngine:
             if mid in state.resolutions:
                 # A verified alignment may supply target-language display metadata. It
                 # never participates in resolution, which remains source anchored (§0).
+                await self.db.execute('''UPDATE source_mention
+                    SET surface_en=coalesce(surface_en,%s)
+                    WHERE revision_id=%s AND id=%s''',(s['phrase'],revision,mid))
                 await self.db.execute('''UPDATE entity SET canonical_en=coalesce(canonical_en,%s)
                     WHERE revision_id=%s AND id=%s''',(s['phrase'],revision,state.resolutions[mid]))
                 # This is an independently verified alignment proposal, not an alias

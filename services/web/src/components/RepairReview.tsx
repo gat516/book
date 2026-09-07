@@ -246,7 +246,7 @@ export function RepairReview({ novelId, track, onSubmitted, onClose }: Props) {
             <li key={mention.id}>
               <p className="repair-review-surface">
                 <strong>Identity decision:</strong>{" "}
-                {mention.entity ? `link this named ${mention.kind ?? "term"} occurrence` : `leave this ${mention.kind ?? "term"} occurrence unlinked`}
+                {mention.surface_target ?? "Target term unavailable"} → {mention.entity ?? "Unlinked"}
                 {mention.chapter !== undefined && <small> · chapter {mention.chapter}</small>}
               </p>
               <p><strong>Translated context</strong></p>
