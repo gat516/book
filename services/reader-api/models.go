@@ -339,13 +339,24 @@ type ChapterKnowledgeRunView struct {
 	Preview   json.RawMessage `json:"preview,omitempty"`
 }
 
+// ChapterGraphExtractionView exposes only aggregate results from an untrusted staging
+// revision. The claims themselves remain behind the active-revision RLS fence (§0), but
+// these counts let the reader distinguish "not extracted" from "extracted and awaiting
+// graph review".
+type ChapterGraphExtractionView struct {
+	State             string `json:"state"`
+	VerifiedTerms     int    `json:"verified_terms"`
+	VerifiedClaims    int    `json:"verified_claims"`
+	PublishedFactRows int    `json:"published_fact_rows"`
+}
+
 type ChapterKnowledgeView struct {
-	NovelID      string                   `json:"novel_id"`
-	ChapterIndex int                      `json:"chapter_index"`
-	RevisionID   string                   `json:"revision_id"`
-	Version      int64                    `json:"version"`
-	Trusted      bool                     `json:"trusted"`
-	Status       string                   `json:"status"`
+	NovelID      string `json:"novel_id"`
+	ChapterIndex int    `json:"chapter_index"`
+	RevisionID   string `json:"revision_id"`
+	Version      int64  `json:"version"`
+	Trusted      bool   `json:"trusted"`
+	Status       string `json:"status"`
 	// Legacy, ChapterSnapshotted and CanExtract mirror KnowledgeStatus's fields of the
 	// same name (migration 0058) — the real predicate ingest-api enforces, not just
 	// Trusted, decides whether this chapter is writable.
@@ -354,10 +365,13 @@ type ChapterKnowledgeView struct {
 	CanExtract         bool `json:"can_extract"`
 	// BlockedReason names the one cause CanExtract is false, so the client can render an
 	// accurate sentence per cause instead of one banner for all of them. "" when writable.
-	BlockedReason string                   `json:"blocked_reason"`
-	Facts         []ChapterFactView        `json:"facts"`
-	Terms         []ChapterTermView        `json:"terms"`
-	Run           *ChapterKnowledgeRunView `json:"run,omitempty"`
+	BlockedReason   string                      `json:"blocked_reason"`
+	TermsExtracted  bool                        `json:"terms_extracted"`
+	FactsExtracted  bool                        `json:"facts_extracted"`
+	Facts           []ChapterFactView           `json:"facts"`
+	Terms           []ChapterTermView           `json:"terms"`
+	Run             *ChapterKnowledgeRunView    `json:"run,omitempty"`
+	GraphExtraction *ChapterGraphExtractionView `json:"graph_extraction,omitempty"`
 }
 
 type ChapterKnowledgeActivity struct {

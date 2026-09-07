@@ -34,9 +34,9 @@ from pipeline.knowledge_contract import (
 
 PROMPT_HARD_BYTES = 42 * 1024
 CANDIDATE_LIMIT = 8
-IDENTITY_BATCH_SIZE = 6
+IDENTITY_BATCH_SIZE = 12
 CLAIM_LIMIT = 12
-CLAIM_PASSAGE_CHARS = 400
+CLAIM_PASSAGE_CHARS = 1200
 MIN_CLAIM_PASSAGE_CHARS = 100
 
 
@@ -122,6 +122,9 @@ class KnowledgeEngine:
                 await self._activity('fact',str(stable_id(stage,item)),'proposed',item)
 
     async def call(self, stage: str, schema, payload: dict):
+        requests=getattr(self,'_stage_requests',{})
+        requests[stage]=requests.get(stage,0)+1
+        self._stage_requests=requests
         instructions = {
             'names': 'Inventory explicitly named subjects in the source passages. Include named locations, buildings, organizations, factions, schools and other named things, not only people. A name mentioned once still counts. Use the most appropriate offered kind. Include explicitly used short names as separate surface proposals, without asserting aliases. Each entry contains ONLY the EXACT source spelling, ontology kind, and ID of a passage containing it. Do not copy or rewrite quotations. Do not translate names. Exclude generic titles, pronouns and unnamed categories. An empty inventory is correct; never invent names.',
             'identity': 'Return exactly one decision for every identity_occurrence. References are request-local opaque tokens; never use a name string as an identity key. An empty existing_candidates list means there is no earlier entity to choose, and DOES permit a supported new identity. For new, target_ref must be one of that occurrence\'s allowed_new_representatives and the representative must decide new with itself as target. For existing, target_ref must be in that occurrence\'s existing_candidates. Keep kinds compatible. If evidence is ambiguous, return unresolved with null target_ref. Example first appearance: o1 has no candidates and names a person, so o1 -> new o1. Example existing identity: the passage explicitly links o2 to offered e1, so o2 -> existing e1. Example ambiguity or homonym: same spelling without coreference evidence -> unresolved. Cite one offered passage and use a reason_code plus at most 200 explanation characters.',
@@ -156,11 +159,10 @@ class KnowledgeEngine:
             return item
         guidance=' Cite offered passage references instead of generating quote text or offsets. A selected passage is evidence to verify, never proof by itself. Null references leave identities unsupported.' if stage in {'propose','identity','claims','align'} else ''
         if stage == 'name_slots':
-            instructions[stage] = ('Inventory names only in the single offered source passage. Fill all six request-local slots. '
-                'For every actual name set named=true and copy its exact source spelling, most appropriate kind, and passage ID. '
-                'For unused slots set named=false; still provide syntactically valid placeholder values for the other fields. '
-                'Do not translate, infer aliases, or list generic titles or pronouns. Six slots is enough for this bounded passage; '
-                'if all are used, report the six clearest explicit names.')
+            instructions[stage] = ('Inventory names in every offered source passage. Fill all six request-local slots. '
+                'For every actual name use one slot containing its exact source spelling, most appropriate kind, and passage ID. '
+                'Set every unused slot to null. Do not translate, infer aliases, or list generic titles or pronouns. If all slots '
+                'are used, report the six clearest explicit names; the application will retry the passages separately for coverage.')
             wire_schema=name_schema(list(contract.by_id),ontology['kinds'])
         elif stage == 'identity_slots':
             instructions[stage] = ('Resolve each occurrence by selecting exactly one offered choice in its required JSON slot. '
@@ -205,18 +207,21 @@ class KnowledgeEngine:
             'SELECT response,runtime_metrics FROM graph_completion WHERE revision_id=%s AND cache_key=%s AND served_provider=%s AND served_model=%s',
             (self.revision['id'],key,'ollama',self.model))).fetchone()
         if row:
+            hits=getattr(self,'_stage_cache_hits',{})
+            hits[stage]=hits.get(stage,0)+1
+            self._stage_cache_hits=hits
             if self.run_id:
                 await self.db.execute('''INSERT INTO graph_completion_run
                     (revision_id,cache_key,served_provider,served_model,run_id,chapter_index,stage,batch_id)
                     VALUES(%s,%s,'ollama',%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING''',
                     (self.revision['id'],key,self.model,self.run_id,self.current_chapter,stage,payload.get('_batch_id',key[:12])))
             parsed=schema.model_validate(row[0])
-            if stage == 'claims':
+            if stage in {'claims','name_slots'}:
                 # A cached response was already filtered, so its own length no longer
                 # reports whether the model saturated. Saturation drives window
                 # subdivision, so the pre-filter count is stored beside the response.
                 proposed=(row[1] or {}).get('proposed_count')
-                payload['_proposed_count']=len(parsed.claims) if proposed is None else proposed
+                payload['_proposed_count']=(len(parsed.claims) if stage=='claims' else len(parsed.names)) if proposed is None else proposed
             await self._proposal_activity(stage,parsed)
             return parsed
         started=time.monotonic()
@@ -260,6 +265,8 @@ class KnowledgeEngine:
                         dict(item,rejection='claim cites no focus passage containing its assertion'))
                 payload['_proposed_count']=len(body['claims'])
                 body=dict(body,claims=kept)
+            elif stage == 'name_slots' and isinstance(body,dict):
+                payload['_proposed_count']=sum(item is not None for item in body.values())
             parsed = (materialize_names(body,contract,ontology)
                       if stage=='name_slots' else
                       materialize_identity(body,payload['identity_occurrences'],contract)
@@ -288,13 +295,14 @@ class KnowledgeEngine:
         return parsed
 
     @staticmethod
-    def _passage_batches(source: str, *, budget: int = 2048, max_passages: int = 1) -> list[list[str]]:
-        """Keep name inventory responses short enough to finish reliably.
+    def _passage_batches(source: str, *, budget: int = 8192,
+                         max_passages: int = 4) -> list[list[str]]:
+        """Amortize name-inventory prefill over a bounded adjacent context.
 
-        The model's name-list grammar degraded into whitespace before JSON was
-        complete. One 400-character passage and six fixed response slots keep each
-        request bounded; aggregation below remains
-        application-owned, so this does not turn a source surface into an identity.
+        Six compact nullable output slots keep generation bounded. A full response is a
+        saturation signal; discover_names then retries each passage separately so
+        batching cannot silently lower recall. Aggregation remains application-owned
+        (§0, §5.4), so a surface never becomes an identity binding.
         """
         batches=[];current=[];size=0
         for p in PassageContract(source).passages:
@@ -365,8 +373,10 @@ class KnowledgeEngine:
         verified=[];rejected=[];count=0
         by_mid={m['id']:m for m in mentions}
         entity_context={c['id']:c for cs in candidates.values() for c in cs}
-        for start in range(0,len(mentions),IDENTITY_BATCH_SIZE):
-            batch=mentions[start:start+IDENTITY_BATCH_SIZE]
+        start=0;batch_limit=IDENTITY_BATCH_SIZE
+        self._identity_batch_sizes=[];self._identity_context_splits=0
+        while start<len(mentions):
+            batch=mentions[start:start+batch_limit]
             # Recent verified occurrences carry both their source context and binding.
             # Selection never creates a binding; the semantic verifier owns that step.
             recent={}
@@ -407,10 +417,19 @@ class KnowledgeEngine:
                     descriptions[key]={k:v for k,v in c.items() if k!='id'}
                 rows.append(dict(occurrence_ref=refs[m['id']],subject=self._subject_context(m),
                     choices=choices,choice_context=descriptions))
-            response=await self.call('identity_slots',IdentityDecisions,dict(source=source,
-                ontology=ontology,identity_occurrences=rows,
-                _passage_ids=self._mention_passages(source,list(offered_mentions.values())),
-                _batch_id=f'identity-{start//IDENTITY_BATCH_SIZE+1}'))
+            identity_batch=f'identity-{start+1}-{start+len(batch)}'
+            try:
+                response=await self.call('identity_slots',IdentityDecisions,dict(source=source,
+                    ontology=ontology,identity_occurrences=rows,
+                    _passage_ids=self._mention_passages(source,list(offered_mentions.values())),
+                    _batch_id=identity_batch))
+            except ValueError as exc:
+                if 'graph context exceeds hard local model budget' not in str(exc) or len(batch)<=1:
+                    raise
+                batch_limit=max(1,len(batch)//2)
+                self._identity_context_splits+=1
+                continue
+            self._identity_batch_sizes.append(len(batch))
             count+=len(response.decisions)
             reverse={ref:mid for mid,ref in refs.items()}
             decisions=[]
@@ -421,7 +440,6 @@ class KnowledgeEngine:
             good,no=validate_proposals(source,mentions,candidates,Proposals(decisions=decisions,claims=[]),ontology)
             rejected.extend(no)
             for i,item in enumerate(good): item['id']=f'identity:{start+i}'
-            identity_batch=f'identity-{start//IDENTITY_BATCH_SIZE+1}'
             verdicts=await self._verify_items(source,good,'identity',mentions=mentions,
                 candidates=candidates,batch_identity=identity_batch)
             good,no=approved(good,verdicts);rejected.extend(no)
@@ -431,6 +449,7 @@ class KnowledgeEngine:
                 if d['outcome']=='new' and d['target_id'] not in roots:
                     rejected.append(dict(d,rejection='new representative lacks a verified self-root decision'))
                 else: verified.append(d)
+            start+=len(batch)
         return verified,rejected,count
 
     @staticmethod
@@ -518,11 +537,29 @@ class KnowledgeEngine:
             focus_passage_ids=[focus['id']],_passage_ids=selected_ids,
             _passage_max_chars=passage_chars,_passage_overlap=0,_batch_id=batch_id,
             _context_ranges=forwarded)
-        response=await self.call('claims',ClaimProposals,request)
+        try:
+            response=await self.call('claims',ClaimProposals,request)
+        except ValueError as exc:
+            if ('graph context exceeds hard local model budget' not in str(exc)
+                    or passage_chars<=MIN_CLAIM_PASSAGE_CHARS):
+                raise
+            self._claim_context_splits=getattr(self,'_claim_context_splits',0)+1
+            smaller=max(MIN_CLAIM_PASSAGE_CHARS,passage_chars//2)
+            children=[p for p in source_passages(source,max_chars=smaller,overlap=0)
+                      if focus['char_start']<=p['char_start'] and p['char_end']<=focus['char_end']]
+            if not children:
+                raise
+            claims=[];rejected=[];proposed=0
+            for child in children:
+                got,no,count=await self._claims_for_focus(source,verified_mentions,ontology,child,
+                                                          passage_chars=smaller,context_ranges=context_ranges)
+                claims.extend(got);rejected.extend(no);proposed+=count
+            return claims,rejected,proposed
         # Saturation is a property of what the model emitted, not of what survived the
         # focus filter, so prefer the pre-filter count `call` reports back.
         proposed=request.get('_proposed_count',len(response.claims))
         if proposed==CLAIM_LIMIT:
+            self._claim_subdivisions=getattr(self,'_claim_subdivisions',0)+1
             if passage_chars<=MIN_CLAIM_PASSAGE_CHARS:
                 return [],[dict(rejection='claim coverage failure: smallest source window reached claim limit',
                                 batch_id=batch_id,claim_limit=CLAIM_LIMIT)],proposed
@@ -594,12 +631,23 @@ class KnowledgeEngine:
 
     async def discover_names(self, novel: str, chapter: int, source: str):
         ontology=self.revision['ontology']
+        batches=self._passage_batches(source) if source.strip() else []
+        self._name_metrics=dict(passages=sum(len(batch) for batch in batches),
+                                top_level_batches=len(batches),saturation_retries=0)
         if source.strip():
             collected=[];rejected=[]
-            for passage_ids in self._passage_batches(source):
-                found=await self.call('name_slots',Names,dict(source=source,ontology=ontology,
-                    _passage_ids=passage_ids,_batch_id=f'names-{len(collected)+1}'))
-                collected.extend(found.names);rejected.extend(found.rejected)
+            for batch_number,passage_ids in enumerate(batches,1):
+                request=dict(source=source,ontology=ontology,_passage_ids=passage_ids,
+                             _batch_id=f'names-{batch_number}')
+                found=await self.call('name_slots',Names,request)
+                if len(passage_ids)>1 and request.get('_proposed_count',len(found.names))==6:
+                    self._name_metrics['saturation_retries']+=1
+                    for part,passage_id in enumerate(passage_ids,1):
+                        child=await self.call('name_slots',Names,dict(source=source,ontology=ontology,
+                            _passage_ids=[passage_id],_batch_id=f'names-{batch_number}.{part}'))
+                        collected.extend(child.names);rejected.extend(child.rejected)
+                else:
+                    collected.extend(found.names);rejected.extend(found.rejected)
             unique={}
             for name in collected:
                 unique[(name.surface,name.kind,name.evidence_start)]=name
@@ -611,9 +659,31 @@ class KnowledgeEngine:
                             source_occurrences=sum(m['kind']==kind for m in mentions)) for kind in ontology['kinds']}
         return names,mentions,coverage
 
+    def _runtime_diagnostics(self, source: str, display: str) -> dict:
+        """Metrics needed to compare chunk policy across chapter sizes (§5.4)."""
+        return dict(
+            input_size=dict(source_chars=len(source),source_bytes=len(source.encode()),
+                            display_chars=len(display),display_bytes=len(display.encode())),
+            chunk_policy=dict(name_passages_per_batch=4,name_slots=6,
+                identity_occurrences_per_batch=IDENTITY_BATCH_SIZE,
+                claim_focus_chars=CLAIM_PASSAGE_CHARS,claim_min_chars=MIN_CLAIM_PASSAGE_CHARS,
+                claims_per_response=CLAIM_LIMIT,verification_items_per_batch=12,
+                alignment_display_chars=12000,alignment_mentions=48,
+                prompt_hard_bytes=PROMPT_HARD_BYTES),
+            name_chunking=getattr(self,'_name_metrics',dict(
+                passages=0,top_level_batches=0,saturation_retries=0)),
+            claim_subdivisions=getattr(self,'_claim_subdivisions',0),
+            claim_context_splits=getattr(self,'_claim_context_splits',0),
+            identity_chunking=dict(batch_sizes=list(getattr(self,'_identity_batch_sizes',[])),
+                                   context_splits=getattr(self,'_identity_context_splits',0)),
+            stage_requests=dict(getattr(self,'_stage_requests',{})),
+            stage_cache_hits=dict(getattr(self,'_stage_cache_hits',{})))
+
     async def extract(self, novel: str, chapter: int, source: str, display: str, target: str,
                       *, include_terms: bool = True, include_facts: bool = True) -> dict:
         await self._ensure_run(novel,chapter,source,display)
+        self._stage_requests={};self._stage_cache_hits={}
+        self._claim_subdivisions=0;self._claim_context_splits=0
         ontology = self.revision['ontology']
         names,mentions,coverage = await self.discover_names(novel,chapter,source)
         if include_terms:
@@ -625,7 +695,8 @@ class KnowledgeEngine:
                 diagnostics=dict(discovered_occurrences=0,proposed_identities=0,
                     verified_identities=0,proposed_claims=0,verified_claims=0,
                     published_facts=0,rejection_reasons={
-                        'No source-valid named mentions; no identity or fact publication attempted.':1}),
+                        'No source-valid named mentions; no identity or fact publication attempted.':1},
+                    **self._runtime_diagnostics(source,display)),
                 name_coverage=coverage,rejected=names.rejected+[dict(rejection='No source-valid named mentions; no identity or fact publication attempted.',proposals=names.model_dump())],
                 source_hash=digest(source),display_hash=digest(display))
         candidates,mention_vectors = await self.candidates_for(chapter,mentions)
@@ -731,7 +802,8 @@ class KnowledgeEngine:
         diagnostics=dict(discovered_occurrences=len(mentions),
             proposed_identities=proposed_identity_count,verified_identities=len(verified_identities),
             proposed_claims=proposed_claim_count,verified_claims=len(verified_claims),
-            published_facts=0,rejection_reasons=rejection_counts)
+            published_facts=0,rejection_reasons=rejection_counts,
+            **self._runtime_diagnostics(source,display))
         print(json.dumps(dict(revision=self.revision['id'],chapter=chapter,stage='knowledge',
                               event='stage_summary',**diagnostics)),file=sys.stderr,flush=True)
         output=dict(mentions=mentions,name_coverage=coverage,items=[i for i in verified if i.get('type')!='alignment'],
@@ -864,6 +936,10 @@ class KnowledgeEngine:
                     SET source_term=EXCLUDED.source_term,display_term=EXCLUDED.display_term,method='aligned' ''',
                     (novel,chapter,s['char_start'],s['char_end'],mentions[mid]['surface'],s['phrase']))
             if mid in state.resolutions:
+                # A verified alignment may supply target-language display metadata. It
+                # never participates in resolution, which remains source anchored (§0).
+                await self.db.execute('''UPDATE entity SET canonical_en=coalesce(canonical_en,%s)
+                    WHERE revision_id=%s AND id=%s''',(s['phrase'],revision,state.resolutions[mid]))
                 # This is an independently verified alignment proposal, not an alias
                 # cache hit. Retries cannot add a second vote for the same chapter.
                 await self.db.execute('''INSERT INTO glossary_proposal_chapter VALUES(%s,%s,%s,%s,%s)

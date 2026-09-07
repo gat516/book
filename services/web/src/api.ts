@@ -106,7 +106,11 @@ export function createNovel(body: CreateNovelRequest): Promise<CreateNovelRespon
 // Irreversible: ingest-api cascades this to the novel's chapters, graph, glossary and
 // queued work (migration 0030). The caller is responsible for confirming with the user.
 export function deleteNovel(novelId: string): Promise<{ deleted: boolean }> {
-  return request(`/novels/${novelId}`, { method: "DELETE" });
+	return request(`/novels/${novelId}`, { method: "DELETE" });
+}
+
+export function deleteGraph(novelId: string): Promise<{ deleted: boolean; revisions_deleted: number }> {
+	return request(`/novels/${novelId}/graph`, { method: "DELETE" });
 }
 
 export function pasteChapter(novelId: string, body: PasteChapterRequest): Promise<PasteChapterResponse> {
@@ -322,8 +326,9 @@ export function saveProviderConfig(
   });
 }
 
-export async function listOllamaModels(novelId: string): Promise<string[]> {
-  const response = await request<{ models: string[] }>(`/novels/${novelId}/provider-config/ollama-models`);
+export async function listOllamaModels(novelId: string, target: "configured" | "graph" = "configured"): Promise<string[]> {
+  const query = target === "graph" ? "?target=graph" : "";
+  const response = await request<{ models: string[] }>(`/novels/${novelId}/provider-config/ollama-models${query}`);
   return response.models;
 }
 

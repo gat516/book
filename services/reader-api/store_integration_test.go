@@ -357,8 +357,17 @@ func TestChapterKnowledgeActivityIsIncrementalAndSpoilerGated(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := admin.Exec(ctx, `INSERT INTO term_rendering_occurrence(novel_id,chapter_index,char_start,char_end,source_term,display_term,method)
-		VALUES($1,100,0,4,'Hero','Hero','aligned'),($1,500,0,6,'Secret','Secret','aligned')`, fixture.novelID); err != nil {
+		VALUES($1,100,0,4,'Hero','Hero','aligned'),($1,220,0,4,'Term','Term','aligned'),
+		       ($1,500,0,6,'Secret','Secret','aligned')`, fixture.novelID); err != nil {
 		t.Fatal(err)
+	}
+	translatedTerms, err := store.ChapterKnowledge(ctx, fixture.novelID, 220, 220)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !translatedTerms.TermsExtracted || translatedTerms.FactsExtracted {
+		t.Fatalf("translation term occurrence: terms_extracted=%v facts_extracted=%v",
+			translatedTerms.TermsExtracted, translatedTerms.FactsExtracted)
 	}
 	var visibleRun, futureRun string
 	for _, row := range []struct {
@@ -381,6 +390,10 @@ func TestChapterKnowledgeActivityIsIncrementalAndSpoilerGated(t *testing.T) {
 	if len(view.Terms) != 1 || view.Terms[0].SourceTerm != "Hero" {
 		t.Fatalf("terms=%+v", view.Terms)
 	}
+	if !view.TermsExtracted || !view.FactsExtracted {
+		t.Fatalf("published all-scope run: terms_extracted=%v facts_extracted=%v",
+			view.TermsExtracted, view.FactsExtracted)
+	}
 	first, err := store.ChapterKnowledgeActivity(ctx, fixture.novelID, 100, 220, visibleRun, 0)
 	if err != nil || len(first) != 2 {
 		t.Fatalf("activity=%+v err=%v", first, err)
@@ -395,6 +408,53 @@ func TestChapterKnowledgeActivityIsIncrementalAndSpoilerGated(t *testing.T) {
 	}
 	if len(leaked) != 0 {
 		t.Fatalf("future activity leaked: %+v", leaked)
+	}
+}
+
+func TestChapterKnowledgeReportsStagingGraphExtractionWithoutExposingClaims(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	fixture := seedIntegrationFixture(t, admin)
+	ctx := context.Background()
+	if _, err := store.AdvanceProgress(ctx, "staging-extraction-reader", fixture.novelID, 220); err != nil {
+		t.Fatal(err)
+	}
+	var stagingRevision string
+	if err := admin.QueryRow(ctx, `INSERT INTO graph_revision(novel_id,state,trusted,legacy,ontology,snapshot)
+		VALUES($1,'staging',false,false,'{}','{}') RETURNING id::text`, fixture.novelID).Scan(&stagingRevision); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), `DELETE FROM graph_job WHERE revision_id=$1`, stagingRevision)
+	})
+	if _, err := admin.Exec(ctx, `INSERT INTO graph_job(revision_id,chapter_index,state,input_hash,model_identity,generation,output)
+		VALUES($1,220,'done','input','model',1,
+		'{"diagnostics":{"verified_identities":16,"verified_claims":10,"published_facts":7}}')`, stagingRevision); err != nil {
+		t.Fatal(err)
+	}
+
+	view, err := store.ChapterKnowledge(ctx, fixture.novelID, 220, 220)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.FactsExtracted {
+		t.Fatal("staging extraction must not mark active-revision facts as published")
+	}
+	if len(view.Facts) != 0 {
+		t.Fatalf("untrusted staging claims leaked into cards: %+v", view.Facts)
+	}
+	if view.GraphExtraction == nil || view.GraphExtraction.State != "done" ||
+		view.GraphExtraction.VerifiedTerms != 16 || view.GraphExtraction.VerifiedClaims != 10 ||
+		view.GraphExtraction.PublishedFactRows != 7 {
+		t.Fatalf("graph extraction summary=%+v", view.GraphExtraction)
+	}
+
+	// Even aggregate staging results obey the caller's chapter ceiling.
+	hidden, err := store.ChapterKnowledge(ctx, fixture.novelID, 220, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hidden.GraphExtraction != nil {
+		t.Fatalf("future staging summary leaked: %+v", hidden.GraphExtraction)
 	}
 }
 
@@ -794,5 +854,39 @@ func TestChapterKnowledgeCanExtractReflectsTheRealGate(t *testing.T) {
 	if view.ChapterSnapshotted || view.CanExtract || view.BlockedReason != "chapter_not_snapshotted" {
 		t.Fatalf("un-snapshotted chapter: snapshotted=%v can_extract=%v blocked_reason=%q",
 			view.ChapterSnapshotted, view.CanExtract, view.BlockedReason)
+	}
+}
+
+// Deleting a graph intentionally leaves active_graph_revision NULL. Chapters and
+// glossary data remain readable; only graph-backed rows disappear behind RLS.
+func TestKnowledgeStatusWithoutGraphIsUnavailableNotAnError(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	ctx := context.Background()
+	novelID := uuid.NewString()
+	if _, err := admin.Exec(ctx, `INSERT INTO novel(id,title,source_lang,target_lang,ontology)
+		VALUES ($1,'Deleted graph test','zh','en','{}')`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		admin.Exec(context.Background(), `UPDATE novel SET active_graph_revision=NULL WHERE id=$1`, novelID)
+		admin.Exec(context.Background(), `DELETE FROM graph_revision WHERE novel_id=$1`, novelID)
+		admin.Exec(context.Background(), `DELETE FROM novel WHERE id=$1`, novelID)
+	})
+	if _, err := admin.Exec(ctx, `UPDATE novel SET active_graph_revision=NULL WHERE id=$1`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `DELETE FROM graph_revision WHERE novel_id=$1`, novelID); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := store.KnowledgeStatus(ctx, novelID, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != "unavailable" || status.RevisionID != "" || status.Trusted || status.CanExtract {
+		t.Fatalf("status without graph = %#v", status)
+	}
+	if reason := blockedReason(status); reason != "never_built" {
+		t.Fatalf("blocked reason = %q, want never_built", reason)
 	}
 }

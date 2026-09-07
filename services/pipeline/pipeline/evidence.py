@@ -13,7 +13,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 
-PROMPT_VERSION = 'evidence-v13-display-gloss'
+PROMPT_VERSION = 'evidence-v16-adaptive-context-batches'
 
 MAX_EXPLANATION_CHARS = 200
 MAX_FACT_VALUE_CHARS = 400

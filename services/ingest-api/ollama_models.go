@@ -26,23 +26,27 @@ func validateOllamaBaseURL(raw string, allowed map[string]bool) error {
 // uses Gemini or another hosted provider, so its model picker falls back to that local
 // endpoint instead of falsely treating a non-Ollama novel as an unreachable server.
 func (a *API) listOllamaModels(w http.ResponseWriter, r *http.Request) {
-	view, err := a.store.GetProviderConfig(r.Context(), r.PathValue("id"))
-	if err != nil && !errors.Is(err, ErrProviderConfigNotFound) {
-		writeErr(w, http.StatusNotFound, "no provider config for this novel")
-		return
-	}
-	base := ""
-	if err == nil && view.Provider == "ollama" {
-		base = view.BaseURL
-	}
-	if base == "" {
-		base = a.cfg.OllamaHost
+	// Graph extraction is deliberately pinned to the pipeline's loopback endpoint. Its
+	// health check must query that exact route: checking a book's directly-configured
+	// remote URL could say "connected" while the SSH forward the graph actually uses is
+	// down. Provider settings keep checking the book-specific URL.
+	graphTarget := r.URL.Query().Get("target") == "graph"
+	base := a.cfg.OllamaHost
+	if !graphTarget {
+		view, err := a.store.GetProviderConfig(r.Context(), r.PathValue("id"))
+		if err != nil && !errors.Is(err, ErrProviderConfigNotFound) {
+			writeErr(w, http.StatusNotFound, "no provider config for this novel")
+			return
+		}
+		if err == nil && view.Provider == "ollama" && view.BaseURL != "" {
+			base = view.BaseURL
+		}
 	}
 	if err := validateOllamaBaseURL(base, a.cfg.OllamaAllowedHosts); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	client := http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+	client := http.Client{Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse // never let an allowed Ollama host redirect elsewhere
 	}}
 	resp, err := client.Get(strings.TrimRight(base, "/") + "/api/tags")

@@ -3,7 +3,7 @@ package main
 // Knowledge repair requests (migration 0043).
 //
 // This file records what a human asked for; it does not repair anything. The actions —
-// prepare, review, activate, rollback — are implemented once, in Python, by
+// prepare, review, activate, rollback, extend — are implemented once, in Python, by
 // pipeline/graph_rebuild.py and pipeline/event_rebuild.py, and executed by
 // pipeline/repair.py on the worker's idle tick.
 //
@@ -30,7 +30,7 @@ import (
 )
 
 var (
-	ErrRepairInProgress      = errors.New("a repair action is already in progress for this book")
+	ErrRepairInProgress      = errors.New("this book already has processing underway; check its status before starting another action")
 	ErrRepairInvalid         = errors.New("invalid repair request")
 	ErrRepairNovelUnknown    = errors.New("no such novel")
 	ErrRepairRevisionUnknown = errors.New("no such revision for this book")
@@ -50,15 +50,15 @@ type repairRequestBody struct {
 	Track      string `json:"track"`
 	Action     string `json:"action"`
 	RevisionID string `json:"revision_id"`
-	// Set only for reextract: which chapter to redo against the live graph.
+	// Set only for chapter-scoped re-extraction actions.
 	ChapterIndex *int            `json:"chapter_index"`
 	Params       json.RawMessage `json:"params"`
 	RequestedBy  string          `json:"requested_by"`
 }
 
 // paramsLimit keeps a review document — the only genuinely large params payload — from
-// becoming an unbounded write. 60 mentions and 30 facts of assessments is a few KiB;
-// a megabyte is generous by two orders of magnitude and still bounded.
+// becoming an unbounded write. A megabyte leaves ample room for an exhaustive small-book
+// review while retaining a firm request bound.
 const paramsLimit = 1 << 20
 
 func validRepairTrack(track string) bool {
@@ -67,7 +67,7 @@ func validRepairTrack(track string) bool {
 
 func validRepairAction(action string) bool {
 	switch action {
-	case "prepare", "review", "activate", "rollback", "reextract", "discard":
+	case "prepare", "review", "activate", "rollback", "reextract", "reextract_apply", "discard", "extend":
 		return true
 	}
 	return false
@@ -87,7 +87,7 @@ func (s *Store) RequestRepair(ctx context.Context, novelID string, body repairRe
 		return RepairRequestView{}, fmt.Errorf("%w: track must be graph or events", ErrRepairInvalid)
 	}
 	if !validRepairAction(action) {
-		return RepairRequestView{}, fmt.Errorf("%w: action must be prepare, review, activate or rollback", ErrRepairInvalid)
+		return RepairRequestView{}, fmt.Errorf("%w: unknown repair action", ErrRepairInvalid)
 	}
 	requestedBy := strings.TrimSpace(body.RequestedBy)
 	if requestedBy == "" || len(requestedBy) > 200 {
@@ -97,9 +97,10 @@ func (s *Store) RequestRepair(ctx context.Context, novelID string, body repairRe
 	// reextract is chapter-scoped and targets whatever revision is currently active, so it
 	// names a chapter instead of a revision. The two are mutually exclusive, and the table
 	// has a CHECK saying so.
-	if (body.Action == "reextract") != (body.ChapterIndex != nil) {
+	chapterScoped := action == "reextract" || action == "reextract_apply"
+	if chapterScoped != (body.ChapterIndex != nil) {
 		return RepairRequestView{}, fmt.Errorf(
-			"%w: reextract requires chapter_index, and only reextract may set it", ErrRepairInvalid)
+			"%w: re-extraction actions require chapter_index, and only they may set it", ErrRepairInvalid)
 	}
 	if body.ChapterIndex != nil && *body.ChapterIndex < 0 {
 		return RepairRequestView{}, fmt.Errorf("%w: chapter_index must be nonnegative", ErrRepairInvalid)
@@ -108,10 +109,11 @@ func (s *Store) RequestRepair(ctx context.Context, novelID string, body repairRe
 	revisionID := strings.TrimSpace(body.RevisionID)
 	// prepare is the action that CREATES a revision, so it cannot name one; every other
 	// action operates on a revision that already exists.
-	if (action == "prepare" || action == "reextract") && revisionID != "" {
-		return RepairRequestView{}, fmt.Errorf("%w: prepare creates a revision and must not name one", ErrRepairInvalid)
+	withoutRevision := action == "prepare" || action == "extend" || chapterScoped
+	if withoutRevision && revisionID != "" {
+		return RepairRequestView{}, fmt.Errorf("%w: %s must not name a revision", ErrRepairInvalid, action)
 	}
-	if action != "prepare" && action != "reextract" {
+	if !withoutRevision {
 		if _, err := uuid.Parse(revisionID); err != nil {
 			return RepairRequestView{}, fmt.Errorf("%w: %s requires a revision_id", ErrRepairInvalid, action)
 		}
@@ -131,6 +133,20 @@ func (s *Store) RequestRepair(ctx context.Context, novelID string, body repairRe
 	if err := json.Unmarshal(params, &paramsObject); err != nil {
 		return RepairRequestView{}, fmt.Errorf("%w: params must be a JSON object", ErrRepairInvalid)
 	}
+	if raw, ok := paramsObject["upto_chapter"]; ok {
+		var ceiling int
+		if err := json.Unmarshal(raw, &ceiling); err != nil || ceiling < 0 || ceiling > 2147483647 {
+			return RepairRequestView{}, fmt.Errorf("%w: upto_chapter must be a nonnegative integer", ErrRepairInvalid)
+		}
+		if track != "graph" || (action != "prepare" && action != "extend") {
+			return RepairRequestView{}, fmt.Errorf("%w: upto_chapter applies only to graph prepare or extend", ErrRepairInvalid)
+		}
+	} else if action == "extend" {
+		return RepairRequestView{}, fmt.Errorf("%w: extend requires upto_chapter", ErrRepairInvalid)
+	}
+	if action == "extend" && track != "graph" {
+		return RepairRequestView{}, fmt.Errorf("%w: extend applies only to the graph track", ErrRepairInvalid)
+	}
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -149,6 +165,16 @@ func (s *Store) RequestRepair(ctx context.Context, novelID string, body repairRe
 	}
 	if !exists {
 		return RepairRequestView{}, ErrRepairNovelUnknown
+	}
+	if action == "extend" {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(
+			SELECT 1 FROM novel n JOIN graph_revision r ON r.id=n.active_graph_revision
+			WHERE n.id=$1 AND r.state='active' AND r.trusted AND NOT r.legacy)`, novelID).Scan(&exists); err != nil {
+			return RepairRequestView{}, err
+		}
+		if !exists {
+			return RepairRequestView{}, ErrRepairRevisionUnknown
+		}
 	}
 
 	// The revision column carries no foreign key, because 'graph' rows point at

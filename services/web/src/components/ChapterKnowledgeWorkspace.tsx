@@ -12,20 +12,72 @@ const terminal = new Set(["published", "rejected", "failed", "awaiting_review"])
 
 function shortId(id: string) { return id.slice(0, 8); }
 
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function extractionStatus(data: ChapterKnowledgeResponse, scope: "terms" | "facts") {
+  const extracted = scope === "terms" ? data.terms_extracted : data.facts_extracted;
+  const run = data.run;
+  const relevant = run && (run.scope === "all" || run.scope === scope);
+  if (relevant && (run.state === "pending" || run.state === "processing")) return "Extracting…";
+  if (relevant && (run.state === "awaiting_review" || run.state === "applying")) return "Review pending";
+  if (relevant && run.state === "failed" && !extracted) return "Failed";
+
+  const rebuild = data.graph_extraction;
+  if (rebuild?.state === "pending" || rebuild?.state === "processing") return "Extracting in book rebuild…";
+  if (rebuild?.state === "failed" && !extracted) return "Book rebuild failed";
+  if (rebuild?.state === "done") {
+    const count = scope === "terms" ? rebuild.verified_terms : rebuild.verified_claims;
+    const noun = scope === "terms" ? (count === 1 ? "term" : "terms") : (count === 1 ? "claim" : "claims");
+    return `Extracted — ${count} verified ${noun} awaiting activation`;
+  }
+  return extracted ? "Extracted" : "Not extracted";
+}
+
+function graphBuildActivity(status: RepairStatus | null) {
+  if (!status) return null;
+  const graph = status.graph;
+  // A replacement revision is the work actually consuming the model. If somebody also
+  // queued a fresh prepare, leading with that queue row makes a busy worker look idle.
+  if (graph.replacement && ["rebuilding", "awaiting_review", "failed", "quarantined"].includes(graph.state)) {
+    return {
+      at: graph.current?.since ?? graph.replacement.created_at ?? "",
+      stage: graph.state === "rebuilding" ? "building"
+        : graph.state === "awaiting_review" ? "review"
+        : graph.state,
+      text: graph.reason,
+    };
+  }
+  const request = status.requests.find(
+    (item) => item.track === "graph" && (item.state === "pending" || item.state === "running"),
+  );
+  if (request) {
+    return {
+      at: request.created_at,
+      stage: request.state === "pending" ? "queued" : "starting",
+      text: request.state === "pending"
+        ? "Book graph build is queued and waiting for the worker."
+        : "Book graph build is being prepared.",
+    };
+  }
+  return null;
+}
+
 // The one-time build a never-rebuilt or not-yet-included book needs: KnowledgeEngine
 // requires a pinned model and a snapshot neither a legacy revision nor a missing chapter
 // has. Adopting a legacy revision instead of building one would have to fabricate the
 // graph_evidence rows the literal-evidence check depends on (§0: structural, not
-// prompted), so the one-time build is the honest path. Shared by the never_built and
-// chapter_not_snapshotted gates below, which differ only in copy and button label.
-function BuildGraph({ novelId, label, onDone }: { novelId: string; label: string; onDone: () => Promise<unknown> }) {
+// prompted), so the one-time build is the honest path.
+function BuildGraph({ novelId, chapter, label, onDone }: { novelId: string; chapter: number; label: string; onDone: () => Promise<unknown> }) {
   const [models, setModels] = useState<string[]>([]);
   const [model, setModel] = useState("");
+  const [upto, setUpto] = useState(chapter);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    void listOllamaModels(novelId).then(setModels).catch(() => setModels([]));
+    void listOllamaModels(novelId, "graph").then(setModels).catch(() => setModels([]));
     void getProviderConfig(novelId)
       .then((config) => {
         const preferred = defaultGraphExtractModel(config);
@@ -33,14 +85,17 @@ function BuildGraph({ novelId, label, onDone }: { novelId: string; label: string
       })
       .catch(() => undefined);
   }, [novelId]);
+  useEffect(() => setUpto(chapter), [novelId, chapter]);
 
   async function build() {
     setBusy(true); setError("");
     try {
-      await requestRepair(novelId, { track: "graph", action: "prepare", params: { model } });
+      await requestRepair(novelId, {
+        track: "graph", action: "prepare", params: { model, upto_chapter: upto },
+      });
       await onDone();
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -54,17 +109,53 @@ function BuildGraph({ novelId, label, onDone }: { novelId: string; label: string
           {models.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
       </label>
-      <button disabled={busy || !model} onClick={() => void build()}>{label}</button>
+      <label>Through chapter{" "}
+        <input type="number" min={0} step={1} value={upto}
+          onChange={(e) => setUpto(Number(e.target.value))} />
+      </label>
+      <button disabled={busy || !model || !Number.isInteger(upto) || upto < 0}
+        onClick={() => void build()}>{busy ? "Queueing…" : `${label} through chapter ${upto}`}</button>
       {error && <p role="alert" className="reader-pane-error">{error}</p>}
     </div>
   );
+}
+
+function ExtendGraph({ novelId, chapter, onDone }: { novelId: string; chapter: number; onDone: () => Promise<unknown> }) {
+  const [upto, setUpto] = useState(chapter);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => setUpto(chapter), [novelId, chapter]);
+
+  async function extend() {
+    setBusy(true); setError("");
+    try {
+      await requestRepair(novelId, {
+        track: "graph", action: "extend", params: { upto_chapter: upto },
+      });
+      await onDone();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <div className="knowledge-gate-action">
+    <label>Through chapter{" "}
+      <input type="number" min={0} step={1} value={upto}
+        onChange={(e) => setUpto(Number(e.target.value))} />
+    </label>
+    <button disabled={busy || !Number.isInteger(upto) || upto < 0}
+      onClick={() => void extend()}>{busy ? "Queueing…" : `Extend through chapter ${upto}`}</button>
+    {error && <p role="alert" className="reader-pane-error">{error}</p>}
+  </div>;
 }
 
 // A rebuild left unfinished withholds facts until it is finished, activated or
 // discarded. `discard` is the escape prepare()'s precautionary quarantine never had: it
 // undoes THAT quarantine when nothing since has re-quarantined the same revision,
 // restoring the earlier facts; otherwise it says plainly that they stay withheld.
-function QuarantineGate({ novelId, onDone }: { novelId: string; onDone: () => Promise<unknown> }) {
+function QuarantineGate({ novelId, chapter, onDone }: { novelId: string; chapter: number; onDone: () => Promise<unknown> }) {
   const [status, setStatus] = useState<RepairStatus | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -72,7 +163,7 @@ function QuarantineGate({ novelId, onDone }: { novelId: string; onDone: () => Pr
   const [error, setError] = useState("");
 
   const load = useCallback(
-    () => getRepairStatus(novelId).then(setStatus).catch((e) => setError(String(e))),
+    () => getRepairStatus(novelId).then(setStatus).catch((e) => setError(errorMessage(e))),
     [novelId],
   );
   useEffect(() => { void load(); }, [load]);
@@ -89,7 +180,7 @@ function QuarantineGate({ novelId, onDone }: { novelId: string; onDone: () => Pr
       await load();
       await onDone();
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -106,7 +197,7 @@ function QuarantineGate({ novelId, onDone }: { novelId: string; onDone: () => Pr
     // one-time build as a book that was never rebuilt.
     return <div className="knowledge-gate">
       <p>Facts are withheld and no rebuild is in progress.</p>
-      <BuildGraph novelId={novelId} label="Start a rebuild" onDone={async () => { await load(); await onDone(); }} />
+      <BuildGraph novelId={novelId} chapter={chapter} label="Start a rebuild" onDone={async () => { await load(); await onDone(); }} />
       {error && <p role="alert" className="reader-pane-error">{error}</p>}
     </div>;
   }
@@ -150,21 +241,35 @@ function QuarantineGate({ novelId, onDone }: { novelId: string; onDone: () => Pr
 // used to stand in for `can_extract`, which reads "writable" for every never-rebuilt book
 // (0023's initialize trigger makes the first revision trusted AND legacy); migration 0058
 // added the real predicate so this switch has something honest to key on.
-function KnowledgeGate({ novelId, reason, onDone }: { novelId: string; reason: string; onDone: () => Promise<unknown> }) {
+function KnowledgeGate({ novelId, chapter, reason, repairStatus, onDone }: { novelId: string; chapter: number; reason: string; repairStatus: RepairStatus | null; onDone: () => Promise<unknown> }) {
+  const graphActivity = graphBuildActivity(repairStatus);
+  // Once extraction stops, the lifecycle controls matter more than the activity
+  // sentence: Review is where the withheld identities and claims are actually shown.
+  // This also covers a never-built book whose active revision is absent, where the
+  // chapter-level blocked reason alone cannot distinguish a finished replacement.
+  const replacementNeedsAction = !!repairStatus?.graph.replacement
+    && ["awaiting_review", "failed", "quarantined"].includes(repairStatus.graph.state);
+  if (replacementNeedsAction) {
+    return <div className="knowledge-gate"><QuarantineGate novelId={novelId} chapter={chapter} onDone={onDone} /></div>;
+  }
+  if (graphActivity) {
+    return <div className="knowledge-gate"><p>{graphActivity.text}</p></div>;
+  }
   if (reason === "never_built") {
     return <div className="knowledge-gate">
-      <p>No chapter-knowledge graph yet. Building it reads every finished chapter once;
-        after that you can extract any chapter on its own.</p>
-      <BuildGraph novelId={novelId} label="Build chapter knowledge" onDone={onDone} />
+      <p>Build a graph from the ready chapters through N. It stops at the first missing
+        chapter. After review and activation, you can extend it to later chapters.</p>
+      <BuildGraph novelId={novelId} chapter={chapter} label="Build" onDone={onDone} />
     </div>;
   }
   if (reason === "quarantined") {
-    return <div className="knowledge-gate"><QuarantineGate novelId={novelId} onDone={onDone} /></div>;
+    return <div className="knowledge-gate"><QuarantineGate novelId={novelId} chapter={chapter} onDone={onDone} /></div>;
   }
   if (reason === "chapter_not_snapshotted") {
     return <div className="knowledge-gate">
-      <p>This chapter was added after the graph was built, so there is nothing to append it to yet.</p>
-      <BuildGraph novelId={novelId} label="Rebuild to include it" onDone={onDone} />
+      <p>This chapter is beyond the active graph ceiling. Extend the existing graph to
+        process the next ready chapters in order.</p>
+      <ExtendGraph novelId={novelId} chapter={chapter} onDone={onDone} />
     </div>;
   }
   return null;
@@ -173,13 +278,17 @@ function KnowledgeGate({ novelId, reason, onDone }: { novelId: string; reason: s
 export function ChapterKnowledgeWorkspace({novelId,chapter,at}:{novelId:string;chapter:number;at:number}) {
   const [data,setData]=useState<ChapterKnowledgeResponse|null>(null);
   const [activity,setActivity]=useState<ChapterKnowledgeActivity[]>([]);
+  const [repairStatus,setRepairStatus]=useState<RepairStatus|null>(null);
+  const [ollamaStatus,setOllamaStatus]=useState<"checking"|"connected"|"unreachable">("checking");
   const [error,setError]=useState(""); const [busy,setBusy]=useState(false);
   const [editing,setEditing]=useState<number|null>(null); const [draft,setDraft]=useState("");
   const [editingTerm,setEditingTerm]=useState<string|null>(null); const [termDraft,setTermDraft]=useState("");
   const [decisions,setDecisions]=useState<Record<string,string>>({});
   const load=useCallback(async()=>{const next=await getChapterKnowledge(novelId,chapter);setData(next);return next},[novelId,chapter]);
+  const loadRepair=useCallback(async()=>{const next=await getRepairStatus(novelId);setRepairStatus(next);return next},[novelId]);
+  const refresh=useCallback(async()=>{const [next]=await Promise.all([load(),loadRepair()]);return next},[load,loadRepair]);
 
-  useEffect(()=>{setData(null);setActivity([]);setError("");void load().catch(e=>setError(String(e)))},[load]);
+  useEffect(()=>{setData(null);setActivity([]);setRepairStatus(null);setError("");void refresh().catch(e=>setError(errorMessage(e)))},[refresh]);
   useEffect(()=>{
     const run=data?.run;if(!run)return;let cancelled=false;let timer:number|undefined;
     async function poll(){try{const after=activity.at(-1)?.sequence??0;const response=await getChapterKnowledgeActivity(novelId,chapter,run!.id,after);if(cancelled)return;if(response.activity.length)setActivity(old=>[...old,...response.activity]);const fresh=await load();if(!terminal.has(fresh.run?.state??""))timer=window.setTimeout(poll,2000)}catch{if(!cancelled)timer=window.setTimeout(poll,5000)}}
@@ -188,26 +297,59 @@ export function ChapterKnowledgeWorkspace({novelId,chapter,at}:{novelId:string;c
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[data?.run?.id,data?.run?.state,novelId,chapter,load]);
 
+  const graphActivity = graphBuildActivity(repairStatus);
+  const graphMoving = repairStatus?.requests.some(
+    (item) => item.track === "graph" && (item.state === "pending" || item.state === "running"),
+  ) || repairStatus?.graph.state === "rebuilding";
+  useEffect(()=>{
+    if(!graphMoving)return;
+    const timer=window.setInterval(()=>{void refresh().catch(()=>undefined)},2000);
+    return()=>window.clearInterval(timer);
+  },[graphMoving,refresh]);
+  const watchOllama = !data?.can_extract || !!graphMoving || !!data?.run && !terminal.has(data.run.state);
+  useEffect(()=>{
+    if(!watchOllama)return;
+    let cancelled=false;let timer:number|undefined;
+    async function check(){
+      try{await listOllamaModels(novelId,"graph");if(!cancelled)setOllamaStatus("connected")}
+      catch{if(!cancelled)setOllamaStatus("unreachable")}
+      finally{if(!cancelled)timer=window.setTimeout(check,2000)}
+    }
+    setOllamaStatus("checking");void check();
+    return()=>{cancelled=true;if(timer)window.clearTimeout(timer)};
+  },[novelId,watchOllama]);
+
   // A chapter can finish background publication while this panel is open. Read the
   // current graph fence immediately before every write; §0 still rejects a genuinely
   // concurrent change, but a merely old browser snapshot no longer causes a false stale edit.
-  async function mutate(work:(current:ChapterKnowledgeResponse)=>Promise<unknown>){setBusy(true);setError("");try{const current=await load();await work(current);await load()}catch(e){try{await load()}catch{/* retain the mutation error */}setError(String(e))}finally{setBusy(false)}}
+  async function mutate(work:(current:ChapterKnowledgeResponse)=>Promise<unknown>){setBusy(true);setError("");try{const current=await load();await work(current);await load()}catch(e){try{await load()}catch{/* retain the mutation error */}setError(errorMessage(e))}finally{setBusy(false)}}
   if(!data)return <section className="chapter-knowledge"><h2>Chapter knowledge</h2><p>{error||"Loading knowledge…"}</p></section>;
   const preview=data.run?.preview?.items??[];
   const writable=data.can_extract;
   return <section className="chapter-knowledge" aria-labelledby="chapter-knowledge-heading">
     <header><div><h2 id="chapter-knowledge-heading">Chapter knowledge</h2><p>Extract terms finds this chapter's named terms; extract facts finds the claims it supports. Proposed items stay out of cards and Ask AI until published.</p></div>
       <span className="knowledge-actions"><button disabled={!writable||busy||!!data.run&&!terminal.has(data.run.state)} onClick={()=>void mutate(()=>startChapterReextract(novelId,chapter,"terms"))}>Extract terms</button><button disabled={!writable||busy||!!data.run&&!terminal.has(data.run.state)} onClick={()=>void mutate(()=>startChapterReextract(novelId,chapter,"facts"))}>Extract facts</button></span></header>
+    <dl className="repair-review-progress" aria-label="Extraction status">
+      <div><dt>Terms</dt><dd>{extractionStatus(data,"terms")}</dd></div>
+      <div><dt>Facts</dt><dd>{extractionStatus(data,"facts")}</dd></div>
+      {watchOllama&&<div><dt>Local model</dt><dd>{ollamaStatus==="connected"?"Connected":ollamaStatus==="checking"?"Checking…":"Unreachable"}</dd></div>}
+    </dl>
+    {watchOllama&&ollamaStatus==="unreachable"&&<p role="alert" className="reader-pane-error">Local Ollama is unreachable. Graph extraction cannot continue until the server and its connection are available.</p>}
     {error&&<p role="alert" className="reader-pane-error">{error}</p>}
-    {!writable&&<KnowledgeGate novelId={novelId} reason={data.blocked_reason} onDone={load} />}
-    <details open><summary>Activity {data.run&&`— ${data.run.scope} ${data.run.state.replace("_"," ")}`}</summary>
-      {activity.length===0?<p>No active extraction activity.</p>:<ol className="knowledge-activity">{activity.map(a=><li key={a.sequence}><time>{new Date(a.created_at).toLocaleTimeString()}</time> <span className={`knowledge-badge phase-${a.phase}`}>{a.phase}</span> {a.item_kind} {a.phase==="proposed"&&<em> — unverified</em>}</li>)}</ol>}
+    {!writable&&<KnowledgeGate novelId={novelId} chapter={chapter} reason={data.blocked_reason} repairStatus={repairStatus} onDone={refresh} />}
+    <details open><summary>Activity {data.run?`— ${data.run.scope} ${data.run.state.replace("_"," ")}`:graphActivity&&"— book graph"}</summary>
+      {!graphActivity&&activity.length===0?<p>No active extraction activity.</p>:<ol className="knowledge-activity">
+        {graphActivity&&<li key="graph-build">{graphActivity.at&&<time>{new Date(graphActivity.at).toLocaleTimeString()}</time>} <span className="knowledge-badge">{graphActivity.stage}</span> {graphActivity.text}</li>}
+        {activity.map(a=><li key={a.sequence}><time>{new Date(a.created_at).toLocaleTimeString()}</time> <span className={`knowledge-badge phase-${a.phase}`}>{a.phase}</span> {a.item_kind} {a.phase==="proposed"&&<em> — unverified</em>}</li>)}
+      </ol>}
       {data.run?.state==="awaiting_review"&&<div className="knowledge-review"><h3>{data.run.scope==="terms"?"Term extraction review":"Fact extraction review"}</h3><p>{data.run.scope==="terms"?"Publish verified term occurrences. This does not extract or change facts.":"Nothing below changes the graph unless you explicitly select it. Missing model claims default to retain."}</p>
         {preview.map(item=><label key={item.item_key}><span>{item.item_kind}: {item.classification.replace("_"," ")}</span>{item.item_kind==="term"?<small>Verified terms will be published; the term itself remains editable below.</small>:<select value={decisions[item.item_key]??"retain"} onChange={e=>setDecisions(old=>({...old,[item.item_key]:e.target.value}))}><option value="retain">Retain current knowledge</option>{item.classification==="new"&&<option value="approve">Publish new item</option>}{item.classification==="display_update"&&<option value="update_display">Update English display</option>}{item.classification==="possible_replacement"&&<option value="replace">Publish correction</option>}{item.classification==="missing"&&<option value="remove">Publish retraction</option>}</select>}</label>)}
         <button disabled={busy} onClick={()=>void mutate(current=>applyChapterReextract(novelId,chapter,current.run?.id||data.run!.id,{revision_id:current.revision_id,version:current.version,decisions}))}>{data.run.scope==="terms"?"Publish verified terms":Object.values(decisions).some(v=>v!=="retain")?"Apply selected changes":"Finish review — retain everything"}</button></div>}
     </details>
-    <details open><summary>Facts ({data.facts.length})</summary>
-      {data.facts.length===0?<p>No published facts originated here.</p>:<ul className="chapter-knowledge-list">{data.facts.map(f=><li key={f.id} className={f.status!=="active"?"knowledge-history":""}>
+    <details open><summary>Facts ({data.facts.length} published)</summary>
+      {data.facts.length===0?<p>{data.graph_extraction?.state==="done"
+        ? `${data.graph_extraction.published_fact_rows} fact rows (${data.graph_extraction.verified_claims} verified claims total) are in the rebuild awaiting review and activation.`
+        : "No published facts originated here."}</p>:<ul className="chapter-knowledge-list">{data.facts.map(f=><li key={f.id} className={f.status!=="active"?"knowledge-history":""}>
         <div><strong>{f.entity_canonical}</strong> — {f.attribute}: {f.value} {f.kind!=="assertion"&&<span className="knowledge-badge">{f.kind}</span>} {f.status!=="active"&&<span className="knowledge-badge">{f.status}</span>}</div>
         <small>Source: {f.value_source}{f.evidence?.quote&&<> · Evidence: “{f.evidence.quote}”</>}</small>
         {f.status==="active"&&<div className="knowledge-actions">{editing===f.id?<><input aria-label="English display value" value={draft} onChange={e=>setDraft(e.target.value)}/><button disabled={!writable||busy||!draft.trim()} onClick={()=>void mutate(async current=>{await editFactDisplay(novelId,f.id,{revision_id:current.revision_id,version:current.version,value_en:draft.trim()});setEditing(null)})}>Save display</button><button onClick={()=>setEditing(null)}>Cancel</button></>:<button disabled={!writable} onClick={()=>{setEditing(f.id);setDraft(f.value)}}>Edit English</button>}

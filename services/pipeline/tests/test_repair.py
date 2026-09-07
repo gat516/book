@@ -11,7 +11,7 @@ import json
 import re
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -41,6 +41,8 @@ def test_failure_category_classifies_repair_action_errors():
         (RuntimeError("Ollama exhausted num_predict; refusing incomplete output"),
          "output_truncated"),
         (TimeoutError("timed out"), "timeout"),
+        (AdmissionRejected("provider unreachable: ReadTimeout"), "model_unreachable"),
+        (ValueError("extraction prompt changed; create a new revision"), "model_changed"),
         (OSError("connection refused"), "model_unreachable"),
         # The literal string httpx produces when the endpoint is gone.
         (ConnectionError("All connection attempts failed"), "model_unreachable"),
@@ -116,7 +118,8 @@ async def test_claim_marks_running_then_done(db_conn, monkeypatch):
 
     async with db_conn.transaction(force_rollback=True):
         novel = await make_novel(db_conn)
-        request_id = await _request(db_conn, novel, params={"model": "qwen3:4b"})
+        request_id = await _request(db_conn, novel,
+                                    params={"model": "qwen3:4b", "upto_chapter": 4})
 
         prepared = AsyncMock(return_value=str(uuid.uuid4()))
         monkeypatch.setattr(graph_rebuild, "prepare", prepared)
@@ -132,6 +135,26 @@ async def test_claim_marks_running_then_done(db_conn, monkeypatch):
         assert (state, attempts, category, retry_at) == ("done", 1, None, None)
         # The model name reached graph_rebuild.prepare unchanged.
         assert prepared.await_args.args[3] == "qwen3:4b"
+        assert prepared.await_args.kwargs == {"upto_chapter": 4}
+
+
+@pytest.mark.db
+async def test_extend_request_targets_the_active_revision(db_conn, monkeypatch):
+    from pipeline import graph_rebuild
+
+    async with db_conn.transaction(force_rollback=True):
+        novel = await make_novel(db_conn)
+        request_id = await _request(db_conn, novel, action="extend",
+                                    params={"upto_chapter": 7})
+        extended = AsyncMock(return_value={"revision": "r", "added": [6, 7]})
+        monkeypatch.setattr(graph_rebuild, "extend", extended)
+
+        row = await repair._claim(db_conn, novel)
+        result = await repair._run(db_conn, object(), row)
+        await repair._finish(db_conn, request_id, result)
+
+        assert result["added"] == [6, 7]
+        extended.assert_awaited_once_with(db_conn, ANY, novel, upto_chapter=7)
 
 
 @pytest.mark.db
@@ -256,6 +279,171 @@ async def test_prepare_rejects_a_missing_model(db_conn):
         row = await repair._claim(db_conn, novel)
         with pytest.raises(ValueError, match="model name"):
             await repair._run(db_conn, object(), row)
+
+
+@pytest.mark.db
+async def test_prepare_starts_from_empty_after_reader_deletes_graph(db_conn, monkeypatch):
+    """Deleting a graph must not strand the book with no path to a fresh revision."""
+    from pipeline import graph_rebuild
+
+    ontology = {"kinds": ["character"], "attributes": []}
+    identity = {"provider": "ollama", "name": "test", "digest": "digest"}
+    monkeypatch.setattr(graph_rebuild, "local_model", AsyncMock(return_value=identity))
+    monkeypatch.setattr(graph_rebuild, "objects", lambda _cfg: None)
+
+    async with db_conn.transaction(force_rollback=True):
+        novel = await make_novel(db_conn, ontology=json.dumps(ontology))
+        await db_conn.execute("UPDATE novel SET active_graph_revision=NULL WHERE id=%s", (novel,))
+        await db_conn.execute("DELETE FROM graph_revision WHERE novel_id=%s", (novel,))
+
+        rid = await graph_rebuild.prepare(db_conn, object(), novel, "test")
+
+        row = await (await db_conn.execute(
+            "SELECT state,trusted,legacy FROM graph_revision WHERE id=%s", (rid,))).fetchone()
+        assert row == ("staging", False, False)
+        audit = await (await db_conn.execute(
+            "SELECT action,detail->>'from_empty' FROM graph_audit WHERE revision_id=%s", (rid,))).fetchone()
+        assert audit == ("prepare", "true")
+
+
+@pytest.mark.db
+async def test_prepare_snapshots_only_the_contiguous_prefix_through_ceiling(db_conn, monkeypatch):
+    from pipeline import graph_rebuild
+
+    ontology = {"kinds": ["character"], "attributes": [], "relations": []}
+    identity = {"provider": "ollama", "name": "test", "digest": "digest"}
+    monkeypatch.setattr(graph_rebuild, "local_model", AsyncMock(return_value=identity))
+    monkeypatch.setattr(graph_rebuild, "objects", lambda _cfg: None)
+    monkeypatch.setattr(graph_rebuild, "read_object", lambda _client, _cfg, uri: uri)
+
+    async with db_conn.transaction(force_rollback=True):
+        novel = await make_novel(db_conn, ontology=json.dumps(ontology))
+        for chapter, status in [(1, "done"), (2, "pending"), (3, "done"), (4, "done")]:
+            await db_conn.execute('''INSERT INTO chapter
+                (novel_id,chapter_index,raw_hash,raw_uri,translated_uri,source_meta,status,translation_ready)
+                VALUES(%s,%s,%s,%s,%s,'{}',%s,%s)''',
+                (novel,chapter,f"raw-{chapter}",f"raw-{chapter}",f"display-{chapter}",status,status=="done"))
+
+        rid=await graph_rebuild.prepare(db_conn,object(),novel,"test",upto_chapter=3)
+        snapshot=(await(await db_conn.execute(
+            "SELECT snapshot FROM graph_revision WHERE id=%s",(rid,))).fetchone())[0]
+        jobs=await(await db_conn.execute(
+            "SELECT chapter_index FROM graph_job WHERE revision_id=%s ORDER BY chapter_index",(rid,))).fetchall()
+
+        assert [c["chapter"] for c in snapshot["chapters"]] == [1]
+        assert snapshot["upto_chapter"] == 3
+        assert jobs == [(1,)]
+
+
+@pytest.mark.db
+async def test_enqueue_completed_respects_ceiling_and_stops_at_gap(db_conn, monkeypatch):
+    from pipeline import graph_rebuild
+    from pipeline.evidence import digest
+    from psycopg.types.json import Jsonb
+
+    monkeypatch.setattr(graph_rebuild, "objects", lambda _cfg: None)
+    monkeypatch.setattr(graph_rebuild, "read_object", lambda _client, _cfg, uri: uri)
+    async with db_conn.transaction(force_rollback=True):
+        novel=await make_novel(db_conn,ontology='{"kinds":[],"attributes":[],"relations":[]}')
+        old=(await(await db_conn.execute(
+            "SELECT active_graph_revision FROM novel WHERE id=%s",(novel,))).fetchone())[0]
+        await db_conn.execute("UPDATE graph_revision SET state='archived' WHERE id=%s",(old,))
+        chapter_one=dict(chapter=1,raw_uri="raw-1",translated_uri="display-1",raw_hash="raw-1",
+                         source_hash=digest("raw-1"),display_hash=digest("display-1"))
+        model={"provider":"ollama","name":"test","digest":"digest"}
+        rid=(await(await db_conn.execute('''INSERT INTO graph_revision
+            (novel_id,state,trusted,legacy,ontology,model,snapshot)
+            VALUES(%s,'active',true,false,'{}',%s,%s) RETURNING id::text''',
+            (novel,Jsonb(model),Jsonb({"chapters":[chapter_one],"upto_chapter":3,"start_chapter":1})))).fetchone())[0]
+        await db_conn.execute("UPDATE novel SET active_graph_revision=%s WHERE id=%s",(rid,novel))
+        for chapter, ready in [(1, True), (2, False), (3, True), (4, True)]:
+            await db_conn.execute('''INSERT INTO chapter
+                (novel_id,chapter_index,raw_hash,raw_uri,translated_uri,source_meta,status,translation_ready)
+                VALUES(%s,%s,%s,%s,%s,'{}','done',%s)''',
+                (novel,chapter,f"raw-{chapter}",f"raw-{chapter}",f"display-{chapter}",ready))
+
+        first=await graph_rebuild.enqueue_completed(db_conn,object(),novel)
+        assert first["added"] == [] and first["first_gap"] == 2
+        await db_conn.execute("UPDATE chapter SET translation_ready=true WHERE novel_id=%s AND chapter_index=2",(novel,))
+        second=await graph_rebuild.enqueue_completed(db_conn,object(),novel)
+
+        assert second["added"] == [2,3]
+        snapshot=(await(await db_conn.execute("SELECT snapshot FROM graph_revision WHERE id=%s",(rid,))).fetchone())[0]
+        assert [c["chapter"] for c in snapshot["chapters"]] == [1,2,3]
+        assert all(c["chapter"] != 4 for c in snapshot["chapters"])
+
+
+@pytest.mark.db
+async def test_one_fact_exhaustive_review_is_eligible(db_conn, monkeypatch):
+    from pipeline import graph_rebuild
+    from pipeline.evidence import PROMPT_VERSION, digest
+    from psycopg.types.json import Jsonb
+
+    monkeypatch.setattr(graph_rebuild, "objects", lambda _cfg: None)
+    monkeypatch.setattr(graph_rebuild, "read_object", lambda _client, _cfg, uri: uri)
+    async with db_conn.transaction(force_rollback=True):
+        novel=await make_novel(db_conn,ontology='{"kinds":["character"],"attributes":[],"relations":[]}')
+        await db_conn.execute('''INSERT INTO chapter
+            (novel_id,chapter_index,raw_hash,raw_uri,translated_uri,source_meta,status,translation_ready)
+            VALUES(%s,1,'raw-1','raw-1','display-1','{}','done',true)''',(novel,))
+        await db_conn.execute('''INSERT INTO chapter
+            (novel_id,chapter_index,raw_hash,raw_uri,translated_uri,source_meta,status,translation_ready)
+            VALUES(%s,2,'raw-2','raw-2','display-2','{}','done',true)''',(novel,))
+        snapshot={"chapters":[dict(chapter=1,raw_uri="raw-1",translated_uri="display-1",raw_hash="raw-1",
+                     source_hash=digest("raw-1"),display_hash=digest("display-1"))],
+                  "glossary":[],"progress":[],"upto_chapter":1,"start_chapter":1}
+        model={"provider":"ollama","name":"test","digest":"digest"}
+        rid=(await(await db_conn.execute('''INSERT INTO graph_revision
+            (novel_id,ontology,model,snapshot,prompt_version)
+            VALUES(%s,'{"kinds":["character"]}',%s,%s,%s) RETURNING id::text''',
+            (novel,Jsonb(model),Jsonb(snapshot),PROMPT_VERSION))).fetchone())[0]
+        await db_conn.execute("SELECT set_config('app.graph_revision',%s,true),set_config('app.graph_generation','1',true)",(rid,))
+        await db_conn.execute('''INSERT INTO graph_job
+            (revision_id,chapter_index,state,input_hash,model_identity,generation)
+            VALUES(%s,1,'done','h','m',1)''',(rid,))
+        evidence=str(uuid.uuid4());mention=str(uuid.uuid4());entity=str(uuid.uuid4())
+        await db_conn.execute('''INSERT INTO graph_evidence
+            (id,revision_id,novel_id,chapter_index,source_hash,char_start,char_end,quote)
+            VALUES(%s,%s,%s,1,%s,0,3,'raw')''',(evidence,rid,novel,digest("raw-1")))
+        await db_conn.execute('''INSERT INTO source_mention
+            (id,revision_id,novel_id,chapter_index,surface,kind,evidence_id)
+            VALUES(%s,%s,%s,1,'Hero','character',%s)''',(mention,rid,novel,evidence))
+        await db_conn.execute('''INSERT INTO entity
+            (id,novel_id,kind,canonical,first_seen_chapter,revision_id)
+            VALUES(%s,%s,'character','Hero',1,%s)''',(entity,novel,rid))
+        await db_conn.execute('''INSERT INTO mention_binding
+            (revision_id,mention_id,known_from_chapter,entity_id,evidence_id)
+            VALUES(%s,%s,1,%s,%s)''',(rid,mention,entity,evidence))
+        fact=(await(await db_conn.execute('''INSERT INTO fact
+            (novel_id,entity_id,attribute,value,valid_from_chapter,source_chapter,
+             revision_id,evidence_id,claim_key)
+            VALUES(%s,%s,'status','awake',1,1,%s,%s,'one') RETURNING id''',
+            (novel,entity,rid,evidence))).fetchone())[0]
+
+        report=await graph_rebuild.preview(db_conn,object(),rid)
+        assert report["mentions"] == [dict(id=mention,chapter=1,surface="Hero",kind="character",entity="Hero",quote="raw",
+                                           target_context="display-1",entity_source="Hero")]
+        assert report["claims"][0]["target_context"] == "display-1"
+        assert report["claims"][0]["value"] == "awake"
+        reviewed=await graph_rebuild.record_review(db_conn,object(),rid,dict(
+            review_hash=report["review_hash"],reviewer="operator",approved=True,
+            known_merge_regressions=0,
+            mentions=[dict(id=mention,correct=True,unambiguous=True)],
+            facts=[dict(id=fact,correct=True)]))
+
+        assert reviewed["activation_eligible"] is True
+        monkeypatch.setattr(graph_rebuild,"local_model",AsyncMock(return_value=model))
+        await graph_rebuild.switch(db_conn,object(),rid,reviewed["review_hash"])
+        after_activation=(await(await db_conn.execute(
+            "SELECT snapshot FROM graph_revision WHERE id=%s",(rid,))).fetchone())[0]
+        assert [c["chapter"] for c in after_activation["chapters"]] == [1]
+
+        result=await graph_rebuild.extend(db_conn,object(),novel,upto_chapter=2)
+        after_extension=(await(await db_conn.execute(
+            "SELECT snapshot FROM graph_revision WHERE id=%s",(rid,))).fetchone())[0]
+        assert result["revision"] == rid
+        assert result["added"] == [2]
+        assert [c["chapter"] for c in after_extension["chapters"]] == [1,2]
 
 
 @pytest.mark.db

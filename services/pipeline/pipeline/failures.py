@@ -65,6 +65,11 @@ def failure_category(exc: BaseException) -> str:
     otherwise read as a refused connection.
     """
     text = f"{type(exc).__name__}: {exc}".lower()
+    # A long-lived worker can encounter a revision created after its process loaded an
+    # older prompt contract. This is actionable process/config drift, not an unknown
+    # extraction failure; restarting the worker lets the current contract resume it.
+    if "prompt changed; create a new" in text:
+        return "model_changed"
     if "model or inference configuration changed" in text:
         return "model_changed"
     if "serving identity changed" in text:
@@ -94,6 +99,12 @@ def failure_category(exc: BaseException) -> str:
         return "review_rejected"
     if "not found" in text or "no such" in text:
         return "not_found"
+    # provider_error wraps transport exceptions as "provider unreachable: <type>".
+    # Check that explicit wrapper before the generic timeout words: a ReadTimeout while
+    # opening the Ollama response means the connection disappeared, not that an admitted
+    # chapter generation exhausted its first-token/idle/total budget.
+    if "provider unreachable" in text:
+        return "model_unreachable"
     if "timeout" in text or "timed out" in text or "deadline" in text:
         return "timeout"
     # httpx raises ConnectError("All connection attempts failed"), which matched none of

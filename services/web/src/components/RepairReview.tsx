@@ -8,12 +8,6 @@ import type {
   RepairTrackName,
 } from "../types";
 
-// Thresholds record_review enforces server-side (graph_rebuild.qualified). Shown here only
-// so the reviewer can see the gate approaching; nothing on this screen decides anything.
-// A submission that falls short is rejected by the server, not hidden by this component.
-const MIN_MENTIONS = 60;
-const MIN_FACTS = 30;
-
 interface Props {
   novelId: string;
   track: RepairTrackName;
@@ -97,9 +91,9 @@ export function RepairReview({ novelId, track, onSubmitted, onClose }: Props) {
 
   const assessedMentions = Object.keys(mentions).length;
   const assessedFacts = Object.keys(facts).length;
-  // record_review requires EVERY published claim to be assessed exactly once, so an
-  // incomplete fact list is rejected outright rather than scored.
+  const allMentionsAssessed = reportMentions.length > 0 && assessedMentions === reportMentions.length;
   const allFactsAssessed = reportClaims.length > 0 && assessedFacts === reportClaims.length;
+  const exhaustiveGraphReview = track !== "graph" || (allMentionsAssessed && allFactsAssessed);
 
   async function submit() {
     if (!reviewHash || !reviewer.trim()) return;
@@ -185,7 +179,7 @@ export function RepairReview({ novelId, track, onSubmitted, onClose }: Props) {
       </header>
 
       <p className="novel-create-form-hint">
-        Assess each identity and each claim against its source quote. Scores are computed
+        Assess each proposed fact, then each identity link, against its translated context. Scores are computed
         by the server from these answers and the stored bindings — this screen never
         decides whether the rebuild qualifies.
       </p>
@@ -193,15 +187,12 @@ export function RepairReview({ novelId, track, onSubmitted, onClose }: Props) {
       <dl className="repair-review-progress">
         <div>
           <dt>Identities assessed</dt>
-          <dd>
-            {assessedMentions} / {MIN_MENTIONS} needed
-          </dd>
+          <dd>{assessedMentions} / {reportMentions.length}</dd>
         </div>
         <div>
           <dt>Claims assessed</dt>
           <dd>
             {assessedFacts} / {reportClaims.length} published
-            {reportClaims.length < MIN_FACTS ? ` (${MIN_FACTS} needed to activate)` : ""}
           </dd>
         </div>
         <div>
@@ -210,7 +201,43 @@ export function RepairReview({ novelId, track, onSubmitted, onClose }: Props) {
         </div>
       </dl>
 
-      <h4>Identities</h4>
+      <h4>Proposed facts ({reportClaims.length})</h4>
+      {reportClaims.length === 0 && <p role="status">No facts were published into this rebuild.</p>}
+      <ul className="repair-review-list">
+        {reportClaims.map((claim) => (
+          <li key={claim.id}>
+            <p className="repair-review-surface">
+              <strong>Proposed fact:</strong> {claim.entity ?? "Unknown subject"} — {claim.attribute}: {claim.value}
+              {claim.chapter !== undefined && <small> · chapter {claim.chapter}</small>}
+            </p>
+            <p><strong>Translated evidence</strong></p>
+            {(claim.target_context ?? claim.quote) && <blockquote>{claim.target_context ?? claim.quote}</blockquote>}
+            {claim.target_context && <details>
+              <summary>Source-language audit record</summary>
+              <p>{claim.entity_source ?? claim.entity}</p>
+              {claim.quote && <blockquote>{claim.quote}</blockquote>}
+            </details>}
+            <fieldset>
+              <legend>Does the translated evidence support this proposed fact?</legend>
+              <label>
+                <input type="radio" name={`fact-${claim.id}`}
+                  checked={facts[claim.id] === true}
+                  onChange={() => setFacts((current) => ({ ...current, [claim.id]: true }))} />{" "}
+                Supported
+              </label>
+              <label>
+                <input type="radio" name={`fact-${claim.id}`}
+                  checked={facts[claim.id] === false}
+                  onChange={() => setFacts((current) => ({ ...current, [claim.id]: false }))} />{" "}
+                Not supported
+              </label>
+            </fieldset>
+          </li>
+        ))}
+      </ul>
+
+      <h4>Identity links ({reportMentions.length})</h4>
+      <p className="novel-create-form-hint">These are term-to-entity checks used to prevent two characters or concepts from being merged. They are separate from the proposed facts above.</p>
       {reportMentions.length === 0 && <p role="status">No identities to review.</p>}
       <ul className="repair-review-list">
         {reportMentions.map((mention) => {
@@ -218,11 +245,17 @@ export function RepairReview({ novelId, track, onSubmitted, onClose }: Props) {
           return (
             <li key={mention.id}>
               <p className="repair-review-surface">
-                {mention.surface}
+                <strong>Identity decision:</strong>{" "}
+                {mention.entity ? `link this named ${mention.kind ?? "term"} occurrence` : `leave this ${mention.kind ?? "term"} occurrence unlinked`}
                 {mention.chapter !== undefined && <small> · chapter {mention.chapter}</small>}
-                {mention.entity ? <small> → {mention.entity}</small> : <small> → unlinked</small>}
               </p>
-              {mention.quote && <blockquote>{mention.quote}</blockquote>}
+              <p><strong>Translated context</strong></p>
+              {(mention.target_context ?? mention.quote) && <blockquote>{mention.target_context ?? mention.quote}</blockquote>}
+              {mention.target_context && <details>
+                <summary>Source-language audit record</summary>
+                <p>{mention.surface}{mention.entity ? <> → {mention.entity}</> : <> → unlinked</>}</p>
+                {mention.quote && <blockquote>{mention.quote}</blockquote>}
+              </details>}
               <label>
                 <input
                   type="checkbox"
@@ -260,30 +293,6 @@ export function RepairReview({ novelId, track, onSubmitted, onClose }: Props) {
         })}
       </ul>
 
-      <h4>Published claims</h4>
-      {reportClaims.length === 0 && <p role="status">No claims were published.</p>}
-      <ul className="repair-review-list">
-        {reportClaims.map((claim) => (
-          <li key={claim.id}>
-            <p className="repair-review-surface">
-              {claim.entity} · {claim.attribute} = {claim.value}
-              {claim.chapter !== undefined && <small> · chapter {claim.chapter}</small>}
-            </p>
-            {claim.quote && <blockquote>{claim.quote}</blockquote>}
-            <label>
-              <input
-                type="checkbox"
-                checked={facts[claim.id] ?? false}
-                onChange={(event) =>
-                  setFacts((current) => ({ ...current, [claim.id]: event.target.checked }))
-                }
-              />{" "}
-              Claim is supported by this quote
-            </label>
-          </li>
-        ))}
-      </ul>
-
       <div className="repair-review-submit">
         <label>
           Reviewer
@@ -302,13 +311,14 @@ export function RepairReview({ novelId, track, onSubmitted, onClose }: Props) {
             onChange={(event) => setRegressions(Math.max(0, Number(event.target.value)))}
           />
         </label>
-        <button type="button" onClick={() => void submit()} disabled={saving || !reviewer.trim()}>
+        <button type="button" onClick={() => void submit()}
+          disabled={saving || !reviewer.trim() || !exhaustiveGraphReview}>
           {saving ? "Submitting…" : "Submit review"}
         </button>
-        {!allFactsAssessed && reportClaims.length > 0 && (
+        {track === "graph" && !exhaustiveGraphReview && (
           <p className="novel-create-form-hint">
-            Every published claim must be assessed before the server will accept the
-            review.
+            Every source identity and published claim must be assessed. Small revisions
+            can activate once everything present is reviewed and passes the accuracy gate.
           </p>
         )}
       </div>

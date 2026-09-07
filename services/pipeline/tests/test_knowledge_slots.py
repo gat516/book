@@ -63,9 +63,8 @@ def test_name_slots_are_fixed_and_only_materialize_source_valid_names():
     schema=name_schema(list(contract.by_id),['character','place'])
     assert schema['required']==['n1','n2','n3','n4','n5','n6']
     assert '$defs' not in schema and 'maxItems' not in json.dumps(schema)
-    placeholder=dict(named=False,surface='',kind='character',passage_id=contract.passages[0]['id'])
-    body={f'n{i}':dict(placeholder) for i in range(1,7)}
-    body['n1']=dict(named=True,surface='凌峰',kind='character',passage_id=contract.passages[0]['id'])
+    body={f'n{i}':None for i in range(1,7)}
+    body['n1']=dict(surface='凌峰',kind='character',passage_id=contract.passages[0]['id'])
     names=materialize_names(body,contract,dict(kinds=['character','place']))
     assert [name.surface for name in names.names]==['凌峰']
 
@@ -81,7 +80,7 @@ def test_recall_requires_review_of_published_fact_ids():
 
 @pytest.mark.db
 async def test_cross_batch_identity_and_pronoun_claim_through_wire_and_publication(db_conn):
-    source='\n'.join(['青山来了。']*7+['他右臂受伤。'])
+    source='\n'.join(['青山来了。']*13+['他右臂受伤。'])
     names=Names(names=[dict(surface='青山',kind='character',named=True,
                            quote='青山来了。',evidence_start=0)])
     async with db_conn.transaction(force_rollback=True):
@@ -133,8 +132,10 @@ async def test_cross_batch_identity_and_pronoun_claim_through_wire_and_publicati
         engine.provider.complete=complete
         try:
             output=await engine.extract(novel,1,source,'','en')
-            assert output['diagnostics']['verified_identities']==7
+            assert output['diagnostics']['verified_identities']==13
             assert output['diagnostics']['verified_claims']==1
+            identity_payloads=[payload for payload in seen if 'identity_occurrences' in payload]
+            assert [len(payload['identity_occurrences']) for payload in identity_payloads]==[12,1]
             await db_conn.execute("INSERT INTO glossary(novel_id,source_term,target_term,locked_at_chapter,constraint_class) VALUES(%s,'青山','Qing Shan',0,'character_name')",(novel,))
             await db_conn.execute("SELECT set_config('app.graph_revision',%s,true),set_config('app.graph_generation','1',true)",(rid,))
             state=PipelineState(envelope=ChapterEnvelope(novel_id=novel,chapter_index=1,source_lang='zh',raw_text=source))
@@ -159,7 +160,7 @@ async def test_subdivision_preserves_parent_antecedent_ranges():
             value=str(i),value_en=str(i),quote=source,evidence_start=0) for i in range(n)])
     engine.call=call
     focus=source_passages(source,max_chars=400,overlap=0)[1]
-    await engine._claims_for_focus(source,[m],ONTOLOGY,focus)
+    await engine._claims_for_focus(source,[m],ONTOLOGY,focus,passage_chars=400)
     assert len(seen)>1
     assert all(p['verified_occurrences'][0]['surface']=='青山' for p in seen)
     # The top-level call re-slices nothing, so its context IS its offered passages;
@@ -176,6 +177,73 @@ async def test_subdivision_preserves_parent_antecedent_ranges():
                  if q['id']==p['focus_passage_ids'][0]]
         start,end=offered[0]['char_start'],offered[0]['char_end']
         assert all(hi<=start or lo>=end for lo,hi in ranges)
+
+
+async def test_default_claim_window_offers_broader_neighbor_context():
+    from pipeline.evidence import ClaimProposals
+    first='青山来到山门。'+'甲'*500
+    middle='他向守卫出示令牌。'+'乙'*500
+    last='守卫打开大门。'+'丙'*500
+    source='\n'.join([first,middle,last])
+    mention=dict(id='m',surface='青山',kind='character',char_start=0,char_end=2,quote=first)
+    focus=source_passages(source,max_chars=1200,overlap=0)[1]
+    engine=object.__new__(KnowledgeEngine);seen=[]
+    async def call(_stage,_schema,payload):
+        seen.append(payload)
+        return ClaimProposals(claims=[])
+    engine.call=call
+    await engine._claims_for_focus(source,[mention],ONTOLOGY,focus)
+    assert len(seen)==1
+    payload=seen[0]
+    assert payload['_passage_max_chars']==1200
+    offered={p['id'] for p in source_passages(source,max_chars=1200,overlap=0)}
+    assert set(payload['_passage_ids'])==offered
+    assert payload['verified_occurrences'][0]['surface']=='青山'
+
+
+async def test_oversized_claim_context_splits_before_inference():
+    from pipeline.evidence import ClaimProposals
+    source='青山做事。'+'甲'*900
+    mention=dict(id='m',surface='青山',kind='character',char_start=0,char_end=2,quote=source[:5])
+    focus=source_passages(source,max_chars=1200,overlap=0)[0]
+    engine=object.__new__(KnowledgeEngine);seen=[]
+    async def call(_stage,_schema,payload):
+        seen.append(payload['_passage_max_chars'])
+        if payload['_passage_max_chars']>600:
+            raise ValueError('graph context exceeds hard local model budget; bounded caller contract regressed')
+        return ClaimProposals(claims=[])
+    engine.call=call
+    await engine._claims_for_focus(source,[mention],ONTOLOGY,focus)
+    assert seen[0]==1200 and all(size==600 for size in seen[1:])
+    assert engine._claim_context_splits==1
+
+
+async def test_oversized_identity_context_halves_batch_and_records_sizes():
+    from pipeline.evidence import IdentityDecisions, Verification
+    lines=[f'青山{i}来了。' for i in range(7)]
+    source='\n'.join(lines);mentions=[];offset=0
+    for i,line in enumerate(lines):
+        surface=f'青山{i}'
+        mentions.append(dict(id=f'm{i}',surface=surface,kind='character',
+            char_start=offset,char_end=offset+len(surface),quote=line))
+        offset+=len(line)+1
+    engine=object.__new__(KnowledgeEngine)
+    async def call(stage,_schema,payload):
+        if stage=='identity_slots':
+            if len(payload['identity_occurrences'])>3:
+                raise ValueError('graph context exceeds hard local model budget; bounded caller contract regressed')
+            return IdentityDecisions(decisions=[dict(occurrence_ref=row['occurrence_ref'],
+                outcome='new',target_ref=row['occurrence_ref'],reason_code='new_first_appearance',
+                explanation='first appearance',quote=row['subject']['quote'],
+                evidence_start=row['subject']['char_start']) for row in payload['identity_occurrences']])
+        return Verification(verdicts=[dict(id=item['item_ref'],supported=True,reason='supported')
+                                      for item in payload['items']])
+    engine.call=call
+    verified,rejected,count=await engine._resolve_incremental(
+        source,mentions,{m['id']:[] for m in mentions},ONTOLOGY)
+    assert not rejected and count==len(verified)==7
+    assert engine._identity_batch_sizes==[3,3,1]
+    assert engine._identity_context_splits==1
 
 
 def _claims_engine(recorded=None):
@@ -209,7 +277,7 @@ async def test_top_level_claims_never_offer_two_ids_for_the_same_source_text():
     engine.provider.complete=AsyncMock(return_value=Completion(text=json.dumps(body),
         served_provider='ollama',served_model='test'))
     try:
-        await engine._claims_for_focus(source,[m],ONTOLOGY,focus)
+        await engine._claims_for_focus(source,[m],ONTOLOGY,focus,passage_chars=400)
         schema=engine.provider.complete.call_args.kwargs['json_schema']
         offered=schema['$defs']['ClaimProposal']['properties']['passage_ids']['items']['enum']
         by_id={p['id']:p for p in source_passages(source,max_chars=400,overlap=0)}
@@ -239,7 +307,8 @@ async def test_claim_citing_only_context_is_rejected_without_failing_the_run():
     engine.provider.complete=AsyncMock(return_value=Completion(text=json.dumps(body),
         served_provider='ollama',served_model='test'))
     try:
-        claims,rejected,proposed=await engine._claims_for_focus(source,[m],ONTOLOGY,focus)
+        claims,rejected,proposed=await engine._claims_for_focus(
+            source,[m],ONTOLOGY,focus,passage_chars=400)
         # One bad citation costs one claim, not the whole chapter's extraction.
         assert [c.value for c in claims]==['做事']
         # Saturation is measured on what the model emitted, not on what survived.

@@ -536,7 +536,7 @@ func (s *Store) GetEntity(
 			return err
 		}
 		if err := tx.QueryRow(ctx,
-			`SELECT id::text, canonical, kind, first_seen_chapter
+			`SELECT id::text, COALESCE(canonical_en,canonical), kind, first_seen_chapter
 			 FROM entity
 			 WHERE novel_id = $1 AND id = $2 AND first_seen_chapter <= $3`,
 			novelID, entityID, at,
@@ -650,10 +650,10 @@ func (s *Store) ListWiki(ctx context.Context, novelID string, at int) ([]EntityS
 	entities := []EntitySummary{}
 	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT id::text, canonical, kind, first_seen_chapter
+			`SELECT id::text, COALESCE(canonical_en,canonical), kind, first_seen_chapter
 			 FROM entity
 			 WHERE novel_id = $1 AND first_seen_chapter <= $2
-			 ORDER BY first_seen_chapter, canonical, id`, novelID, at)
+			 ORDER BY first_seen_chapter, COALESCE(canonical_en,canonical), id`, novelID, at)
 		if err != nil {
 			return err
 		}
@@ -753,7 +753,7 @@ func listEventsInTx(ctx context.Context, tx pgx.Tx, novelID string, chapter *int
 
 	for index := range events {
 		argumentRows, err := tx.Query(ctx,
-			`SELECT a.role,a.surface,visible.id::text,visible.canonical,visible.kind,visible.first_seen_chapter
+			`SELECT a.role,a.surface,visible.id::text,COALESCE(visible.canonical_en,visible.canonical),visible.kind,visible.first_seen_chapter
 			 FROM chapter_event_argument a
 			 LEFT JOIN entity visible ON visible.id=a.entity_id
 			   AND visible.revision_id=a.linked_graph_revision
@@ -811,7 +811,7 @@ func (s *Store) ListRelationships(
 		rows, err := tx.Query(ctx,
 			`SELECT edge.id, edge.rel_type,
 			        CASE WHEN edge.src_id = $2 THEN 'outgoing' ELSE 'incoming' END,
-			        other.id::text, other.canonical, other.kind, other.first_seen_chapter,
+			        other.id::text, COALESCE(other.canonical_en,other.canonical), other.kind, other.first_seen_chapter,
 			        edge.valid_from_chapter, edge.valid_to_chapter, edge.source_chapter, COALESCE((SELECT jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash,'char_start',v.char_start,'char_end',v.char_end) FROM graph_evidence v WHERE v.id=edge.evidence_id),'null'::jsonb)
 			 FROM edge
 			 JOIN entity other ON other.id = CASE
@@ -822,7 +822,7 @@ func (s *Store) ListRelationships(
 			   AND other.novel_id = $1 AND other.first_seen_chapter <= $3
 			 ORDER BY edge.rel_type,
 			          CASE WHEN edge.src_id = $2 THEN 'outgoing' ELSE 'incoming' END,
-			          other.canonical, edge.id`, novelID, entityID, at)
+			          COALESCE(other.canonical_en,other.canonical), edge.id`, novelID, entityID, at)
 		if err != nil {
 			return err
 		}
@@ -881,7 +881,7 @@ func newFactsInTx(ctx context.Context, tx pgx.Tx, novelID string, n int, view *C
 		     AND source_chapter <= reader_chapter() AND valid_from_chapter <= reader_chapter()
 		 )
 	 SELECT DISTINCT ON (f.entity_id, f.attribute)
-	        f.entity_id::text, e.canonical, f.attribute, f.value, f.valid_from_chapter,
+	        f.entity_id::text, COALESCE(e.canonical_en,e.canonical), f.attribute, f.value, f.valid_from_chapter,
 		        f.source_chapter, f.confidence
 	 FROM visible f
 	 JOIN entity e ON e.id = f.entity_id

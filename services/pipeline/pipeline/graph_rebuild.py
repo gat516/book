@@ -1,12 +1,14 @@
 """Review-gated local graph repair. Never rewrites source, translations or glossary.
 
 python -m pipeline.graph_rebuild prepare --novel UUID --model llama3.2:3b
+python -m pipeline.graph_rebuild extend --novel UUID --upto 10
 python -m pipeline.graph_rebuild resume --revision UUID
 python -m pipeline.graph_rebuild preview --revision UUID --output report.json
 python -m pipeline.graph_rebuild activate --revision UUID --review-hash SHA256
 python -m pipeline.graph_rebuild rollback --revision UUID
 
 Activation is an explicit operator action and requires a frozen qualifying report.
+Bounded revisions grow only through their recorded chapter ceiling (§0.2).
 """
 from __future__ import annotations
 
@@ -41,12 +43,17 @@ async def revision(db, rid, *, lock=False):
 
 
 def qualified(metrics: dict) -> bool:
-    return (metrics.get('reviewed_mentions',0)>=60 and metrics.get('reviewed_facts',0)>=30
+    total_mentions=metrics.get('total_mentions',metrics.get('reviewed_mentions',0))
+    total_facts=metrics.get('total_facts',metrics.get('reviewed_facts',0))
+    return (total_mentions>0 and total_facts>0
+            and ('total_mentions' not in metrics or metrics.get('reviewed_mentions')==total_mentions)
+            and ('total_facts' not in metrics or metrics.get('reviewed_facts')==total_facts)
+            and metrics.get('reviewed_mentions',0)>=min(60,total_mentions)
+            and metrics.get('reviewed_facts',0)>=min(30,total_facts)
             and (metrics.get('link_precision') or 0)>=.98 and metrics.get('unambiguous_recall',0)>=.90
             and (metrics.get('fact_precision') or 0)>=.95 and metrics.get('merge_regressions',1)==0
             and metrics.get('evidence_valid',False) and metrics.get('reviewed',False)
-            and metrics.get('publication_review_complete',False)
-            and metrics.get('candidate_recall')==1)
+            and metrics.get('publication_review_complete',False))
 
 
 def select_model(reports):
@@ -55,6 +62,7 @@ def select_model(reports):
         m=report['metrics']
         if (report['model']['provider']=='ollama' and not m.get('failures')
             and m.get('tested_mentions',0)>=60 and m.get('tested_facts',0)>=30
+            and m.get('candidate_recall')==1
             and m.get('model_inference_seconds') is not None
             and qualified(dict(m,publication_review_complete=True))):
             candidates.append(report)
@@ -127,7 +135,31 @@ def read_object(client, cfg, uri):
         response.release_conn()
 
 
-async def prepare(db,cfg,novel,model):
+def _chapter_ceiling(value):
+    if value is None:
+        return None
+    if type(value) is not int or not 0 <= value <= 2_147_483_647:
+        raise ValueError('upto_chapter must be a nonnegative integer')
+    return value
+
+
+def _ready_prefix(rows, *, start):
+    """Return the contiguous ready prefix; identity state may never cross a gap (§0.2)."""
+    prefix=[]
+    expected=start
+    for row in rows:
+        index,*chapter,ready=row
+        if index<expected:
+            continue
+        if index!=expected or not ready:
+            break
+        prefix.append((index,*chapter))
+        expected+=1
+    return prefix,expected
+
+
+async def prepare(db,cfg,novel,model, *, upto_chapter=None):
+    upto_chapter=_chapter_ceiling(upto_chapter)
     identity = await local_model(cfg,model)
     client = objects(cfg)
     row = await (await db.execute('SELECT ontology FROM novel WHERE id=%s',(novel,))).fetchone()
@@ -138,8 +170,18 @@ async def prepare(db,cfg,novel,model):
     ontology['attributes'] = [a for a in ontology['attributes'] if a['name']!='description']+[
         dict(name='description',kinds=ontology['kinds'])]
     # Snapshot only durably completed chapters; do not manipulate ordinary jobs.
-    rows = await (await db.execute('''SELECT chapter_index,raw_uri,translated_uri,raw_hash FROM chapter
-        WHERE novel_id=%s AND status='done' ORDER BY chapter_index''',(novel,))).fetchall()
+    if upto_chapter is None:
+        rows = await (await db.execute('''SELECT chapter_index,raw_uri,translated_uri,raw_hash FROM chapter
+            WHERE novel_id=%s AND status='done' ORDER BY chapter_index''',(novel,))).fetchall()
+        start_chapter=rows[0][0] if rows else 1
+    else:
+        candidates = await (await db.execute('''SELECT chapter_index,raw_uri,translated_uri,raw_hash,status='done'
+            FROM chapter WHERE novel_id=%s AND chapter_index<=%s ORDER BY chapter_index''',
+            (novel,upto_chapter))).fetchall()
+        start_chapter=0 if candidates and candidates[0][0]==0 else 1
+        rows,_=_ready_prefix(candidates,start=start_chapter)
+        if not rows:
+            raise ValueError('no contiguous completed chapters are available through upto_chapter')
     chapters = []
     for index,raw_uri,translated_uri,raw_hash in rows:
         source = await asyncio.to_thread(read_object,client,cfg,raw_uri)
@@ -149,14 +191,25 @@ async def prepare(db,cfg,novel,model):
     glossary = await (await db.execute('SELECT row_to_json(g) FROM glossary g WHERE novel_id=%s ORDER BY source_term',(novel,))).fetchall()
     progress = await (await db.execute('SELECT row_to_json(p) FROM reader_progress p WHERE novel_id=%s ORDER BY reader_id',(novel,))).fetchall()
     snapshot = dict(chapters=chapters,glossary=[g[0] for g in glossary],progress=[p[0] for p in progress])
+    if upto_chapter is not None:
+        snapshot.update(upto_chapter=upto_chapter,start_chapter=start_chapter)
     async with db.transaction():
         old = await (await db.execute('SELECT active_graph_revision FROM novel WHERE id=%s FOR UPDATE',(novel,))).fetchone()
+        if not old:
+            raise ValueError('novel not found')
         # Lock waits for a publication transaction to finish; future chapters cannot write.
-        await db.execute('UPDATE graph_revision SET trusted=false,generation=generation+1,version=version+1 WHERE id=%s',(old[0],))
+        if old[0] is not None:
+            await db.execute('UPDATE graph_revision SET trusted=false,generation=generation+1,version=version+1 WHERE id=%s',(old[0],))
         rid = (await (await db.execute('''INSERT INTO graph_revision(novel_id,ontology,model,snapshot,prompt_version)
             VALUES(%s,%s,%s,%s,%s) RETURNING id''',(novel,Jsonb(ontology),Jsonb(identity),Jsonb(snapshot),PROMPT_VERSION))).fetchone())[0]
-        await db.execute('INSERT INTO graph_audit(novel_id,revision_id,action,detail) VALUES(%s,%s,%s,%s)',
-                         (novel,old[0],'quarantine',Jsonb(dict(replacement=str(rid)))))
+        if old[0] is not None:
+            await db.execute('INSERT INTO graph_audit(novel_id,revision_id,action,detail) VALUES(%s,%s,%s,%s)',
+                             (novel,old[0],'quarantine',Jsonb(dict(replacement=str(rid)))))
+        else:
+            # A reader may explicitly delete every revision and later start over. The
+            # new revision is still staged and untrusted; this audit only records origin.
+            await db.execute('INSERT INTO graph_audit(novel_id,revision_id,action,detail) VALUES(%s,%s,%s,%s)',
+                             (novel,rid,'prepare',Jsonb(dict(from_empty=True))))
         for c in chapters:
             await db.execute('''INSERT INTO graph_job(revision_id,chapter_index,input_hash,model_identity,generation)
                 VALUES(%s,%s,%s,%s,1)''',(rid,c['chapter'],digest(c),digest(identity)))
@@ -302,30 +355,86 @@ async def promote_verified_glossary(db,r: dict,chapter: int,target_lang: str) ->
                 (r['novel_id'],source_term,r['id'],entity_ids[0],chapter))
 
 
+def translated_context(source: str, display: str, start: int, end: int, *, limit: int = 320) -> str:
+    """Map source evidence to readable context from the saved translation.
+
+    Translation is instructed to preserve paragraph breaks. Matching the non-empty line
+    ordinal therefore gives review deterministic target-language context without turning
+    translated prose into evidence (§0). If line structure differs, the global character
+    ratio is a bounded display fallback; the source quote remains the audit evidence.
+    """
+    def lines(text):
+        result=[];offset=0
+        for line in text.splitlines(keepends=True):
+            content=line.rstrip('\r\n')
+            if content.strip():
+                result.append((offset,offset+len(content),content))
+            offset+=len(line)
+        return result or ([(0,len(text),text)] if text.strip() else [])
+
+    source_lines,display_lines=lines(source),lines(display)
+    source_index=next((i for i,(lo,hi,_) in enumerate(source_lines)
+                       if lo<=start<max(lo+1,hi)),None)
+    if source_index is not None and len(source_lines)==len(display_lines):
+        slo,shi,_=source_lines[source_index]
+        _,_,target=display_lines[source_index]
+        ratio=(((start+end)/2)-slo)/max(1,shi-slo)
+        center=int(len(target)*max(0,min(1,ratio)))
+    else:
+        target=display
+        center=int(len(display)*max(0,min(1,((start+end)/2)/max(1,len(source)))))
+    if len(target)<=limit:
+        return target.strip()
+    lo=max(0,min(len(target)-limit,center-limit//2));hi=min(len(target),lo+limit)
+    if lo:
+        space=target.find(' ',lo,min(hi,lo+60))
+        if space!=-1: lo=space+1
+    if hi<len(target):
+        space=target.rfind(' ',max(lo,hi-60),hi)
+        if space!=-1: hi=space
+    return target[lo:hi].strip()
+
+
 async def preview(db,cfg,rid):
     r = await revision(db,rid)
     client = objects(cfg)
     checks = []
-    sources={}
+    sources={};displays={}
     for c in r['snapshot'].get('chapters',[]):
         source = await asyncio.to_thread(read_object,client,cfg,c['raw_uri'])
         sources[c['chapter']]=source
         display = await asyncio.to_thread(read_object,client,cfg,c['translated_uri'] or c['raw_uri'])
+        displays[c['chapter']]=display
         saved=await (await db.execute('SELECT raw_uri,translated_uri,raw_hash FROM chapter WHERE novel_id=%s AND chapter_index=%s',
             (r['novel_id'],c['chapter']))).fetchone()
         checks.append(digest(source)==c['source_hash'] and digest(display)==c['display_hash']
                       and saved==(c['raw_uri'],c['translated_uri'],c['raw_hash']))
     jobs = await (await db.execute('SELECT chapter_index,state,error,output FROM graph_job WHERE revision_id=%s ORDER BY chapter_index',(rid,))).fetchall()
-    claims = await (await db.execute('''SELECT e.canonical,f.attribute,f.value,f.source_chapter,v.quote,v.source_hash,v.char_start,v.char_end,f.id
+    claims = await (await db.execute('''SELECT coalesce(e.canonical_en,e.canonical),f.attribute,coalesce(f.value_en,f.value),f.source_chapter,v.quote,v.source_hash,v.char_start,v.char_end,f.id,e.canonical
         FROM fact f JOIN entity e ON e.id=f.entity_id LEFT JOIN graph_evidence v ON v.id=f.evidence_id
         WHERE f.revision_id=%s ORDER BY f.source_chapter,f.id''',(rid,))).fetchall()
+    mention_rows=await(await db.execute('''SELECT m.id::text,m.chapter_index,m.surface,m.kind,coalesce(e.canonical_en,e.canonical),v.quote,v.char_start,v.char_end,e.canonical
+        FROM source_mention m
+        LEFT JOIN LATERAL (SELECT entity_id FROM mention_binding b
+            WHERE b.revision_id=m.revision_id AND b.mention_id=m.id
+            ORDER BY known_from_chapter DESC LIMIT 1) b ON true
+        LEFT JOIN entity e ON e.revision_id=m.revision_id AND e.id=b.entity_id
+        LEFT JOIN graph_evidence v ON v.id=m.evidence_id
+        WHERE m.revision_id=%s ORDER BY m.chapter_index,m.id''',(rid,))).fetchall()
     coverage = (await (await db.execute('''SELECT count(*),count(*) FILTER(WHERE EXISTS(SELECT 1 FROM mention_binding b
         WHERE b.revision_id=m.revision_id AND b.mention_id=m.id)) FROM source_mention m WHERE revision_id=%s''',(rid,))).fetchone())
     report = dict(revision=rid,generation=r['generation'],version=r['version'],model=r['model'],prompt_version=r['prompt_version'],
         ontology=r['ontology'],evaluation=r['evaluation'],saved_prose_unchanged=all(checks),
         completed=sum(j[1]=='done' for j in jobs),total_jobs=len(jobs),
+        upto_chapter=r['snapshot'].get('upto_chapter'),
         mention_coverage=dict(total=coverage[0],linked=coverage[1],unresolved=coverage[0]-coverage[1]),
-        claims=[dict(zip(['canonical','attribute','value','chapter','quote','source_hash','start','end','id'],c)) for c in claims],
+        mentions=[dict(id=m[0],chapter=m[1],surface=m[2],kind=m[3],entity=m[4],quote=m[5],
+                       target_context=translated_context(sources[m[1]],displays[m[1]],m[6],m[7]),
+                       entity_source=m[8])
+                  for m in mention_rows],
+        claims=[dict(**dict(zip(['entity','attribute','value','chapter','quote','source_hash','start','end','id','entity_source'],c)),
+                     target_context=translated_context(sources[c[3]],displays[c[3]],c[6],c[7]))
+                for c in claims],
         failures=[dict(chapter=j[0],state=j[1],error=j[2]) for j in jobs if j[1]!='done'],
         rejected=[dict(chapter=j[0],**x) for j in jobs if j[3] for x in j[3].get('rejected',[])])
     splits=await(await db.execute('''SELECT a.surface,array_agg(DISTINCT old.canonical),array_agg(DISTINCT fresh.canonical)
@@ -358,15 +467,17 @@ async def record_review(db,cfg,rid,document):
     actual={str(mid):bool(linked) for mid,linked in await(await db.execute('''SELECT m.id,EXISTS(SELECT 1 FROM mention_binding b
         WHERE b.revision_id=m.revision_id AND b.mention_id=m.id) FROM source_mention m WHERE revision_id=%s''',(rid,))).fetchall()}
     mids=[m['id'] for m in mentions];fids=[f['id'] for f in facts]
-    if len(set(mids))!=len(mids) or not set(mids)<=set(actual):
-        raise ValueError('review contains duplicate or unknown mention IDs')
+    if len(set(mids))!=len(mids) or set(mids)!=set(actual):
+        raise ValueError('review must assess every source mention exactly once')
     if len(set(fids))!=len(fids) or set(fids)!={c['id'] for c in report['claims']}:
         raise ValueError('review must assess every published fact exactly once')
     if any(type(x.get('correct')) is not bool for x in mentions+facts) or any(type(x.get('unambiguous')) is not bool for x in mentions):
         raise ValueError('review assessments must contain explicit boolean judgments')
     linked=[m for m in mentions if actual[m['id']]]
     unambiguous=[m for m in mentions if m['unambiguous']]
-    metrics=dict(reviewed=True,publication_review_complete=True,reviewed_mentions=len(mentions),reviewed_facts=len(facts),
+    metrics=dict(reviewed=True,publication_review_complete=True,
+        total_mentions=len(actual),total_facts=len(report['claims']),
+        reviewed_mentions=len(mentions),reviewed_facts=len(facts),
         link_precision=sum(m['correct'] for m in linked)/len(linked) if linked else 0,
         unambiguous_recall=sum(m['correct'] and actual[m['id']] for m in unambiguous)/len(unambiguous) if unambiguous else 0,
         fact_precision=sum(f['correct'] for f in facts)/len(facts) if facts else 0,
@@ -390,7 +501,8 @@ async def switch(db,cfg,rid,review_hash=None, *, rollback=False):
         r = await revision(db,rid)
         old = (await (await db.execute('SELECT active_graph_revision FROM novel WHERE id=%s FOR UPDATE',(r['novel_id'],))).fetchone())[0]
         # Deterministic lock order avoids cutover/cutover deadlocks.
-        await db.execute('SELECT id FROM graph_revision WHERE id=ANY(%s::uuid[]) ORDER BY id FOR UPDATE',([str(old),rid],))
+        revision_ids=[rid] if old is None else [str(old),rid]
+        await db.execute('SELECT id FROM graph_revision WHERE id=ANY(%s::uuid[]) ORDER BY id FOR UPDATE',(revision_ids,))
         r = await revision(db,rid)
         if not rollback:
             if (not report['activation_eligible'] or report['review_hash']!=review_hash
@@ -401,7 +513,8 @@ async def switch(db,cfg,rid,review_hash=None, *, rollback=False):
                 raise ValueError('only a staging revision can be activated')
         elif r['state']!='archived':
             raise ValueError('rollback target must be an archived revision')
-        await db.execute("UPDATE graph_revision SET state='archived',generation=generation+1,version=version+1 WHERE id=%s",(old,))
+        if old is not None:
+            await db.execute("UPDATE graph_revision SET state='archived',generation=generation+1,version=version+1 WHERE id=%s",(old,))
         await db.execute("UPDATE graph_revision SET state='active',trusted=CASE WHEN %s THEN trusted ELSE true END,generation=generation+1,version=version+1 WHERE id=%s",(rollback,rid))
         await db.execute('UPDATE novel SET active_graph_revision=%s WHERE id=%s',(rid,r['novel_id']))
         await db.execute('INSERT INTO graph_audit(novel_id,revision_id,action,detail) VALUES(%s,%s,%s,%s)',
@@ -477,14 +590,27 @@ async def discard(db,cfg,rid):
     return dict(revision=rid,restored=restored)
 
 
-async def enqueue_completed(db,cfg,novel):
+async def enqueue_completed(db,cfg,novel, *, upto_chapter=None):
+    upto_chapter=_chapter_ceiling(upto_chapter)
     row=await (await db.execute("SELECT r.id FROM graph_revision r JOIN novel n ON n.active_graph_revision=r.id WHERE n.id=%s AND r.trusted AND NOT r.legacy",(novel,))).fetchone()
     if not row:
-        return
+        return dict(revision=None,added=[],upto_chapter=None,first_gap=None)
     r=await revision(db,str(row[0]))
     client=objects(cfg)
     known={c['chapter'] for c in r['snapshot']['chapters']}
-    rows=await (await db.execute("SELECT chapter_index,raw_uri,translated_uri,raw_hash FROM chapter WHERE novel_id=%s AND translation_ready ORDER BY chapter_index",(novel,))).fetchall()
+    persisted=r['snapshot'].get('upto_chapter')
+    ceiling=(persisted if upto_chapter is None else min(persisted,upto_chapter)
+             if persisted is not None else upto_chapter)
+    if ceiling is None:
+        rows=await(await db.execute("SELECT chapter_index,raw_uri,translated_uri,raw_hash FROM chapter WHERE novel_id=%s AND translation_ready ORDER BY chapter_index",(novel,))).fetchall()
+        first_gap=None
+    else:
+        all_rows=await(await db.execute('''SELECT chapter_index,raw_uri,translated_uri,raw_hash,translation_ready
+            FROM chapter WHERE novel_id=%s AND chapter_index<=%s ORDER BY chapter_index''',
+            (novel,ceiling))).fetchall()
+        start=(max(known)+1) if known else r['snapshot'].get('start_chapter',0 if all_rows and all_rows[0][0]==0 else 1)
+        rows,next_missing=_ready_prefix(all_rows,start=start)
+        first_gap=next_missing if next_missing<=ceiling else None
     additions=[]
     for index,raw_uri,translated_uri,raw_hash in rows:
         if index in known: continue
@@ -492,18 +618,52 @@ async def enqueue_completed(db,cfg,novel):
         display=await asyncio.to_thread(read_object,client,cfg,translated_uri or raw_uri)
         additions.append(dict(chapter=index,raw_uri=raw_uri,translated_uri=translated_uri,raw_hash=raw_hash,
                               source_hash=digest(source),display_hash=digest(display)))
-    if not additions: return
+    if not additions:
+        return dict(revision=r['id'],added=[],upto_chapter=persisted,first_gap=first_gap)
+    added=[]
     async with db.transaction():
         current=await revision(db,r['id'],lock=True)
-        if current['generation']!=r['generation'] or current['state']!='active': return
+        if current['generation']!=r['generation'] or current['state']!='active':
+            return dict(revision=r['id'],added=[],upto_chapter=current['snapshot'].get('upto_chapter'),first_gap=first_gap)
         known={c['chapter'] for c in current['snapshot']['chapters']}
         for c in additions:
             if c['chapter'] in known: continue
+            saved=await(await db.execute('''SELECT raw_uri,translated_uri,raw_hash,translation_ready FROM chapter
+                WHERE novel_id=%s AND chapter_index=%s FOR SHARE''',(novel,c['chapter']))).fetchone()
+            if not saved or saved!=(c['raw_uri'],c['translated_uri'],c['raw_hash'],True):
+                first_gap=c['chapter']
+                break
             current['snapshot']['chapters'].append(c)
             await db.execute('''INSERT INTO graph_job(revision_id,chapter_index,input_hash,model_identity,generation)
                 VALUES(%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING''',
                 (r['id'],c['chapter'],digest(c),digest(r['model']),r['generation']))
-        await db.execute('UPDATE graph_revision SET snapshot=%s,version=version+1 WHERE id=%s',(Jsonb(current['snapshot']),r['id']))
+            added.append(c['chapter'])
+        if added:
+            await db.execute('UPDATE graph_revision SET snapshot=%s,version=version+1 WHERE id=%s',(Jsonb(current['snapshot']),r['id']))
+    return dict(revision=r['id'],added=added,
+                upto_chapter=current['snapshot'].get('upto_chapter'),first_gap=first_gap)
+
+
+async def extend(db,cfg,novel, *, upto_chapter):
+    """Raise a bounded active revision's ceiling, then append its next ready prefix."""
+    upto_chapter=_chapter_ceiling(upto_chapter)
+    if upto_chapter is None:
+        raise ValueError('extend requires upto_chapter')
+    async with db.transaction():
+        row=await(await db.execute('SELECT active_graph_revision FROM novel WHERE id=%s FOR UPDATE',(novel,))).fetchone()
+        if not row or row[0] is None:
+            raise ValueError('active graph revision not found for extension')
+        r=await revision(db,str(row[0]),lock=True)
+        if r['state']!='active' or not r['trusted'] or r['legacy']:
+            raise ValueError('active graph revision is not extendable')
+        persisted=r['snapshot'].get('upto_chapter')
+        if persisted is not None and upto_chapter>persisted:
+            r['snapshot']['upto_chapter']=upto_chapter
+            await db.execute('UPDATE graph_revision SET snapshot=%s,version=version+1 WHERE id=%s',
+                             (Jsonb(r['snapshot']),r['id']))
+        await db.execute('INSERT INTO graph_audit(novel_id,revision_id,action,detail) VALUES(%s,%s,%s,%s)',
+                         (novel,r['id'],'extend',Jsonb(dict(upto_chapter=upto_chapter))))
+    return await enqueue_completed(db,cfg,novel,upto_chapter=upto_chapter)
 
 
 async def next_retryable_active_revision(db, novel_id=None, preferred_novel=None):
@@ -538,7 +698,9 @@ async def main(args):
         return
     async with await psycopg.AsyncConnection.connect(cfg.database_url,autocommit=True) as db:
         if args.command=='prepare':
-            result = dict(revision=await prepare(db,cfg,args.novel,args.model),status='quarantined; awaiting evaluation and rebuild')
+            result = dict(revision=await prepare(db,cfg,args.novel,args.model,upto_chapter=args.upto),status='quarantined; awaiting evaluation and rebuild')
+        elif args.command=='extend':
+            result = await extend(db,cfg,args.novel,upto_chapter=args.upto)
         elif args.command=='resume':
             await resume(db,cfg,args.revision,limit=args.limit)
             result = dict(status='resume finished')
@@ -559,7 +721,8 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command',required=True)
     p=commands.add_parser('select-model');p.add_argument('--reports',nargs='+',required=True)
-    p = commands.add_parser('prepare'); p.add_argument('--novel',required=True); p.add_argument('--model',required=True)
+    p = commands.add_parser('prepare'); p.add_argument('--novel',required=True); p.add_argument('--model',required=True); p.add_argument('--upto',type=int)
+    p = commands.add_parser('extend'); p.add_argument('--novel',required=True); p.add_argument('--upto',type=int,required=True)
     for name in ['resume','preview','review','activate','rollback']:
         p = commands.add_parser(name); p.add_argument('--revision',required=True)
         if name=='resume': p.add_argument('--limit',type=int)

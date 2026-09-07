@@ -6,16 +6,15 @@ NAME_SLOT_COUNT = 6
 
 
 def name_schema(passage_ids, kinds):
-    """A fixed local inventory avoids a model-generated unbounded array."""
+    """Fixed nullable slots bound generation without verbose unused placeholders."""
     slots = {}
     for index in range(1, NAME_SLOT_COUNT + 1):
-        slots[f'n{index}'] = dict(type='object', additionalProperties=False,
-            required=['named', 'surface', 'kind', 'passage_id'], properties={
-                'named': dict(type='boolean'),
-                'surface': dict(type='string', maxLength=80),
+        item=dict(type='object', additionalProperties=False,
+            required=['surface', 'kind', 'passage_id'], properties={
+                'surface': dict(type='string', minLength=1, maxLength=80),
                 'kind': dict(type='string', enum=kinds),
-                'passage_id': dict(type='string', enum=passage_ids),
-            })
+                'passage_id': dict(type='string', enum=passage_ids)})
+        slots[f'n{index}'] = dict(anyOf=[item,dict(type='null')])
     return dict(type='object', additionalProperties=False,
                 required=list(slots), properties=slots)
 
@@ -29,12 +28,10 @@ def materialize_names(body, contract, ontology):
     kinds=set(ontology['kinds'])
     for ref in sorted(expected):
         item=body[ref]
-        if not isinstance(item, dict) or set(item) != {'named','surface','kind','passage_id'}:
-            raise ValueError('invalid name slot')
-        if not isinstance(item['named'], bool):
-            raise ValueError('name slot named must be boolean')
-        if not item['named']:
+        if item is None:
             continue
+        if not isinstance(item, dict) or set(item) != {'surface','kind','passage_id'}:
+            raise ValueError('invalid name slot')
         surface=item['surface']
         if (not isinstance(surface,str) or not surface.strip() or len(surface)>80
                 or item['kind'] not in kinds):

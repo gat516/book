@@ -300,6 +300,12 @@ export interface ReextractPreviewItem {
   classification: "unchanged" | "display_update" | "new" | "possible_replacement" | "missing";
   existing_fact_id?: number; proposal?: Record<string, unknown>;
 }
+export interface ChapterGraphExtraction {
+  state: "pending" | "processing" | "done" | "failed";
+  verified_terms: number;
+  verified_claims: number;
+  published_fact_rows: number;
+}
 export interface ChapterKnowledgeResponse {
   novel_id: string; chapter_index: number; revision_id: string; version: number;
   trusted: boolean; status: string;
@@ -310,7 +316,9 @@ export interface ChapterKnowledgeResponse {
   // "" when writable; otherwise the one cause, matched to a KnowledgeGate case:
   // "never_built" | "quarantined" | "chapter_not_snapshotted".
   blocked_reason: string;
+  terms_extracted: boolean; facts_extracted: boolean;
   facts: ChapterFactView[]; terms: ChapterTermView[]; run?: ChapterKnowledgeRun;
+  graph_extraction?: ChapterGraphExtraction;
 }
 export interface ChapterKnowledgeActivity {
   sequence: number; run_id: string; item_kind: "fact" | "term" | "run";
@@ -578,7 +586,7 @@ export interface RepairProgressFact {
 
 export type RepairTrackName = "graph" | "events";
 
-export type RepairAction = "prepare" | "review" | "activate" | "rollback" | "discard";
+export type RepairAction = "prepare" | "review" | "activate" | "rollback" | "discard" | "extend" | "reextract" | "reextract_apply";
 
 export interface RepairRequestView {
   id: string;
@@ -625,17 +633,22 @@ export interface RepairReportMention {
   id: string;
   chapter?: number;
   surface?: string;
+  kind?: string;
   entity?: string | null;
+  entity_source?: string | null;
   quote?: string;
+  target_context?: string;
 }
 
 export interface RepairReportClaim {
   id: number;
   entity?: string;
+  entity_source?: string;
   attribute?: string;
   value?: string;
   chapter?: number;
   quote?: string;
+  target_context?: string;
 }
 
 export interface RepairReport {

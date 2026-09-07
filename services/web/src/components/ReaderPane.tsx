@@ -128,6 +128,11 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
     if (held) held.push(fact);
     else newFactsByEntity.set(fact.entity_id, [fact]);
   }
+  const graphNeedsAction = !chapter.knowledge?.can_extract;
+  const eventKnowledge = chapter.event_knowledge ?? {
+    revision_id: "", version: 0, trusted: false, status: "unavailable",
+    legacy: false, chapter_snapshotted: false, can_extract: false,
+  };
 
   return (
     <div className="reader-pane">
@@ -158,10 +163,12 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
       {chapter.translation_warning?.code === "locked_terms_missing" && <p role="status" className="reader-translation-warning">
         This chapter is readable, but {chapter.translation_warning.term_count} locked name{chapter.translation_warning.term_count === 1 ? " was" : "s were"} not preserved exactly.
       </p>}
-      <section className="chapter-events" aria-labelledby="chapter-events-heading">
-        <h2 id="chapter-events-heading">What happened</h2>
-        <EventList events={chapter.events ?? []} knowledge={chapter.event_knowledge ?? { revision_id: "", version: 0, trusted: false, status: "unavailable", legacy: false, chapter_snapshotted: false, can_extract: false }} />
-      </section>
+      {graphNeedsAction && <ChapterKnowledgeWorkspace novelId={novelId} chapter={chapterIndex} at={chapter.at} />}
+      {eventKnowledge.status !== "unavailable" &&
+        <section className="chapter-events" aria-labelledby="chapter-events-heading">
+          <h2 id="chapter-events-heading">What happened</h2>
+          <EventList events={chapter.events ?? []} knowledge={eventKnowledge} />
+        </section>}
       {clickableEntities && chapter.spans.length === 0 && <p className="reader-entity-hint">
         No named mentions are available for this chapter yet. Cards do not require facts or a glossary entry.
       </p>}
@@ -216,7 +223,7 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
           </span>
         );
       })}
-      <ChapterKnowledgeWorkspace novelId={novelId} chapter={chapterIndex} at={chapter.at} />
+      {!graphNeedsAction && <ChapterKnowledgeWorkspace novelId={novelId} chapter={chapterIndex} at={chapter.at} />}
       {selected && <EntityInspector
         key={`${novelId}:${chapterIndex}:${chapter.at}:${selected.id}`}
         novelId={novelId}

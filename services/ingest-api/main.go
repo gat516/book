@@ -40,6 +40,7 @@ func main() {
 	mux.Handle("PATCH /queue", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.queueControl)))
 	mux.Handle("POST /novels", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.createNovel)))
 	mux.Handle("DELETE /novels/{id}", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.deleteNovel)))
+	mux.Handle("DELETE /novels/{id}/graph", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.deleteGraph)))
 	mux.HandleFunc("POST /novels/{id}/chapters", api.pasteChapter)
 	mux.HandleFunc("PATCH /novels/{id}/glossary/{term}", api.correctGlossaryTerm)
 	mux.HandleFunc("DELETE /novels/{id}/glossary/{term}", api.deleteGlossaryTerm)

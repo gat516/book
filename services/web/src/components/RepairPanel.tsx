@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   cancelRepair,
+  deleteGraph,
   getProviderConfig,
   getRepairStatus,
   listOllamaModels,
@@ -118,7 +119,7 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   }, [openSignal]);
 
   useEffect(() => {
-    void listOllamaModels(novelId).then(setOllamaModels).catch(() => setOllamaModels([]));
+    void listOllamaModels(novelId, "graph").then(setOllamaModels).catch(() => setOllamaModels([]));
   }, [novelId]);
 
   useEffect(() => {
@@ -161,6 +162,26 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
         "Recorded. Repair runs when the worker is not busy with chapters someone is waiting to read, so this may not start immediately.",
       );
       setConfirming(null);
+      await load();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeGraph() {
+    setBusy(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const result = await deleteGraph(novelId);
+      const suffix = result.revisions_deleted === 1 ? "" : "s";
+      setNotice(
+        `Graph deleted (${result.revisions_deleted} revision${suffix}). Chapters, translations, glossary, and reading progress were preserved.`,
+      );
+      setConfirming(null);
+      setReviewing(null);
       await load();
     } catch (err) {
       setError(String(err));
@@ -459,6 +480,41 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
       {status && (
         <>
           {renderTrack("graph", status.graph, "Facts and names")}
+
+          <div className="repair-actions">
+            <button
+              type="button"
+              className="novel-picker-delete"
+              disabled={
+                busy ||
+                (!status.graph.active_revision &&
+                  !status.graph.replacement &&
+                  status.graph.superseded === 0)
+              }
+              onClick={() =>
+                confirming === "delete-graph"
+                  ? void removeGraph()
+                  : setConfirming("delete-graph")
+              }
+            >
+              {confirming === "delete-graph"
+                ? "Confirm — delete graph permanently"
+                : "Delete graph"}
+            </button>
+            {confirming === "delete-graph" && (
+              <>
+                <p className="novel-create-form-hint">
+                  This permanently deletes every facts-and-names revision for this book,
+                  including active, staged, and archived attempts. Chapters, translations,
+                  glossary history, and reading progress remain. The graph cannot be recovered.
+                </p>
+                <button type="button" disabled={busy} onClick={() => setConfirming(null)}>
+                  Cancel
+                </button>
+              </>
+            )}
+          </div>
+
           {renderTrack("events", status.events, "Chapter events")}
 
           {status.requests.length > 0 && (

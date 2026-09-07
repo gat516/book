@@ -23,11 +23,12 @@ type IngestClient interface {
 	QueueControl(ctx context.Context, method string, body json.RawMessage) (json.RawMessage, int, error)
 	CreateNovel(ctx context.Context, body json.RawMessage) (json.RawMessage, int, error)
 	DeleteNovel(ctx context.Context, novelID string) (json.RawMessage, int, error)
+	DeleteGraph(ctx context.Context, novelID string) (json.RawMessage, int, error)
 	PasteChapter(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
 	DeleteGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
 	GetProviderConfig(ctx context.Context, novelID string) (json.RawMessage, int, error)
-	ListOllamaModels(ctx context.Context, novelID string) (json.RawMessage, int, error)
+	ListOllamaModels(ctx context.Context, novelID string, graphTarget bool) (json.RawMessage, int, error)
 	ListProviderCredentials(ctx context.Context) (json.RawMessage, int, error)
 	PutProviderCredential(ctx context.Context, provider string, body json.RawMessage) (json.RawMessage, int, error)
 	DeleteProviderCredential(ctx context.Context, provider string) (json.RawMessage, int, error)
@@ -124,6 +125,10 @@ func (c *ingestHTTPClient) DeleteNovel(ctx context.Context, novelID string) (jso
 	return c.send(ctx, http.MethodDelete, "/novels/"+novelID, nil, true)
 }
 
+func (c *ingestHTTPClient) DeleteGraph(ctx context.Context, novelID string) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodDelete, "/novels/"+novelID+"/graph", nil, true)
+}
+
 func (c *ingestHTTPClient) PasteChapter(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
 	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/chapters", body, false)
 }
@@ -141,8 +146,12 @@ func (c *ingestHTTPClient) GetProviderConfig(ctx context.Context, novelID string
 	return c.send(ctx, http.MethodGet, "/novels/"+novelID+"/provider-config", nil, false)
 }
 
-func (c *ingestHTTPClient) ListOllamaModels(ctx context.Context, novelID string) (json.RawMessage, int, error) {
-	return c.send(ctx, http.MethodGet, "/novels/"+novelID+"/provider-config/ollama-models", nil, false)
+func (c *ingestHTTPClient) ListOllamaModels(ctx context.Context, novelID string, graphTarget bool) (json.RawMessage, int, error) {
+	path := "/novels/" + novelID + "/provider-config/ollama-models"
+	if graphTarget {
+		path += "?target=graph"
+	}
+	return c.send(ctx, http.MethodGet, path, nil, false)
 }
 
 func (c *ingestHTTPClient) PutProviderConfig(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {

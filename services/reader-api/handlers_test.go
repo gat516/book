@@ -103,6 +103,10 @@ func (f *fakeIngestClient) DeleteNovel(_ context.Context, _ string) (json.RawMes
 	return f.response, f.status, f.err
 }
 
+func (f *fakeIngestClient) DeleteGraph(_ context.Context, _ string) (json.RawMessage, int, error) {
+	return f.response, f.status, f.err
+}
+
 func (f *fakeIngestClient) PasteChapter(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
 	return f.response, f.status, f.err
@@ -143,7 +147,7 @@ func (f *fakeIngestClient) GetProviderConfig(_ context.Context, _ string) (json.
 	return f.response, f.status, f.err
 }
 
-func (f *fakeIngestClient) ListOllamaModels(_ context.Context, _ string) (json.RawMessage, int, error) {
+func (f *fakeIngestClient) ListOllamaModels(_ context.Context, _ string, _ bool) (json.RawMessage, int, error) {
 	return json.RawMessage(`{"models":["qwen2.5:7b-instruct"]}`), http.StatusOK, nil
 }
 
@@ -773,6 +777,23 @@ func TestDeleteNovelProxiesToIngestClient(t *testing.T) {
 func TestDeleteNovelRejectsBadID(t *testing.T) {
 	api := &API{store: readyFake(), ingest: &fakeIngestClient{}}
 	response := request(t, api, http.MethodDelete, "/novels/not-a-uuid", "", "")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestDeleteGraphProxiesToIngestClient(t *testing.T) {
+	ingest := &fakeIngestClient{response: json.RawMessage(`{"deleted":true,"revisions_deleted":2}`), status: http.StatusOK}
+	api := &API{store: readyFake(), ingest: ingest}
+	response := request(t, api, http.MethodDelete, "/novels/"+testNovelID+"/graph", "", "reader-1")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"revisions_deleted":2`) {
+		t.Fatalf("response: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestDeleteGraphRejectsBadID(t *testing.T) {
+	api := &API{store: readyFake(), ingest: &fakeIngestClient{}}
+	response := request(t, api, http.MethodDelete, "/novels/not-a-uuid/graph", "", "reader-1")
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
 	}

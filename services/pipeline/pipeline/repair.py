@@ -3,13 +3,14 @@
 The repair verbs already exist and are carefully defended: ``prepare`` quarantines and
 snapshots under a lock, ``resume`` rebuilds a chapter at a time under a model pin,
 ``preview`` freezes a report, ``record_review`` derives its metrics from per-item
-assessments joined against actually-stored bindings, and ``switch`` is the only cutover.
+assessments joined against actually-stored bindings, ``switch`` is the only cutover, and
+``extend`` raises the chapter ceiling on an already-trusted graph.
 Until now they were reachable only from argparse, so repairing a book meant six commands
 at a shell.
 
-This module is the bridge, and it is deliberately thin.  It claims a ``repair_request``
-row and calls those same functions.  It re-implements no gate, lowers no threshold, and
-skips no check: ``qualified`` still decides what may be activated, and a review submitted
+This module is the bridge, and it is deliberately thin. It claims a ``repair_request``
+row and calls those same functions. It re-implements no gate and skips no check:
+``qualified`` still decides what may be activated, and a review submitted
 from a browser goes through exactly the code a review submitted from a file does.
 
 It runs on the worker's idle tick, below reader-critical translation (§0), because a
@@ -298,14 +299,23 @@ async def _run(db, cfg, row: dict) -> dict:
         if not isinstance(model, str) or not model.strip():
             raise ValueError("prepare requires a model name")
         if row["track"] == "graph":
-            revision = await module.prepare(db, cfg, row["novel_id"], model.strip())
+            revision = await module.prepare(db, cfg, row["novel_id"], model.strip(),
+                                            upto_chapter=params.get("upto_chapter"))
         else:
+            if "upto_chapter" in params:
+                raise ValueError("chapter ceilings apply only to the entity graph")
             provider = params.get("provider", "ollama")
             if provider not in event_rebuild.EXTRACTION_PROVIDERS:
                 raise ValueError(f"unknown extraction provider {provider!r}")
             revision = await module.prepare(db, cfg, row["novel_id"], model.strip(),
                                             params.get("schema"), provider=provider)
         return {"revision": str(revision)}
+
+    if action == "extend":
+        if row["track"] != "graph":
+            raise ValueError("extension applies only to the entity graph")
+        return await graph_rebuild.extend(db, cfg, row["novel_id"],
+                                          upto_chapter=params.get("upto_chapter"))
 
     if action == "reextract":
         if row["track"] != "graph":

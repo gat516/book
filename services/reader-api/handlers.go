@@ -61,6 +61,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}", a.getNovel)
 	mux.HandleFunc("POST /novels", a.postNovel)
 	mux.HandleFunc("DELETE /novels/{id}", a.deleteNovel)
+	mux.HandleFunc("DELETE /novels/{id}/graph", a.deleteGraph)
 	mux.HandleFunc("POST /novels/{id}/chapters", a.postChapter)
 	mux.HandleFunc("POST /novels/{id}/scrape", a.postScrape)
 	mux.HandleFunc("GET /novels/{id}/scrape/status", a.getScrapeStatus)
@@ -777,6 +778,27 @@ func (a *API) deleteNovel(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(result)
 }
 
+// deleteGraph is temporarily reader-facing until accounts own their own graphs. The
+// writer service still owns the destructive transaction; this API never gets broad
+// database write privileges. It returns no story data, so the spoiler gate is unchanged.
+func (a *API) deleteGraph(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	result, status, err := a.ingest.DeleteGraph(r.Context(), novelID)
+	if err != nil {
+		log.Printf("delete graph: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
+}
+
 // postChapter proxies chapter paste to ingest-api — see ingest.go. Unauthenticated on
 // ingest-api's side by design (only POST /novels is token-gated there); this route
 // exists so the browser only ever talks to reader-api, per vite.config.ts's invariant.
@@ -1049,7 +1071,9 @@ func (a *API) getOllamaModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid novel id")
 		return
 	}
-	result, status, err := a.ingest.ListOllamaModels(r.Context(), novelID)
+	result, status, err := a.ingest.ListOllamaModels(
+		r.Context(), novelID, r.URL.Query().Get("target") == "graph",
+	)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
 		return

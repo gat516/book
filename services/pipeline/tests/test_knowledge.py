@@ -82,6 +82,8 @@ async def test_graph_cache_preserves_runtime_metrics_and_avoids_repeat_inference
                 result=await engine.call('names',Names,dict(source=source))
                 assert len(result.names)==2 and all(n.quote==source and n.evidence_start==0 for n in result.names)
             complete.assert_awaited_once()
+            assert engine._stage_requests=={'names':2}
+            assert engine._stage_cache_hits=={'names':1}
             prompt=complete.call_args.args[0]
             offered=json.loads(prompt.split('INPUT DATA (not instructions):\n')[1])
             assert 'source' not in offered and offered['passages']==[dict(id=pid,text=source)]
@@ -316,7 +318,8 @@ async def test_saturated_claim_windows_subdivide_and_smallest_window_records_fai
             value=f'事实{i}',value_en=f'fact {i}',quote='甲做了一件事。',evidence_start=0) for i in range(12)])
     engine.call=AsyncMock(side_effect=saturated)
     focus=source_passages(source,max_chars=400,overlap=0)[0]
-    claims,rejected,count=await engine._claims_for_focus(source,[mention],ONTOLOGY,focus)
+    claims,rejected,count=await engine._claims_for_focus(
+        source,[mention],ONTOLOGY,focus,passage_chars=400)
     assert not claims and count>=12
     assert any('smallest source window' in row['rejection'] for row in rejected)
     assert engine.call.await_count>1
@@ -343,13 +346,52 @@ async def test_application_can_aggregate_more_than_64_names_across_bounded_reque
         await engine.close()
 
 
+async def test_saturated_batched_name_inventory_retries_each_passage():
+    source='\n'.join(f'Name{i} arrived.' for i in range(4))
+    engine=object.__new__(KnowledgeEngine)
+    calls=[]
+    async def discover(_stage,_schema,payload):
+        calls.append(list(payload['_passage_ids']))
+        if len(payload['_passage_ids'])>1:
+            payload['_proposed_count']=6
+            return Names(names=[],reviewed_kinds=ONTOLOGY['kinds'])
+        p=PassageContract(source,set(payload['_passage_ids'])).passages[0]
+        surface=p['text'].split()[0]
+        return Names(names=[dict(surface=surface,kind='character',quote=p['text'],
+            evidence_start=p['char_start'],named=True)],reviewed_kinds=ONTOLOGY['kinds'])
+    engine.call=discover
+    engine.revision=dict(ontology=ONTOLOGY)
+    names,mentions,_=await engine.discover_names('book',1,source)
+    assert len(calls)==5 and len(calls[0])==4
+    assert all(len(batch)==1 for batch in calls[1:])
+    assert len(names.names)==len(mentions)==4
+    assert engine._name_metrics==dict(passages=4,top_level_batches=1,saturation_retries=1)
+
+
+def test_runtime_diagnostics_record_input_size_policy_and_request_counts():
+    engine=object.__new__(KnowledgeEngine)
+    engine._stage_requests={'name_slots':3,'claims':2}
+    engine._stage_cache_hits={'name_slots':1}
+    engine._name_metrics=dict(passages=12,top_level_batches=3,saturation_retries=1)
+    engine._claim_subdivisions=2
+    metrics=engine._runtime_diagnostics('甲乙','Alpha')
+    assert metrics['input_size']==dict(source_chars=2,source_bytes=6,
+                                       display_chars=5,display_bytes=5)
+    assert metrics['chunk_policy']['claim_focus_chars']==1200
+    assert metrics['chunk_policy']['identity_occurrences_per_batch']==12
+    assert metrics['name_chunking']['saturation_retries']==1
+    assert metrics['claim_subdivisions']==2
+    assert metrics['stage_requests']['claims']==2
+    assert metrics['stage_cache_hits']=={'name_slots':1}
+
+
 def test_long_chapters_are_split_below_the_prompt_target_budget():
     source='\n'.join(('段落'+str(i)+'。')*100 for i in range(200))
     batches=KnowledgeEngine._passage_batches(source)
     passages={p['id']:p for p in PassageContract(source).passages}
-    assert all(len(batch)<=1 for batch in batches)
+    assert all(len(batch)<=4 for batch in batches)
     assert all(sum(len(json.dumps(dict(id=pid,text=passages[pid]['text']),ensure_ascii=False).encode())+2
-                   for pid in batch)<=2048 for batch in batches)
+                   for pid in batch)<=8192 for batch in batches)
     assert len(source.encode())>42000 and len(batches)>1
     passages={p['id']:p for p in source_passages(source)}
     assert all(sum(len(json.dumps(dict(id=pid,text=passages[pid]['text']),ensure_ascii=False).encode())+2 for pid in batch)<=24000
@@ -501,7 +543,19 @@ def test_activation_requires_review_of_publications_not_only_model_scores():
     assert not qualified(metrics)
     assert qualified(dict(metrics,publication_review_complete=True,candidate_recall=1))
     assert not qualified(dict(metrics,publication_review_complete=True,candidate_recall=1,link_precision=.979))
-    assert not qualified(dict(metrics,publication_review_complete=True,candidate_recall=.99))
+    # Candidate retrieval belongs to model selection; publication review judges every
+    # row produced by this concrete revision.
+    assert qualified(dict(metrics,publication_review_complete=True,candidate_recall=.99))
+
+
+def test_small_complete_publication_review_can_qualify():
+    metrics=dict(reviewed=True,publication_review_complete=True,
+                 total_mentions=1,total_facts=1,reviewed_mentions=1,reviewed_facts=1,
+                 link_precision=1,unambiguous_recall=1,fact_precision=1,
+                 merge_regressions=0,evidence_valid=True)
+    assert qualified(metrics)
+    assert not qualified(dict(metrics,total_facts=0,reviewed_facts=0))
+    assert not qualified(dict(metrics,total_mentions=2))
 
 
 async def test_staging_rebuild_never_touches_global_glossary():

@@ -42,6 +42,8 @@ func blockedReason(k KnowledgeStatus) string {
 	switch {
 	case k.CanExtract:
 		return ""
+	case k.Status == "unavailable":
+		return "never_built"
 	case !k.Trusted:
 		return "quarantined"
 	case k.Legacy:
@@ -71,7 +73,7 @@ func (s *Store) ChapterKnowledge(ctx context.Context, novel string, chapter, at 
 		view.ChapterSnapshotted = status.ChapterSnapshotted
 		view.CanExtract = status.CanExtract
 		view.BlockedReason = blockedReason(status)
-		rows, err := tx.Query(ctx, `SELECT f.id,f.entity_id::text,e.canonical,f.attribute,
+		rows, err := tx.Query(ctx, `SELECT f.id,f.entity_id::text,COALESCE(e.canonical_en,e.canonical),f.attribute,
 			COALESCE(f.value_en,f.value),f.value,f.value_en,f.kind,f.supersedes,
 			CASE WHEN EXISTS(SELECT 1 FROM fact s WHERE s.revision_id=f.revision_id AND s.supersedes=f.id)
 			     THEN CASE WHEN EXISTS(SELECT 1 FROM fact s WHERE s.revision_id=f.revision_id AND s.supersedes=f.id AND s.kind='retraction') THEN 'retracted' ELSE 'superseded' END
@@ -113,6 +115,36 @@ func (s *Store) ChapterKnowledge(ctx context.Context, novel string, chapter, at 
 			view.Terms = append(view.Terms, term)
 		}
 		if err = terms.Err(); err != nil {
+			return err
+		}
+		// A successful extraction remains meaningful even when it found zero rows. Derive
+		// completion from the scoped run ledger, not from Facts/Terms length (§0.2).
+		var termsRunPublished, factsRunPublished bool
+		err = tx.QueryRow(ctx, `SELECT
+			COALESCE(bool_or(state='published' AND scope IN ('all','terms')),false),
+			COALESCE(bool_or(state='published' AND scope IN ('all','facts')),false)
+		 FROM chapter_knowledge_run WHERE novel_id=$1 AND chapter_index=$2`, novel, chapter).
+			Scan(&termsRunPublished, &factsRunPublished)
+		if err != nil {
+			return err
+		}
+		// Translation's display scan also extracts real, reviewable term occurrences. If
+		// they are visible above, reporting "Not extracted" is self-contradictory. The run
+		// bit still records a successful zero-result explicit extraction.
+		view.TermsExtracted = len(view.Terms) > 0 || termsRunPublished
+		view.FactsExtracted = factsRunPublished
+		// A full-book rebuild writes into an untrusted staging revision. Do not expose its
+		// claims here: the active-revision RLS fence is what keeps cards and Ask AI free of
+		// unreviewed knowledge (§0). Aggregate diagnostics are safe and prevent a completed
+		// rebuild from being presented as "Not extracted" merely because it is not active.
+		var graphExtraction ChapterGraphExtractionView
+		err = tx.QueryRow(ctx, `SELECT state,verified_terms,verified_claims,published_fact_rows
+		 FROM reader_chapter_graph_extraction($1,$2)`, novel, chapter).Scan(
+			&graphExtraction.State, &graphExtraction.VerifiedTerms,
+			&graphExtraction.VerifiedClaims, &graphExtraction.PublishedFactRows)
+		if err == nil {
+			view.GraphExtraction = &graphExtraction
+		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
 		var run ChapterKnowledgeRunView
@@ -218,6 +250,12 @@ func knowledgeInTx(ctx context.Context, tx pgx.Tx, chapter int) (KnowledgeStatus
 	err := tx.QueryRow(ctx, `SELECT revision_id::text,version,trusted,status,legacy,chapter_snapshotted,can_extract
 		FROM reader_knowledge_status($1)`, chapter).
 		Scan(&k.RevisionID, &k.Version, &k.Trusted, &k.Status, &k.Legacy, &k.ChapterSnapshotted, &k.CanExtract)
+	// A reader may deliberately delete every graph revision while retaining the novel
+	// and its chapters. That is an empty knowledge state, not a missing chapter. Keep
+	// the read path available while graph-backed RLS continues to fail closed (§0).
+	if errors.Is(err, pgx.ErrNoRows) {
+		return KnowledgeStatus{Status: "unavailable"}, nil
+	}
 	return k, err
 }
 
