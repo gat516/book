@@ -106,14 +106,19 @@ async def record_candidate(db, novel_id: str, term_type: str, name: str, kind: s
         (novel_id,term_type,name))).fetchone()
     if current and current[0] in {'banned','retired'}:
         return dict(name=name,status=current[0],proposals=0)
+    # First sighting of a brand-new term seeds its initial src/dst kind directly --
+    # that single observation *is* the term's origin, not a widening of something
+    # already established. Widening an EXISTING entry to another kind is corroboration-
+    # gated below (C.4), via the role_count/dst_count blocks.
+    initial_dst = [dst_kind] if term_type == 'relation' and dst_kind else []
     await db.execute('''INSERT INTO novel_vocabulary
         (novel_id,term_type,name,kinds,dst_kinds,status,gloss,first_seen_chapter,last_seen_chapter)
-        VALUES(%s,%s,%s,'{}'::text[],'{}'::text[],
+        VALUES(%s,%s,%s,%s,%s,
                'candidate','',%s,%s)
         ON CONFLICT(novel_id,term_type,name) DO UPDATE SET
           first_seen_chapter=least(novel_vocabulary.first_seen_chapter,EXCLUDED.first_seen_chapter),
           last_seen_chapter=greatest(novel_vocabulary.last_seen_chapter,EXCLUDED.last_seen_chapter)''',
-        (novel_id,term_type,name,chapter,chapter))
+        (novel_id,term_type,name,[kind],initial_dst,chapter,chapter))
     entries=[(kind,dict(evidence or {},role='src'))]
     if term_type == 'relation' and dst_kind:
         entries.append((f'dst:{dst_kind}',dict(evidence or {},role='dst')))

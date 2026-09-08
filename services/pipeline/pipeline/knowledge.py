@@ -356,7 +356,7 @@ class KnowledgeEngine:
         await self._exec('''INSERT INTO chapter_knowledge_activity
             (run_id,novel_id,chapter_index,item_kind,item_key,phase,payload,idempotency_key)
             VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(run_id,idempotency_key) DO NOTHING''',
-            (self.run_id,getattr(self,'_novel_id',self.revision.get('novel_id')),self.current_chapter,kind,key,phase,Jsonb(payload),identity))
+            (self.run_id,getattr(self,'_novel_id',None) or self.revision.get('novel_id'),self.current_chapter,kind,key,phase,Jsonb(payload),identity))
 
     async def _worker_progress(self, stage: str, *, heartbeat: bool = False) -> None:
         """Persist stage/liveness metadata without persisting source or model output."""

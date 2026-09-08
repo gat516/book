@@ -90,7 +90,9 @@ async def test_vocabulary_relation_records_src_dst_and_tombstone_wins(db_conn):
 async def test_vocabulary_resolution_is_chapter_visible(db_conn):
     from pipeline.vocabulary import resolve
     async with db_conn.transaction(force_rollback=True):
-        novel = await make_novel(db_conn)
+        # The seed trigger only seeds default vocabulary for kinds the novel's own
+        # ontology declares (C.1) -- an empty ontology seeds nothing.
+        novel = await make_novel(db_conn, ontology=json.dumps({'kinds':['character'],'attributes':[],'relations':[]}))
         assert (await resolve(db_conn, novel, 'attribute', 'appearance', 0))['status'] == 'admitted'
         await db_conn.execute('''INSERT INTO novel_vocabulary_alias
             (novel_id,term_type,surface,name,known_from_chapter,created_by)
@@ -212,9 +214,14 @@ async def test_kind_widening_requires_two_chapters_and_bumps_once(db_conn):
         await db_conn.execute('''INSERT INTO novel_vocabulary
             (novel_id,term_type,name,kinds,dst_kinds,status,gloss,first_seen_chapter,last_seen_chapter,admitted_at_chapter)
             VALUES(%s,'relation','trusts',ARRAY['character'],ARRAY['place'],'admitted','',0,0,0)''',(novel,))
-        for state in ('active','staging'):
-            await db_conn.execute('''INSERT INTO graph_revision(novel_id,ontology,state,version)
-                VALUES(%s,%s,%s,10)''',(novel,Jsonb({'kinds':['character','group','place','sect'],'attributes':[],'relations':[]}),state))
+        # `novel`'s own initialize_graph_revision trigger already created one 'active'
+        # row (empty ontology) -- widen that row in place and add the 'staging' peer,
+        # rather than inserting a second 'active' row (would violate graph_one_active).
+        ontology=Jsonb({'kinds':['character','group','place','sect'],'attributes':[],'relations':[]})
+        await db_conn.execute('''UPDATE graph_revision SET ontology=%s,version=10
+            WHERE novel_id=%s AND state='active' ''',(ontology,novel))
+        await db_conn.execute('''INSERT INTO graph_revision(novel_id,ontology,state,version)
+            VALUES(%s,%s,'staging',10)''',(novel,ontology))
         await record_candidate(db_conn,novel,'relation','trusts','group',3,dst_kind='sect')
         first=await (await db_conn.execute('SELECT kinds,dst_kinds FROM novel_vocabulary WHERE novel_id=%s AND name=\'trusts\'',(novel,))).fetchone()
         assert 'group' not in first[0] and 'sect' not in first[1]
