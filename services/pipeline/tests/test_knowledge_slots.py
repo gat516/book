@@ -183,7 +183,10 @@ async def test_cross_batch_identity_and_pronoun_claim_through_wire_and_publicati
                 body=dict(claims=[])
                 if any('受伤' in p['text'] for p in focus):
                     assertion=next(p for p in focus if '受伤' in p['text'])
-                    prior=next(p for p in payload['passages'] if '青山' in p['text'])
+                    assertion_index=next(i for i,p in enumerate(payload['passages'])
+                                         if p['id']==assertion['id'])
+                    prior=next(p for p in reversed(payload['passages'][:assertion_index])
+                               if '青山' in p['text'])
                     body['claims']=[dict(type='fact',occurrence_refs=['o1'],attribute='description',
                             value=value,passage_ids=[prior['id'],assertion['id']])
                             for value in ['右臂受伤','已经死亡']]
@@ -393,19 +396,95 @@ async def test_failed_identity_batch_is_rejected_and_later_batch_continues():
     assert engine._identity_batch_sizes==[1]
 
 
-def _claims_engine(recorded=None):
-    """A KnowledgeEngine whose completion cache always misses and whose writes are captured."""
+def _claims_engine(recorded=None, cached=None):
+    """A small engine double whose cache reads and bookkeeping writes are captured."""
     class Cursor:
-        async def fetchone(self): return None
+        async def fetchone(self): return cached if cached is not None else None
     class DB:
         async def execute(self,sql,params=None,*_a,**_k):
             if recorded is not None:
                 recorded.append((sql,params))
+            if cached is not None and 'FROM completion_cache' in sql:
+                return Cursor()
             return Cursor()
     engine=KnowledgeEngine(DB(),Config.load(),dict(id='test',ontology=ONTOLOGY,
         model=dict(provider='ollama',name='test')))
     engine.run_id,engine.current_chapter,engine._novel_id='run','1','novel'
     return engine
+
+
+async def test_cache_hit_rematerializes_and_refilters_raw_claim_wire_response():
+    """A cache hit must obey the current focus and adjacency contract."""
+    from pipeline.evidence import ClaimProposals
+    source='凌峰来了。\n他拿起地图。\n她离开房间。'
+    passages=source_passages(source,max_chars=400,overlap=0)
+    raw=dict(claims=[dict(type='fact',occurrence_refs=['o1'],attribute='description',
+        value='凌峰拿起地图',passage_ids=[passages[0]['id'],passages[2]['id']])])
+    recorded=[]
+    engine=_claims_engine(recorded,cached=(raw,{'proposed_count':1},'ollama','test'))
+    engine.provider.complete=AsyncMock()
+    try:
+        result=await engine.call('claims',ClaimProposals,dict(
+            source=source,verified_occurrences=[dict(occurrence_ref='o1',surface='凌峰',
+                kind='character',context=passages[0]['text'])],ontology=ONTOLOGY,
+            focus_passage_ids=[passages[0]['id'],passages[2]['id']],
+            _passage_ids=[passages[0]['id'],passages[2]['id']],_passage_max_chars=400,
+            _passage_overlap=0,_batch_id='cached-non-adjacent'))
+        assert result.claims==[]
+        engine.provider.complete.assert_not_awaited()
+        rejected=[params for sql,params in recorded
+                   if 'chapter_knowledge_activity' in sql and params[5]=='rejected']
+        assert len(rejected)==1
+        assert rejected[0][6].obj['rejection']=='claim cites non-adjacent evidence passages'
+    finally:
+        await engine.close()
+
+
+async def test_cache_stores_raw_wire_response_before_materialization():
+    from pipeline.evidence import Names
+    source='凌峰来到碎星滩。'
+    pid=source_passages(source)[0]['id']
+    wire=dict(reviewed={kind:True for kind in ONTOLOGY['kinds']},
+              names=[dict(surface='凌峰',kind='character',passage_id=pid)])
+    recorded=[]
+    engine=_claims_engine(recorded)
+    engine.provider.complete=AsyncMock(return_value=Completion(text=json.dumps(wire),
+        served_provider='ollama',served_model='test'))
+    try:
+        result=await engine.call('names',Names,dict(source=source))
+        assert result.names[0].quote==source
+        inserts=[params for sql,params in recorded
+                 if 'INSERT INTO completion_cache\n' in sql]
+        assert len(inserts)==1
+        stored=inserts[0][4]
+        assert isinstance(stored,Jsonb) and stored.obj==wire
+        assert 'quote' not in stored.obj['names'][0]
+    finally:
+        await engine.close()
+
+
+async def test_optional_bookkeeping_savepoint_allows_following_statement():
+    """A failed optional write must not poison the connection transaction."""
+    import asyncio
+    class Savepoint:
+        def __init__(self, events): self.events=events
+        async def __aenter__(self): self.events.append('enter'); return self
+        async def __aexit__(self,typ,_value,_traceback):
+            self.events.append('rollback' if typ else 'release')
+            return False
+    class DB:
+        def __init__(self): self.events=[]
+        def transaction(self): return Savepoint(self.events)
+        async def execute(self,sql,params=None):
+            self.events.append(sql)
+            if sql=='bad': raise RuntimeError('optional write failed')
+            return object()
+    engine=object.__new__(KnowledgeEngine)
+    engine.db=DB();engine._db_lock=asyncio.Lock()
+    with pytest.raises(RuntimeError,match='optional write failed'):
+        await engine._optional_exec('bad')
+    await engine._optional_exec('good')
+    assert engine.db.events==['enter','bad','rollback','enter','good','release']
 
 
 async def test_top_level_claims_never_offer_two_ids_for_the_same_source_text():
@@ -464,6 +543,36 @@ async def test_claim_citing_only_context_is_rejected_without_failing_the_run():
                   if 'chapter_knowledge_activity' in sql and params[5]=='rejected']
         assert len(activity)==1 and activity[0][3]=='fact'
         assert 'no focus passage' in activity[0][6].obj['rejection']
+    finally:
+        await engine.close()
+
+
+async def test_non_adjacent_claim_is_soft_rejected_and_audit_keeps_all_citations():
+    from pipeline.evidence import ClaimProposals
+    source='凌峰来了。\n他拿起地图。\n她离开房间。'
+    passages=source_passages(source,max_chars=400,overlap=0)
+    recorded=[]
+    engine=_claims_engine(recorded)
+    body=dict(claims=[dict(type='fact',occurrence_refs=['o1'],attribute='description',
+        value='凌峰拿起地图',passage_ids=[passages[0]['id'],passages[2]['id']])])
+    engine.provider.complete=AsyncMock(return_value=Completion(text=json.dumps(body),
+        served_provider='ollama',served_model='test'))
+    try:
+        request=dict(source=source,verified_occurrences=[dict(occurrence_ref='o1',
+            surface='凌峰',kind='character',context=passages[0]['text'])],ontology=ONTOLOGY,
+            focus_passage_ids=[passages[0]['id'],passages[2]['id']],
+            # The cited IDs are neighbors in this filtered offer; source order still
+            # contains an uncited passage between them and must drive rejection.
+            _passage_ids=[passages[0]['id'],passages[2]['id']],_passage_max_chars=400,
+            _passage_overlap=0,_batch_id='claims-non-adjacent')
+        result=await engine.call('claims',ClaimProposals,request)
+        assert result.claims==[]
+        activity=[params for sql,params in recorded
+                  if 'chapter_knowledge_activity' in sql and params[5]=='rejected']
+        assert len(activity)==1 and activity[0][3]=='fact'
+        audited=activity[0][6].obj
+        assert audited['passage_ids']==[passages[0]['id'],passages[2]['id']]
+        assert audited['rejection']=='claim cites non-adjacent evidence passages'
     finally:
         await engine.close()
 

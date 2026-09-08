@@ -116,6 +116,10 @@ func (f *fakeIngestClient) CorrectGlossaryTerm(_ context.Context, _, _ string, b
 	f.lastBody = body
 	return f.response, f.status, f.err
 }
+func (f *fakeIngestClient) MutateVocabulary(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
+}
 
 func (f *fakeIngestClient) DeleteGlossaryTerm(_ context.Context, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
@@ -127,6 +131,11 @@ func (f *fakeIngestClient) MutateFact(_ context.Context, _, _, _, _ string, body
 	return f.response, f.status, f.err
 }
 func (f *fakeIngestClient) ChapterKnowledgeMutation(_ context.Context, _, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
+}
+
+func (f *fakeIngestClient) ReviewChapterKnowledge(_ context.Context, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
 	return f.response, f.status, f.err
 }
@@ -279,6 +288,17 @@ func (f *fakeStore) RequestScrapeCancel(context.Context, string) error {
 func (f *fakeStore) ListGlossary(_ context.Context, _ string, at int) ([]GlossaryTermView, error) {
 	f.lastAt = at
 	return f.glossary, f.glossaryErr
+}
+
+func (f *fakeStore) ListVocabulary(_ context.Context, _ string, at int) ([]VocabularyTermView, error) {
+	f.lastAt = at
+	return nil, nil
+}
+
+func (f *fakeStore) ListHeldKnowledge(_ context.Context, _ string, chapter, at int) ([]HeldKnowledgeItem, error) {
+	f.lastChapter = chapter
+	f.lastAt = at
+	return nil, nil
 }
 
 func (f *fakeStore) ListNameReviews(context.Context, string, *int) ([]CharacterNameReview, error) {
@@ -920,6 +940,46 @@ func TestPatchGlossaryTermProxiesToIngestClient(t *testing.T) {
 	}
 	if string(ingest.lastBody) != `{"target_term":"Verdant Cloud Sect","at_chapter":1}` {
 		t.Fatalf("body forwarded = %q", ingest.lastBody)
+	}
+}
+
+func TestVocabularyRequiresReaderAndUsesStoredProgress(t *testing.T) {
+	response := request(t, &API{store: readyFake(), ingest: &fakeIngestClient{}}, http.MethodGet,
+		"/novels/"+testNovelID+"/vocabulary", "", "")
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want 401", response.Code)
+	}
+	response = request(t, &API{store: readyFake(), ingest: &fakeIngestClient{}}, http.MethodGet,
+		"/novels/"+testNovelID+"/vocabulary", "", "reader-a")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200", response.Code)
+	}
+	if strings.Contains(response.Body.String(), "first_seen_chapter") || strings.Contains(response.Body.String(), "proposals") {
+		t.Fatalf("vocabulary response leaked future metadata: %s", response.Body.String())
+	}
+}
+
+func TestPatchVocabularyProxiesAndAddsActor(t *testing.T) {
+	ingest := &fakeIngestClient{response: json.RawMessage(`{"version":2}`), status: http.StatusOK}
+	response := request(t, &API{store: readyFake(), ingest: ingest}, http.MethodPatch,
+		"/novels/"+testNovelID+"/vocabulary", `{"action":"ban","term_type":"attribute","name":"description","chapter":5}`, "reader-a")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d, body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(string(ingest.lastBody), `"created_by":"reader-a"`) {
+		t.Fatalf("actor not forwarded: %s", ingest.lastBody)
+	}
+}
+
+func TestPatchVocabularyRejectsBeyondStoredProgress(t *testing.T) {
+	ingest := &fakeIngestClient{response: json.RawMessage(`{"version":2}`), status: http.StatusOK}
+	response := request(t, &API{store: readyFake(), ingest: ingest}, http.MethodPatch,
+		"/novels/"+testNovelID+"/vocabulary", `{"action":"alias","term_type":"attribute","name":"description","alias":"old_description","chapter":6}`, "reader-a")
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403", response.Code)
+	}
+	if ingest.lastBody != nil {
+		t.Fatal("future vocabulary mutation was proxied")
 	}
 }
 

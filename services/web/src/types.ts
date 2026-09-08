@@ -92,6 +92,37 @@ export interface GlossaryResponse {
   terms: GlossaryTermView[];
 }
 
+export interface VocabularyTermView {
+  term_type: "attribute" | "relation";
+  name: string;
+  status: "candidate" | "admitted" | "banned" | "retired";
+  kinds: string[];
+  dst_kinds?: string[];
+  cardinality: "single" | "accretive";
+  polarity?: number;
+  gloss?: string;
+  aliases?: string[];
+}
+
+export interface VocabularyResponse {
+  novel_id: string;
+  at: number;
+  terms: VocabularyTermView[];
+}
+
+export type VocabularyMutationAction = "admit" | "ban" | "rename-to-alias" | "set-cardinality" | "set-kinds" | "edit-gloss";
+export interface VocabularyMutationRequest {
+  action: VocabularyMutationAction;
+  term_type: "attribute" | "relation";
+  name: string;
+  chapter: number;
+  alias?: string;
+  cardinality?: "single" | "accretive";
+  kinds?: string[];
+  dst_kinds?: string[];
+  gloss?: string;
+}
+
 export interface CharacterNameCandidate {
   target_term: string;
   pronunciation: string[];
@@ -324,6 +355,69 @@ export interface ChapterKnowledgeActivity {
   sequence: number; run_id: string; item_kind: "fact" | "term" | "run";
   item_key: string; phase: "detected" | "proposed" | "verified" | "published" | "rejected";
   payload: Record<string, unknown>; created_at: string;
+}
+
+// One row of reader_held_knowledge (migration 0074). Exactly one of {attribute, rel_type}
+// and one of {entity_id, (src_id,dst_id)} is populated depending on item_type — never
+// both, and never guessed on the client.
+export interface HeldKnowledgeItem {
+  item_type: "fact" | "edge" | "event";
+  item_id: number;
+  revision_id: string;
+  revision_version: number;
+  chapter_index: number;
+  entity_id: string | null;
+  src_id: string | null;
+  dst_id: string | null;
+  attribute: string | null;
+  rel_type: string | null;
+  value: string | null;
+  summary: string | null;
+  evidence_id: string | null;
+  evidence_quote: string | null;
+  review_state: "held" | "passed" | "rejected";
+  review_flag: string | null;
+  // Mirrors the exact set pass_all_corroborated would apply server-side (migration 0076's
+  // corroborated_fact_ids, shared by this preview and the write). Always false for
+  // edge/event items.
+  bulk_eligible: boolean;
+}
+
+export interface HeldKnowledgeResponse {
+  novel_id: string;
+  chapter_index: number;
+  at: number;
+  items: HeldKnowledgeItem[];
+}
+
+export interface KnowledgeReviewItem {
+  item_type: "fact" | "edge" | "event";
+  id: number;
+  verdict: "pass" | "reject";
+  reason: string;
+}
+
+// The browser collects verdicts and reasons only; every gate (stale version, scope,
+// idempotency, corroboration) is server-side (CLAUDE.md: "Go never reimplements a gate").
+export interface KnowledgeReviewRequest {
+  revision_id: string;
+  version: number;
+  request_id: string;
+  items?: KnowledgeReviewItem[];
+  pass_all_corroborated?: boolean;
+}
+
+export interface KnowledgeReviewOutcome {
+  item_type: string;
+  id: number;
+  verdict: string;
+  already_applied: boolean;
+}
+
+export interface KnowledgeReviewResponse {
+  revision_id: string;
+  version: number;
+  applied: KnowledgeReviewOutcome[];
 }
 
 export interface FactView {

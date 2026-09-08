@@ -9,16 +9,20 @@ novels, these are different strings in different scripts — source-text offsets
 translated text (§0.5, §5 step 6), so reusing ``state.mentions`` there would highlight
 nonsense ranges.
 
-``glossary.target_term`` (not ``entity``/``alias``) is the linked alias set here, because it is
-exactly "the locked English surface forms" — the same discipline TRANSLATE relies on to
-keep terms stable chapter to chapter. Rows are keyed by ``entity_id`` for the same reason
-``ScanStage`` keys by it (§4: alias has no surrogate key); a glossary row with a NULL
-entity_id cannot assert an identity. Independent name discovery may still produce an
-unlinked card for that literal name, without pretending the glossary has approved it.
+``glossary.target_term`` (not ``entity``/``alias``) is the searchable surface set here,
+because it is exactly "the locked English surface forms" — the same discipline TRANSLATE
+relies on to keep terms stable chapter to chapter. A target may be locked before RESOLVE
+has created its entity, so every target is scanned and such a span is written as a
+presentation placeholder. An entity id is copied into the legacy presentation table only
+when a matching ``glossary_binding`` belongs to the novel's active, trusted legacy
+revision. Managed graph identity stays in revision-scoped ``display_mention``/
+``mention_binding``; it must never be copied into the legacy ``mention_span`` row (§0.3).
 The ledger records terminology alignment only; it never creates or binds an entity.
 
-No chapter gate on the glossary query, for the same reason ``ScanStage`` has none:
-ingestion is not a read path (§0.3 governs reads, not writes).
+No chapter gate removes glossary targets from the scan, for the same reason ``ScanStage``
+has none: ingestion is not a read path (§0.3 governs reads, not writes). Knowledge-time
+still gates entity links: a target may receive a legacy entity id only after both its
+glossary lock and its revision binding are known by the chapter being processed.
 """
 
 from __future__ import annotations
@@ -67,7 +71,14 @@ class DisplayScanStage:
             # Displayed text IS the source text, unchanged — the step-2 scan already
             # computed correct offsets against it. Re-scanning would be redundant work
             # producing an identical result.
-            state.display_spans = state.mentions
+            # ``mention_span`` is the legacy presentation ledger. Managed identity is
+            # revision-scoped and is published through display_mention/mention_binding;
+            # carrying those ids into this table would cross the revision fence (§0.3).
+            if await self._legacy_presentation_revision(ctx) is not None:
+                state.display_spans = state.mentions
+            else:
+                state.display_spans = [span.model_copy(update={"alias_id": ""})
+                                       for span in state.mentions]
             return
 
         if state.translation is None:
@@ -76,10 +87,26 @@ class DisplayScanStage:
             # wrong text).
             return
 
+        # The target term remains useful presentation data even while its source term
+        # has no entity. Resolve ids only from the verified legacy binding for the exact
+        # active revision. In particular, never use glossary.entity_id or a managed
+        # revision's binding in the legacy mention_span table.
+        legacy_revision = await self._legacy_presentation_revision(ctx)
         rows = await (
             await ctx.db.execute(
-                "SELECT source_term, entity_id, target_term FROM glossary WHERE novel_id = %s AND NOT deleted",
-                (ctx.novel.id,),
+                """
+                SELECT g.source_term, g.target_term, b.entity_id
+                  FROM glossary g
+                  LEFT JOIN glossary_binding b
+                   ON b.novel_id = g.novel_id
+                   AND b.source_term = g.source_term
+                   AND b.revision_id = %s::uuid
+                   AND g.locked_at_chapter <= %s
+                   AND b.known_from_chapter <= %s
+                 WHERE g.novel_id = %s AND NOT g.deleted
+                """,
+                (legacy_revision, state.envelope.chapter_index, state.envelope.chapter_index,
+                 ctx.novel.id),
             )
         ).fetchall()
 
@@ -87,16 +114,20 @@ class DisplayScanStage:
             text=state.translation,
             aliases=[
                 Alias(alias_id=str(index), surface=target_term)
-                for index, (_, entity_id, target_term) in enumerate(rows)
-                if entity_id is not None
+                for index, (_, target_term, _entity_id) in enumerate(rows)
             ],
             lang=ctx.novel.target_lang,
         )
         response = await ctx.textproc.scan(request) if ctx.textproc else scan_mentions(request)
         state.display_spans = []
         for span in response.spans:
-            source_term, entity_id, target_term = rows[int(span.alias_id)]
-            state.display_spans.append(span.model_copy(update={"alias_id": str(entity_id)}))
+            source_term, target_term, entity_id = rows[int(span.alias_id)]
+            # Empty alias ids are intentional placeholders. GraphWriter stores them as
+            # NULL, while term_renderings preserves the source/display ledger for later
+            # managed revision materialization.
+            state.display_spans.append(span.model_copy(update={
+                "alias_id": str(entity_id) if entity_id is not None else "",
+            }))
             state.term_renderings.append(TermRenderingOccurrence(
                 source_term, target_term, span.char_start, span.char_end, "glossary"))
 
@@ -107,3 +138,26 @@ class DisplayScanStage:
             len(rows),
             len(state.display_spans),
         )
+
+    async def _legacy_presentation_revision(self, ctx: StageContext) -> str | None:
+        """Return the only revision allowed to supply legacy entity links.
+
+        ``GraphWriter.replace_mention_spans`` intentionally has no revision argument and
+        migration 0024's trigger assigns the legacy revision. Therefore a managed or
+        quarantined graph may still write empty presentation spans, but it may not attach
+        an id from that graph to them. This is a write-path fence; reader authorization
+        remains the revision/RLS fence on managed display rows (§0.3).
+        """
+        row = await (
+            await ctx.db.execute(
+                """
+                SELECT r.id
+                  FROM novel n
+                  JOIN graph_revision r ON r.id = n.active_graph_revision
+                 WHERE n.id = %s
+                   AND r.legacy AND r.state = 'active' AND r.trusted
+                """,
+                (ctx.novel.id,),
+            )
+        ).fetchone()
+        return str(row[0]) if row else None

@@ -118,6 +118,21 @@ type GlossaryTermView struct {
 	LockedAtChapter int     `json:"locked_at_chapter"`
 }
 
+// VocabularyTermView intentionally omits proposals, evidence, revisions and all
+// chapter metadata. Those fields can reveal future terminology even when the name
+// itself has passed the reader's chapter gate (§0.3/C.10).
+type VocabularyTermView struct {
+	TermType    string   `json:"term_type"`
+	Name        string   `json:"name"`
+	Kinds       []string `json:"kinds"`
+	DstKinds    []string `json:"dst_kinds,omitempty"`
+	Cardinality string   `json:"cardinality"`
+	Status      string   `json:"status"`
+	Polarity    int16    `json:"polarity,omitempty"`
+	Gloss       string   `json:"gloss,omitempty"`
+	Aliases     []string `json:"aliases,omitempty"`
+}
+
 type GlossaryResponse struct {
 	Knowledge KnowledgeStatus    `json:"knowledge"`
 	NovelID   string             `json:"novel_id"`
@@ -372,6 +387,45 @@ type ChapterKnowledgeView struct {
 	Terms           []ChapterTermView           `json:"terms"`
 	Run             *ChapterKnowledgeRunView    `json:"run,omitempty"`
 	GraphExtraction *ChapterGraphExtractionView `json:"graph_extraction,omitempty"`
+}
+
+// HeldKnowledgeItem mirrors one row of reader_held_knowledge (migration 0074). Exactly
+// one of {Attribute, RelType} and one of {EntityID, (SrcID,DstID)} is populated depending
+// on ItemType. RevisionVersion is the write-side stale-check token: the caller must echo
+// it back on PATCH .../knowledge/review (Phase D).
+type HeldKnowledgeItem struct {
+	ItemType        string  `json:"item_type"`
+	ItemID          int64   `json:"item_id"`
+	RevisionID      string  `json:"revision_id"`
+	RevisionVersion int64   `json:"revision_version"`
+	ChapterIndex    int     `json:"chapter_index"`
+	EntityID        *string `json:"entity_id,omitempty"`
+	SrcID           *string `json:"src_id,omitempty"`
+	DstID           *string `json:"dst_id,omitempty"`
+	Attribute       *string `json:"attribute,omitempty"`
+	RelType         *string `json:"rel_type,omitempty"`
+	Value           *string `json:"value,omitempty"`
+	Summary         *string `json:"summary,omitempty"`
+	EvidenceID      *string `json:"evidence_id,omitempty"`
+	EvidenceQuote   *string `json:"evidence_quote,omitempty"`
+	ReviewState     string  `json:"review_state"`
+	ReviewFlag      *string `json:"review_flag,omitempty"`
+	// BulkEligible mirrors the exact set pass_all_corroborated would apply (migration
+	// 0076's corroborated_fact_ids, computed identically for both this preview and the
+	// write). Always false for edge/event items -- the corroboration ledger has no
+	// equivalent for them.
+	BulkEligible bool `json:"bulk_eligible"`
+}
+
+// HeldKnowledgeResponse is the review workspace's read surface for one chapter. There is
+// deliberately no "everything pending" operator view (plan §0.3/Phase D) — a reviewer
+// only ever sees held knowledge at their own reading position, exactly like every other
+// reader-api response.
+type HeldKnowledgeResponse struct {
+	NovelID      string              `json:"novel_id"`
+	ChapterIndex int                 `json:"chapter_index"`
+	At           int                 `json:"at"`
+	Items        []HeldKnowledgeItem `json:"items"`
 }
 
 type ChapterKnowledgeActivity struct {

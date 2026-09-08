@@ -36,6 +36,7 @@ type IngestClient interface {
 	BootstrapGlossary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	ConfirmGlossaryTerm(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	ApproveCharacterName(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
+	MutateVocabulary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	TranslateAhead(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	UpdateNovelSettings(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	RequestRepair(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
@@ -43,6 +44,11 @@ type IngestClient interface {
 	RetryRepairNow(ctx context.Context, novelID, requestID string) (json.RawMessage, int, error)
 	MutateFact(ctx context.Context, method, novelID, factID, suffix string, body json.RawMessage) (json.RawMessage, int, error)
 	ChapterKnowledgeMutation(ctx context.Context, novelID, chapter, runID string, body json.RawMessage) (json.RawMessage, int, error)
+	ReviewChapterKnowledge(ctx context.Context, novelID, chapter string, body json.RawMessage) (json.RawMessage, int, error)
+}
+
+func (c *ingestHTTPClient) MutateVocabulary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodPatch, "/novels/"+novelID+"/vocabulary", body, true)
 }
 
 func (c *ingestHTTPClient) ChapterKnowledgeMutation(ctx context.Context, novelID, chapter, runID string, body json.RawMessage) (json.RawMessage, int, error) {
@@ -55,6 +61,13 @@ func (c *ingestHTTPClient) ChapterKnowledgeMutation(ctx context.Context, novelID
 
 func (c *ingestHTTPClient) MutateFact(ctx context.Context, method, novelID, factID, suffix string, body json.RawMessage) (json.RawMessage, int, error) {
 	return c.send(ctx, method, "/novels/"+novelID+"/facts/"+factID+suffix, body, true)
+}
+
+// ReviewChapterKnowledge passes/rejects held fact, edge and event rows for one chapter
+// (migration 0074, Phase D). Token-gated like every other write that changes reader
+// visibility (MutateFact, MutateVocabulary): the browser never sees INGEST_INTERNAL_TOKEN.
+func (c *ingestHTTPClient) ReviewChapterKnowledge(ctx context.Context, novelID, chapter string, body json.RawMessage) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodPatch, "/novels/"+novelID+"/chapter/"+chapter+"/knowledge/review", body, true)
 }
 
 func (c *ingestHTTPClient) QueueControl(ctx context.Context, method string, body json.RawMessage) (json.RawMessage, int, error) {

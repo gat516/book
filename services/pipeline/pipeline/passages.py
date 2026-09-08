@@ -9,7 +9,7 @@ from copy import deepcopy
 from functools import lru_cache
 import re
 
-from pipeline.evidence import Names, digest, passage
+from pipeline.evidence import CJK_RE, digest, passage
 
 
 @lru_cache(maxsize=32)
@@ -88,6 +88,9 @@ class PassageContract:
     def __init__(self, source: str, passage_ids: set[str] | None = None,
                  *, max_chars: int = 400, overlap: int = 80, windows: bool = False):
         self.source=source
+        self.max_chars=max_chars
+        self.overlap=overlap
+        self.windows=windows
         factory = source_windows if windows else source_passages
         all_passages=factory(source, max_chars=max_chars, overlap=overlap)
         self.passages=[p for p in all_passages if passage_ids is None or p['id'] in passage_ids]
@@ -105,20 +108,16 @@ class PassageContract:
                 if 'char_start' in m else m for m in result['mentions']]
         return result
 
-    def schema(self, stage: str, internal_schema, ontology: dict) -> dict:
+    def schema(self, stage: str, internal_schema, ontology: dict, vocabulary: dict | None = None,
+              limits: dict | None = None) -> dict:
+        """Build the wire JSON schema for ``stage``.
+
+        ``limits`` overrides per-list ``maxItems`` (B.4: local vs hosted ceilings are
+        experimental, not qualified, and must never live as a second copy of the
+        internal pydantic Field bound -- the model only sees what's passed here).
+        """
         ids=list(self.by_id)
         reference={'anyOf':[dict(type='string',enum=ids),dict(type='null')]}
-        if stage=='names':
-            item=dict(type='object',additionalProperties=False,required=['surface','passage_id'],properties={
-                'surface':dict(type='string',minLength=1,maxLength=80),
-                'kind':dict(type='string',enum=ontology['kinds']),
-                'passage_id':dict(type='string',enum=ids)})
-            item['required'].append('kind')
-            kinds=ontology['kinds']
-            return dict(type='object',additionalProperties=False,required=['reviewed','names'],properties={
-                'reviewed':dict(type='object',additionalProperties=False,required=kinds,
-                                properties={k:dict(type='boolean',const=True) for k in kinds}),
-                'names':dict(type='array',maxItems=12,items=item)})
         result=deepcopy(internal_schema.model_json_schema())
         for definition in result.get('$defs',{}).values():
             fields=definition.get('properties',{})
@@ -127,13 +126,35 @@ class PassageContract:
             fields.pop('quote');fields.pop('evidence_start',None)
             fields['passage_id']=reference
             definition['required']=[k for k in definition.get('required',[]) if k not in {'quote','evidence_start'}]+['passage_id']
-        if stage == 'claims':
-            definition = result['$defs']['ClaimProposal']
-            fields = definition['properties']
-            fields.pop('passage_id', None)
-            fields['passage_ids'] = dict(type='array',minItems=1,maxItems=3,
-                                         items=dict(type='string',enum=ids))
-            definition['required']=[k for k in definition['required'] if k != 'passage_id']+['passage_ids']
+        if stage == 'align' and limits and 'alignments' in limits:
+            result['properties']['alignments']['maxItems']=limits['alignments']
+        if stage == 'extract':
+            limits = limits or {}
+            ref=dict(type='object',additionalProperties=False,
+                     required=['name_index','passage_id','occurrence_index'],properties={
+                         'name_index':dict(type='integer',minimum=0),
+                         'passage_id':dict(type='string',enum=ids),
+                         'occurrence_index':dict(type='integer',minimum=0)})
+            citations=dict(type='array',minItems=1,maxItems=2,items=dict(type='string',enum=ids))
+            admitted=[]
+            if vocabulary:
+                admitted=sorted({x['name'] if isinstance(x,dict) else x for x in vocabulary.get('attributes',[])} |
+                                {x['name'] if isinstance(x,dict) else x for x in vocabulary.get('relations',[])})
+            term=dict(anyOf=[dict(type='string',enum=admitted),dict(type='string',pattern=r'^[a-z][a-z0-9_]{1,39}$')]) if admitted else dict(type='string',pattern=r'^[a-z][a-z0-9_]{1,39}$')
+            name=dict(type='object',additionalProperties=False,required=['surface','kind','passage_id'],properties={
+                'surface':dict(type='string',minLength=1,maxLength=80),'kind':dict(type='string',enum=ontology['kinds']),
+                'passage_id':dict(type='string',enum=ids)})
+            attr=dict(type='object',additionalProperties=False,required=['subject_ref','attribute','value','value_en','passage_ids'],properties={
+                'subject_ref':ref,'attribute':term,'value':dict(type='string',maxLength=400),'value_en':dict(type='string',maxLength=200),'passage_ids':citations})
+            rel=dict(type='object',additionalProperties=False,required=['src_ref','dst_ref','relation','sentiment','passage_ids'],properties={
+                'src_ref':ref,'dst_ref':ref,'relation':term,'sentiment':dict(anyOf=[dict(type='integer',minimum=-1,maximum=1),dict(type='null')]),'passage_ids':citations})
+            occ=dict(type='object',additionalProperties=False,required=['summary','summary_en','participant_refs','passage_ids'],properties={
+                'summary':dict(type='string',maxLength=400),'summary_en':dict(type='string',maxLength=200),'participant_refs':dict(type='array',maxItems=8,items=ref),'passage_ids':citations})
+            return dict(type='object',additionalProperties=False,required=['names','attributes','relations','occurrences'],properties={
+                'names':dict(type='array',maxItems=limits.get('names',14),items=name),
+                'attributes':dict(type='array',maxItems=limits.get('attributes',8),items=attr),
+                'relations':dict(type='array',maxItems=limits.get('relations',6),items=rel),
+                'occurrences':dict(type='array',maxItems=limits.get('occurrences',5),items=occ)})
         return result
 
     def resolve(self, reference) -> dict | None:
@@ -146,55 +167,110 @@ class PassageContract:
             return None
         return dict(quote=p['text'],evidence_start=p['char_start'])
 
+    def claim_refs_are_adjacent(self, references) -> bool:
+        """Return whether cited claim ranges have no uncited passage between them.
+
+        This is intentionally based on the complete source split, rather than the order
+        of the IDs in ``self.by_id``. A claims request may offer a filtered prompt and
+        model-generated reference order is not source order. Malformed, unknown, duplicate
+        or overlapping references remain materialization errors; this helper only owns the
+        soft rejection of a valid, non-adjacent pair (§0.2).
+        """
+        if not isinstance(references,list) or len(references) < 2:
+            return True
+        cited=[self.by_id.get(reference) for reference in references]
+        if any(p is None for p in cited):
+            return True
+        ranges=sorted((p['char_start'],p['char_end']) for p in cited)
+        if any(right_start < left_end
+               for (_,left_end),(right_start,_) in zip(ranges,ranges[1:])):
+            return True
+        factory=source_windows if self.windows else source_passages
+        complete=factory(self.source,max_chars=self.max_chars,overlap=self.overlap)
+        for (_,left_end),(right_start,_) in zip(ranges,ranges[1:]):
+            if any(p['char_start'] >= left_end and p['char_end'] <= right_start
+                   for p in complete):
+                return False
+        return True
+
     def materialize(self, stage: str, internal_schema, body: dict, ontology: dict):
         if not isinstance(body,dict):
             raise ValueError('expected an object containing passage references')
-        if stage=='names':
-            kinds=ontology['kinds']
-            reviewed=body.get('reviewed');items=body.get('names')
-            if (set(body)!= {'reviewed','names'} or not isinstance(reviewed,dict)
-                or set(reviewed)!=set(kinds) or not all(value is True for value in reviewed.values())):
-                raise ValueError('name discovery must explicitly review every ontology kind')
-            if not isinstance(items,list) or len(items)>12:
-                raise ValueError('invalid names list')
-            names=[];rejected=[]
-            for item in items:
-                if not isinstance(item,dict) or set(item)!= {'surface','kind','passage_id'}:
-                    raise ValueError('name proposals must reference passages, never supply quotations')
-                kind=item['kind'];evidence=self.resolve(item['passage_id']);surface=item['surface']
-                if kind not in kinds or not isinstance(surface,str) or not surface.strip() or len(surface)>80:
-                    raise ValueError('invalid named surface or kind')
-                if not evidence or surface not in evidence['quote']:
-                    rejected.append(dict(**item,rejection='unknown passage or surface absent from cited passage'))
-                    continue
-                names.append(dict(surface=surface,kind=kind,named=True,**evidence))
-            return Names(names=names,reviewed_kinds=list(kinds),rejected=rejected)
-        if stage not in {'propose','claims','align'}:
+        if stage == 'extract':
+            if set(body) != {'names','attributes','relations','occurrences'}:
+                raise ValueError('extract response must contain four proposal lists')
+            names=body['names']
+            if not all(isinstance(n,dict) and set(n)=={'surface','kind','passage_id'} for n in names):
+                raise ValueError('invalid extract name proposal')
+            def matches(surface, passage_row):
+                # Same CJK discipline as evidence.source_mentions: Python's isalnum()
+                # is True for Han characters, so an unguarded boundary check would
+                # reject nearly every occurrence in zh source text (no spaces mean a
+                # name is always "surrounded" by alnum characters). Both functions
+                # must agree, or an anchored reference here finds a different
+                # occurrence set than the mention_id source_mentions() produced.
+                text=passage_row['text']; out=[]; start=0
+                cjk=CJK_RE.search(surface)
+                while True:
+                    at=text.find(surface,start)
+                    if at<0: break
+                    before=text[at-1] if at else ''; after=text[at+len(surface)] if at+len(surface)<len(text) else ''
+                    if cjk or not ((before.isalnum() and surface[0].isalnum()) or (after.isalnum() and surface[-1].isalnum())):
+                        out.append((passage_row['char_start']+at,passage_row['char_start']+at+len(surface)))
+                    start=at+1
+                return out
+            def ref(item, key):
+                value=item.get(key)
+                if not isinstance(value,dict) or set(value)!={'name_index','passage_id','occurrence_index'}:
+                    raise ValueError('invalid anchored occurrence reference')
+                ni=value['name_index']; pid=value['passage_id']; oi=value['occurrence_index']
+                if not isinstance(ni,int) or not 0<=ni<len(names) or pid not in self.by_id:
+                    raise ValueError('occurrence reference is not offered')
+                if pid not in item.get('passage_ids',[]):
+                    raise ValueError('occurrence citation does not include its passage')
+                found=matches(names[ni]['surface'],self.by_id[pid])
+                if oi>=len(found): raise ValueError('occurrence ordinal is out of range')
+                lo,hi=found[oi]
+                return dict(mention_index=ni,passage_id=pid,occurrence_index=oi,char_start=lo,char_end=hi,
+                            surface=names[ni]['surface'],kind=names[ni]['kind'])
+            def citations(item):
+                refs=item.get('passage_ids')
+                if not isinstance(refs,list) or not 1<=len(refs)<=2 or len(set(refs))!=len(refs):
+                    raise ValueError('extract items must cite one or two distinct passages')
+                if any(r not in self.by_id for r in refs): raise ValueError('extract citation is not offered')
+                if len(refs)==2 and not self.claim_refs_are_adjacent(refs):
+                    raise ValueError('extract citations must be adjacent')
+                return refs
+            out=dict(names=[] ,attributes=[],relations=[],occurrences=[])
+            for n in names:
+                ev=self.resolve(n['passage_id'])
+                if not ev or n['surface'] not in ev['quote']: raise ValueError('name surface absent from cited passage')
+                out['names'].append(dict(surface=n['surface'],kind=n['kind'],**ev))
+            for item in body['attributes']:
+                citations(item); subject=ref(item,'subject_ref')
+                out['attributes'].append(dict(item,subject_ref=subject))
+            for item in body['relations']:
+                citations(item); src=ref(item,'src_ref'); dst=ref(item,'dst_ref')
+                out['relations'].append(dict(item,src_ref=src,dst_ref=dst))
+            for item in body['occurrences']:
+                citations(item)
+                # Participant refs are validated with the same anchor contract.
+                participants=[]
+                for value in item.get('participant_refs',[]):
+                    holder=dict(item,subject_ref=value); participants.append(ref(holder,'subject_ref'))
+                out['occurrences'].append(dict(item,participant_refs=participants))
+            return out
+        if stage != 'align':
             return internal_schema.model_validate(body)
         result=deepcopy(body)
-        # Event extraction shares this evidence contract with graph proposals: the model
+        # align shares this evidence contract with the old 'propose' stage: the model
         # selects an offered passage_id but never supplies a quote or offset (§0.2).
-        keys = {'propose':['decisions','claims','events'],
-                'claims':['claims'], 'align':['alignments']}[stage]
-        for key in keys:
-            for item in result.get(key,[]):
-                reference_key = 'passage_ids' if stage == 'claims' else 'passage_id'
-                if 'quote' in item or 'evidence_start' in item or reference_key not in item:
-                    raise ValueError('model must cite offered passages, not generate evidence text or offsets')
-                refs=item.pop(reference_key)
-                if stage == 'claims':
-                    if not isinstance(refs,list) or not 1 <= len(refs) <= 3 or len(set(refs)) != len(refs):
-                        raise ValueError('claims must cite one to three distinct offered passages')
-                    evidence=[self.resolve(ref) for ref in refs]
-                    if all(evidence):
-                        lo=min(ev['evidence_start'] for ev in evidence)
-                        hi=max(ev['evidence_start']+len(ev['quote']) for ev in evidence)
-                        ev=dict(quote=self.source[lo:hi],evidence_start=lo)
-                    else:
-                        ev=None
-                else:
-                    ev=self.resolve(refs)
-                # Invalid/unlinked references retain empty evidence. Existing literal
-                # validation rejects claims/links; unaligned cards stay clickable.
-                item.update(ev or dict(quote='',evidence_start=None))
+        for item in result.get('alignments',[]):
+            if 'quote' in item or 'evidence_start' in item or 'passage_id' not in item:
+                raise ValueError('model must cite offered passages, not generate evidence text or offsets')
+            ref=item.pop('passage_id')
+            ev=self.resolve(ref)
+            # Invalid/unlinked references retain empty evidence. Existing literal
+            # validation rejects links; unaligned cards stay clickable.
+            item.update(ev or dict(quote='',evidence_start=None))
         return internal_schema.model_validate(result)

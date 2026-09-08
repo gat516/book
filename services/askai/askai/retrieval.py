@@ -41,9 +41,77 @@ async def retrieve(conn: AsyncConnection, novel_id: str, at: int, embedding: lis
         entity_ids = [row[0] for row in await cur.fetchall()]
         if not entity_ids:
             return events + chunks
-        await cur.execute("""WITH visible AS (SELECT f.* FROM fact f WHERE f.novel_id = %s AND f.entity_id = ANY(%s::uuid[]) AND f.source_chapter <= %s AND f.valid_from_chapter <= %s), current_facts AS (SELECT DISTINCT ON (entity_id, attribute) * FROM visible f WHERE f.kind <> 'retraction' AND NOT EXISTS (SELECT 1 FROM visible successor WHERE successor.supersedes = f.id) ORDER BY entity_id, attribute, valid_from_chapter DESC, source_chapter DESC, confidence DESC, id DESC) SELECT cf.id, cf.source_chapter, coalesce(e.canonical_en,e.canonical) || ': ' || attribute || ' = ' || coalesce(cf.value_en, cf.value), (SELECT jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash) FROM graph_evidence v WHERE v.id=cf.evidence_id) FROM current_facts cf JOIN entity e ON e.id = cf.entity_id ORDER BY source_chapter DESC, id DESC LIMIT %s""", (novel_id, entity_ids, at, at, max_facts))
+        await cur.execute("""WITH vocabulary AS (
+            SELECT name, aliases, status
+                FROM reader_vocabulary(%s::uuid,%s)
+               WHERE term_type='attribute'
+            ), visible AS (
+              SELECT f.*, canonical.name AS canonical_attribute
+                FROM fact f
+                LEFT JOIN LATERAL (
+                  SELECT v.name
+                    FROM vocabulary v
+                   WHERE f.attribute=ANY(v.aliases)
+                   ORDER BY v.name
+                   LIMIT 1
+                ) alias_match ON true
+                LEFT JOIN vocabulary exact ON exact.name=f.attribute
+                JOIN vocabulary canonical
+                  ON canonical.name=COALESCE(alias_match.name,exact.name)
+                 AND canonical.status='admitted'
+               WHERE f.novel_id = %s AND f.entity_id = ANY(%s::uuid[])
+                 AND f.source_chapter <= %s AND f.valid_from_chapter <= %s
+            ), current_facts AS (
+              SELECT DISTINCT ON (entity_id, canonical_attribute) *
+                FROM visible f
+               WHERE f.kind <> 'retraction'
+                 AND NOT EXISTS (SELECT 1 FROM visible successor WHERE successor.supersedes = f.id)
+               ORDER BY entity_id, canonical_attribute, valid_from_chapter DESC,
+                        source_chapter DESC, confidence DESC, id DESC
+            )
+            SELECT cf.id, cf.source_chapter,
+                   coalesce(e.canonical_en,e.canonical) || ': ' || cf.canonical_attribute || ' = ' || coalesce(cf.value_en, cf.value),
+                   (SELECT jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash)
+                      FROM graph_evidence v WHERE v.id=cf.evidence_id)
+              FROM current_facts cf JOIN entity e ON e.id = cf.entity_id
+             ORDER BY source_chapter DESC, id DESC LIMIT %s""", (novel_id, at, novel_id, entity_ids, at, at, max_facts))
         facts = [Source("fact", row[0], row[1], row[2], row[3]) for row in await cur.fetchall()]
-        await cur.execute("""SELECT ed.id, ed.source_chapter, src.canonical || ' --' || ed.rel_type || '--> ' || dst.canonical, (SELECT jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash) FROM graph_evidence v WHERE v.id=ed.evidence_id) FROM edge ed JOIN entity src ON src.id = ed.src_id JOIN entity dst ON dst.id = ed.dst_id WHERE ed.novel_id = %s AND (ed.src_id = ANY(%s::uuid[]) OR ed.dst_id = ANY(%s::uuid[])) AND ed.source_chapter <= %s AND ed.valid_from_chapter <= %s AND (ed.valid_to_chapter IS NULL OR ed.valid_to_chapter > %s) ORDER BY ed.source_chapter DESC, ed.id DESC LIMIT %s""", (novel_id, entity_ids, entity_ids, at, at, at, max_edges))
+        await cur.execute("""WITH vocabulary AS (
+            SELECT name, aliases, status
+                FROM reader_vocabulary(%s::uuid,%s)
+               WHERE term_type='relation'
+            ), eligible AS (
+              SELECT ed.*, canonical.name AS canonical_relation
+                FROM edge ed
+                LEFT JOIN LATERAL (
+                  SELECT v.name
+                    FROM vocabulary v
+                   WHERE ed.rel_type=ANY(v.aliases)
+                   ORDER BY v.name
+                   LIMIT 1
+                ) alias_match ON true
+                LEFT JOIN vocabulary exact ON exact.name=ed.rel_type
+                JOIN vocabulary canonical
+                  ON canonical.name=COALESCE(alias_match.name,exact.name)
+                 AND canonical.status='admitted'
+               WHERE ed.novel_id = %s
+                 AND (ed.src_id = ANY(%s::uuid[]) OR ed.dst_id = ANY(%s::uuid[]))
+                 AND ed.source_chapter <= %s AND ed.valid_from_chapter <= %s
+                 AND (ed.valid_to_chapter IS NULL OR ed.valid_to_chapter > %s)
+            ), current_edges AS (
+              SELECT e.*
+                FROM eligible e
+               WHERE e.kind <> 'retraction'
+                 AND NOT EXISTS (SELECT 1 FROM eligible successor WHERE successor.supersedes=e.id)
+            )
+            SELECT ed.id, ed.source_chapter,
+                   src.canonical || ' --' || ed.canonical_relation || '--> ' || dst.canonical,
+                   (SELECT jsonb_build_object('id',ev.id,'chapter',ev.chapter_index,'quote',ev.quote,'source_hash',ev.source_hash)
+                      FROM graph_evidence ev WHERE ev.id=ed.evidence_id)
+              FROM current_edges ed
+              JOIN entity src ON src.id = ed.src_id
+              JOIN entity dst ON dst.id = ed.dst_id
+             ORDER BY ed.source_chapter DESC, ed.id DESC LIMIT %s""", (novel_id, at, novel_id, entity_ids, entity_ids, at, at, at, max_edges))
         edges = [Source("edge", row[0], row[1], row[2], row[3]) for row in await cur.fetchall()]
     return events + chunks + facts + edges
 

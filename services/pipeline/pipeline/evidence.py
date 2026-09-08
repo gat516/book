@@ -13,7 +13,14 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 
-PROMPT_VERSION = 'evidence-v20-compact-identity-wire'
+# Word-boundary checks must not apply Latin isalnum() adjacency rules to CJK
+# surfaces: Python's str.isalnum() is True for Han characters, so an unguarded
+# check would reject nearly every occurrence in zh source text (no spaces mean
+# every name is "surrounded" by alnum characters). Shared by source_mentions()
+# below and passages.py's extract materializer -- both must agree, or an
+# attribute/relation/occurrence's anchored reference silently fails to match any
+# mention_id source_mentions() produced.
+CJK_RE = re.compile(r'[㐀-䶿一-鿿豈-﫿]')
 
 MAX_EXPLANATION_CHARS = 200
 MAX_FACT_VALUE_CHARS = 400
@@ -26,6 +33,27 @@ MAX_FACT_GLOSS_CHARS = 200
 def digest(value) -> str:
     text = value if isinstance(value, str) else json.dumps(value, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(text.encode()).hexdigest()
+
+
+# Each stage keeps its own compatibility marker.  The prompt text and wire schema are
+# also part of the request digest, so these values are only needed when a materializer
+# changes while its visible prompt text does not.  Keeping that distinction explicit
+# prevents a future maintainer from deleting this map as redundant.
+# B.6 collapses the pipeline to four surviving stages for an unsplit chapter: the
+# merged 'extract' pass, 'identity_slots' (bounded identity proposals), 'verify'
+# (semantic identity verification -- the one verifier B.6 keeps), and 'align'.
+# 'names', 'name_slots', 'claims', 'evidence', 'fact_verify', 'fact_review',
+# 'render', 'render_verify', 'propose' and 'name_verify' are dropped; 'verify' no
+# longer serves claims or alignment, only identity.
+STAGE_PROMPT_VERSIONS = {
+    stage: 'evidence-v21-merged-extract'
+    for stage in ('extract', 'identity_slots', 'verify', 'align')
+}
+
+# graph_revision.prompt_version is a digest of the stage map.  The old single marker is
+# retained as a compatible drift source for revisions created before the map existed.
+LEGACY_PROMPT_VERSION = 'evidence-v20-compact-identity-wire'
+PROMPT_VERSION = digest(STAGE_PROMPT_VERSIONS)
 
 
 def stable_id(*parts) -> str:
@@ -43,15 +71,20 @@ class Supported(Strict):
 
 
 class Name(Supported):
+    """One inventoried name, cited to a passage rather than to an occurrence.
+
+    `quote` is the whole cited passage (B.1: extract's names[] items cite only a
+    passage, never an occurrence anchor), so it is intentionally unbounded here --
+    the 400-char cap belonged to the old 400-char-passage 'names'/'name_slots'
+    stages, both dropped by B.6. ``source_mentions`` still does the real per-
+    occurrence regex scan of the whole chapter to build durable mention anchors.
+    """
     surface: str = Field(max_length=80)
     kind: str
-    quote: str = Field(max_length=400)
     named: bool
 
 
 class Names(Strict):
-    # Each model request is capped at 12 names by its wire schema. Application-owned
-    # aggregation spans as many bounded passage batches as a long chapter needs.
     names: list[Name]
     reviewed_kinds: list[str] = Field(default_factory=list)
     rejected: list[dict] = Field(default_factory=list)
@@ -67,14 +100,77 @@ class Decision(Supported):
 
 
 class Claim(Supported):
+    """Application-materialized proposal, ready for validate_proposals/publish.
+
+    `type` is set structurally by the caller from which of B.1's three routing lists
+    (attributes/relations/occurrences) produced this item -- never a model-chosen
+    field. Keeping this shape (rather than reintroducing a wire-level enum) is a
+    deliberate B.1 decision: see ExtractAttribute/ExtractRelation/ExtractOccurrence
+    below for the model-facing contract that actually produces these.
+    """
     type: Literal['fact', 'relationship', 'event']
-    mention_ids: list[str] = Field(min_length=1)
+    # Facts/relationships require exact-count subjects (1/2), enforced structurally
+    # in validate_proposals rather than here; an occurrence may legitimately name no
+    # participant at all ("it began to rain"), so this stays unconstrained.
+    mention_ids: list[str] = Field(default_factory=list)
     attribute: str
     value: str = Field(max_length=MAX_FACT_VALUE_CHARS)
-    # Display only. `value` stays source-language and is the only thing verification
-    # checks against the evidence; an absent or wrong gloss never blocks publication.
+    # Display only. `value` stays source-language; an absent or wrong gloss never
+    # blocks publication. Now populated directly from the extract schema (B.6) --
+    # there is no separate render/render_verify pass to fall back on.
     value_en: str = Field(default='', max_length=MAX_FACT_GLOSS_CHARS)
     quote: str
+    sentiment: int | None = Field(default=None, ge=-1, le=1)
+
+
+class OccurrenceRef(Strict):
+    """Response-local occurrence anchor; never a durable identity binding."""
+    name_index: int = Field(ge=0)
+    passage_id: str
+    occurrence_index: int = Field(ge=0)
+
+
+class ExtractName(Strict):
+    surface: str = Field(min_length=1, max_length=80)
+    kind: str
+    passage_id: str
+
+
+class ExtractAttribute(Strict):
+    subject_ref: OccurrenceRef
+    attribute: str = Field(pattern=r'^[a-z][a-z0-9_]{1,39}$')
+    value: str = Field(max_length=400)
+    value_en: str = Field(default='', max_length=200)
+    passage_ids: list[str] = Field(min_length=1, max_length=2)
+
+
+class ExtractRelation(Strict):
+    src_ref: OccurrenceRef
+    dst_ref: OccurrenceRef
+    relation: str = Field(pattern=r'^[a-z][a-z0-9_]{1,39}$')
+    sentiment: int | None = Field(default=None, ge=-1, le=1)
+    passage_ids: list[str] = Field(min_length=1, max_length=2)
+
+
+class ExtractOccurrence(Strict):
+    summary: str = Field(max_length=400)
+    summary_en: str = Field(default='', max_length=200)
+    participant_refs: list[OccurrenceRef] = Field(default_factory=list, max_length=8)
+    passage_ids: list[str] = Field(min_length=1, max_length=2)
+
+
+class ExtractProposals(Strict):
+    """Merged proposal response; refs are normalized by the application.
+
+    Field ceilings are the hosted upper bound (B.4's provisional experimental caps).
+    The wire schema actually offered to the model tightens `maxItems` per request
+    (local vs hosted) via PassageContract.schema's `limits` argument; these Field
+    bounds only need to admit whichever ceiling was actually offered.
+    """
+    names: list[ExtractName] = Field(default_factory=list, max_length=64)
+    attributes: list[ExtractAttribute] = Field(default_factory=list, max_length=48)
+    relations: list[ExtractRelation] = Field(default_factory=list, max_length=24)
+    occurrences: list[ExtractOccurrence] = Field(default_factory=list, max_length=32)
 
 
 class Proposals(Strict):
@@ -102,32 +198,6 @@ class IdentityDecisions(Strict):
     decisions: list[IdentityDecision]
 
 
-class ClaimProposal(Strict):
-    """Bounded model wire claim; occurrence refs exist only for one request."""
-
-    type: Literal['fact', 'relationship', 'event']
-    occurrence_refs: list[str] = Field(min_length=1)
-    attribute: str
-    value: str = Field(max_length=MAX_FACT_VALUE_CHARS)
-    quote: str
-    evidence_start: int | None = Field(default=None, ge=0)
-
-
-class ClaimProposals(Strict):
-    claims: list[ClaimProposal] = Field(max_length=12)
-
-
-class HostedClaimProposals(Strict):
-    """Chapter-sized extraction response for high-capacity hosted models.
-
-    Local models keep the smaller twelve-item grammar and recursive windows. Hosted
-    models get enough output room to cover an ordinary chapter in one request; hitting
-    this ceiling still triggers the same application-owned subdivision path.
-    """
-
-    claims: list[ClaimProposal] = Field(max_length=48)
-
-
 class Alignment(Supported):
     phrase: str
     occurrence: int = Field(ge=0)
@@ -136,13 +206,15 @@ class Alignment(Supported):
 
 
 class Alignments(Strict):
-    # Bounded like ClaimProposals.claims above: an unbounded list let a name that
-    # recurs often in one translated window (a recurring protagonist, say) force the
-    # model to emit one object per occurrence with no ceiling, which reliably exhausted
-    # num_predict and truncated the whole response into an unparseable partial JSON
-    # array. The caller (KnowledgeEngine._align_window) detects saturation the same way
-    # claim extraction does and re-queries a smaller window for the remainder.
-    alignments: list[Alignment] = Field(max_length=24)
+    # An unbounded list let a name that recurs often in one translated window (a
+    # recurring protagonist, say) force the model to emit one object per occurrence
+    # with no ceiling, which reliably exhausted num_predict and truncated the whole
+    # response into unparseable partial JSON. The caller (_align_window) detects
+    # saturation the same way extraction does and re-queries a smaller window for the
+    # remainder. This Field ceiling is the hosted upper bound (B.4); the actual wire
+    # schema sent to the model tightens `maxItems` per request via
+    # PassageContract.schema's `limits` argument, local vs hosted.
+    alignments: list[Alignment] = Field(max_length=96)
 
 
 class Verdict(Strict):
@@ -153,48 +225,6 @@ class Verdict(Strict):
 
 class Verification(Strict):
     verdicts: list[Verdict]
-
-
-class EvidenceStatement(Strict):
-    """A claim-independent reading of one exact source passage."""
-
-    subject: str = Field(min_length=1, max_length=120)
-    assertion: str = Field(min_length=1, max_length=400)
-    qualifiers: list[str] = Field(default_factory=list, max_length=8)
-
-
-class EvidenceReading(Strict):
-    statements: list[EvidenceStatement] = Field(max_length=16)
-
-
-class FactComponentVerdict(Strict):
-    id: str
-    subject_supported: bool
-    assertion_supported: bool
-    qualifiers_supported: bool
-    evidence_sufficient: bool
-    reason: str = Field(max_length=MAX_EXPLANATION_CHARS)
-
-
-class FactComponentVerification(Strict):
-    verdicts: list[FactComponentVerdict]
-
-
-class HostedFactReviewVerdict(FactComponentVerdict):
-    value_target: str = Field(max_length=MAX_FACT_GLOSS_CHARS)
-
-
-class HostedFactReviews(Strict):
-    verdicts: list[HostedFactReviewVerdict]
-
-
-class FactRendering(Strict):
-    id: str
-    value_en: str = Field(max_length=MAX_FACT_GLOSS_CHARS)
-
-
-class FactRenderings(Strict):
-    renderings: list[FactRendering]
 
 
 def passage(text: str, quote: str, *, anchor: int | None = None, start: int | None = None) -> dict | None:
@@ -226,7 +256,7 @@ def source_mentions(novel: str, chapter: int, source: str, names: Names, ontolog
             continue
         for match in re.finditer(re.escape(name.surface), source):
             start, end = match.span()
-            if not re.search(r'[㐀-䶿一-鿿豈-﫿]',name.surface):
+            if not CJK_RE.search(name.surface):
                 word=lambda ch: ch.isalnum() or ch=='_'
                 if ((word(name.surface[0]) and start>0 and word(source[start-1]))
                     or (word(name.surface[-1]) and end<len(source) and word(source[end]))):
@@ -250,8 +280,49 @@ def source_mentions(novel: str, chapter: int, source: str, names: Names, ontolog
     return sorted(found.values(), key=lambda m: m['char_start'])
 
 
+# B.2.2 -- indefinite/quantified-subject reject. A language heuristic, not a proof:
+# preserve numeral-bearing proper names (techniques, organizations) by anchoring on
+# a LEADING numeral/classifier only, never a bare substring match anywhere in the
+# surface. Uncertain cases are not covered here and stay held for human review, same
+# as everything else -- this only catches the clear cases the plan names.
+_QUANTITY_EN = re.compile(
+    r'^(?:\d+|dozens?|hundreds?|thousands?|several|many|numerous|a\s+(?:group|handful|few|couple)\s+of)\b',
+    re.IGNORECASE)
+_QUANTITY_ZH = re.compile(r'^(?:[〇零一二两三四五六七八九十百千万亿0-9]+[个只名位群批批伙帮]|数十|数百|数千|几|许多|一群|一片|一伙|一帮)')
+
+
+def quantified_subject(surface: str) -> bool:
+    surface = (surface or '').strip()
+    return bool(surface and (_QUANTITY_EN.match(surface) or _QUANTITY_ZH.match(surface)))
+
+
+# B.2.3 -- transient-predicate demotion. Not a reject: callers convert a matching
+# fact deterministically into an event (preserving value/value_en, subject and
+# evidence) rather than dropping it. Ambiguous cases stay held, same discipline.
+_TRANSIENT_EN = re.compile(
+    r'\b(?:patrolling|circling|hovering|currently|right now|at (?:this|that) moment)\b',
+    re.IGNORECASE)
+_TRANSIENT_ZH = re.compile(r'(正在|围绕着|巡逻|盘旋)')
+
+
+def transient_predicate(value: str) -> bool:
+    value = value or ''
+    return bool(_TRANSIENT_EN.search(value) or _TRANSIENT_ZH.search(value))
+
+
+# B.2.4 -- copied-sentence review flag. Length alone must not reject; this only
+# marks an item for human attention, same accepted item either way.
+COPIED_SENTENCE_CHARS = 200
+
+
 def validate_proposals(source: str, mentions: list[dict], candidates: list[dict] | dict[str, list[dict]],
-                       proposals: Proposals, ontology: dict) -> tuple[list[dict], list[dict]]:
+                       proposals: Proposals, ontology: dict, vocabulary: dict | None = None) -> tuple[list[dict], list[dict]]:
+    """Structural checks and review-flag heuristics (B.2). Never durability/support proof.
+
+    `mentions` must already be restricted to independently *verified* occurrences
+    (B.1's anchored-subject rule): an unresolved or rejected mention is simply not
+    `offered`, so any claim citing it is rejected below as an unoffered reference.
+    """
     offered = {m['id']: m for m in mentions}
     if isinstance(candidates, dict):
         per_mention = {
@@ -288,19 +359,58 @@ def validate_proposals(source: str, mentions: list[dict], candidates: list[dict]
         (rejected if why else accepted).append(dict(item, rejection=why) if why else item)
     for i, c in enumerate(proposals.claims):
         why = None
+        flags = []
+        demote = False
         if any(mid not in offered for mid in c.mention_ids):
             why = 'claim references an unoffered mention ID'
         elif not passage(source, c.quote, start=c.evidence_start):
             why = 'claim evidence is absent or ambiguous'
+        elif c.mention_ids and quantified_subject(offered[c.mention_ids[0]].get('surface','')):
+            # B.2.2: reject clear quantity/classifier subjects. The information is not
+            # lost -- it may still surface as an occurrence's free-text summary.
+            why = 'quantified or indefinite subject cannot anchor a durable assertion'
         elif c.type == 'fact':
-            if len(c.mention_ids) != 1 or not any(
-                a['name'] == c.attribute and offered[c.mention_ids[0]]['kind'] in a['kinds']
-                for a in ontology['attributes']):
+            row = (vocabulary or {}).get(('attribute', c.attribute)) if vocabulary else None
+            syntactic = bool(re.fullmatch(r'^[a-z][a-z0-9_]{1,39}$', c.attribute))
+            compatible = (len(c.mention_ids) == 1 and c.mention_ids[0] in offered and
+                          (row is None or offered[c.mention_ids[0]]['kind'] in (row.get('kinds') or [])))
+            if row and row.get('status') in {'banned','retired'}:
+                why = 'vocabulary term is banned or retired'
+            elif len(c.mention_ids) != 1 or not syntactic or not compatible:
                 why = 'invalid attribute or entity kind'
-        elif c.type == 'relationship' and (len(c.mention_ids) != 2 or c.attribute not in ontology['relations']):
-            why = 'invalid relationship'
+            elif transient_predicate(c.value):
+                # B.2.3: demote deterministically rather than reject. Same subject,
+                # evidence and qualifiers; value/value_en become the event summary.
+                demote = True
+                flags.append('transient_predicate_demoted_to_event')
+            elif len(c.value) >= COPIED_SENTENCE_CHARS:
+                # B.2.4: flag only. A long verbatim value may still be a valid durable
+                # statement; a human, not sentence length, decides.
+                flags.append('long_verbatim_value')
+        elif c.type == 'relationship':
+            row = (vocabulary or {}).get(('relation', c.attribute)) if vocabulary else None
+            syntactic = bool(re.fullmatch(r'^[a-z][a-z0-9_]{1,39}$', c.attribute))
+            compatible = (len(c.mention_ids) == 2 and all(mid in offered for mid in c.mention_ids) and
+                          (row is None or
+                           (offered[c.mention_ids[0]]['kind'] in (row.get('kinds') or []) and
+                            offered[c.mention_ids[1]]['kind'] in (row.get('dst_kinds') or []))))
+            if row and row.get('status') in {'banned','retired'}:
+                why = 'vocabulary term is banned or retired'
+            elif len(c.mention_ids) != 2 or not syntactic or not compatible:
+                why = 'invalid relationship'
+        elif c.type == 'event':
+            if len(c.mention_ids) > 8:
+                why = 'occurrence cites more participants than offered'
         item = dict(id=f'claim:{i}', **c.model_dump())
-        (rejected if why else accepted).append(dict(item, rejection=why) if why else item)
+        if why:
+            rejected.append(dict(item, rejection=why))
+            continue
+        if demote:
+            item = dict(item, type='event', attribute='', mention_ids=item['mention_ids'][:1],
+                        review_flags=flags)
+        elif flags:
+            item = dict(item, review_flags=flags)
+        accepted.append(item)
     return accepted, rejected
 
 

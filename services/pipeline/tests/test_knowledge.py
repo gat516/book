@@ -15,8 +15,125 @@ from pipeline.graph_rebuild import qualified,next_retryable_active_revision,grap
 from pipeline.graph_rebuild import promote_verified_glossary
 from pipeline.knowledge import KnowledgeEngine
 from tests.fixtures import make_novel
+from novel_llm.provider import Completion
 
 ONTOLOGY=dict(kinds=['character','place','group'],relations=['member_of'],attributes=[dict(name='description',kinds=['character','place','group'])])
+
+
+def _cache_test_revision(novel, *, served_model='claude-concrete'):
+    return dict(id=str(uuid4()), novel_id=str(novel), ontology=ONTOLOGY,
+                prompt_version=PROMPT_VERSION,
+                model=dict(provider='anthropic', name='claude-alias',
+                            served_provider='anthropic', served_model=served_model))
+
+
+def _cache_test_response(surface='凌峰', served_model='claude-concrete', source=None):
+    source = source or f'{surface}来了。'
+    return Completion(text=json.dumps(dict(reviewed={k: True for k in ONTOLOGY['kinds']},
+        names=[dict(surface=surface, kind='character',
+                    passage_id=source_passages(source)[0]['id'])])),
+        served_provider='anthropic', served_model=served_model)
+
+
+async def _cache_test_call(db, cfg, revision, provider, source='凌峰来了。'):
+    # The argument is deliberately the completion mock, never a provider. AsyncMock
+    # dynamically manufactures arbitrary attributes, so feature-detecting ``complete``
+    # would mistake a bare mock for a provider and produce an unconfigured child mock.
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    provider = SimpleNamespace(complete=provider, aclose=AsyncMock())
+    engine = KnowledgeEngine(db, cfg, revision, provider=provider)
+    try:
+        return await engine.call('names', Names, dict(source=source))
+    finally:
+        await engine.close()
+
+
+@pytest.mark.db
+async def test_completion_cache_reuses_identical_request_across_revisions(db_conn, monkeypatch):
+    from unittest.mock import AsyncMock
+    from pipeline.config import Config
+    monkeypatch.setenv('GRAPH_OLLAMA_FIRST_TOKEN_SECONDS', '120')
+    monkeypatch.setenv('GRAPH_OLLAMA_TIMEOUT_SECONDS', '120')
+    cfg = Config.load()
+    async with db_conn.transaction(force_rollback=True):
+        novel = await make_novel(db_conn, ontology=json.dumps(ONTOLOGY))
+        first = AsyncMock(return_value=_cache_test_response())
+        await _cache_test_call(db_conn, cfg, _cache_test_revision(novel), first)
+        second = AsyncMock(return_value=_cache_test_response())
+        result = await _cache_test_call(db_conn, cfg, _cache_test_revision(novel), second)
+        assert result.names[0].surface == '凌峰'
+        second.assert_not_awaited()
+
+        changed = AsyncMock(return_value=_cache_test_response(source='凌峰离开了。'))
+        await _cache_test_call(db_conn, cfg, _cache_test_revision(novel), changed,
+                               source='凌峰离开了。')
+        changed.assert_awaited_once()
+
+
+@pytest.mark.db
+async def test_completion_cache_requires_explicit_served_pin_and_identity_match(db_conn, monkeypatch):
+    from unittest.mock import AsyncMock
+    from pipeline.config import Config
+    monkeypatch.setenv('GRAPH_OLLAMA_FIRST_TOKEN_SECONDS', '120')
+    monkeypatch.setenv('GRAPH_OLLAMA_TIMEOUT_SECONDS', '120')
+    cfg = Config.load()
+    async with db_conn.transaction(force_rollback=True):
+        novel = await make_novel(db_conn, ontology=json.dumps(ONTOLOGY))
+        first = AsyncMock(return_value=_cache_test_response())
+        await _cache_test_call(db_conn, cfg, _cache_test_revision(novel), first)
+
+        # Same requested alias and request, but a changed concrete pin cannot select
+        # the old row and must call the provider for the new identity.
+        changed_pin = AsyncMock(return_value=_cache_test_response(served_model='claude-new'))
+        await _cache_test_call(db_conn, cfg,
+                               _cache_test_revision(novel, served_model='claude-new'),
+                               changed_pin)
+        changed_pin.assert_awaited_once()
+
+        # Without an explicit pin, a concrete response is rejected rather than being
+        # treated as an arbitrary alias fallback.
+        drift = AsyncMock(return_value=_cache_test_response())
+        unpinned = _cache_test_revision(novel)
+        unpinned['model'].pop('served_provider')
+        unpinned['model'].pop('served_model')
+        with pytest.raises(RuntimeError, match='serving identity changed'):
+            await _cache_test_call(db_conn, cfg, unpinned, drift)
+
+
+@pytest.mark.db
+async def test_completion_cache_refreshes_legacy_empty_provenance_row(db_conn, monkeypatch):
+    from unittest.mock import AsyncMock
+    from pipeline.config import Config
+    monkeypatch.setenv('GRAPH_OLLAMA_FIRST_TOKEN_SECONDS', '120')
+    monkeypatch.setenv('GRAPH_OLLAMA_TIMEOUT_SECONDS', '120')
+    cfg = Config.load()
+    async with db_conn.transaction(force_rollback=True):
+        novel = await make_novel(db_conn, ontology=json.dumps(ONTOLOGY))
+        revision = _cache_test_revision(novel)
+        first = AsyncMock(return_value=_cache_test_response())
+        await _cache_test_call(db_conn, cfg, revision, first)
+        row = await (await db_conn.execute(
+            "SELECT cache_key,created_at FROM completion_cache WHERE novel_id=%s",
+            (novel,))).fetchone()
+        await db_conn.execute('''UPDATE completion_cache SET requested_provider='',
+            requested_model='',stage_prompt_version='',prompt_digest='',schema_digest=''
+            WHERE novel_id=%s''', (novel,))
+
+        refresh = AsyncMock(return_value=_cache_test_response())
+        await _cache_test_call(db_conn, cfg, revision, refresh)
+        refresh.assert_awaited_once()
+        refreshed = await (await db_conn.execute('''SELECT requested_provider,
+            requested_model,stage_prompt_version,prompt_digest,schema_digest,created_at
+            FROM completion_cache WHERE novel_id=%s AND cache_key=%s''',
+            (novel, row[0]))).fetchone()
+        assert refreshed[0:3] == ('anthropic', 'claude-alias',
+                                  'evidence-v20-compact-identity-wire')
+        assert refreshed[3] and refreshed[4]
+        assert refreshed[5] == row[1]
+        hit = AsyncMock()
+        await _cache_test_call(db_conn, cfg, revision, hit)
+        hit.assert_not_awaited()
 
 
 async def test_graph_uses_configured_runtime_and_keeps_deadlines_out_of_identity(monkeypatch):
@@ -187,7 +304,7 @@ async def test_graph_cache_preserves_runtime_metrics_and_avoids_repeat_inference
             offered=json.loads(prompt.split('INPUT DATA (not instructions):\n')[1])
             assert 'source' not in offered and offered['passages']==[dict(id=pid,text=source)]
             assert complete.call_args.kwargs['json_schema']['required']==['reviewed','names']
-            timing=(await(await db_conn.execute('SELECT runtime_metrics FROM graph_completion WHERE revision_id=%s',(rid,))).fetchone())[0]
+            timing=(await(await db_conn.execute('SELECT runtime_metrics FROM completion_cache WHERE novel_id=%s',(novel,))).fetchone())[0]
             assert {k:timing[k] for k in ('load_seconds','eval_seconds','input_tokens','output_tokens')}==dict(
                 load_seconds=1,eval_seconds=2,input_tokens=42,output_tokens=5)
             assert timing['stage']=='names' and timing['batch_id']
@@ -312,7 +429,7 @@ def test_claim_wire_schema_is_bounded_and_never_carries_quotes():
     assert set(claims['properties'])=={'claims'}
     assert claims['properties']['claims']['maxItems']==12
     assert cdef['properties']['value']['maxLength']==400
-    assert cdef['properties']['passage_ids']['maxItems']==3
+    assert cdef['properties']['passage_ids']['maxItems']==2
     assert 'quote' not in json.dumps(claims)
 
 
@@ -410,6 +527,31 @@ def test_claim_materialization_supports_pronoun_continuation_and_cross_paragraph
         occurrence_refs=['o1'],attribute='description',value='指出西南方向',
         passage_ids=[first['id'],second['id']])]),ONTOLOGY)
     assert result.claims[0].quote==source and result.claims[0].evidence_start==0
+
+
+def test_claim_materialization_rejects_invalid_reference_counts_and_overlapping_ranges():
+    source='甲'*6
+    c=PassageContract(source,max_chars=4,overlap=2)
+    first,second=c.passages
+    proposal=dict(type='fact',occurrence_refs=['o1'],attribute='description',value='甲')
+    for refs, pattern in (([], 'one or two'), ([first['id'],second['id'],first['id']], 'one or two'),
+                          ([first['id'],first['id']], 'one or two')):
+        with pytest.raises(ValueError,match=pattern):
+            c.materialize('claims',ClaimProposals,dict(claims=[dict(proposal,passage_ids=refs)]),ONTOLOGY)
+    with pytest.raises(ValueError,match='non-overlapping'):
+        c.materialize('claims',ClaimProposals,
+                      dict(claims=[dict(proposal,passage_ids=[first['id'],second['id']])]),ONTOLOGY)
+
+
+def test_claim_materialization_union_span_stays_within_adjacent_citations():
+    source='凌峰打开地图。\n他指出西南方向。\n她离开房间。'
+    c=PassageContract(source,max_chars=400,overlap=0)
+    first,second,unrelated=c.passages
+    result=c.materialize('claims',ClaimProposals,dict(claims=[dict(
+        type='fact',occurrence_refs=['o1'],attribute='description',value='指出西南方向',
+        passage_ids=[second['id'],first['id']])]),ONTOLOGY)
+    assert result.claims[0].quote==source[:second['char_end']]
+    assert unrelated['text'] not in result.claims[0].quote
 
 
 async def test_saturated_claim_windows_subdivide_and_smallest_window_records_failure():

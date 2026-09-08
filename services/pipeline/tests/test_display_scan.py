@@ -45,11 +45,12 @@ def _ctx(db, novel_id, *, source_lang: str, target_lang: str) -> StageContext:
     )
 
 
-def _state(*, source_lang: str, translation: str | None = None) -> PipelineState:
+def _state(*, source_lang: str, translation: str | None = None,
+           chapter_index: int = CHAPTER) -> PipelineState:
     return PipelineState(
         envelope=ChapterEnvelope(
             novel_id="ignored",
-            chapter_index=CHAPTER,
+            chapter_index=chapter_index,
             raw_text="他回到了青云宗。",
             source_lang=source_lang,
             source_meta=SourceMeta(raw_hash="sha256:cafe"),
@@ -84,6 +85,11 @@ async def test_translated_novel_scans_the_translated_text_against_the_glossary(d
         "VALUES (%s, '青云宗', 'Azure Cloud Sect', %s, 1)",
         (novel, entity_id),
     )
+    revision_id = (await (await db_conn.execute(
+        "SELECT active_graph_revision FROM novel WHERE id=%s", (novel,))).fetchone())[0]
+    await db_conn.execute(
+        "INSERT INTO glossary_binding(novel_id,source_term,revision_id,entity_id,known_from_chapter) "
+        "VALUES (%s,'青云宗',%s,%s,1)", (novel, revision_id, entity_id))
 
     ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
     translated = "He returned to the Azure Cloud Sect."
@@ -96,9 +102,8 @@ async def test_translated_novel_scans_the_translated_text_against_the_glossary(d
     assert translated[span.char_start : span.char_end] == "Azure Cloud Sect"
 
 
-async def test_translated_novel_ignores_glossary_rows_with_no_bound_entity(db_conn, novel):
-    """A glossary row RESOLVE never bound to an entity (entity_id NULL) has nothing for
-    the reader UI to link to and must not crash the scan."""
+async def test_translated_novel_keeps_glossary_rows_with_no_bound_entity_as_placeholders(db_conn, novel):
+    """A pre-identity glossary row still supplies a display span, but no entity link."""
     await db_conn.execute(
         "INSERT INTO glossary (novel_id, source_term, target_term, locked_at_chapter) "
         "VALUES (%s, '青云宗', 'Azure Cloud Sect', 1)",
@@ -109,7 +114,46 @@ async def test_translated_novel_ignores_glossary_rows_with_no_bound_entity(db_co
 
     await DisplayScanStage().run(ctx, state)
 
-    assert state.display_spans == []
+    [span] = state.display_spans
+    assert span.alias_id == ""
+    assert state.translation[span.char_start : span.char_end] == "Azure Cloud Sect"
+
+
+async def test_legacy_glossary_links_are_knowledge_time_gated(db_conn, novel):
+    await db_conn.execute(
+        "INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status) "
+        "VALUES (%s,9,%s,'raw/early.txt','{}','done')",
+        (novel, f"sha256:{novel}:early"),
+    )
+    entity_id = str(uuid.uuid4())
+    await db_conn.execute(
+        "INSERT INTO entity (id, novel_id, kind, canonical, first_seen_chapter) "
+        "VALUES (%s, %s, 'sect', 'Azure Cloud Sect', 10)",
+        (entity_id, novel),
+    )
+    await db_conn.execute(
+        "INSERT INTO glossary (novel_id, source_term, target_term, entity_id, locked_at_chapter) "
+        "VALUES (%s, '青云宗', 'Azure Cloud Sect', %s, 10)",
+        (novel, entity_id),
+    )
+    revision_id = (await (await db_conn.execute(
+        "SELECT active_graph_revision FROM novel WHERE id=%s", (novel,))).fetchone())[0]
+    await db_conn.execute(
+        "INSERT INTO glossary_binding(novel_id,source_term,revision_id,entity_id,known_from_chapter) "
+        "VALUES (%s,'青云宗',%s,%s,10)", (novel, revision_id, entity_id))
+    ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
+
+    early = _state(source_lang="zh", translation="He returned to the Azure Cloud Sect.",
+                   chapter_index=9)
+    await DisplayScanStage().run(ctx, early)
+    [early_span] = early.display_spans
+    assert early_span.alias_id == ""
+
+    eligible = _state(source_lang="zh", translation="He returned to the Azure Cloud Sect.",
+                      chapter_index=12)
+    await DisplayScanStage().run(ctx, eligible)
+    [eligible_span] = eligible.display_spans
+    assert eligible_span.alias_id == entity_id
 
 
 async def test_translate_skipped_leaves_no_display_spans(db_conn, novel):
@@ -165,6 +209,11 @@ async def test_discovery_preserves_verified_link_and_does_not_link_other_names(d
         "INSERT INTO glossary (novel_id, source_term, target_term, entity_id, locked_at_chapter) VALUES (%s,'青云宗','Azure Cloud Sect',%s,1)",
         (novel, entity_id),
     )
+    revision_id = (await (await db_conn.execute(
+        "SELECT active_graph_revision FROM novel WHERE id=%s", (novel,))).fetchone())[0]
+    await db_conn.execute(
+        "INSERT INTO glossary_binding(novel_id,source_term,revision_id,entity_id,known_from_chapter) "
+        "VALUES (%s,'青云宗',%s,%s,1)", (novel, revision_id, entity_id))
     ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
     ctx.provider.response = lambda _prompt, system: (
         '{"alignments":[]}' if "Map each offered" in system
@@ -173,6 +222,58 @@ async def test_discovery_preserves_verified_link_and_does_not_link_other_names(d
     await DisplayScanStage().run(ctx, state)
     assert [(s.alias_id, state.translation[s.char_start:s.char_end]) for s in state.display_spans] == [
         ("", "Ling Feng"), (entity_id, "Azure Cloud Sect")]
+
+
+async def test_legacy_links_follow_active_trusted_revision_only(db_conn, novel):
+    """Legacy spans are presentation fallbacks; managed revision ids never enter them."""
+    entity_id = str(uuid.uuid4())
+    await db_conn.execute(
+        "INSERT INTO entity (id, novel_id, kind, canonical, first_seen_chapter) "
+        "VALUES (%s, %s, 'sect', 'Azure Cloud Sect', 1)",
+        (entity_id, novel),
+    )
+    await db_conn.execute(
+        "INSERT INTO glossary (novel_id, source_term, target_term, entity_id, locked_at_chapter) "
+        "VALUES (%s, '青云宗', 'Azure Cloud Sect', %s, 1)",
+        (novel, entity_id),
+    )
+    legacy = (await (await db_conn.execute(
+        "SELECT active_graph_revision FROM novel WHERE id=%s", (novel,))).fetchone())[0]
+    await db_conn.execute(
+        "INSERT INTO glossary_binding(novel_id,source_term,revision_id,entity_id,known_from_chapter) "
+        "VALUES (%s,'青云宗',%s,%s,1)", (novel, legacy, entity_id))
+    managed = (await (await db_conn.execute(
+        "INSERT INTO graph_revision(novel_id,state,trusted,legacy,ontology) "
+        "VALUES (%s,'staging',false,false,%s) RETURNING id", (novel, json.dumps(ONTOLOGY))
+    )).fetchone())[0]
+    ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
+
+    async def scan() -> str:
+        state = _state(source_lang="zh", translation="He returned to the Azure Cloud Sect.")
+        await DisplayScanStage().run(ctx, state)
+        [span] = state.display_spans
+        return span.alias_id
+
+    # The original legacy graph may link a verified binding.
+    assert await scan() == entity_id
+
+    # No active revision and a staging/quarantined active revision can still write the
+    # presentation ledger, but only as empty placeholders.
+    await db_conn.execute("UPDATE novel SET active_graph_revision=NULL WHERE id=%s", (novel,))
+    assert await scan() == ""
+    await db_conn.execute("UPDATE novel SET active_graph_revision=%s WHERE id=%s", (managed, novel))
+    assert await scan() == ""
+    await db_conn.execute("UPDATE novel SET active_graph_revision=%s WHERE id=%s", (legacy, novel))
+    await db_conn.execute("UPDATE graph_revision SET trusted=false WHERE id=%s", (legacy,))
+    assert await scan() == ""
+
+    # Cutover to a trusted managed revision still cannot make its binding eligible for
+    # legacy mention_span. Managed identity is reader-authorized through its own tables.
+    await db_conn.execute("UPDATE graph_revision SET state='archived' WHERE id=%s", (legacy,))
+    await db_conn.execute(
+        "UPDATE graph_revision SET state='active',trusted=true WHERE id=%s", (managed,))
+    await db_conn.execute("UPDATE novel SET active_graph_revision=%s WHERE id=%s", (managed, novel))
+    assert await scan() == ""
 
 
 async def test_unlinked_mentions_are_still_chapter_gated_by_rls(db_conn, novel):

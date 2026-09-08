@@ -1,49 +1,12 @@
-"""Request-local graph choices. Grammar and application enforce the same allowlists."""
+"""Request-local graph choices. Grammar and application enforce the same allowlists.
+
+The old fixed-slot 'names'/'name_slots' grammar (name_schema/materialize_names) is
+gone with B.6's merged extract pass; PassageContract.schema/.materialize in
+passages.py now own the 'extract' stage's names[] list directly.
+"""
 import json
 
-from pipeline.evidence import IdentityDecisions, Names, Verification, Verdict
-
-
-NAME_SLOT_COUNT = 8
-
-
-def name_schema(passage_ids, kinds):
-    """Fixed nullable slots bound generation without verbose unused placeholders."""
-    slots = {}
-    for index in range(1, NAME_SLOT_COUNT + 1):
-        item=dict(type='object', additionalProperties=False,
-            required=['surface', 'kind', 'passage_id'], properties={
-                'surface': dict(type='string', minLength=1, maxLength=80),
-                'kind': dict(type='string', enum=kinds),
-                'passage_id': dict(type='string', enum=passage_ids)})
-        slots[f'n{index}'] = dict(anyOf=[item,dict(type='null')])
-    return dict(type='object', additionalProperties=False,
-                required=list(slots), properties=slots)
-
-
-def materialize_names(body, contract, ontology):
-    expected={f'n{index}' for index in range(1, NAME_SLOT_COUNT + 1)}
-    if not isinstance(body, dict) or set(body) != expected:
-        raise ValueError('name response must fill every request-local slot')
-    names=[]
-    rejected=[]
-    kinds=set(ontology['kinds'])
-    for ref in sorted(expected):
-        item=body[ref]
-        if item is None:
-            continue
-        if not isinstance(item, dict) or set(item) != {'surface','kind','passage_id'}:
-            raise ValueError('invalid name slot')
-        surface=item['surface']
-        if (not isinstance(surface,str) or not surface.strip() or len(surface)>80
-                or item['kind'] not in kinds):
-            raise ValueError('invalid named surface or kind')
-        evidence=contract.resolve(item['passage_id'])
-        if not evidence or surface not in evidence['quote']:
-            rejected.append(dict(**item,rejection='unknown passage or surface absent from cited passage'))
-            continue
-        names.append(dict(surface=surface,kind=item['kind'],named=True,**evidence))
-    return Names(names=names,reviewed_kinds=list(ontology['kinds']),rejected=rejected)
+from pipeline.evidence import IdentityDecisions, Verification, Verdict
 
 
 def identity_schema(rows, passage_ids):

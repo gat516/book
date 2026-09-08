@@ -275,8 +275,9 @@ async def prepare(db,cfg,novel,model, *, upto_chapter=None, provider='ollama'):
         raise ValueError('novel not found')
     ontology = row[0]
     ontology['kinds'] = list(dict.fromkeys(ontology['kinds']+['place','group']))
-    ontology['attributes'] = [a for a in ontology['attributes'] if a['name']!='description']+[
-        dict(name='description',kinds=ontology['kinds'])]
+    # Attribute/relation vocabulary is novel-scoped durable data.  Do not rebuild a
+    # synthetic ontology (or append a universal description escape hatch) here; graph
+    # extraction loads admitted vocabulary at the chapter boundary instead (§0.4, C.8).
     # Snapshot only durably completed chapters; do not manipulate ordinary jobs.
     if upto_chapter is None:
         rows = await (await db.execute('''SELECT chapter_index,raw_uri,translated_uri,raw_hash FROM chapter
@@ -433,7 +434,7 @@ async def resume(db,cfg,rid, *, limit=None):
                 raise
             except asyncio.CancelledError:
                 # SIGINT/SIGTERM must not leave a dead process looking like active work.
-                # The completed graph_completion rows remain reusable; this chapter can
+                # The completed completion-cache rows remain reusable; this chapter can
                 # resume immediately from its first incomplete request (§0, §5.4).
                 if engine.run_id:
                     await engine._activity('run','run','rejected',{'reason':'extraction interrupted'})

@@ -5,6 +5,7 @@ import { AskBox } from "./components/AskBox";
 import { ChapterList } from "./components/ChapterList";
 import { ChapterPending } from "./components/ChapterPending";
 import { GlossaryView } from "./components/GlossaryView";
+import { VocabularyView } from "./components/VocabularyView";
 import { NovelCreateForm } from "./components/NovelCreateForm";
 import { NovelPicker } from "./components/NovelPicker";
 import { ProgressControls } from "./components/ProgressControls";
@@ -63,6 +64,7 @@ export default function App() {
   // ChapterPending for it holds them here and polls until it's readable.
   const [pending, setPending] = useState<PendingChapter | null>(null);
   const [showGlossary, setShowGlossary] = useState(false);
+  const [showVocabulary, setShowVocabulary] = useState(false);
   const [showTimeline, setShowTimeline] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   // Book-level settings (provider/model config, knowledge repair) — separate from the
@@ -118,6 +120,7 @@ export default function App() {
     setPending(null);
     setLookingForMore(false);
     setShowGlossary(false);
+    setShowVocabulary(false);
     setShowTimeline(false);
     setRepairRequest(0);
     setShowBookSettings(false);
@@ -133,6 +136,7 @@ export default function App() {
     setPending(null);
     setLookingForMore(false);
     setShowGlossary(false);
+    setShowVocabulary(false);
     setShowTimeline(false);
     setRepairRequest(0);
     setShowBookSettings(false);
@@ -146,6 +150,7 @@ export default function App() {
     setPending(null);
     setAddingChapter(false);
     setShowGlossary(false);
+    setShowVocabulary(false);
     setShowTimeline(false);
     setRepairRequest(0);
     setShowChapters(true);
@@ -176,6 +181,7 @@ export default function App() {
     setPending(null);
     setShowChapters(false);
     setShowGlossary(false);
+    setShowVocabulary(false);
     setShowTimeline(false);
     setRepairRequest(0);
   }
@@ -318,6 +324,9 @@ export default function App() {
       <button className="app-toggle-glossary" onClick={() => { setShowGlossary((v) => !v); setShowTimeline(false); }}>
         {showGlossary ? "← Close glossary" : "Glossary"}
       </button>
+      <button className="app-toggle-glossary" onClick={() => { setShowVocabulary((v) => !v); setShowGlossary(false); setShowTimeline(false); }}>
+        {showVocabulary ? "← Close vocabulary" : "Vocabulary"}
+      </button>
       <button className="app-toggle-glossary" onClick={() => { setShowTimeline((v) => !v); setShowGlossary(false); }}>
         {showTimeline ? "← Close timeline" : "Timeline"}
       </button>
@@ -328,8 +337,9 @@ export default function App() {
         Account settings
       </button>
       {showGlossary && <GlossaryView key={novelId} novelId={novelId} at={chapter?.at} />}
+      {showVocabulary && <VocabularyView key={`vocabulary-${novelId}`} novelId={novelId} />}
       {showTimeline && <TimelineView key={`timeline-${novelId}`} novelId={novelId} onClose={() => setShowTimeline(false)} />}
-      <div hidden={showGlossary || showTimeline}>
+      <div hidden={showGlossary || showVocabulary || showTimeline}>
         {navigationError && <p role="alert" className="chapter-list-error">{navigationError}</p>}
         {addingChapter ? (
           <AddChapterForm

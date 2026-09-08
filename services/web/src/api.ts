@@ -8,6 +8,9 @@ import type {
   ChapterResponse,
   ChapterKnowledgeResponse,
   ChapterKnowledgeActivity,
+  HeldKnowledgeResponse,
+  KnowledgeReviewRequest,
+  KnowledgeReviewResponse,
   CorrectGlossaryTermRequest,
   CorrectGlossaryTermResponse,
   CreateNovelRequest,
@@ -18,6 +21,8 @@ import type {
   NovelSummary,
   PipelineStatusResponse,
   TranslationHealth,
+  VocabularyMutationRequest,
+  VocabularyResponse,
   PasteChapterRequest,
   ProviderConfigView,
   ProviderCredentialsResponse,
@@ -97,6 +102,15 @@ export function startChapterReextract(novelId:string,chapter:number,scope:"terms
 }
 export function applyChapterReextract(novelId:string,chapter:number,runId:string,body:{revision_id:string;version:number;decisions:Record<string,string>}) {
   return request(`/novels/${novelId}/chapter/${chapter}/knowledge/reextract/${runId}/apply`,{method:"POST",body:JSON.stringify(body)});
+}
+
+// Phase D: held knowledge review. There is deliberately no "everything pending" view --
+// this always reads at the reader's own stored position, same as getChapterKnowledge.
+export function getHeldKnowledge(novelId:string,chapter:number):Promise<HeldKnowledgeResponse>{
+  return request(`/novels/${novelId}/chapter/${chapter}/knowledge/held`);
+}
+export function reviewChapterKnowledge(novelId:string,chapter:number,body:KnowledgeReviewRequest):Promise<KnowledgeReviewResponse>{
+  return request(`/novels/${novelId}/chapter/${chapter}/knowledge/review`,{method:"PATCH",body:JSON.stringify(body)});
 }
 
 export function createNovel(body: CreateNovelRequest): Promise<CreateNovelResponse> {
@@ -188,6 +202,14 @@ export function cancelScrape(novelId: string): Promise<{ status: string }> {
 
 export function getGlossary(novelId: string, at?: number): Promise<GlossaryResponse> {
   return request(`/novels/${novelId}/glossary${at === undefined ? "" : `?at=${at}`}`);
+}
+
+export function getVocabulary(novelId: string): Promise<VocabularyResponse> {
+  return request(`/novels/${novelId}/vocabulary`);
+}
+
+export function mutateVocabulary(novelId: string, body: VocabularyMutationRequest): Promise<unknown> {
+  return request(`/novels/${novelId}/vocabulary`, { method: "PATCH", body: JSON.stringify(body) });
 }
 
 export function correctGlossaryTerm(

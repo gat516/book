@@ -285,12 +285,25 @@ async def benchmark(db,cfg,base,dataset,model,output_path):
         publication_review_complete=False,failures=failures,early_stopped=bool(failures),
         run_status='failed' if failures else 'completed',
         fact_verification_status='skipped after identity failure' if failures and not fact_results else 'tested')
-    timing=await(await db.execute('SELECT count(*),count(elapsed_seconds),sum(elapsed_seconds) FROM graph_completion WHERE revision_id=%s',(rid,))).fetchone()
-    metrics['model_inference_seconds']=timing[2] if timing[0] and timing[0]==timing[1] else None
-    runtime_rows=await(await db.execute(
-        'SELECT cache_key,stage,runtime_metrics FROM graph_completion WHERE revision_id=%s ORDER BY cache_key',(rid,))).fetchall()
-    metrics['runtime_calls']=[dict(cache_key=key,**(runtime or {})) for key,_stage,runtime in runtime_rows]
-    metrics['runtime_by_stage']=summarize_runtime_calls([(stage,runtime) for _key,stage,runtime in runtime_rows])
+    # KnowledgeEngine's production cache is novel-scoped and cross-revision. Attribute
+    # each distinct cached inference through completion_cache_run, then join back to the
+    # durable response row for timings. The old graph_completion table is intentionally
+    # read-only after 0068 and cannot describe this benchmark.
+    runtime_rows=await(await db.execute('''SELECT DISTINCT ON (c.novel_id,c.cache_key,c.served_provider,c.served_model)
+            c.cache_key,c.stage,c.runtime_metrics,c.elapsed_seconds
+        FROM completion_cache c
+        JOIN completion_cache_run u
+          ON u.cache_key=c.cache_key AND u.served_provider=c.served_provider
+         AND u.served_model=c.served_model
+        JOIN graph_revision r ON r.id=u.revision_id AND r.novel_id=c.novel_id
+        WHERE u.revision_id=%s
+        ORDER BY c.novel_id,c.cache_key,c.served_provider,c.served_model,c.created_at''',(rid,))).fetchall()
+    elapsed=[row[3] for row in runtime_rows]
+    metrics['model_inference_seconds']=(sum(elapsed)
+        if elapsed and all(value is not None for value in elapsed) else None)
+    metrics['runtime_calls']=[dict(cache_key=key,elapsed_seconds=elapsed_seconds,**(runtime or {}))
+                              for key,_stage,runtime,elapsed_seconds in runtime_rows]
+    metrics['runtime_by_stage']=summarize_runtime_calls([(stage,runtime) for _key,stage,runtime,_elapsed in runtime_rows])
     await db.execute('UPDATE graph_revision SET evaluation=%s WHERE id=%s',(Jsonb(metrics),rid))
     report=dict(revision=rid,model=identity,metrics=metrics,mentions=results,facts=fact_results,
                 publications=publications,expected_facts=expected_facts,

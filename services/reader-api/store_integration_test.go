@@ -655,6 +655,165 @@ func TestRLSAloneFailsClosedAndDoesNotLeakSettings(t *testing.T) {
 	}
 }
 
+func TestChapterMentionSelectionFollowsActiveRevision(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	ctx := context.Background()
+	novelID, legacyEntityID, managedEntityID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	managedRevisionID, mentionID, evidenceID, displayID := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	if _, err := admin.Exec(ctx, `INSERT INTO novel(id,title,source_lang,target_lang,ontology)
+		VALUES ($1,'Mention authorization test','zh','en','{}')`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status)
+		VALUES ($1,1,'sha256:mention','mention/raw','{}','done')`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	var legacyRevisionID string
+	if err := admin.QueryRow(ctx, `SELECT active_graph_revision::text FROM novel WHERE id=$1`, novelID).Scan(&legacyRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO entity(id,novel_id,kind,canonical,first_seen_chapter)
+		VALUES ($1,$3,'character','Legacy Hero',1),($2,$3,'character','Managed Hero',1)`,
+		legacyEntityID, managedEntityID, novelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO mention_span(novel_id,chapter_index,entity_id,char_start,char_end)
+		VALUES ($1,1,$2,0,6)`, novelID, legacyEntityID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO graph_revision
+		(id,novel_id,state,trusted,legacy,ontology,model,snapshot)
+		VALUES ($1,$2,'staging',false,false,'{}','{}',
+		'{"chapters":[{"chapter":1,"source_hash":"sha256:mention"}]}')`,
+		managedRevisionID, novelID); err != nil {
+		t.Fatal(err)
+	}
+	// Managed records need the same revision/generation fence as the pipeline writer. They
+	// are inserted before cutover so each reader state exercises the actual RLS query.
+	tx, err := admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.graph_revision',$1,true),
+		set_config('app.graph_generation','1',true)`, managedRevisionID); err != nil {
+		tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE entity SET revision_id=$1 WHERE id=$2`, managedRevisionID, managedEntityID); err != nil {
+		tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO graph_evidence
+		(id,revision_id,novel_id,chapter_index,source_hash,char_start,char_end,quote)
+		VALUES ($1,$2,$3,1,'sha256:mention',0,7,'Managed')`, evidenceID, managedRevisionID, novelID); err != nil {
+		tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO source_mention
+		(id,revision_id,novel_id,chapter_index,surface,kind,evidence_id)
+		VALUES ($1,$2,$3,1,'管理者','character',$4)`, mentionID, managedRevisionID, novelID, evidenceID); err != nil {
+		tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO mention_binding
+		(revision_id,mention_id,known_from_chapter,entity_id,evidence_id)
+		VALUES ($1,$2,1,$3,$4)`, managedRevisionID, mentionID, managedEntityID, evidenceID); err != nil {
+		tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO display_mention
+		(id,revision_id,novel_id,chapter_index,mention_id,char_start,char_end,phrase,display_hash,evidence_id)
+		VALUES ($1,$2,$3,1,$4,0,7,'Managed','display-hash',$5)`,
+		displayID, managedRevisionID, novelID, mentionID, evidenceID); err != nil {
+		tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for _, statement := range []string{
+			`DELETE FROM display_mention WHERE revision_id=$1`,
+			`DELETE FROM mention_binding WHERE revision_id=$1`,
+			`DELETE FROM source_mention WHERE revision_id=$1`,
+			`DELETE FROM graph_evidence WHERE revision_id=$1`,
+			`DELETE FROM mention_span WHERE novel_id=$1`,
+			`DELETE FROM entity WHERE novel_id=$1`,
+			`DELETE FROM chapter WHERE novel_id=$1`,
+			`UPDATE novel SET active_graph_revision=NULL WHERE id=$1`,
+			`DELETE FROM graph_revision WHERE novel_id=$1`,
+			`DELETE FROM novel WHERE id=$1`,
+		} {
+			arg := novelID
+			if statement == `DELETE FROM graph_evidence WHERE revision_id=$1` {
+				arg = managedRevisionID
+			}
+			_, _ = admin.Exec(context.Background(), statement, arg)
+		}
+	})
+
+	read := func() []SpanView {
+		t.Helper()
+		var spans []SpanView
+		if err := store.withReaderTx(ctx, novelID, 1, func(tx pgx.Tx) error {
+			var err error
+			spans, err = chapterSpansInTx(ctx, tx, novelID, 1)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return spans
+	}
+	assertEntity := func(want string) {
+		t.Helper()
+		spans := read()
+		if len(spans) != 1 || spans[0].EntityID == nil || *spans[0].EntityID != want {
+			t.Fatalf(`spans=%+v, want one link to %s`, spans, want)
+		}
+	}
+	assertPlaceholder := func() {
+		t.Helper()
+		spans := read()
+		if len(spans) != 1 || spans[0].EntityID != nil {
+			t.Fatalf(`spans=%+v, want one placeholder`, spans)
+		}
+	}
+
+	// No active revision: the legacy presentation row survives, but its entity join is
+	// denied by revision RLS.
+	if _, err := admin.Exec(ctx, `UPDATE novel SET active_graph_revision=NULL WHERE id=$1`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	assertPlaceholder()
+	// A staging revision is not reader-authorized.
+	if _, err := admin.Exec(ctx, `UPDATE novel SET active_graph_revision=$1 WHERE id=$2`, managedRevisionID, novelID); err != nil {
+		t.Fatal(err)
+	}
+	assertPlaceholder()
+	// The trusted legacy graph may expose its verified legacy entity link.
+	if _, err := admin.Exec(ctx, `UPDATE novel SET active_graph_revision=$1 WHERE id=$2`, legacyRevisionID, novelID); err != nil {
+		t.Fatal(err)
+	}
+	assertEntity(legacyEntityID)
+	// Quarantine removes the entity authorization while retaining the presentation row.
+	if _, err := admin.Exec(ctx, `UPDATE graph_revision SET trusted=false WHERE id=$1`, legacyRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	assertPlaceholder()
+	// Cutover selects managed display_mention/mention_binding and suppresses the legacy
+	// fallback, so the managed entity is the only visible link.
+	if _, err := admin.Exec(ctx, `UPDATE graph_revision SET state='archived' WHERE id=$1`, legacyRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE graph_revision SET state='active',trusted=true WHERE id=$1`, managedRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE novel SET active_graph_revision=$1 WHERE id=$2`, managedRevisionID, novelID); err != nil {
+		t.Fatal(err)
+	}
+	assertEntity(managedEntityID)
+}
+
 func TestDatabaseRolesAreLeastPrivilege(t *testing.T) {
 	store, _ := integrationDatabase(t)
 	ctx := context.Background()
@@ -665,6 +824,249 @@ func TestDatabaseRolesAreLeastPrivilege(t *testing.T) {
 	}
 	if err := store.progressDB.QueryRow(ctx, `SELECT count(*) FROM fact`).Scan(&count); err == nil {
 		t.Fatal("reader_progress_writer unexpectedly read fact")
+	}
+}
+
+func TestListVocabularyUsesReaderDefinerAndChapterRedaction(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	ctx := context.Background()
+	novelID, otherID := uuid.NewString(), uuid.NewString()
+	for _, id := range []string{novelID, otherID} {
+		if _, err := admin.Exec(ctx, `INSERT INTO novel(id,title,source_lang,target_lang,ontology) VALUES($1,'Vocabulary reader','en','en','{"kinds":["character"]}')`, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := admin.Exec(ctx, `INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status) VALUES($1,5,$2,'raw','{}','done'),($1,10,$3,'raw10','{}','done')`, id, "sha256:"+id, "sha256:10"+id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO reader_progress(reader_id,novel_id,current_chapter) VALUES('reader-vocab',$1,5)`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO novel_vocabulary(novel_id,term_type,name,kinds,status,gloss,first_seen_chapter,last_seen_chapter,admitted_at_chapter) VALUES($1,'attribute','visible_term',ARRAY['character'],'admitted','old gloss',0,0,0),($1,'attribute','future_term',ARRAY['character'],'admitted','future',10,10,10)`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO novel_vocabulary_alias(novel_id,term_type,surface,name,known_from_chapter,created_by) VALUES($1,'attribute','visible_alias','visible_term',0,'test'),($1,'attribute','future_alias','visible_term',10,'test')`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO novel_vocabulary_changelog(novel_id,seq,term_type,action,name,changed_at_chapter,old_value,new_value,row_hash,created_by) VALUES($1,1,'attribute','gloss','visible_term',10,'{"gloss":"old gloss"}','{"gloss":"new gloss"}','hash','test')`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for _, q := range []string{`DELETE FROM novel_vocabulary_changelog WHERE novel_id=$1`, `DELETE FROM novel_vocabulary_alias WHERE novel_id=$1`, `DELETE FROM novel_vocabulary WHERE novel_id=$1`, `DELETE FROM reader_progress WHERE novel_id=$1`, `DELETE FROM chapter WHERE novel_id=$1`, `UPDATE novel SET active_graph_revision=NULL WHERE id=$1`, `DELETE FROM graph_revision WHERE novel_id=$1`, `DELETE FROM novel WHERE id=$1`, `UPDATE novel SET active_graph_revision=NULL WHERE id=$1`, `DELETE FROM graph_revision WHERE novel_id=$1`, `DELETE FROM novel WHERE id=$1`} {
+			_, _ = admin.Exec(context.Background(), q, novelID)
+			if strings.Contains(q, "$1") && strings.Contains(q, "novel_id") {
+				_, _ = admin.Exec(context.Background(), q, otherID)
+			}
+		}
+	})
+	terms, err := store.ListVocabulary(ctx, novelID, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var visible *VocabularyTermView
+	for i := range terms {
+		if terms[i].Name == "visible_term" {
+			visible = &terms[i]
+		}
+		if terms[i].Name == "future_term" {
+			t.Fatalf("future term visible at 5: %+v", terms[i])
+		}
+	}
+	if visible == nil || visible.Gloss != "old gloss" || len(visible.Aliases) != 1 || visible.Aliases[0] != "visible_alias" {
+		t.Fatalf("visible term at 5=%+v", visible)
+	}
+	terms, err = store.ListVocabulary(ctx, novelID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible = nil
+	var future *VocabularyTermView
+	for i := range terms {
+		if terms[i].Name == "visible_term" {
+			visible = &terms[i]
+		}
+		if terms[i].Name == "future_term" {
+			future = &terms[i]
+		}
+	}
+	if visible == nil || future == nil {
+		t.Fatalf("terms at 10=%+v", terms)
+	}
+	aliasSet := map[string]bool{}
+	for _, alias := range visible.Aliases {
+		aliasSet[alias] = true
+	}
+	if visible.Gloss != "new gloss" || len(visible.Aliases) != 2 || !aliasSet["visible_alias"] || !aliasSet["future_alias"] {
+		t.Fatalf("terms at 10=%+v", terms)
+	}
+	// The definer validates requested_novel against the transaction's reader novel.
+	var count int
+	if err := store.readerDB.QueryRow(ctx, `SELECT count(*) FROM reader_vocabulary($1,5)`, otherID).Scan(&count); err == nil && count != 0 {
+		t.Fatalf("cross-novel function returned %d rows", count)
+	}
+}
+
+func TestVocabularyGatesEntityNewFactsAndRelationships(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	ctx := context.Background()
+	novelID := uuid.NewString()
+	if _, err := admin.Exec(ctx, `INSERT INTO novel(id,title,source_lang,target_lang,ontology) VALUES($1,'Vocabulary paths','en','en','{"kinds":["character"]}')`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	var revision string
+	if err := admin.QueryRow(ctx, `SELECT active_graph_revision::text FROM novel WHERE id=$1`, novelID).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	a, b := uuid.NewString(), uuid.NewString()
+	if _, err := admin.Exec(ctx, `INSERT INTO entity(id,novel_id,kind,canonical,first_seen_chapter) VALUES($1,$3,'character','A',0),($2,$3,'character','B',0)`, a, b, novelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO fact(novel_id,entity_id,attribute,value,valid_from_chapter,source_chapter) VALUES($1,$2,'description','kept',0,1),($1,$2,'candidate_term','hidden',0,1),($1,$2,'old_description','renamed',0,1)`, novelID, a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO edge(novel_id,src_id,dst_id,rel_type,valid_from_chapter,source_chapter) VALUES($1,$2,$3,'ally',0,1)`, novelID, a, b); err != nil {
+		t.Fatal(err)
+	}
+	var predecessorFact, predecessorEdge int64
+	if err := admin.QueryRow(ctx, `SELECT id FROM fact WHERE novel_id=$1 AND attribute='description'`, novelID).Scan(&predecessorFact); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT id FROM edge WHERE novel_id=$1 AND rel_type='ally'`, novelID).Scan(&predecessorEdge); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO novel_vocabulary(novel_id,term_type,name,kinds,status,first_seen_chapter,last_seen_chapter,admitted_at_chapter) VALUES($1,'attribute','candidate_term',ARRAY['character'],'candidate',0,0,NULL),($1,'attribute','old_description',ARRAY['character'],'admitted',0,0,0)`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO novel_vocabulary(novel_id,term_type,name,kinds,status,first_seen_chapter,last_seen_chapter) VALUES($1,'relation','candidate_relation',ARRAY['character'],'candidate',0,0)`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO novel_vocabulary_alias(novel_id,term_type,surface,name,known_from_chapter,created_by) VALUES($1,'attribute','old_description','description',2,'test')`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for _, q := range []string{`DELETE FROM novel_vocabulary_alias WHERE novel_id=$1`, `DELETE FROM novel_vocabulary WHERE novel_id=$1`, `DELETE FROM edge WHERE novel_id=$1`, `DELETE FROM fact WHERE novel_id=$1`, `DELETE FROM entity WHERE novel_id=$1`, `UPDATE novel SET active_graph_revision=NULL WHERE id=$1`, `DELETE FROM graph_revision WHERE novel_id=$1`, `DELETE FROM novel WHERE id=$1`} {
+			_, _ = admin.Exec(context.Background(), q, novelID)
+		}
+	})
+	view, err := store.GetEntity(ctx, novelID, a, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, f := range view.Facts {
+		seen[f.Attribute] = true
+	}
+	if !seen["description"] || !seen["old_description"] || seen["candidate_term"] {
+		t.Fatalf("facts at 1=%+v", view.Facts)
+	}
+	view, err = store.GetEntity(ctx, novelID, a, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen = map[string]bool{}
+	for _, f := range view.Facts {
+		seen[f.Attribute] = true
+	}
+	if !seen["description"] || seen["old_description"] {
+		t.Fatalf("facts at 2=%+v", view.Facts)
+	}
+	var newFacts ChapterView
+	if err := store.withReaderTx(ctx, novelID, 1, func(tx pgx.Tx) error { return newFactsInTx(ctx, tx, novelID, 1, &newFacts) }); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(newFacts.NewFacts, func(f ChapterFactView) bool { return f.Attribute == "old_description" }) {
+		t.Fatalf("old label missing before alias chapter: %+v", newFacts.NewFacts)
+	}
+	newFacts = ChapterView{}
+	if err := store.withReaderTx(ctx, novelID, 2, func(tx pgx.Tx) error { return newFactsInTx(ctx, tx, novelID, 1, &newFacts) }); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(newFacts.NewFacts, func(f ChapterFactView) bool { return f.Attribute == "old_description" }) || !slices.ContainsFunc(newFacts.NewFacts, func(f ChapterFactView) bool { return f.Attribute == "description" }) {
+		t.Fatalf("alias not canonicalized at chapter 2: %+v", newFacts.NewFacts)
+	}
+	rels, err := store.ListRelationships(ctx, novelID, a, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rels) != 1 || rels[0].Relation != "ally" {
+		t.Fatalf("relationships=%+v", rels)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE novel_vocabulary SET status='banned' WHERE novel_id=$1 AND term_type='relation' AND name='ally'`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	rels, err = store.ListRelationships(ctx, novelID, a, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rels) != 0 {
+		t.Fatalf("banned relationship visible: %+v", rels)
+	}
+	var raw string
+	if err := admin.QueryRow(ctx, `SELECT rel_type FROM edge WHERE novel_id=$1`, novelID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw != "ally" {
+		t.Fatalf("edge mutated: %q", raw)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE novel_vocabulary SET status='admitted' WHERE novel_id=$1 AND term_type='relation' AND name='ally'`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	var factCount, edgeCount int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM fact WHERE novel_id=$1`, novelID).Scan(&factCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM edge WHERE novel_id=$1`, novelID).Scan(&edgeCount); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO fact(novel_id,entity_id,attribute,value,valid_from_chapter,source_chapter,supersedes) VALUES($1,$2,'candidate_term','successor',0,1,$3)`, novelID, a, predecessorFact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO edge(novel_id,src_id,dst_id,rel_type,valid_from_chapter,source_chapter,supersedes) VALUES($1,$2,$3,'candidate_relation',0,1,$4)`, novelID, a, b, predecessorEdge); err != nil {
+		t.Fatal(err)
+	}
+	view, err = store.GetEntity(ctx, novelID, a, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(view.Facts, func(f FactView) bool { return f.Attribute == "description" }) {
+		t.Fatalf("candidate successor hid predecessor: %+v", view.Facts)
+	}
+	rels, err = store.ListRelationships(ctx, novelID, a, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rels) != 1 || rels[0].Relation != "ally" {
+		t.Fatalf("candidate edge successor hid predecessor: %+v", rels)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE novel_vocabulary SET status='admitted' WHERE novel_id=$1 AND term_type='attribute' AND name='candidate_term'`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE novel_vocabulary SET status='admitted' WHERE novel_id=$1 AND term_type='relation' AND name='candidate_relation'`, novelID); err != nil {
+		t.Fatal(err)
+	}
+	view, err = store.GetEntity(ctx, novelID, a, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(view.Facts, func(f FactView) bool { return f.Attribute == "description" }) {
+		t.Fatalf("admitted successor did not supersede predecessor: %+v", view.Facts)
+	}
+	rels, err = store.ListRelationships(ctx, novelID, a, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rels) != 1 || rels[0].Relation != "candidate_relation" {
+		t.Fatalf("admitted edge successor missing: %+v", rels)
+	}
+	var afterFacts, afterEdges int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM fact WHERE novel_id=$1`, novelID).Scan(&afterFacts); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM edge WHERE novel_id=$1`, novelID).Scan(&afterEdges); err != nil {
+		t.Fatal(err)
+	}
+	if factCount+1 != afterFacts || edgeCount+1 != afterEdges {
+		t.Fatalf("knowledge row counts changed unexpectedly: facts %d->%d edges %d->%d", factCount, afterFacts, edgeCount, afterEdges)
 	}
 }
 

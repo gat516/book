@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   applyChapterReextract, cancelRepair, correctFact, correctGlossaryTerm, deleteGlossaryTerm,
-  editFactDisplay, getChapterKnowledge, getChapterKnowledgeActivity, getProviderConfig,
-  getPipelineStatus, getRepairStatus, listOllamaModels, removeFact, requestRepair, retryRepairNow, startChapterReextract,
+  editFactDisplay, getChapterKnowledge, getChapterKnowledgeActivity, getHeldKnowledge, getProviderConfig,
+  getPipelineStatus, getRepairStatus, listOllamaModels, removeFact, requestRepair, retryRepairNow,
+  reviewChapterKnowledge, startChapterReextract,
 } from "../api";
 import { DEFAULT_MODEL, MODEL_OPTIONS, PROVIDER_LABELS } from "../providers";
 import type {
-  ChapterKnowledgeActivity, ChapterKnowledgeResponse, ProviderName, RepairRequestView, RepairStatus, RepairTrack,
+  ChapterKnowledgeActivity, ChapterKnowledgeResponse, HeldKnowledgeItem, HeldKnowledgeResponse,
+  KnowledgeReviewItem, ProviderName, RepairRequestView, RepairStatus, RepairTrack,
 } from "../types";
 import { RepairReview } from "./RepairReview";
 
@@ -394,6 +396,135 @@ function KnowledgeGate({ novelId, chapter, reason, repairStatus, onDone }: { nov
   return null;
 }
 
+function heldItemLabel(item: HeldKnowledgeItem) {
+  if (item.item_type === "fact") return `${item.attribute}: ${item.value ?? ""}`;
+  if (item.item_type === "edge") return `${item.rel_type ?? "relation"} (${shortId(item.src_id ?? "")} → ${shortId(item.dst_id ?? "")})`;
+  return item.summary ?? "";
+}
+
+function heldItemKey(item: HeldKnowledgeItem) { return `${item.item_type}:${item.item_id}`; }
+
+// Phase D's review workspace. There is deliberately no "everything pending" operator
+// view (plan §0.3) -- this always reads at the reader's own stored position, exactly
+// like the rest of this file. The browser collects verdicts and reasons only; the stale
+// version check, scope validation, idempotency and corroboration query are all
+// server-side (CLAUDE.md: "Go never reimplements a gate").
+function HeldKnowledgeReview({ novelId, chapter, onDone }: { novelId: string; chapter: number; onDone: () => Promise<unknown> }) {
+  const [data, setData] = useState<HeldKnowledgeResponse | null>(null);
+  const [verdicts, setVerdicts] = useState<Record<string, { verdict: "pass" | "reject"; reason: string }>>({});
+  const [confirmingBulk, setConfirmingBulk] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = useCallback(
+    () => getHeldKnowledge(novelId, chapter).then((next) => { setData(next); return next; }).catch((e) => { setError(errorMessage(e)); throw e; }),
+    [novelId, chapter],
+  );
+  useEffect(() => { setData(null); setVerdicts({}); setConfirmingBulk(false); setError(""); void load().catch(() => undefined); }, [load]);
+
+  async function withRevision(action: (revisionId: string, version: number) => Promise<unknown>) {
+    const current = await load();
+    const first = current.items[0];
+    if (!first) return;
+    setBusy(true); setError("");
+    try {
+      await action(first.revision_id, first.revision_version);
+      setVerdicts({});
+      await load();
+      await onDone();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submit() {
+    const items: KnowledgeReviewItem[] = Object.entries(verdicts)
+      .filter(([, v]) => v.reason.trim())
+      .map(([key, v]) => {
+        const [item_type, idStr] = key.split(":");
+        return { item_type: item_type as KnowledgeReviewItem["item_type"], id: Number(idStr), verdict: v.verdict, reason: v.reason.trim() };
+      });
+    if (items.length === 0) return;
+    await withRevision((revision_id, version) =>
+      reviewChapterKnowledge(novelId, chapter, { revision_id, version, request_id: crypto.randomUUID(), items }));
+  }
+
+  // pass_all_corroborated is still fully server-computed and atomic (never a client-sent
+  // id list) -- this only decides WHEN to send that request. The confirm step below shows
+  // the exact facts bulk_eligible currently names, with their evidence, before the click
+  // that submits. Preview and write are guaranteed to agree because any intervening
+  // change (a new pass/reject, a fresh corroborating chapter, a vocabulary edit) bumps
+  // graph_revision.version, and reviewChapterKnowledge's expected-version check on the
+  // server rejects the write if that happened -- do NOT drop that check to make bulk pass
+  // "faster later"; it is the only reason this preview is trustworthy at all.
+  async function confirmPassAllCorroborated() {
+    setConfirmingBulk(false);
+    await withRevision((revision_id, version) =>
+      reviewChapterKnowledge(novelId, chapter, { revision_id, version, request_id: crypto.randomUUID(), pass_all_corroborated: true }));
+  }
+
+  if (!data) return <p>{error || "Loading held knowledge…"}</p>;
+  if (data.items.length === 0) return <p>Nothing held for this chapter.</p>;
+  const eligible = data.items.filter((item) => item.bulk_eligible);
+
+  return <div className="knowledge-review">
+    <p>Held items stay out of entity cards and Ask AI until passed. "Pass all corroborated"
+      only affects facts: the same assertion, with the same value, evidenced in at least two
+      chapters you have already read, with no conflicting value and no review flag anywhere
+      in that group (e.g. "alive" and "dead" never corroborate each other).</p>
+    {eligible.length === 0 && <p>No facts are currently eligible for bulk pass.</p>}
+    {eligible.length > 0 && !confirmingBulk && (
+      <button disabled={busy} onClick={() => setConfirmingBulk(true)}>
+        Review {eligible.length} corroborated fact{eligible.length === 1 ? "" : "s"}…
+      </button>
+    )}
+    {confirmingBulk && (
+      <div className="knowledge-review-bulk-confirm">
+        <p>Passing these {eligible.length} fact{eligible.length === 1 ? "" : "s"} now. Nothing else held changes.</p>
+        <ul className="chapter-knowledge-list">
+          {eligible.map((item) => <li key={heldItemKey(item)}>
+            <div>{heldItemLabel(item)}</div>
+            {item.evidence_quote && <small>Evidence: “{item.evidence_quote}”</small>}
+          </li>)}
+        </ul>
+        <div className="knowledge-actions">
+          <button disabled={busy} onClick={() => void confirmPassAllCorroborated()}>
+            Pass these {eligible.length} corroborated fact{eligible.length === 1 ? "" : "s"}
+          </button>
+          <button disabled={busy} onClick={() => setConfirmingBulk(false)}>Cancel</button>
+        </div>
+      </div>
+    )}
+    <ul className="chapter-knowledge-list">
+      {data.items.map((item) => {
+        const key = heldItemKey(item);
+        const v = verdicts[key] ?? { verdict: "pass" as const, reason: "" };
+        return <li key={key}>
+          <div><span className="knowledge-badge">{item.item_type}</span> {heldItemLabel(item)}{" "}
+            {item.review_flag && <span className="knowledge-badge">{item.review_flag}</span>}{" "}
+            {item.bulk_eligible && <span className="knowledge-badge">corroborated</span>}</div>
+          {item.evidence_quote && <small>Evidence: “{item.evidence_quote}”</small>}
+          <div className="knowledge-actions">
+            <select aria-label={`Verdict for ${key}`} value={v.verdict}
+              onChange={(e) => setVerdicts((old) => ({ ...old, [key]: { ...v, verdict: e.target.value as "pass" | "reject" } }))}>
+              <option value="pass">Pass</option>
+              <option value="reject">Reject</option>
+            </select>
+            <input aria-label={`Reason for ${key}`} placeholder="Reason (required to include in submit)" value={v.reason}
+              onChange={(e) => setVerdicts((old) => ({ ...old, [key]: { ...v, reason: e.target.value } }))} />
+          </div>
+        </li>;
+      })}
+    </ul>
+    <button disabled={busy || Object.values(verdicts).every((v) => !v.reason.trim())} onClick={() => void submit()}>
+      Submit verdicts
+    </button>
+    {error && <p role="alert" className="reader-pane-error">{error}</p>}
+  </div>;
+}
+
 export function ChapterKnowledgeWorkspace({novelId,chapter,at}:{novelId:string;chapter:number;at:number}) {
   const [data,setData]=useState<ChapterKnowledgeResponse|null>(null);
   const [activity,setActivity]=useState<ChapterKnowledgeActivity[]>([]);
@@ -487,6 +618,9 @@ export function ChapterKnowledgeWorkspace({novelId,chapter,at}:{novelId:string;c
           <button disabled={!writable||busy} onClick={()=>{const value=window.prompt("Correct English value",f.value);if(value)void mutate(current=>correctFact(novelId,f.id,{revision_id:current.revision_id,version:current.version,attribute:f.attribute,value_en:value}))}}>Correct fact…</button>
           <button disabled={!writable||busy} onClick={()=>{if(window.confirm("Remove this fact? Its source row and evidence will remain in history."))void mutate(current=>removeFact(novelId,f.id,{revision_id:current.revision_id,version:current.version}))}}>Remove</button></div>}
       </li>)}</ul>}
+    </details>
+    <details open><summary>Held knowledge — review queue</summary>
+      <HeldKnowledgeReview novelId={novelId} chapter={chapter} onDone={refresh} />
     </details>
     <details open><summary>Terms ({data.terms.length} occurrences)</summary>
       {data.terms.length===0?<p>No terms were recorded.</p>:<ul className="chapter-knowledge-list">{data.terms.map((t,i)=><li key={`${t.char_start}:${t.char_end}:${i}`} className={t.deleted?"knowledge-history":""}><strong>{t.source_term}</strong> → {t.target_term} {t.new_in_chapter&&<span className="knowledge-badge">New in this chapter</span>} {t.deleted&&<span className="knowledge-badge">removed</span>}

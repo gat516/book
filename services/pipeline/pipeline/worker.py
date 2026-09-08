@@ -231,6 +231,12 @@ class Worker:
             claimed_at = str(time.time())
             raw = await self.redis.eval(queue.CLAIM, len(queue.KEYS), *queue.KEYS, claimed_at)
             if raw is None:
+                # A graph rebuild's own inference calls can run well past the TTL set
+                # above, with no chapter claim around to renew it (_renew_claim only
+                # runs for jobs:pending work). Without a renewer here, the UI reports
+                # "offline" for the entire length of any rebuild, which is wrong: the
+                # worker is doing exactly the work the UI can't see progress on.
+                heartbeat = asyncio.create_task(self._renew_heartbeat())
                 try:
                     await self._run_until_stopping(self._drain_background())
                 except asyncio.CancelledError:
@@ -242,6 +248,10 @@ class Worker:
                     await self._idle(max(exc.retry_after_s, 0.25))
                 except Exception:
                     log.exception("revision enrichment failed; retained for explicit resume")
+                finally:
+                    heartbeat.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await heartbeat
                 await self._idle(min(max(self.cfg.queue_timeout, 0.1), 1))
                 continue
             heartbeat = asyncio.create_task(self._renew_claim(raw, claimed_at))
@@ -396,6 +406,15 @@ class Worker:
     async def _idle(self, seconds: float) -> None:
         with suppress(asyncio.TimeoutError):
             await asyncio.wait_for(self.stopping.wait(), timeout=seconds)
+
+    async def _renew_heartbeat(self) -> None:
+        interval = max(0.1, min(30, WORKER_HEARTBEAT_TTL_SECONDS / 3))
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self.redis.set(WORKER_HEARTBEAT, str(time.time()), ex=WORKER_HEARTBEAT_TTL_SECONDS)
+            except Exception:
+                log.warning("heartbeat renewal failed", exc_info=True)
 
     async def _renew_claim(self, raw: str, claimed_at: str) -> None:
         # Total chapter duration is not evidence of a dead worker. Keep the original
