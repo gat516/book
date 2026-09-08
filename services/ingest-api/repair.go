@@ -238,6 +238,25 @@ func (s *Store) CancelRepairRequest(ctx context.Context, novelID, requestID stri
 	return nil
 }
 
+// RetryRepairRequestNow clears a pending request's backoff so the worker's next idle tick
+// picks it up instead of waiting out the scheduled cooldown -- same idea as the existing
+// 'retry' action's blocked_at clear, but for a request that failed before a revision even
+// exists to hold a blocked_category (prepare's own transient failures: an unreachable
+// model, a timeout loading it). Same restriction as cancel: a running request is left
+// alone, since its next attempt is already underway.
+func (s *Store) RetryRepairRequestNow(ctx context.Context, novelID, requestID string) error {
+	tag, err := s.db.Exec(ctx,
+		`UPDATE repair_request SET retry_at=now(), updated_at=now()
+		  WHERE id=$1 AND novel_id=$2 AND state='pending'`, requestID, novelID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
 func (a *API) requestRepair(w http.ResponseWriter, r *http.Request) {
 	var body repairRequestBody
 	if err := decodeJSONBody(r, &body); err != nil {
@@ -275,6 +294,20 @@ func (a *API) cancelRepair(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("cancel repair: %v", err)
 		writeErr(w, http.StatusInternalServerError, "could not cancel repair request")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) retryRepairNow(w http.ResponseWriter, r *http.Request) {
+	err := a.store.RetryRepairRequestNow(r.Context(), r.PathValue("id"), r.PathValue("request"))
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, "no pending repair request with that id")
+		return
+	}
+	if err != nil {
+		log.Printf("retry repair now: %v", err)
+		writeErr(w, http.StatusInternalServerError, "could not retry repair request")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

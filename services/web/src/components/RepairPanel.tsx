@@ -6,6 +6,7 @@ import {
   getRepairStatus,
   listOllamaModels,
   requestRepair,
+  retryRepairNow,
 } from "../api";
 import { DEFAULT_MODEL, MODEL_OPTIONS, PROVIDER_LABELS } from "../providers";
 import { usePolling } from "../usePolling";
@@ -79,6 +80,11 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   // for Ollama. List what is actually installed locally instead, same as the chapter
   // workspace's one-time build does.
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  // The book's configured extractor is only ever a *guess* for the graph track, so it is
+  // held apart from `model` until the installed catalog can confirm it. Seeding `model`
+  // directly let a config naming an uninstalled model win over what is actually on the
+  // host, and the rebuild then failed server-side with `model_not_installed`.
+  const [graphSuggestion, setGraphSuggestion] = useState("");
   const [rollbackTo, setRollbackTo] = useState<Record<RepairTrackName, string>>({ graph: "", events: "" });
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -135,8 +141,7 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
       .then((config) => {
         if (config) {
           setGraphProvider(config.provider);
-          setModel((current) => ({ ...current,
-            graph: current.graph || config.extract_model || config.model || DEFAULT_MODEL[config.provider] }));
+          setGraphSuggestion(config.extract_model || config.model || DEFAULT_MODEL[config.provider] || "");
         }
         if (config?.extract_model && (config.provider === "ollama" || config.provider === "gemini")) {
           setProvider((current) => (current === "ollama" ? config.provider : current));
@@ -145,6 +150,22 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
       })
       .catch(() => undefined);
   }, [novelId]);
+
+  // Seeding the graph model needs BOTH fetches above, which resolve in either order, so
+  // it cannot live in either one: keyed on [novelId] alone, whichever lost the race would
+  // read the other's state as still-empty and never re-run. Depending on both results
+  // instead means this settles once they have arrived.
+  //
+  // A suggestion that is not installed is dropped rather than substituted. Picking some
+  // other entry would be a guess at which local model is a graph extractor -- the catalog
+  // also lists embedding models -- and silently rebuilding under a model the operator did
+  // not choose is the failure this panel exists to prevent. Blank leaves the button
+  // disabled and the datalist open, which asks rather than assumes.
+  useEffect(() => {
+    if (!graphSuggestion || ollamaModels.length === 0) return;
+    if (!ollamaModels.includes(graphSuggestion)) return;
+    setModel((current) => (current.graph ? current : { ...current, graph: graphSuggestion }));
+  }, [graphSuggestion, ollamaModels]);
 
   async function act(
     track: RepairTrackName,
@@ -545,22 +566,46 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
               <ul>
                 {status.requests.map((request) => (
                   <li key={request.id}>
-                    {request.action} · {request.track} · {request.state}
-                    {request.category ? ` (${request.category})` : ""} · asked by{" "}
+                    {request.action} · {request.track} · {request.state} · asked by{" "}
                     {request.requested_by} at{" "}
                     {new Date(request.created_at).toLocaleString()}
+                    {request.detail && (
+                      <>
+                        {" — "}
+                        {request.detail}
+                        {request.retry_at
+                          ? ` Retrying automatically at ${new Date(request.retry_at).toLocaleTimeString()}.`
+                          : ""}
+                      </>
+                    )}
                     {request.state === "pending" && (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() =>
-                          void cancelRepair(novelId, request.id).then(load).catch((err) =>
-                            setError(String(err)),
-                          )
-                        }
-                      >
-                        Cancel
-                      </button>
+                      <>
+                        {" "}
+                        {request.retry_at && (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              void retryRepairNow(novelId, request.id).then(load).catch((err) =>
+                                setError(String(err)),
+                              )
+                            }
+                          >
+                            Retry now
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() =>
+                            void cancelRepair(novelId, request.id).then(load).catch((err) =>
+                              setError(String(err)),
+                            )
+                          }
+                        >
+                          Discard
+                        </button>
+                      </>
                     )}
                   </li>
                 ))}

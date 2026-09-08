@@ -599,6 +599,11 @@ export interface RepairRequestView {
   state: "pending" | "running" | "done" | "failed";
   attempts: number;
   category?: string;
+  // Server-rendered sentence for `category` -- render this, not the category slug.
+  detail?: string;
+  // Set only while pending and backing off after a failed attempt -- absent for a freshly
+  // queued request with nothing to retry yet.
+  retry_at?: string;
   requested_by: string;
   created_at: string;
   updated_at: string;

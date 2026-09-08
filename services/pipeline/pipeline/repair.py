@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from copy import deepcopy
 
 import psycopg
@@ -29,6 +30,8 @@ from psycopg.types.json import Jsonb
 from pipeline.config import Config
 from pipeline.failures import ABANDONED, failure_category
 from pipeline.llm.provider import AdmissionRejected
+
+log = logging.getLogger(__name__)
 
 
 async def _reextract_preview(db, cfg, graph_rebuild, row, run_id):
@@ -211,13 +214,18 @@ STALE_AFTER_MINUTES = 30
 # that fails qualified() will fail identically on every attempt; scheduling three more
 # runs of it produces noise, not recovery.  Reusing graph_rebuild's delays keeps one
 # backoff policy in the codebase rather than two.
-TRANSIENT_CATEGORIES = {"model_unreachable", "timeout"}
+TRANSIENT_CATEGORIES = {"model_unreachable", "timeout", "model_server_error"}
 
 # No per-revision attempt counter exists to back off against (unlike graph_job's
 # attempts + graph_retry_delay_minutes), so this is a flat cooldown rather than an
 # escalating one. resume()'s preamble check is cheap (metadata only, no model call), so a
 # flat 5 minutes just bounds how often a still-down endpoint gets re-probed.
 BLOCKED_RETRY_MINUTES = 5
+
+# How often a running chapter checks whether the rebuild it belongs to has been discarded.
+# Short because it only costs one indexed lookup on a separate connection, and the whole
+# point is not making someone wait out a call they have already abandoned.
+DISCARD_CHECK_SECONDS = 2
 
 
 def retry_delay_minutes(attempt: int) -> int | None:
@@ -525,6 +533,66 @@ async def _next_staging_revision(db, revision_table: str, job_table: str,
     return row[0] if row else None
 
 
+async def _watch_for_discard(cfg: Config, revision_id: str) -> None:
+    """Return once someone has asked to discard ``revision_id``.
+
+    Its own connection, for the same reason worker._watch_novel opens one: the caller's
+    connection is busy running the chapter this is watching over.
+
+    A database error is not evidence of a discard. Anything short of an actual pending row
+    keeps waiting, because cancelling live inference on a failed lookup would make a blip
+    on this connection destroy minutes of real model work.
+    """
+    while True:
+        try:
+            async with await psycopg.AsyncConnection.connect(
+                cfg.database_url, autocommit=True, connect_timeout=5
+            ) as monitor:
+                while True:
+                    row = await (await monitor.execute(
+                        "SELECT 1 FROM repair_request"
+                        " WHERE revision_id=%s AND action='discard' AND state IN ('pending','running')",
+                        (revision_id,))).fetchone()
+                    if row is not None:
+                        return
+                    await asyncio.sleep(DISCARD_CHECK_SECONDS)
+        except (psycopg.Error, TimeoutError):
+            log.warning("could not check for a discard intent; retrying", exc_info=True)
+            await asyncio.sleep(DISCARD_CHECK_SECONDS)
+
+
+async def _resume_until_discarded(db, cfg: Config, module, revision_id: str) -> None:
+    """Run one chapter of ``revision_id``, abandoning it if a discard lands mid-call.
+
+    Queueing a discard behind the chapter it cancels is the wrong order: a chapter call can
+    run for the whole of GRAPH_OLLAMA_FIRST_TOKEN_SECONDS, and the reader asking to discard
+    is very often asking *because* it looks stuck. Waiting for work whose only remaining
+    purpose is to be thrown away is time nobody gets back.
+
+    Interrupting is safe here in a way it is not for a repair ACTION (see
+    CancelRepairRequest, which deliberately leaves a running one alone). A cancelled
+    chapter leaves its row in 'processing', which _next_staging_revision already treats as
+    claimable, so the worst case if the discard then fails is that the chapter runs again
+    -- the same outcome as the worker being restarted mid-chapter.
+
+    Same structure as worker._handle_claim: the work and its watcher race, and whichever
+    loses is cancelled.
+    """
+    work = asyncio.create_task(module.resume(db, cfg, revision_id, limit=1))
+    watch = asyncio.create_task(_watch_for_discard(cfg, revision_id))
+    try:
+        done, _ = await asyncio.wait((work, watch), return_when=asyncio.FIRST_COMPLETED)
+        if work in done:
+            await work  # Preserve resume's own exception; the caller classifies it.
+        else:
+            log.info("discard requested for %s; abandoning the chapter in flight", revision_id)
+    finally:
+        for task in (work, watch):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(work, watch, return_exceptions=True)
+
+
 async def drain_staging(cfg: Config, novel_id: str | None = None) -> str | None:
     """Advance one chapter of a prepared rebuild.
 
@@ -551,7 +619,7 @@ async def drain_staging(cfg: Config, novel_id: str | None = None) -> str | None:
             # resume takes its own per-revision advisory lock, re-checks the model pin and
             # the saved prose against the snapshot, and records a failure with its safe
             # class before re-raising. The worker logs and keeps going.
-            await module.resume(db, cfg, rid, limit=1)
+            await _resume_until_discarded(db, cfg, module, rid)
             return f"{track}:{rid}"
     return None
 

@@ -187,7 +187,8 @@ async def discover_num_ctx(cfg, name):
     Ollama's own API contract; this is the one place in the codebase allowed to do that
     (call only from prepare(), never from local_model() or preflight -- see their notes).
     """
-    async with httpx.AsyncClient(base_url=cfg.ollama_host, timeout=120) as client:
+    async with httpx.AsyncClient(base_url=cfg.ollama_host,
+                                  timeout=cfg.graph_ollama_first_token_seconds or 120) as client:
         probe = await client.post('/api/generate', json=dict(
             model=name, options=dict(num_ctx=cfg.graph_ollama_num_ctx_target)))
         probe.raise_for_status()

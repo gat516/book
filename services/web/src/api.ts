@@ -403,6 +403,24 @@ export async function cancelRepair(novelId: string, requestId: string): Promise<
   }
 }
 
+// Same 204-with-empty-body shape as cancelRepair.
+export async function retryRepairNow(novelId: string, requestId: string): Promise<void> {
+  const response = await fetch(`/api/novels/${novelId}/repair/${requestId}/retry-now`, {
+    method: "POST",
+    headers: { "X-Reader-ID": readerId() },
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    let code = body || response.statusText;
+    try {
+      code = JSON.parse(body).error ?? code;
+    } catch {
+      // non-JSON error body: keep the raw text
+    }
+    throw new ApiError(response.status, code);
+  }
+}
+
 // The frozen review report. Operator-only, and the one repair response that carries story
 // content -- see reader-api's getRepairPreview for why that exception exists.
 export async function getRepairPreview(

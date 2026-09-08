@@ -7,22 +7,38 @@ forever, backpressure is not mistaken for failure, and no gate is bypassed.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import uuid
 from pathlib import Path
 from unittest.mock import ANY, AsyncMock
 
+import httpx
 import pytest
 
 from pipeline import repair
 from pipeline.failures import failure_category
 from pipeline.llm.provider import AdmissionRejected
 
-from tests.fixtures import make_novel
+from tests.conftest import DATABASE_URL
+from tests.fixtures import delete_novel, make_config, make_novel
 
 
 REPAIR_GO = Path(__file__).resolve().parents[3] / "services/reader-api/repair.go"
+
+
+def _status_error(code: int) -> httpx.HTTPStatusError:
+    """The exception httpx itself raises for `code`, not a hand-written imitation.
+
+    The message text matters to classification (a 404 still has to reach the "not found"
+    phrase match), and it is httpx's to word, not this test's to assume.
+    """
+    response = httpx.Response(
+        code, request=httpx.Request("POST", "http://127.0.0.1:11435/api/generate"))
+    with pytest.raises(httpx.HTTPStatusError) as caught:
+        response.raise_for_status()
+    return caught.value
 
 
 def test_failure_category_classifies_repair_action_errors():
@@ -46,6 +62,14 @@ def test_failure_category_classifies_repair_action_errors():
         (OSError("connection refused"), "model_unreachable"),
         # The literal string httpx produces when the endpoint is gone.
         (ConnectionError("All connection attempts failed"), "model_unreachable"),
+        # Answered, but with its own failure -- Ollama returns this when it gives up on a
+        # model load that exceeded its server-side OLLAMA_LOAD_TIMEOUT. Distinct from
+        # unreachable (nothing answered) and from timeout (a budget of ours expired).
+        (_status_error(500), "model_server_error"),
+        (_status_error(503), "model_server_error"),
+        # A 4xx is the endpoint rejecting the request, not failing to serve it, and must
+        # keep classifying on its message rather than falling into the 5xx class.
+        (_status_error(404), "not_found"),
         (KeyError("chapters"), "unknown"),
     ]
     for exc, expected in cases:
@@ -83,6 +107,7 @@ def test_category_vocabulary_matches_reader_api():
             RuntimeError("serving identity changed"),
             RuntimeError("worker fenced"), RuntimeError("num_predict"),
             TimeoutError("timed out"), OSError("connection refused"), KeyError("x"),
+            _status_error(500),
             # Raised by graph_rebuild/event_rebuild resume(), never by a repair action.
             RuntimeError("Ollama exhausted num_predict; refusing incomplete output"),
         )
@@ -198,6 +223,117 @@ async def test_transient_failure_is_retried_with_backoff(db_conn):
         state, attempts, category, retry_at = await _state(db_conn, request_id)
         assert (state, category) == ("pending", "model_unreachable")
         assert retry_at is not None, "a transient failure must be rescheduled"
+
+
+@pytest.mark.db
+async def test_model_server_error_is_retried_rather_than_ending_the_request(db_conn):
+    """A 5xx from the model host is infrastructure, not a verdict on this request.
+
+    Observed live: Ollama abandons a model load that outlives its own
+    OLLAMA_LOAD_TIMEOUT and answers 500. That classified as `unknown`, which is not
+    transient, so a single slow load ended the rebuild outright -- no retry, and a reader
+    told only that "the cause was not recognised" for something the next attempt might
+    well get past.
+    """
+    async with db_conn.transaction(force_rollback=True):
+        novel = await make_novel(db_conn)
+        request_id = await _request(db_conn, novel, params={"model": "m"})
+        row = await repair._claim(db_conn, novel)
+        await repair._fail(db_conn, row, _status_error(500))
+
+        state, attempts, category, retry_at = await _state(db_conn, request_id)
+        assert (state, category) == ("pending", "model_server_error")
+        assert retry_at is not None, "a model-server failure must be rescheduled"
+
+
+class _NeverFinishes:
+    """A rebuild whose chapter call never returns, the way a stuck prefill behaves."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.cancelled = False
+
+    async def resume(self, db, cfg, revision_id, limit=1):
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
+async def test_discard_abandons_the_chapter_in_flight(monkeypatch):
+    """A discard must not queue behind the call it makes pointless.
+
+    A chapter call can hold the worker for the whole first-token budget, and someone
+    discarding a rebuild is very often doing it *because* the call looks stuck. Waiting
+    for work whose only remaining purpose is to be thrown away helps nobody.
+    """
+    module = _NeverFinishes()
+    asked = asyncio.Event()
+
+    async def fake_watch(cfg, revision_id):
+        await module.started.wait()  # Only interrupt work that actually started.
+        asked.set()
+        return
+
+    monkeypatch.setattr(repair, "_watch_for_discard", fake_watch)
+    async with asyncio.timeout(5):
+        await repair._resume_until_discarded(None, make_config(), module, "rev-1")
+
+    assert asked.is_set()
+    assert module.cancelled, "the in-flight chapter must be cancelled, not awaited"
+
+
+async def test_a_chapter_failure_still_reaches_the_caller(monkeypatch):
+    """Racing the watcher must not swallow the failure the caller classifies.
+
+    _resume_until_discarded sits between resume and the code that records a safe failure
+    class, so an exception it ate would leave a rebuild stalled with an empty ledger.
+    """
+    class _Fails:
+        async def resume(self, db, cfg, revision_id, limit=1):
+            raise TimeoutError("timed out")
+
+    never = asyncio.Event()
+
+    async def fake_watch(cfg, revision_id):
+        await never.wait()
+
+    monkeypatch.setattr(repair, "_watch_for_discard", fake_watch)
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(5):
+            await repair._resume_until_discarded(None, make_config(), _Fails(), "rev-1")
+
+
+@pytest.mark.db
+async def test_watch_for_discard_sees_a_real_pending_request(db_conn):
+    """The watcher's own query, against real rows.
+
+    Worth its own test because a wrong column or state here fails silently: the watcher
+    would simply never fire, and the interrupt would look like it was never built.
+    """
+    novel = await make_novel(db_conn)
+    watching = None
+    try:
+        revision = (await (await db_conn.execute(
+            "INSERT INTO graph_revision (novel_id, ontology) VALUES (%s,'{}') RETURNING id::text",
+            (novel,))).fetchone())[0]
+        cfg = make_config(database_url=DATABASE_URL)
+
+        watching = asyncio.create_task(repair._watch_for_discard(cfg, revision))
+        await asyncio.sleep(0)
+        assert not watching.done(), "nothing has asked for a discard yet"
+
+        await db_conn.execute(
+            "INSERT INTO repair_request (novel_id, track, action, revision_id, requested_by)"
+            " VALUES (%s,'graph','discard',%s,'test')", (novel, revision))
+        async with asyncio.timeout(10):
+            await watching
+    finally:
+        if watching is not None:
+            watching.cancel()
+        await delete_novel(db_conn, novel)
 
 
 @pytest.mark.db

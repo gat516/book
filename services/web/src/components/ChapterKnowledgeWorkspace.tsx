@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  applyChapterReextract, correctFact, correctGlossaryTerm, deleteGlossaryTerm,
+  applyChapterReextract, cancelRepair, correctFact, correctGlossaryTerm, deleteGlossaryTerm,
   editFactDisplay, getChapterKnowledge, getChapterKnowledgeActivity, getProviderConfig,
-  getRepairStatus, listOllamaModels, removeFact, requestRepair, startChapterReextract,
+  getRepairStatus, listOllamaModels, removeFact, requestRepair, retryRepairNow, startChapterReextract,
 } from "../api";
 import { DEFAULT_MODEL, MODEL_OPTIONS, PROVIDER_LABELS } from "../providers";
-import type { ChapterKnowledgeActivity, ChapterKnowledgeResponse, ProviderName, RepairStatus } from "../types";
+import type {
+  ChapterKnowledgeActivity, ChapterKnowledgeResponse, ProviderName, RepairRequestView, RepairStatus,
+} from "../types";
 import { RepairReview } from "./RepairReview";
 
 const terminal = new Set(["published", "rejected", "failed", "awaiting_review"]);
@@ -53,13 +55,17 @@ function graphBuildActivity(status: RepairStatus | null) {
     (item) => item.track === "graph" && (item.state === "pending" || item.state === "running"),
   );
   if (request) {
-    return {
-      at: request.created_at,
-      stage: request.state === "pending" ? "queued" : "starting",
-      text: request.state === "pending"
-        ? "Book graph build is queued and waiting for the worker."
-        : "Book graph build is being prepared.",
-    };
+    // retry_at only appears once a first attempt has already failed and the request is
+    // backing off -- a freshly queued request with nothing to retry yet has neither this
+    // nor a category, and gets the plain "queued" sentence below.
+    const text = request.state === "running"
+      ? request.attempts > 0
+        ? `Book graph build is being prepared (attempt ${request.attempts + 1}, after ${request.detail ?? "an earlier failure"}).`
+        : "Book graph build is being prepared."
+      : request.retry_at
+        ? `Book graph build failed — ${request.detail ?? "an unknown error"}. Retrying automatically at ${new Date(request.retry_at).toLocaleTimeString()}.`
+        : "Book graph build is queued and waiting for the worker.";
+    return { at: request.created_at, stage: request.state === "pending" ? "queued" : "starting", text, request };
   }
   return null;
 }
@@ -263,6 +269,33 @@ function QuarantineGate({ novelId, chapter, onDone }: { novelId: string; chapter
   );
 }
 
+// The controls for a repair_request that hasn't produced a graph_revision yet, so
+// QuarantineGate (which needs one to discard or retry) has nothing to act on. Discard is
+// always available while pending -- the executor holds no lock yet. Retry now only when
+// retry_at is set: a freshly queued request with nothing to retry yet has nothing to skip.
+function PendingRequestControls({ novelId, request, onDone }: { novelId: string; request: RepairRequestView; onDone: () => Promise<unknown> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function run(action: () => Promise<void>) {
+    setBusy(true); setError("");
+    try { await action(); await onDone(); }
+    catch (e) { setError(errorMessage(e)); }
+    finally { setBusy(false); }
+  }
+  if (request.state !== "pending") return null;
+  return <p className="knowledge-gate-action">
+    {request.retry_at && (
+      <button type="button" disabled={busy} onClick={() => void run(() => retryRepairNow(novelId, request.id))}>
+        Retry now
+      </button>
+    )}
+    <button type="button" disabled={busy} onClick={() => void run(() => cancelRepair(novelId, request.id))}>
+      Discard
+    </button>
+    {error && <span className="chapter-list-error" role="alert"> {error}</span>}
+  </p>;
+}
+
 // Which of four states this chapter's knowledge is in, and the one action that resolves
 // it — not a single banner naming the wrong cause for three of the four. `trusted` alone
 // used to stand in for `can_extract`, which reads "writable" for every never-rebuilt book
@@ -282,7 +315,12 @@ function KnowledgeGate({ novelId, chapter, reason, repairStatus, onDone }: { nov
     return <div className="knowledge-gate"><QuarantineGate novelId={novelId} chapter={chapter} onDone={onDone} /></div>;
   }
   if (graphActivity) {
-    return <div className="knowledge-gate"><p>{graphActivity.text}</p></div>;
+    return <div className="knowledge-gate">
+      <p>{graphActivity.text}</p>
+      {graphActivity.request && (
+        <PendingRequestControls novelId={novelId} request={graphActivity.request} onDone={onDone} />
+      )}
+    </div>;
   }
   if (reason === "never_built") {
     return <div className="knowledge-gate">

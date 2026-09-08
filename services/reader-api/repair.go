@@ -50,15 +50,23 @@ type RepairStatus struct {
 }
 
 type RepairRequestView struct {
-	ID          string    `json:"id"`
-	Track       string    `json:"track"`
-	Action      string    `json:"action"`
-	State       string    `json:"state"`
-	Attempts    int       `json:"attempts"`
-	Category    string    `json:"category,omitempty"`
-	RequestedBy string    `json:"requested_by"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          string     `json:"id"`
+	Track       string     `json:"track"`
+	Action      string     `json:"action"`
+	State       string     `json:"state"`
+	Attempts    int        `json:"attempts"`
+	Category    string     `json:"category,omitempty"`
+	// Detail is repairFailureDetail[Category] -- the same fixed, safe sentence RepairFailure
+	// uses, never the stored exception text (migration 0046's discipline applies here too).
+	Detail      string     `json:"detail,omitempty"`
+	// Set only while state is 'pending' and the request is backing off after a failed
+	// attempt -- absent for a freshly queued request with nothing to retry yet, so the UI
+	// can tell "waiting for the worker's first attempt" from "retrying after a failure"
+	// without also needing attempts > 0 as a proxy.
+	RetryAt     *time.Time `json:"retry_at,omitempty"`
+	RequestedBy string     `json:"requested_by"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 type RepairAuditEntry struct {
@@ -292,6 +300,10 @@ const (
 	repairFenced        = "fenced"
 	repairTimeout       = "timeout"
 	repairUnreachable   = "model_unreachable"
+	// Reached, answered, and the answer was a 5xx — distinct from "unreachable" on
+	// purpose. The observed cause is the model server aborting a load it was still
+	// making progress on, which no client-side budget can extend.
+	repairModelServerErr = "model_server_error"
 	repairTruncated     = "output_truncated"
 	repairCredentialErr = "credential_missing"
 	repairUnknownCause  = "unknown"
@@ -317,6 +329,7 @@ var repairFailureDetail = map[string]string{
 	repairTruncated:      "the local model hit its output limit mid-answer; a partial extraction is never published",
 	repairCredentialErr:  "the configured extraction provider has no usable API credential; add the book or account credential, then start a fresh rebuild",
 	repairUnreachable:    "the local model could not be reached",
+	repairModelServerErr: "the local model server answered with a server error; most often it gave up loading the model before the load finished, which its own OLLAMA_LOAD_TIMEOUT bounds and no setting here can extend, or its runner process died. This is retried automatically",
 	repairNotRebuildErr:  "this revision cannot be rebuilt",
 	repairUnknownCause:   "processing failed; the cause was not recognised",
 	repairReviewRejected: "the review was rejected: it must approve the current report hash, name a reviewer, and assess every published claim exactly once",
@@ -432,7 +445,7 @@ func (s *Store) repairRollbackTargets(ctx context.Context, novelID string) (map[
 
 func (s *Store) repairRequests(ctx context.Context, novelID string) ([]RepairRequestView, error) {
 	rows, err := s.readerDB.Query(ctx,
-		`SELECT id::text, track, action, state, attempts, category, requested_by, created_at, updated_at
+		`SELECT id::text, track, action, state, attempts, category, retry_at, requested_by, created_at, updated_at
 		   FROM reader_repair_requests($1)`, novelID)
 	if err != nil {
 		return nil, fmt.Errorf("read repair requests: %w", err)
@@ -443,12 +456,16 @@ func (s *Store) repairRequests(ctx context.Context, novelID string) ([]RepairReq
 		var request RepairRequestView
 		var category *string
 		if err := rows.Scan(&request.ID, &request.Track, &request.Action, &request.State,
-			&request.Attempts, &category, &request.RequestedBy,
+			&request.Attempts, &category, &request.RetryAt, &request.RequestedBy,
 			&request.CreatedAt, &request.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan repair request: %w", err)
 		}
 		if category != nil {
 			request.Category = *category
+			request.Detail = repairFailureDetail[*category]
+			if request.Detail == "" {
+				request.Detail = repairFailureDetail[repairUnknownCause]
+			}
 		}
 		requests = append(requests, request)
 	}
@@ -853,6 +870,32 @@ func (a *API) deleteRepair(w http.ResponseWriter, r *http.Request) {
 	result, status, err := a.ingest.CancelRepair(r.Context(), novelID, requestID)
 	if err != nil {
 		log.Printf("cancel repair: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
+}
+
+// retryRepairNow skips a pending request's backoff so the worker tries again on its next
+// idle tick, instead of the reader waiting out a cooldown chosen for a cause that may
+// already be fixed. Same proxy shape as deleteRepair.
+func (a *API) retryRepairNow(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	requestID, ok := pathUUID(r, "request")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid request id")
+		return
+	}
+	result, status, err := a.ingest.RetryRepairNow(r.Context(), novelID, requestID)
+	if err != nil {
+		log.Printf("retry repair now: %v", err)
 		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
 		return
 	}

@@ -99,6 +99,16 @@ def failure_category(exc: BaseException) -> str:
         return "review_rejected"
     if "not found" in text or "no such" in text:
         return "not_found"
+    # A 5xx is not "unreachable": the endpoint answered, and it answered with its own
+    # failure. Observed live as Ollama aborting a model load that had not finished within
+    # its server-side OLLAMA_LOAD_TIMEOUT (5m by default) and returning 500 to
+    # discover_num_ctx's load probe. Worth its own class because the fix is on the model
+    # host and NOT in this repo's timeouts: GRAPH_OLLAMA_FIRST_TOKEN_SECONDS can be raised
+    # to any value and will never widen a deadline the server enforces itself. Matched on
+    # the exception object rather than its text; httpx's message carries only the status
+    # and URL, so a phrase match would be guessing at wording it does not control.
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500:
+        return "model_server_error"
     # provider_error wraps transport exceptions as "provider unreachable: <type>".
     # Check that explicit wrapper before the generic timeout words: a ReadTimeout while
     # opening the Ollama response means the connection disappeared, not that an admitted

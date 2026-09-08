@@ -180,6 +180,10 @@ func (f *fakeIngestClient) CancelRepair(_ context.Context, _, _ string) (json.Ra
 	return f.response, f.status, f.err
 }
 
+func (f *fakeIngestClient) RetryRepairNow(_ context.Context, _, _ string) (json.RawMessage, int, error) {
+	return f.response, f.status, f.err
+}
+
 func (f *fakeIngestClient) TranslateAhead(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
 	return f.response, f.status, f.err

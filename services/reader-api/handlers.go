@@ -53,6 +53,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/repair/progress", a.getRepairProgress)
 	mux.HandleFunc("POST /novels/{id}/repair", a.postRepair)
 	mux.HandleFunc("DELETE /novels/{id}/repair/{request}", a.deleteRepair)
+	mux.HandleFunc("POST /novels/{id}/repair/{request}/retry-now", a.retryRepairNow)
 	mux.HandleFunc("PATCH /novels/{id}/facts/{fact}/display", a.mutateFact)
 	mux.HandleFunc("POST /novels/{id}/facts/{fact}/corrections", a.mutateFact)
 	mux.HandleFunc("DELETE /novels/{id}/facts/{fact}", a.mutateFact)

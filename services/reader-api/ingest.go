@@ -40,6 +40,7 @@ type IngestClient interface {
 	UpdateNovelSettings(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	RequestRepair(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	CancelRepair(ctx context.Context, novelID, requestID string) (json.RawMessage, int, error)
+	RetryRepairNow(ctx context.Context, novelID, requestID string) (json.RawMessage, int, error)
 	MutateFact(ctx context.Context, method, novelID, factID, suffix string, body json.RawMessage) (json.RawMessage, int, error)
 	ChapterKnowledgeMutation(ctx context.Context, novelID, chapter, runID string, body json.RawMessage) (json.RawMessage, int, error)
 }
@@ -69,6 +70,10 @@ func (c *ingestHTTPClient) RequestRepair(ctx context.Context, novelID string, bo
 
 func (c *ingestHTTPClient) CancelRepair(ctx context.Context, novelID, requestID string) (json.RawMessage, int, error) {
 	return c.send(ctx, http.MethodDelete, "/novels/"+novelID+"/repair/"+requestID, nil, true)
+}
+
+func (c *ingestHTTPClient) RetryRepairNow(ctx context.Context, novelID, requestID string) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/repair/"+requestID+"/retry-now", nil, true)
 }
 
 type ingestHTTPClient struct {
