@@ -115,8 +115,29 @@ class Config:
     # of inheriting a translate-sized timeout that has nothing to do with either phase.
     graph_ollama_first_token_seconds: float | None = None
     graph_ollama_timeout_seconds: float | None = None
-    graph_ollama_total_timeout_seconds: float = 1800
-    graph_ollama_num_ctx: int = 16384
+    # None (the default) means no hard cap: a genuinely stuck call is already caught by
+    # the idle/first-token budgets above, which fire the moment tokens stop arriving.
+    # A flat wall-clock ceiling on top of that only ever kills a call that is actively
+    # streaming but simply slow -- observed live: a chapter with a large evidence
+    # passage exceeded a 3600s cap mid-stream, repeatedly, until the chapter's three
+    # attempts were exhausted and the whole rebuild reported failed over one call that
+    # was never actually stuck.
+    graph_ollama_total_timeout_seconds: float | None = None
+    # No num_ctx field: a fixed value sized for one machine reliably starved another (a
+    # 16384 setting tuned for a bigger card exhausted an 8 GB RTX 2070 elsewhere,
+    # triggering repeated kernel OOM-kills). graph_rebuild.discover_num_ctx() pins
+    # whatever Ollama actually loads the model with, per host, into the revision; see
+    # graph_rebuild._without_num_ctx() for why it is excluded from drift comparisons.
+    #
+    # graph_ollama_num_ctx_target is the ASK, not the answer: Ollama's own vram-based
+    # default optimizes for keeping several models resident at once (it picked 4096 on
+    # the same 8 GB card that ran real extraction calls needing 6-10k input tokens alone)
+    # and is too conservative to be usable for this workload's actual prompt sizes.
+    # Requesting this target explicitly makes Ollama evict competing idle models to fit
+    # it, which is the outcome we want; discover_num_ctx() still reads back and pins
+    # whatever it actually ends up loaded with, so a host that genuinely cannot fit the
+    # target fails loudly at prepare() time instead of mid-chapter.
+    graph_ollama_num_ctx_target: int = 16384
     graph_ollama_num_predict: int = 4096
     # Reasoning is generation-affecting, so when it is set at all it joins the revision
     # identity below. Left None the key is omitted entirely, which keeps every identity
@@ -180,8 +201,8 @@ class Config:
             ollama_timeout_seconds=float(_getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
             graph_ollama_first_token_seconds=_optional_float("GRAPH_OLLAMA_FIRST_TOKEN_SECONDS"),
             graph_ollama_timeout_seconds=_optional_float("GRAPH_OLLAMA_TIMEOUT_SECONDS"),
-            graph_ollama_total_timeout_seconds=float(_getenv("GRAPH_OLLAMA_TOTAL_TIMEOUT_SECONDS", "1800")),
-            graph_ollama_num_ctx=int(_getenv("GRAPH_OLLAMA_NUM_CTX", "16384")),
+            graph_ollama_total_timeout_seconds=_optional_float("GRAPH_OLLAMA_TOTAL_TIMEOUT_SECONDS"),
+            graph_ollama_num_ctx_target=int(_getenv("GRAPH_OLLAMA_NUM_CTX_TARGET", "16384")),
             graph_ollama_num_predict=int(_getenv("GRAPH_OLLAMA_NUM_PREDICT", "4096")),
             graph_ollama_think=_optional_bool("GRAPH_OLLAMA_THINK"),
             event_remote_timeout_seconds=float(_getenv("EVENT_REMOTE_TIMEOUT_SECONDS", "300")),
@@ -232,12 +253,23 @@ def graph_runtime(cfg: Config) -> dict:
             '2656-token prompt, so an inherited 120s budget aborts before the first token.')
     first_token, idle = cfg.graph_ollama_first_token_seconds, cfg.graph_ollama_timeout_seconds
     total = cfg.graph_ollama_total_timeout_seconds
-    if not all(math.isfinite(v) and v > 0 for v in (first_token, idle, total)) or total < max(first_token, idle):
+    if not all(math.isfinite(v) and v > 0 for v in (first_token, idle)):
         raise ValueError('graph timeouts must be finite, positive, and total >= first-token and idle')
-    if not 0 < cfg.graph_ollama_num_predict < cfg.graph_ollama_num_ctx:
-        raise ValueError('graph output budget must be positive and smaller than context')
-    identity = dict(version='stream-admission-v2', stream=True,
-                    num_ctx=cfg.graph_ollama_num_ctx, num_predict=cfg.graph_ollama_num_predict)
+    # total is optional (see the field comment): None disables the wall-clock cap and
+    # leaves the idle/first-token budgets as the only stall detector. When set, it still
+    # has to be a real ceiling above both.
+    if total is not None and (not math.isfinite(total) or total <= 0 or total < max(first_token, idle)):
+        raise ValueError('graph timeouts must be finite, positive, and total >= first-token and idle')
+    if cfg.graph_ollama_num_predict <= 0:
+        raise ValueError('graph output budget must be positive')
+    # num_ctx is intentionally absent: it is discovered per host by
+    # graph_rebuild.discover_num_ctx() at prepare() time, not chosen from config, so a
+    # revision's context window fits whatever VRAM is actually available on whichever
+    # machine OLLAMA_HOST names (see that function's docstring for why). Bumping the
+    # version still forces a fresh identity for every revision pinned under the old,
+    # config-sized num_ctx scheme.
+    identity = dict(version='stream-admission-v3', stream=True,
+                    num_predict=cfg.graph_ollama_num_predict)
     # Only when explicitly configured, so an identity recorded before this setting existed
     # still compares equal and its revision stays resumable.
     if cfg.graph_ollama_think is not None:

@@ -16,7 +16,7 @@ from pipeline.knowledge_contract import (
     unique_json_object, verification_schema,
 )
 from pipeline.passages import PassageContract, source_passages
-from pipeline.benchmark_knowledge import reviewed_fact_recall
+from pipeline.benchmark_knowledge import reviewed_fact_recall, summarize_runtime_calls
 from novel_llm.provider import Completion
 from tests.fixtures import make_novel
 
@@ -61,9 +61,9 @@ def test_name_slots_are_fixed_and_only_materialize_source_valid_names():
     source='凌峰来到碎星滩。'
     contract=PassageContract(source)
     schema=name_schema(list(contract.by_id),['character','place'])
-    assert schema['required']==['n1','n2','n3','n4','n5','n6']
+    assert schema['required']==[f'n{i}' for i in range(1,9)]
     assert '$defs' not in schema and 'maxItems' not in json.dumps(schema)
-    body={f'n{i}':None for i in range(1,7)}
+    body={f'n{i}':None for i in range(1,9)}
     body['n1']=dict(surface='凌峰',kind='character',passage_id=contract.passages[0]['id'])
     names=materialize_names(body,contract,dict(kinds=['character','place']))
     assert [name.surface for name in names.names]==['凌峰']
@@ -76,6 +76,17 @@ def test_recall_requires_review_of_published_fact_ids():
     assert reviewed_fact_recall(gold,publications,{'g1':['f1'],'g2':[]})==.5
     with pytest.raises(ValueError,match='unpublished'):
         reviewed_fact_recall(gold,publications,{'g1':['proposal-id'],'g2':[]})
+
+
+def test_runtime_call_summary_keeps_stage_costs_and_retries_visible():
+    summary=summarize_runtime_calls([
+        ('claims',dict(input_tokens=100,output_tokens=20,request_seconds=1.25,stall_retries=1)),
+        ('claims',dict(input_tokens=80,output_tokens=10,total_seconds=0.75)),
+        ('fact_verify',dict(input_tokens=40,output_tokens=5,request_seconds=0.5)),
+    ])
+    assert summary['claims']==dict(calls=2,input_tokens=180,output_tokens=30,
+                                   inference_seconds=2.0,stall_retries=1)
+    assert summary['fact_verify']['calls']==1
 
 
 @pytest.mark.db
@@ -108,13 +119,26 @@ async def test_cross_batch_identity_and_pronoun_claim_through_wire_and_publicati
                     body[row['occurrence_ref']]=dict(choice=choice,passage_id=pid,explanation='叙事连续')
                 assert set(kwargs['json_schema']['properties'])==set(body)
             elif 'verified_occurrences' in payload:
-                focus=next(p for p in payload['passages'] if p['id']==payload['focus_passage_ids'][0])
+                focus=[p for p in payload['passages'] if p['id'] in payload['focus_passage_ids']]
                 body=dict(claims=[])
-                if '受伤' in focus['text']:
+                if any('受伤' in p['text'] for p in focus):
+                    assertion=next(p for p in focus if '受伤' in p['text'])
                     prior=next(p for p in payload['passages'] if '青山' in p['text'])
                     body['claims']=[dict(type='fact',occurrence_refs=['o1'],attribute='description',
-                        value=value,value_en='',passage_ids=[prior['id'],focus['id']])
-                        for value in ['右臂受伤','已经死亡']]
+                            value=value,passage_ids=[prior['id'],assertion['id']])
+                            for value in ['右臂受伤','已经死亡']]
+            elif 'items' not in payload:
+                body=dict(statements=[dict(subject='青山',assertion='右臂受伤',qualifiers=[])])
+            elif payload['items'] and 'evidence_reading' in payload['items'][0]:
+                item=payload['items'][0]
+                body=dict(verdicts=[dict(id='v1',subject_supported=True,
+                    assertion_supported=item['value']!='已经死亡',qualifiers_supported=True,
+                    evidence_sufficient=True,reason='checked source')])
+            elif payload['items'] and 'source_value' in payload['items'][0]:
+                body={item['item_ref']:dict(supported=True,reason='faithful') for item in payload['items']}
+            elif payload['items'] and 'value' in payload['items'][0] and 'subjects' not in payload['items'][0]:
+                body=dict(renderings=[dict(id=item['item_ref'],value_en='right arm injured')
+                                      for item in payload['items']])
             else:
                 body={}
                 for item in payload['items']:
@@ -157,7 +181,7 @@ async def test_subdivision_preserves_parent_antecedent_ranges():
         seen.append(payload)
         n=12 if payload['_passage_max_chars']==400 else 0
         return ClaimProposals(claims=[dict(type='fact',occurrence_refs=['o1'],attribute='description',
-            value=str(i),value_en=str(i),quote=source,evidence_start=0) for i in range(n)])
+            value=str(i),quote=source,evidence_start=0) for i in range(n)])
     engine.call=call
     focus=source_passages(source,max_chars=400,overlap=0)[1]
     await engine._claims_for_focus(source,[m],ONTOLOGY,focus,passage_chars=400)
@@ -273,7 +297,7 @@ async def test_top_level_claims_never_offer_two_ids_for_the_same_source_text():
     focus=source_passages(source,max_chars=400,overlap=0)[1]
     engine=_claims_engine()
     body=dict(claims=[dict(type='fact',occurrence_refs=['o1'],attribute='description',
-        value='做事',value_en='acts',passage_ids=[focus['id']])])
+        value='做事',passage_ids=[focus['id']])])
     engine.provider.complete=AsyncMock(return_value=Completion(text=json.dumps(body),
         served_provider='ollama',served_model='test'))
     try:
@@ -301,9 +325,9 @@ async def test_claim_citing_only_context_is_rejected_without_failing_the_run():
     engine=_claims_engine(recorded)
     body=dict(claims=[
         dict(type='fact',occurrence_refs=['o1'],attribute='description',
-             value='做事',value_en='acts',passage_ids=[focus['id']]),
+             value='做事',passage_ids=[focus['id']]),
         dict(type='fact',occurrence_refs=['o1'],attribute='description',
-             value='来了',value_en='arrived',passage_ids=[antecedent['id']])])
+             value='来了',passage_ids=[antecedent['id']])])
     engine.provider.complete=AsyncMock(return_value=Completion(text=json.dumps(body),
         served_provider='ollama',served_model='test'))
     try:
@@ -319,3 +343,41 @@ async def test_claim_citing_only_context_is_rejected_without_failing_the_run():
         assert 'no focus passage' in activity[0][6].obj['rejection']
     finally:
         await engine.close()
+
+
+def test_hosted_claim_batches_use_one_ordinary_request_and_scale_with_chapter_size():
+    engine=object.__new__(KnowledgeEngine);engine.hosted=True
+    assert len(engine._claim_batches('甲'*8_000))==1
+    batches=engine._claim_batches('甲'*50_000)
+    assert len(batches)==3
+    assert all(sum(len(row['text']) for row in batch)<=24_000 for batch in batches)
+
+
+async def test_hosted_fact_review_batches_verification_and_target_rendering_once():
+    from pipeline.evidence import HostedFactReviewVerdict, HostedFactReviews
+    source='青山很强。青山住在山上。'
+    mention=dict(id='m1',surface='青山',kind='character',char_start=0,char_end=2,
+                 quote=source)
+    items=[
+        dict(id='claim:1',type='fact',mention_ids=['m1'],attribute='description',
+             value='很强',value_en='',quote=source,evidence_start=0),
+        dict(id='claim:2',type='fact',mention_ids=['m1'],attribute='description',
+             value='住在山上',value_en='',quote=source,evidence_start=0),
+    ]
+    engine=object.__new__(KnowledgeEngine)
+    engine._activity=AsyncMock()
+    engine.call=AsyncMock(return_value=HostedFactReviews(verdicts=[
+        HostedFactReviewVerdict(id='v1',subject_supported=True,assertion_supported=True,
+            qualifiers_supported=True,evidence_sufficient=True,reason='supported',
+            value_target='is strong'),
+        HostedFactReviewVerdict(id='v2',subject_supported=True,assertion_supported=False,
+            qualifiers_supported=True,evidence_sufficient=True,reason='location is ambiguous',
+            value_target='lives on the mountain'),
+    ]))
+    accepted,rejected=await engine._review_hosted_claims(
+        source,items,[mention],'en')
+    assert [item['value_en'] for item in accepted]==['is strong']
+    assert len(rejected)==1 and 'assertion_supported' in rejected[0]['rejection']
+    engine.call.assert_awaited_once()
+    assert engine.call.await_args.args[:2]==('fact_review',HostedFactReviews)
+    assert engine.call.await_args.args[2]['target_language']=='en'

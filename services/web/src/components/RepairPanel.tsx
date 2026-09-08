@@ -7,10 +7,11 @@ import {
   listOllamaModels,
   requestRepair,
 } from "../api";
-import { defaultGraphExtractModel } from "../providers";
+import { DEFAULT_MODEL, MODEL_OPTIONS, PROVIDER_LABELS } from "../providers";
 import { usePolling } from "../usePolling";
 import type {
   RepairStatus,
+  ProviderName,
   RepairTrack,
   RepairTrackName,
 } from "../types";
@@ -70,6 +71,7 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   // want different models, so one shared input was wrong.
   const [model, setModel] = useState<Record<RepairTrackName, string>>({ graph: "", events: "" });
   const [provider, setProvider] = useState("ollama");
+  const [graphProvider, setGraphProvider] = useState<ProviderName>("ollama");
   // KnowledgeEngine refuses anything but a loopback Ollama model, independent of the
   // book's own translate/extract provider (which can be Gemini, DeepSeek or Anthropic).
   // Deriving the graph model from provider config used to leave it permanently blank --
@@ -131,9 +133,10 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
     // supplies a starting guess when it happens to already be Ollama.
     void getProviderConfig(novelId)
       .then((config) => {
-        const graphDefault = defaultGraphExtractModel(config);
-        if (graphDefault) {
-          setModel((current) => ({ ...current, graph: current.graph || graphDefault }));
+        if (config) {
+          setGraphProvider(config.provider);
+          setModel((current) => ({ ...current,
+            graph: current.graph || config.extract_model || config.model || DEFAULT_MODEL[config.provider] }));
         }
         if (config?.extract_model && (config.provider === "ollama" || config.provider === "gemini")) {
           setProvider((current) => (current === "ollama" ? config.provider : current));
@@ -208,6 +211,21 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
             Stalled: {track.blocked.detail}
             {track.blocked.since &&
               ` (since ${new Date(track.blocked.since).toLocaleTimeString()})`}
+            {track.blocked.retry_eligible_at
+              ? ` The worker will retry automatically at ${new Date(
+                  track.blocked.retry_eligible_at,
+                ).toLocaleTimeString()}.`
+              : " This will not clear on its own; fix the cause, then retry."}
+            {" "}
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                void act(name, "retry", {}, replacement?.revision_id)
+              }
+            >
+              Retry now
+            </button>
           </p>
         )}
 
@@ -298,26 +316,30 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
         {(
           <div className="repair-actions">
             {name === "graph" ? (
-              // The graph track cannot use the book's configured provider at all
-              // (KnowledgeEngine refuses anything but a loopback Ollama) -- deriving its
-              // model from provider config left this permanently blank, and the button
-              // permanently disabled, for every book not itself set to Ollama. Pick from
-              // what is actually installed locally instead.
-              <label className="novel-create-form-hint">
-                Model{" "}
-                <select
-                  value={model.graph}
-                  onChange={(e) => setModel((current) => ({ ...current, graph: e.target.value }))}
-                  disabled={ollamaModels.length === 0}
-                >
-                  <option value="">{ollamaModels.length === 0 ? "No local Ollama models found" : "Choose a model…"}</option>
-                  {ollamaModels.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
-                {ollamaModels.length === 0 && (
-                  <> — the entity graph always runs on a local Ollama model, regardless of
-                  this book's configured provider.</>
-                )}
-              </label>
+              <div className="knowledge-gate-action">
+                <label className="novel-create-form-hint">Provider{" "}
+                  <select value={graphProvider} onChange={(e) => {
+                    const next=e.target.value as ProviderName;
+                    setGraphProvider(next);
+                    setModel((current) => ({...current,graph: next === "ollama" ? "" : DEFAULT_MODEL[next]}));
+                  }}>
+                    {(Object.keys(PROVIDER_LABELS) as ProviderName[]).map((value) =>
+                      <option key={value} value={value}>{PROVIDER_LABELS[value]}</option>)}
+                  </select>
+                </label>
+                <label className="novel-create-form-hint">Model{" "}
+                  <input list={`repair-graph-models-${novelId}`} value={model.graph}
+                    onChange={(e) => setModel((current) => ({...current,graph:e.target.value}))}
+                    placeholder="exact model id" />
+                  <datalist id={`repair-graph-models-${novelId}`}>
+                    {(graphProvider === "ollama" ? ollamaModels : MODEL_OPTIONS[graphProvider].map((option) => option.id))
+                      .map((value) => <option key={value} value={value} />)}
+                  </datalist>
+                </label>
+                {graphProvider !== "ollama" && <span className="novel-create-form-hint">
+                  Two model calls for facts in an ordinary chapter: extract, then verify and render.
+                </span>}
+              </div>
             ) : (
               // The events track, unlike graph, can use the book's own configured
               // provider (event_rebuild.EXTRACTION_PROVIDERS includes it) -- so showing
@@ -340,7 +362,7 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
                       "prepare",
                       name === "events"
                         ? { model: model[name], provider }
-                        : { model: model[name] },
+                        : { model: model[name], provider: graphProvider },
                     )
                   : setConfirming(`prepare-${name}`)
               }

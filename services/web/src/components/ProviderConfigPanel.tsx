@@ -140,8 +140,30 @@ export function ProviderConfigPanel({ novelId }: Props) {
         api_key: apiKey.trim() || undefined,
       });
       setCurrent(view);
+      setProvider(view.provider);
+      setTranslationModel(view.translate_model ?? view.model ?? "");
+      setExtractionModel(view.extract_model ?? view.model ?? "");
+      setBaseURL(view.base_url ?? "");
       setApiKey("");
       setSaved(true);
+      if (view.provider === "ollama") {
+        // Model discovery is based on the persisted per-novel URL, not the draft input.
+        // Reload only after PATCH completes so GET cannot race the save and query the
+        // previous server while leaving a stale "0 models" result on screen.
+        setAvailableModels([]);
+        setOllamaStatus("checking");
+        try {
+          const models = await listOllamaModels(novelId);
+          setAvailableModels(models);
+          setOllamaStatus("connected");
+        } catch (err) {
+          setOllamaStatus("unreachable");
+          setError(`Provider saved, but its Ollama server could not be queried: ${String(err)}`);
+        }
+      } else {
+        setAvailableModels([]);
+        setOllamaStatus(null);
+      }
     } catch (err) {
       setError(String(err));
     } finally {
@@ -151,6 +173,7 @@ export function ProviderConfigPanel({ novelId }: Props) {
 
   async function loadOllamaModels() {
     setError(null);
+	setAvailableModels([]);
 		setOllamaStatus("checking");
     try {
       const models = await listOllamaModels(novelId);
@@ -166,6 +189,9 @@ export function ProviderConfigPanel({ novelId }: Props) {
   const selectedNote = MODEL_OPTIONS[provider].find((m) => m.id === translationModel)?.note;
   const sharedKey = sharedKeyProviders.has(provider);
   const missingKey = needsKey && !current?.api_key_set && !sharedKey && !apiKey.trim();
+  const ollamaURLDirty =
+    provider === "ollama" &&
+    baseURL.trim() !== (current?.provider === "ollama" ? current.base_url ?? "" : "");
 
   return (
     <details className="reader-settings" id="provider-config">
@@ -176,7 +202,7 @@ export function ProviderConfigPanel({ novelId }: Props) {
         <form onSubmit={submit}>
           <p>
             {current
-              ? `This novel uses ${PROVIDER_LABELS[current.provider]}. Translation: ${current.translate_model ?? current.model ?? "server default"}; extraction: ${current.extract_model ?? current.model ?? "server default"}.`
+              ? `This novel uses ${PROVIDER_LABELS[current.provider]}. Translation: ${current.translate_model ?? current.model ?? "server default"}; extraction: ${current.extract_model ?? current.model ?? "server default"}.${current.provider === "ollama" ? ` Endpoint: ${current.base_url || "Book server default"}.` : ""}`
               : "This novel has no provider of its own and uses the server default."}
           </p>
 
@@ -243,22 +269,40 @@ export function ProviderConfigPanel({ novelId }: Props) {
 
           <label>
             Base URL{" "}
+            {provider === "ollama" && (
+              <span className="novel-create-form-hint">(blank = Book server's Ollama)</span>
+            )}{" "}
             <input
               value={baseURL}
-              onChange={(e) => setBaseURL(e.target.value)}
+              onChange={(e) => {
+                setBaseURL(e.target.value);
+                if (provider === "ollama") {
+                  // A result from the previously saved URL no longer describes the
+                  // server shown in the input.
+                  setAvailableModels([]);
+                  setOllamaStatus(null);
+                }
+              }}
               placeholder="provider default"
             />
           </label>
 
           {provider === "ollama" && (
             <>
-              <button type="button" onClick={() => void loadOllamaModels()}>
-                Load models from this Ollama server
+              <button
+                type="button"
+                disabled={pending || ollamaStatus === "checking" || ollamaURLDirty}
+                onClick={() => void loadOllamaModels()}
+              >
+                Load models from saved Ollama URL
               </button>
               <p className="novel-create-form-hint">
-                Save the Ollama URL first. The server queries its fixed <code>/api/tags</code> endpoint;
-                only hosts allowed by the server administrator can be queried.
+                Saving automatically reloads the model list. The server queries the saved URL's fixed{" "}
+                <code>/api/tags</code> endpoint; only hosts allowed by the server administrator can be queried.
               </p>
+              {ollamaURLDirty && (
+                <p className="novel-create-form-hint">Save provider before loading models from the edited URL.</p>
+              )}
               {availableModels.length > 0 && (
                 <p className="novel-create-form-hint">Available: {availableModels.join(", ")}</p>
               )}

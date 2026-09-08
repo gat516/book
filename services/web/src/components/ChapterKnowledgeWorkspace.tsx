@@ -4,8 +4,8 @@ import {
   editFactDisplay, getChapterKnowledge, getChapterKnowledgeActivity, getProviderConfig,
   getRepairStatus, listOllamaModels, removeFact, requestRepair, startChapterReextract,
 } from "../api";
-import { defaultGraphExtractModel } from "../providers";
-import type { ChapterKnowledgeActivity, ChapterKnowledgeResponse, RepairStatus } from "../types";
+import { DEFAULT_MODEL, MODEL_OPTIONS, PROVIDER_LABELS } from "../providers";
+import type { ChapterKnowledgeActivity, ChapterKnowledgeResponse, ProviderName, RepairStatus } from "../types";
 import { RepairReview } from "./RepairReview";
 
 const terminal = new Set(["published", "rejected", "failed", "awaiting_review"]);
@@ -72,6 +72,7 @@ function graphBuildActivity(status: RepairStatus | null) {
 function BuildGraph({ novelId, chapter, label, onDone }: { novelId: string; chapter: number; label: string; onDone: () => Promise<unknown> }) {
   const [models, setModels] = useState<string[]>([]);
   const [model, setModel] = useState("");
+  const [provider, setProvider] = useState<ProviderName>("ollama");
   const [upto, setUpto] = useState(chapter);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -80,8 +81,9 @@ function BuildGraph({ novelId, chapter, label, onDone }: { novelId: string; chap
     void listOllamaModels(novelId, "graph").then(setModels).catch(() => setModels([]));
     void getProviderConfig(novelId)
       .then((config) => {
-        const preferred = defaultGraphExtractModel(config);
-        if (preferred) setModel((current) => current || preferred);
+        if (!config) return;
+        setProvider(config.provider);
+        setModel((current) => current || config.extract_model || config.model || DEFAULT_MODEL[config.provider]);
       })
       .catch(() => undefined);
   }, [novelId]);
@@ -91,7 +93,7 @@ function BuildGraph({ novelId, chapter, label, onDone }: { novelId: string; chap
     setBusy(true); setError("");
     try {
       await requestRepair(novelId, {
-        track: "graph", action: "prepare", params: { model, upto_chapter: upto },
+        track: "graph", action: "prepare", params: { provider, model, upto_chapter: upto },
       });
       await onDone();
     } catch (e) {
@@ -103,12 +105,27 @@ function BuildGraph({ novelId, chapter, label, onDone }: { novelId: string; chap
 
   return (
     <div className="knowledge-gate-action">
-      <label>Model{" "}
-        <select value={model} onChange={(e) => setModel(e.target.value)} disabled={models.length === 0}>
-          <option value="">{models.length === 0 ? "No models found" : "Choose a model…"}</option>
-          {models.map((m) => <option key={m} value={m}>{m}</option>)}
+      <label>Provider{" "}
+        <select value={provider} onChange={(e) => {
+          const next=e.target.value as ProviderName;
+          setProvider(next);
+          setModel(next === "ollama" ? "" : DEFAULT_MODEL[next]);
+        }}>
+          {(Object.keys(PROVIDER_LABELS) as ProviderName[]).map((name) =>
+            <option key={name} value={name}>{PROVIDER_LABELS[name]}</option>)}
         </select>
       </label>
+      <label>Model{" "}
+        <input list={`graph-models-${novelId}`} value={model}
+          onChange={(e) => setModel(e.target.value)} placeholder="exact model id" />
+        <datalist id={`graph-models-${novelId}`}>
+          {(provider === "ollama" ? models : MODEL_OPTIONS[provider].map((option) => option.id))
+            .map((name) => <option key={name} value={name} />)}
+        </datalist>
+      </label>
+      {provider !== "ollama" && <p className="novel-create-form-hint">
+        Uses the saved {PROVIDER_LABELS[provider]} API key and the two-pass fact strategy.
+      </p>}
       <label>Through chapter{" "}
         <input type="number" min={0} step={1} value={upto}
           onChange={(e) => setUpto(Number(e.target.value))} />
@@ -210,8 +227,18 @@ function QuarantineGate({ novelId, chapter, onDone }: { novelId: string; chapter
         {shortId(replacement.revision_id)}, {track.chapters.done}/{track.chapters.total} chapters extracted.
         {" "}It resumes automatically when the worker is not busy with a chapter someone is waiting to read.
       </p>
-      {track.blocked && <p role="alert" className="reader-pane-error">Stalled: {track.blocked.detail}</p>}
+      {track.blocked && (
+        <p role="alert" className="reader-pane-error">
+          Stalled: {track.blocked.detail}
+          {track.blocked.retry_eligible_at
+            ? ` The worker will retry automatically at ${new Date(track.blocked.retry_eligible_at).toLocaleTimeString()}.`
+            : " This will not clear on its own; fix the cause, then retry."}
+        </p>
+      )}
       <div className="knowledge-actions">
+        {track.blocked && (
+          <button disabled={busy} onClick={() => void act("retry")}>Retry now</button>
+        )}
         {replacement.review_hash && <button disabled={busy} onClick={() => setReviewing(true)}>Review</button>}
         {replacement.review_hash && (
           <button disabled={busy} onClick={() =>
@@ -243,12 +270,14 @@ function QuarantineGate({ novelId, chapter, onDone }: { novelId: string; chapter
 // added the real predicate so this switch has something honest to key on.
 function KnowledgeGate({ novelId, chapter, reason, repairStatus, onDone }: { novelId: string; chapter: number; reason: string; repairStatus: RepairStatus | null; onDone: () => Promise<unknown> }) {
   const graphActivity = graphBuildActivity(repairStatus);
-  // Once extraction stops, the lifecycle controls matter more than the activity
-  // sentence: Review is where the withheld identities and claims are actually shown.
-  // This also covers a never-built book whose active revision is absent, where the
-  // chapter-level blocked reason alone cannot distinguish a finished replacement.
-  const replacementNeedsAction = !!repairStatus?.graph.replacement
-    && ["awaiting_review", "failed", "quarantined"].includes(repairStatus.graph.state);
+  // A replacement existing AT ALL -- healthily rebuilding, blocked, awaiting review,
+  // failed, whatever -- is exactly the state QuarantineGate exists for: discard is
+  // always a valid action on an unfinished rebuild, not only once something has gone
+  // wrong with it. Gating this on `state` (as an earlier version did) routed a perfectly
+  // healthy in-progress rebuild to the plain activity-text branch below instead, with no
+  // way to discard or retry it short of calling the API directly -- the reader could
+  // watch "Rebuilding: 4 of 26..." for hours with no button at all.
+  const replacementNeedsAction = !!repairStatus?.graph.replacement;
   if (replacementNeedsAction) {
     return <div className="knowledge-gate"><QuarantineGate novelId={novelId} chapter={chapter} onDone={onDone} /></div>;
   }

@@ -119,7 +119,8 @@ async def test_claim_marks_running_then_done(db_conn, monkeypatch):
     async with db_conn.transaction(force_rollback=True):
         novel = await make_novel(db_conn)
         request_id = await _request(db_conn, novel,
-                                    params={"model": "qwen3:4b", "upto_chapter": 4})
+                                    params={"provider":"gemini","model": "gemini-test",
+                                            "upto_chapter": 4})
 
         prepared = AsyncMock(return_value=str(uuid.uuid4()))
         monkeypatch.setattr(graph_rebuild, "prepare", prepared)
@@ -134,8 +135,8 @@ async def test_claim_marks_running_then_done(db_conn, monkeypatch):
         state, attempts, category, retry_at = await _state(db_conn, request_id)
         assert (state, attempts, category, retry_at) == ("done", 1, None, None)
         # The model name reached graph_rebuild.prepare unchanged.
-        assert prepared.await_args.args[3] == "qwen3:4b"
-        assert prepared.await_args.kwargs == {"upto_chapter": 4}
+        assert prepared.await_args.args[3] == "gemini-test"
+        assert prepared.await_args.kwargs == {"upto_chapter": 4,"provider":"gemini"}
 
 
 @pytest.mark.db
@@ -287,8 +288,10 @@ async def test_prepare_starts_from_empty_after_reader_deletes_graph(db_conn, mon
     from pipeline import graph_rebuild
 
     ontology = {"kinds": ["character"], "attributes": []}
-    identity = {"provider": "ollama", "name": "test", "digest": "digest"}
+    identity = {"provider": "ollama", "name": "test", "digest": "digest",
+                "identity": {"num_predict": 4096}}
     monkeypatch.setattr(graph_rebuild, "local_model", AsyncMock(return_value=identity))
+    monkeypatch.setattr(graph_rebuild, "discover_num_ctx", AsyncMock(return_value=16384))
     monkeypatch.setattr(graph_rebuild, "objects", lambda _cfg: None)
 
     async with db_conn.transaction(force_rollback=True):
@@ -311,8 +314,10 @@ async def test_prepare_snapshots_only_the_contiguous_prefix_through_ceiling(db_c
     from pipeline import graph_rebuild
 
     ontology = {"kinds": ["character"], "attributes": [], "relations": []}
-    identity = {"provider": "ollama", "name": "test", "digest": "digest"}
+    identity = {"provider": "ollama", "name": "test", "digest": "digest",
+                "identity": {"num_predict": 4096}}
     monkeypatch.setattr(graph_rebuild, "local_model", AsyncMock(return_value=identity))
+    monkeypatch.setattr(graph_rebuild, "discover_num_ctx", AsyncMock(return_value=16384))
     monkeypatch.setattr(graph_rebuild, "objects", lambda _cfg: None)
     monkeypatch.setattr(graph_rebuild, "read_object", lambda _client, _cfg, uri: uri)
 
@@ -729,6 +734,36 @@ async def test_graph_interruption_is_visible_and_immediately_resumable(db_conn):
 
 
 @pytest.mark.db
+async def test_graph_interruption_refunds_the_attempt_it_never_really_spent(db_conn):
+    """The regression this exists for: a worker restarted while the SAME chapter
+    happened to be mid-attempt, three times in a row, silently burned all three
+    genuine-failure attempts on nothing but its own restarts and permanently stranded
+    the revision -- 'no retries left' with no failed chapter to point an operator at."""
+    from pipeline import graph_rebuild
+
+    async with db_conn.transaction(force_rollback=True):
+        _, revision = await _graph_job(db_conn, attempts=3)
+        await graph_rebuild.record_job_interruption(db_conn, revision, 1)
+        attempts = (await (await db_conn.execute(
+            "SELECT attempts FROM graph_job WHERE revision_id=%s AND chapter_index=1",
+            (revision,))).fetchone())[0]
+        assert attempts == 2, "an interruption must not count against the 3-attempt budget"
+
+
+@pytest.mark.db
+async def test_graph_interruption_never_takes_attempts_below_zero(db_conn):
+    from pipeline import graph_rebuild
+
+    async with db_conn.transaction(force_rollback=True):
+        _, revision = await _graph_job(db_conn, attempts=0)
+        await graph_rebuild.record_job_interruption(db_conn, revision, 1)
+        attempts = (await (await db_conn.execute(
+            "SELECT attempts FROM graph_job WHERE revision_id=%s AND chapter_index=1",
+            (revision,))).fetchone())[0]
+        assert attempts == 0
+
+
+@pytest.mark.db
 async def test_event_failure_records_a_class_and_schedules_a_retry(db_conn):
     from psycopg.types.json import Jsonb
 
@@ -824,6 +859,81 @@ async def test_blocked_staging_revision_is_not_hot_looped(db_conn):
             (revision,))
         assert await repair._next_staging_revision(
             db_conn, "graph_revision", "graph_job", novel) is None
+
+
+@pytest.mark.db
+async def test_a_transient_block_is_retried_after_its_cooldown(db_conn):
+    """model_unreachable and timeout are the two causes worth re-probing.
+
+    resume()'s preamble is cheap (no model call) so re-checking costs nothing if the
+    endpoint is still down -- it just re-blocks with a fresh blocked_at. Without this, a
+    flapping SSH tunnel to a remote Ollama left the revision stuck forever: nothing else
+    ever clears blocked_at, and the repair panel has no retry action for a blocked
+    revision.
+    """
+    async with db_conn.transaction(force_rollback=True):
+        novel, revision = await _staging_revision(db_conn)
+        await db_conn.execute(
+            "UPDATE graph_revision SET blocked_category='model_unreachable',"
+            "blocked_at=now() - interval '6 minutes' WHERE id=%s",
+            (revision,))
+        assert await repair._next_staging_revision(
+            db_conn, "graph_revision", "graph_job", novel) == revision
+
+
+@pytest.mark.db
+async def test_a_non_transient_block_is_never_retried(db_conn):
+    """A malformed review or a revision that fails qualified() fails identically every
+    time, so unlike model_unreachable/timeout it must stay blocked no matter how long
+    ago blocked_at was set."""
+    async with db_conn.transaction(force_rollback=True):
+        novel, revision = await _staging_revision(db_conn)
+        await db_conn.execute(
+            "UPDATE graph_revision SET blocked_category='model_not_installed',"
+            "blocked_at=now() - interval '1 day' WHERE id=%s",
+            (revision,))
+        assert await repair._next_staging_revision(
+            db_conn, "graph_revision", "graph_job", novel) is None
+
+
+@pytest.mark.db
+async def test_retry_action_clears_a_non_transient_block_immediately(db_conn):
+    """The manual escape hatch for a cause _next_staging_revision never self-clears.
+
+    An operator who has fixed the actual problem (installed the pinned model, added a
+    credential) should not have to wait for a cooldown that only applies to the two
+    causes assumed to heal on their own.
+    """
+    async with db_conn.transaction(force_rollback=True):
+        novel, revision = await _staging_revision(db_conn)
+        await db_conn.execute(
+            "UPDATE graph_revision SET blocked_category='model_not_installed',"
+            "blocked_at=now() WHERE id=%s", (revision,))
+
+        result = await repair._run(db_conn, None, dict(
+            track="graph", action="retry", revision_id=revision, params={}))
+        assert result == {"status": "retry requested", "revision": revision,
+                           "was_blocked": True}
+
+        row = await (await db_conn.execute(
+            "SELECT blocked_category, blocked_at FROM graph_revision WHERE id=%s",
+            (revision,))).fetchone()
+        assert row == (None, None)
+        assert await repair._next_staging_revision(
+            db_conn, "graph_revision", "graph_job", novel) == revision
+
+
+@pytest.mark.db
+async def test_retry_action_refuses_a_revision_that_is_not_a_blocked_staging_rebuild(db_conn):
+    from pipeline.graph_rebuild import discard
+
+    async with db_conn.transaction(force_rollback=True):
+        _, old, rid = await _quarantined_novel(db_conn)
+        await discard(db_conn, None, rid)  # archives rid, leaving no staging revision
+
+        with pytest.raises(ValueError, match="no such staging rebuild to retry"):
+            await repair._run(db_conn, None, dict(
+                track="graph", action="retry", revision_id=rid, params={}))
 
 
 @pytest.mark.db

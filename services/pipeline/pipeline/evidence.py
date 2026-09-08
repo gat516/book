@@ -13,7 +13,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 
-PROMPT_VERSION = 'evidence-v16-adaptive-context-batches'
+PROMPT_VERSION = 'evidence-v19-balanced-extraction-windows'
 
 MAX_EXPLANATION_CHARS = 200
 MAX_FACT_VALUE_CHARS = 400
@@ -109,16 +109,23 @@ class ClaimProposal(Strict):
     occurrence_refs: list[str] = Field(min_length=1)
     attribute: str
     value: str = Field(max_length=MAX_FACT_VALUE_CHARS)
-    # Required on the wire, unlike on Claim: an optional property is one the model can
-    # quietly stop emitting, and a grammar slot it must fill is the cheapest guarantee
-    # that a gloss actually arrives. Empty string is the honest "cannot render this".
-    value_en: str = Field(max_length=MAX_FACT_GLOSS_CHARS)
     quote: str
     evidence_start: int | None = Field(default=None, ge=0)
 
 
 class ClaimProposals(Strict):
     claims: list[ClaimProposal] = Field(max_length=12)
+
+
+class HostedClaimProposals(Strict):
+    """Chapter-sized extraction response for high-capacity hosted models.
+
+    Local models keep the smaller twelve-item grammar and recursive windows. Hosted
+    models get enough output room to cover an ordinary chapter in one request; hitting
+    this ceiling still triggers the same application-owned subdivision path.
+    """
+
+    claims: list[ClaimProposal] = Field(max_length=48)
 
 
 class Alignment(Supported):
@@ -129,7 +136,13 @@ class Alignment(Supported):
 
 
 class Alignments(Strict):
-    alignments: list[Alignment]
+    # Bounded like ClaimProposals.claims above: an unbounded list let a name that
+    # recurs often in one translated window (a recurring protagonist, say) force the
+    # model to emit one object per occurrence with no ceiling, which reliably exhausted
+    # num_predict and truncated the whole response into an unparseable partial JSON
+    # array. The caller (KnowledgeEngine._align_window) detects saturation the same way
+    # claim extraction does and re-queries a smaller window for the remainder.
+    alignments: list[Alignment] = Field(max_length=24)
 
 
 class Verdict(Strict):
@@ -140,6 +153,48 @@ class Verdict(Strict):
 
 class Verification(Strict):
     verdicts: list[Verdict]
+
+
+class EvidenceStatement(Strict):
+    """A claim-independent reading of one exact source passage."""
+
+    subject: str = Field(min_length=1, max_length=120)
+    assertion: str = Field(min_length=1, max_length=400)
+    qualifiers: list[str] = Field(default_factory=list, max_length=8)
+
+
+class EvidenceReading(Strict):
+    statements: list[EvidenceStatement] = Field(max_length=16)
+
+
+class FactComponentVerdict(Strict):
+    id: str
+    subject_supported: bool
+    assertion_supported: bool
+    qualifiers_supported: bool
+    evidence_sufficient: bool
+    reason: str = Field(max_length=MAX_EXPLANATION_CHARS)
+
+
+class FactComponentVerification(Strict):
+    verdicts: list[FactComponentVerdict]
+
+
+class HostedFactReviewVerdict(FactComponentVerdict):
+    value_target: str = Field(max_length=MAX_FACT_GLOSS_CHARS)
+
+
+class HostedFactReviews(Strict):
+    verdicts: list[HostedFactReviewVerdict]
+
+
+class FactRendering(Strict):
+    id: str
+    value_en: str = Field(max_length=MAX_FACT_GLOSS_CHARS)
+
+
+class FactRenderings(Strict):
+    renderings: list[FactRendering]
 
 
 def passage(text: str, quote: str, *, anchor: int | None = None, start: int | None = None) -> dict | None:

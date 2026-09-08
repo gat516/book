@@ -93,6 +93,23 @@ def reviewed_fact_recall(expected, publications, review=None):
     return sum(bool(ids) for ids in review.values())/len(gold)
 
 
+def summarize_runtime_calls(rows):
+    """Aggregate efficiency without hiding the per-call evidence used to derive it."""
+    result={}
+    for stage,runtime in rows:
+        runtime=runtime or {}
+        summary=result.setdefault(stage or 'unknown',dict(
+            calls=0,input_tokens=0,output_tokens=0,inference_seconds=0.0,stall_retries=0))
+        summary['calls']+=1
+        summary['input_tokens']+=runtime.get('input_tokens') or 0
+        summary['output_tokens']+=runtime.get('output_tokens') or 0
+        summary['inference_seconds']+=runtime.get('request_seconds') or runtime.get('total_seconds') or 0
+        summary['stall_retries']+=runtime.get('stall_retries') or 0
+    for summary in result.values():
+        summary['inference_seconds']=round(summary['inference_seconds'],3)
+    return result
+
+
 async def probe_verifier(cfg,dataset,model,output_path,chapter):
     """Compare verifier wire shapes on identical reviewed facts; never writes graph state."""
     reviewed=next((c for c in dataset['chapters'] if c['chapter']==chapter),None)
@@ -227,9 +244,10 @@ async def benchmark(db,cfg,base,dataset,model,output_path):
         for chapter in dataset['chapters'] if not failures else []:
             cases=[c for c in dataset['facts'] if c['chapter']==chapter['chapter']]
             if not cases:continue
-            verdicts=await engine._verify_items(chapter['source'],[
+            verdicts=await engine._verify_facts(chapter['source'],[
                 dict(id=c['id'],type='fact',subject=c['subject'],value=c['claim'],quote=c['quote'],
-                     evidence_start=chapter['source'].find(c['quote'])) for c in cases], 'benchmark-facts')
+                     attribute=c.get('attribute','description'),
+                     evidence_start=chapter['source'].find(c['quote'])) for c in cases], [])
             counts=Counter(v.id for v in verdicts.verdicts)
             votes={v.id:v.supported for v in verdicts.verdicts if counts[v.id]==1}
             fact_results += [dict(id=c['id'],expected=c['expected_supported'],published=votes.get(c['id'],False)) for c in cases]
@@ -249,6 +267,10 @@ async def benchmark(db,cfg,base,dataset,model,output_path):
         unambiguous_recall=sum(x['correct'] for x in results if x['expected'] is not None)/len(unambiguous),
         recall_upper_bound=(sum(x['correct'] for x in results if x['expected'] is not None)+sum(not x['tested'] for x in results if x['expected'] is not None))/len(unambiguous),
         fact_precision=sum(x['expected'] for x in published)/len(published) if published else None,
+        fact_false_approvals=sum(x['published'] and not x['expected'] for x in fact_results),
+        fact_supported_recall=(sum(x['published'] and x['expected'] for x in fact_results)
+                               /sum(x['expected'] for x in fact_results)
+                               if any(x['expected'] for x in fact_results) else None),
         # Report extraction recall independently from verifier precision. A zero-fact
         # rebuild therefore scores zero instead of looking successful through vacuity.
         end_to_end_fact_recall=reviewed_fact_recall(expected_facts,publications),
@@ -265,8 +287,10 @@ async def benchmark(db,cfg,base,dataset,model,output_path):
         fact_verification_status='skipped after identity failure' if failures and not fact_results else 'tested')
     timing=await(await db.execute('SELECT count(*),count(elapsed_seconds),sum(elapsed_seconds) FROM graph_completion WHERE revision_id=%s',(rid,))).fetchone()
     metrics['model_inference_seconds']=timing[2] if timing[0] and timing[0]==timing[1] else None
-    metrics['runtime_calls']=[dict(cache_key=key,**(runtime or {})) for key,runtime in await(await db.execute(
-        'SELECT cache_key,runtime_metrics FROM graph_completion WHERE revision_id=%s ORDER BY cache_key',(rid,))).fetchall()]
+    runtime_rows=await(await db.execute(
+        'SELECT cache_key,stage,runtime_metrics FROM graph_completion WHERE revision_id=%s ORDER BY cache_key',(rid,))).fetchall()
+    metrics['runtime_calls']=[dict(cache_key=key,**(runtime or {})) for key,_stage,runtime in runtime_rows]
+    metrics['runtime_by_stage']=summarize_runtime_calls([(stage,runtime) for _key,stage,runtime in runtime_rows])
     await db.execute('UPDATE graph_revision SET evaluation=%s WHERE id=%s',(Jsonb(metrics),rid))
     report=dict(revision=rid,model=identity,metrics=metrics,mentions=results,facts=fact_results,
                 publications=publications,expected_facts=expected_facts,
@@ -301,7 +325,7 @@ async def main(args):
         print(json.dumps(dict(event='waiting_for_exclusive_ollama',preflight=diagnostics)),flush=True)
         # Same-task nested provider calls reuse this reservation. Translation/Ask AI
         # back off using AdmissionRejected; no chapter claim is lost or marked failed.
-        async with ollama_session(cfg.ollama_host,timeout=cfg.graph_ollama_total_timeout_seconds) as waited:
+        async with ollama_session(cfg.ollama_host,timeout=cfg.graph_ollama_total_timeout_seconds or 1800) as waited:
             print(json.dumps(dict(event='exclusive_ollama_acquired',wait_seconds=waited)),flush=True)
             async with await psycopg.AsyncConnection.connect(cfg.database_url,autocommit=True) as db:
                 if args.verify_probe:

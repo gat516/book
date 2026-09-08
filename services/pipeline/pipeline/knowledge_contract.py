@@ -2,7 +2,7 @@
 from pipeline.evidence import IdentityDecisions, Names, Verification, Verdict
 
 
-NAME_SLOT_COUNT = 6
+NAME_SLOT_COUNT = 8
 
 
 def name_schema(passage_ids, kinds):

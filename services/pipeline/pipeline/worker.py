@@ -146,8 +146,32 @@ class Worker:
         self._deferrals = 0
 
     def request_stop(self) -> None:
-        log.info("shutdown requested; finishing current chapter before stopping")
+        log.info("shutdown requested; cancelling current work at a resumable boundary")
         self.stopping.set()
+
+    async def _run_until_stopping(self, awaitable):
+        """Run one unit of work, cancelling it when shutdown is requested.
+
+        Stage and repair code owns its rollback/retry cleanup. Awaiting the cancelled
+        task here is load-bearing: it lets provider calls release admission locks and
+        graph rebuilds mark their chapter immediately retryable before the process exits
+        (§0 append-only/idempotent ingestion).
+        """
+        work = asyncio.create_task(awaitable)
+        stop = asyncio.create_task(self.stopping.wait())
+        try:
+            done, _ = await asyncio.wait((work, stop), return_when=asyncio.FIRST_COMPLETED)
+            # Work that completed concurrently with the signal wins. This avoids
+            # requeueing an output that was already committed at the boundary.
+            if work in done:
+                return await work
+            work.cancel()
+            return await work
+        finally:
+            for task in (work, stop):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(work, stop, return_exceptions=True)
 
     async def _assert_embed_dim(self) -> None:
         """Fail fast at startup, not hundreds of chunks into a run (§10).
@@ -166,10 +190,27 @@ class Worker:
     async def start(self) -> None:
         while not self.stopping.is_set():
             try:
-                await self._assert_embed_dim()
+                await self._run_until_stopping(self._assert_embed_dim())
                 break
+            except asyncio.CancelledError:
+                if self.stopping.is_set():
+                    return
+                raise
             except AdmissionRejected as exc:
+                # Explicit control-plane work such as Discard does not need embeddings.
+                # Let it run while model admission is busy instead of leaving the UI's
+                # one-active-request guard stuck on a pending row (§0.1).
+                await self._drain_repair_requests()
                 await self._idle(max(exc.retry_after_s, 0.25))
+            except Exception:
+                # Keep fail-fast startup semantics for a bad embedding configuration, but
+                # first honor one already-authorized repair action. systemd retries startup,
+                # so a discard submitted while the model endpoint is down is still drained.
+                try:
+                    await self._drain_repair_requests()
+                except Exception:
+                    log.exception("repair control failed while embedding preflight was unavailable")
+                raise
         if self.stopping.is_set():
             return
         # autocommit for chapter-status updates outside graph-write; graph-write itself
@@ -191,7 +232,12 @@ class Worker:
             raw = await self.redis.eval(queue.CLAIM, len(queue.KEYS), *queue.KEYS, claimed_at)
             if raw is None:
                 try:
-                    await self._drain_background()
+                    await self._run_until_stopping(self._drain_background())
+                except asyncio.CancelledError:
+                    if not self.stopping.is_set():
+                        raise
+                    log.info("shutdown cancelled background work; resumable state recorded")
+                    break
                 except AdmissionRejected as exc:
                     await self._idle(max(exc.retry_after_s, 0.25))
                 except Exception:
@@ -202,7 +248,14 @@ class Worker:
             disposition = "done"
             enrichment_raw = ""
             try:
-                await self._handle_claim(raw)
+                await self._run_until_stopping(self._handle_claim(raw))
+            except asyncio.CancelledError:
+                if not self.stopping.is_set():
+                    raise
+                # RELEASE atomically returns the pointer to pending only after provider,
+                # transaction and preview cleanup in _handle_claim has completed.
+                disposition = "retry"
+                log.info("shutdown cancelled chapter work; returning claim to pending")
             except NovelDeleted:
                 msg = QueueMessage.model_validate_json(raw)
                 await self._clear_preview(msg.novel_id, msg.chapter_index)
@@ -273,16 +326,15 @@ class Worker:
     async def _drain_background(self) -> None:
         from pipeline.event_rebuild import drain_active as drain_events
         from pipeline.graph_rebuild import drain_active
-        from pipeline.repair import drain_requests, drain_staging
+        from pipeline.repair import drain_staging
         control = await self.redis.hgetall(queue.KEYS[5])
         mode, focus = control.get("mode", "all"), control.get("focus_novel_id") or None
-        if mode == "paused" or (mode == "focused" and focus is None):
+        # These are explicit operator intents, including the escape from an unfinished
+        # rebuild. Queue pause/focus controls automatic processing, not whether an already
+        # accepted Discard/Activate/Review request is allowed to settle.
+        if await self._drain_repair_requests():
             return
-        # Repair intents run before enrichment: a pending 'prepare' quarantines the graph
-        # and a pending 'activate' replaces it, so spending this tick enriching a revision
-        # that is about to be superseded is wasted work at best.  One action per tick, so
-        # the loop re-checks the reader queue between them (§0).
-        if await drain_requests(self.cfg, novel_id=focus if mode == "focused" else None):
+        if mode == "paused" or (mode == "focused" and focus is None):
             return
         # A prepared rebuild advances before ordinary enrichment: a quarantined book shows
         # its reader no facts at all, while an active revision already has some. This can
@@ -295,6 +347,11 @@ class Worker:
         await drain_events(self.cfg, novel_id=focus if mode == "focused" else None)
         await drain_active(self.cfg, novel_id=focus if mode == "focused" else None,
                            preferred_novel=focus)
+
+    async def _drain_repair_requests(self) -> str | None:
+        """Execute one explicit repair intent without requiring model readiness."""
+        from pipeline.repair import drain_requests
+        return await drain_requests(self.cfg)
 
     async def _handle_claim(self, raw: str) -> None:
         msg = QueueMessage.model_validate_json(raw)

@@ -72,13 +72,20 @@ the current saved source and retains exact code-point offsets, including for rep
 passages. Invalid references do not publish claims or identity links. An independently
 verified decision is still required: a real passage alone does not establish a fact.
 
-Name discovery returns a flat `names` array plus `reviewed`, with every ontology kind
-required and set to `true` for each bounded request. The array is capped at 64 rows per
-request; application-owned aggregation across passage batches has no contradictory
-chapter-global cap. Each name carries its ontology kind and cited passage ID. Empty
-lists are allowed; invented names are not. Coverage is reported per
-kind and conflicting kind proposals are withheld. These checks prevent silently
-omitting a kind from the response; they cannot prove that a model found every name.
+Name discovery uses 8 fixed nullable slots over adjacent passages packed to 400 source
+characters and the hard byte budget.
+A full response recursively divides only that source window; it does not replay every
+paragraph. Application-owned aggregation has no chapter-global cap. Distinct proposed
+spellings then pass a separate eligibility check before occurrence expansion, preventing
+generic colors, actions, quantities and descriptive fragments from multiplying into
+identity and alignment calls. Each accepted name retains an ontology kind and exact
+passage citation; this eligibility check never binds equal spellings to one entity.
+
+Claim extraction similarly packs short passages into 1,200-character focus requests while
+retaining the constituent passage IDs for exact evidence. Saturated focus requests split
+recursively. Runtime diagnostics report request counts, cache hits, fresh calls, split
+counts and input sizes; benchmark reports also aggregate calls, tokens, inference time and
+stall retries by stage so efficiency changes can be judged beside fact and identity recall.
 
 For a bounded discovery diagnostic on one reviewed saved chapter:
 

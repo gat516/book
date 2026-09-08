@@ -548,6 +548,10 @@ export interface RepairBlocked {
   category: string;
   detail: string;
   since: string;
+  // Present only for the two causes the worker treats as transient (an unreachable
+  // endpoint or a timed-out call) -- it will retry on its own by this time. Absent for
+  // every other cause, which never self-clears.
+  retry_eligible_at?: string;
 }
 
 // One claim the running rebuild has already published. Operator-only: unreviewed, and

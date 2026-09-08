@@ -1,4 +1,4 @@
-import type { ProviderConfigView, ProviderName } from "./types";
+import type { ProviderName } from "./types";
 
 // Shared by the create form and the per-novel settings panel so the two cannot drift.
 
@@ -54,7 +54,9 @@ export const PROVIDER_LABELS: Record<ProviderName, string> = {
   anthropic: "Anthropic",
   deepseek: "DeepSeek",
   gemini: "Gemini",
-  ollama: "Ollama (local)",
+  // Ollama may be local, remote, or reached through a tunnel. Calling the provider
+  // "local" hid per-novel remote URL overrides and made connection failures confusing.
+  ollama: "Ollama",
 };
 
 // Providers that authenticate with a key. Ollama is a local endpoint and takes none, so
@@ -74,13 +76,3 @@ export const MODEL_LIST_IS_ADVISORY: Record<ProviderName, boolean> = {
   gemini: false,
   ollama: true,
 };
-
-// The entity graph structurally requires a loopback Ollama (KnowledgeEngine refuses
-// anything else), so only an Ollama provider config's own extraction model is ever a
-// sane default for a graph rebuild -- a book configured for Gemini has no matching entry
-// in the graph track's (locally-installed) model list. Shared by RepairPanel (fresh
-// rebuilds) and ChapterKnowledgeWorkspace (the one-time managed-graph build) so there is
-// exactly one copy of this default rather than two that can drift.
-export function defaultGraphExtractModel(config: ProviderConfigView | null): string {
-  return config?.provider === "ollama" ? config.extract_model ?? "" : "";
-}

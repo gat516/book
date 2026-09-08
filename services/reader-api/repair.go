@@ -160,6 +160,26 @@ type RepairBlocked struct {
 	Category string    `json:"category"`
 	Detail   string    `json:"detail"`
 	Since    time.Time `json:"since"`
+	// RetryEligibleAt is when pipeline.repair._next_staging_revision will pick this
+	// revision back up on its own, for the two causes it treats as transient (an
+	// unreachable endpoint or a timed-out call). Nil for every other category, because
+	// those never self-clear -- resume() will just re-block on the very next tick with
+	// the same cause until whatever is actually wrong (a missing model, a missing
+	// credential, an oversized chapter) is fixed.
+	RetryEligibleAt *time.Time `json:"retry_eligible_at,omitempty"`
+}
+
+// repairBlockedRetryMinutes mirrors pipeline.repair.BLOCKED_RETRY_MINUTES. Kept as a
+// separate constant, not imported, for the same reason failure categories are rendered
+// here rather than derived here: this file only needs the number to compute a display
+// timestamp, never to decide eligibility itself -- that decision stays in the one query
+// in _next_staging_revision.
+const repairBlockedRetryMinutes = 5
+
+// repairTransientBlockCategories mirrors pipeline.repair.TRANSIENT_CATEGORIES.
+var repairTransientBlockCategories = map[string]bool{
+	repairUnreachable: true,
+	repairTimeout:     true,
 }
 
 type RepairCurrent struct {
@@ -293,7 +313,7 @@ var repairFailureDetail = map[string]string{
 	repairPromptTooBig:   "a chapter produced more context than the local model can be given safely",
 	repairServingDrift:   "the model that answered was not the model this rebuild is pinned to",
 	repairFenced:         "the rebuild was superseded by a newer revision while this chapter was running",
-	repairTimeout:        "the local model did not finish this chapter within the deadline",
+	repairTimeout:        "the local model produced no output for a call after several retries; each retry reuses everything already completed for this chapter",
 	repairTruncated:      "the local model hit its output limit mid-answer; a partial extraction is never published",
 	repairCredentialErr:  "the configured extraction provider has no usable API credential; add the book or account credential, then start a fresh rebuild",
 	repairUnreachable:    "the local model could not be reached",
@@ -650,6 +670,10 @@ func buildTrack(row repairRow, failures []RepairFailure, targets []RepairRollbac
 		track.Blocked = &RepairBlocked{Category: *row.blockedCat, Detail: detail}
 		if row.blockedAt != nil {
 			track.Blocked.Since = *row.blockedAt
+			if repairTransientBlockCategories[*row.blockedCat] {
+				eligible := row.blockedAt.Add(repairBlockedRetryMinutes * time.Minute)
+				track.Blocked.RetryEligibleAt = &eligible
+			}
 		}
 	}
 
@@ -718,9 +742,14 @@ func buildTrack(row repairRow, failures []RepairFailure, targets []RepairRollbac
 		if track.Blocked != nil {
 			// Leading with the blockage: "Rebuilding: 0 of 26" next to a dead endpoint is
 			// the exact reading that sent someone to the journal to find out why.
+			retry := "Retrying will not clear this on its own; the cause needs fixing first."
+			if track.Blocked.RetryEligibleAt != nil {
+				retry = fmt.Sprintf("The worker will retry automatically at %s.",
+					track.Blocked.RetryEligibleAt.Format(time.Kitchen))
+			}
 			track.Reason = fmt.Sprintf(
-				"Stalled at %d of %d chapters — %s. %s stay withheld until this is resolved.",
-				row.done, row.total, track.Blocked.Detail, capitalise(noun))
+				"Stalled at %d of %d chapters — %s. %s %s stay withheld until this is resolved.",
+				row.done, row.total, track.Blocked.Detail, retry, capitalise(noun))
 			break
 		}
 		// Model calls, not claims: a claim only lands when a whole chapter publishes, so

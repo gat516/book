@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -29,6 +30,10 @@ from pipeline.evidence import PROMPT_VERSION, digest
 from pipeline.failures import CANCELLED, clear_blocked, failure_category, record_blocked
 from pipeline.knowledge import KnowledgeEngine
 from pipeline.llm.provider import AdmissionRejected
+from pipeline.provider_config import (
+    ProviderConfigRow, build_provider, load_provider_config, load_provider_credential,
+    resolve_provider_config,
+)
 from pipeline.stages.resolve import _lock_glossary
 
 
@@ -112,9 +117,102 @@ async def local_model(cfg, name):
         raise ValueError('requested model is not installed; no automatic download or provider fallback')
     from pipeline.config import graph_runtime
     # Only generation-affecting settings identify a graph revision. Deadline budgets are
-    # operational controls and stay live in Config for resumable work.
+    # operational controls and stay live in Config for resumable work. num_ctx is
+    # deliberately absent here too -- it is discovered per host by discover_num_ctx(),
+    # called only from prepare(), and is excluded from drift comparisons by
+    # _without_num_ctx() below. This function must stay side-effect-free: preflight
+    # calls it and promises never to load a model or generate a token.
     return dict(provider='ollama',name=name,digest=matches[0]['digest'],
                 identity=graph_runtime(cfg)['identity'])
+
+
+HOSTED_GRAPH_PROVIDERS = frozenset({'anthropic','deepseek','gemini'})
+
+
+async def graph_provider_config(db, cfg, novel: str, provider: str, model: str
+                                ) -> ProviderConfigRow:
+    """Resolve a graph-only provider without changing the book's translation routing.
+
+    A matching per-book key wins. Otherwise the account credential for the requested
+    provider is used. This lets graph extraction use an API key independently of the
+    provider that produced the saved translation (§5.4).
+    """
+    book=await load_provider_config(db,novel)
+    if book is not None and book.provider==provider:
+        effective=await resolve_provider_config(db,novel,provider)
+        assert effective is not None
+    else:
+        base_url,api_key=await load_provider_credential(db,provider)
+        effective=ProviderConfigRow(provider=provider,model=None,translate_model=None,
+            extract_model=None,base_url=base_url,api_key=api_key)
+    return replace(effective,extract_model=model)
+
+
+async def graph_model_identity(db, cfg, novel: str, provider: str, model: str) -> dict:
+    if provider=='ollama':
+        return await local_model(cfg,model)
+    if provider not in HOSTED_GRAPH_PROVIDERS:
+        raise ValueError('graph provider must be anthropic, deepseek, gemini, or ollama')
+    # Constructing validates that required credentials exist without spending a model call.
+    configured=await graph_provider_config(db,cfg,novel,provider,model)
+    candidate=build_provider(configured,cfg)
+    await candidate.aclose()
+    return dict(provider=provider,name=model,strategy='api_two_pass')
+
+
+async def graph_completion_provider(db, cfg, revision_row: dict):
+    model=revision_row['model']
+    if model['provider']=='ollama':
+        return None
+    configured=await graph_provider_config(
+        db,cfg,revision_row['novel_id'],model['provider'],model['name'])
+    return build_provider(configured,cfg)
+
+
+async def discover_num_ctx(cfg, name):
+    """Ask for cfg.graph_ollama_num_ctx_target, then read back what Ollama actually
+    loaded the model with (§ dynamic context sizing).
+
+    Not a bare request-and-hope: Ollama's own vram-based DEFAULT optimizes for keeping
+    several models resident on a shared card at once, not for this workload's own
+    prompts -- on the same 8 GB RTX 2070 that ran real extraction calls needing 6-10k
+    input tokens alone, that default came out to 4096. Asking for the target explicitly
+    makes Ollama evict competing idle models to fit it rather than silently handing back
+    a window too small to be useful; a fixed 16384 chosen once still starved a smaller
+    card elsewhere, which is why this reads back the actual value instead of trusting the
+    ask -- a host that genuinely cannot fit the target fails loudly here, at prepare()
+    time, rather than mid-chapter with a truncated response or an OOM-killed server.
+
+    POST /api/generate with no prompt loads the model without generating a token, per
+    Ollama's own API contract; this is the one place in the codebase allowed to do that
+    (call only from prepare(), never from local_model() or preflight -- see their notes).
+    """
+    async with httpx.AsyncClient(base_url=cfg.ollama_host, timeout=120) as client:
+        probe = await client.post('/api/generate', json=dict(
+            model=name, options=dict(num_ctx=cfg.graph_ollama_num_ctx_target)))
+        probe.raise_for_status()
+        loaded = await client.get('/api/ps')
+        loaded.raise_for_status()
+    resident = next((m for m in loaded.json()['models'] if m['name']==name), None)
+    if not resident or not resident.get('context_length'):
+        raise ValueError(f'{name} did not report a resident context length after loading')
+    return resident['context_length']
+
+
+def _without_num_ctx(model: dict) -> dict:
+    """Strip num_ctx from a model dict before comparing it for drift.
+
+    num_ctx is host capacity, not a generation-affecting choice (§ dynamic context
+    sizing): the same weights answer identically whether Ollama sized their window at
+    8192 or 16384, as long as a call actually fits. Comparing it as drift would force a
+    fresh revision every time the configured Ollama host's available memory shifted for
+    reasons that have nothing to do with reproducibility -- exactly the kind of
+    operational fact `identity`'s own docstring says does not belong there.
+    """
+    identity = model.get('identity')
+    if not identity or 'num_ctx' not in identity:
+        return model
+    return dict(model, identity={k: v for k, v in identity.items() if k != 'num_ctx'})
 
 
 def objects(cfg):
@@ -158,9 +256,18 @@ def _ready_prefix(rows, *, start):
     return prefix,expected
 
 
-async def prepare(db,cfg,novel,model, *, upto_chapter=None):
+async def prepare(db,cfg,novel,model, *, upto_chapter=None, provider='ollama'):
     upto_chapter=_chapter_ceiling(upto_chapter)
-    identity = await local_model(cfg,model)
+    identity = await graph_model_identity(db,cfg,novel,provider,model)
+    if provider=='ollama':
+        # Pin num_ctx to whatever this host actually loaded the model with (§ dynamic
+        # context sizing), not a value chosen ahead of time -- see discover_num_ctx().
+        num_ctx = await discover_num_ctx(cfg,model)
+        if num_ctx <= identity['identity']['num_predict']:
+            raise ValueError(f'{model} loaded with a {num_ctx}-token context on this host, which leaves '
+                              f'no room for the configured {identity["identity"]["num_predict"]}-token output '
+                              'budget; reduce GRAPH_OLLAMA_NUM_PREDICT or free VRAM on this host')
+        identity = dict(identity, identity=dict(identity['identity'], num_ctx=num_ctx))
     client = objects(cfg)
     row = await (await db.execute('SELECT ontology FROM novel WHERE id=%s',(novel,))).fetchone()
     if not row:
@@ -239,10 +346,19 @@ async def record_job_failure(db,rid,index,exc):
 
 
 async def record_job_interruption(db,rid,index):
-    """Make an interrupted chapter visible and immediately resumable."""
+    """Make an interrupted chapter visible and immediately resumable.
+
+    attempts is incremented before a chapter is attempted (this run's own UPDATE, above),
+    so an interruption -- the worker being restarted or stopped, never anything wrong
+    with the chapter -- would otherwise spend one of the three genuine-failure attempts a
+    real content or model error gets. A worker restarted three times in a row while the
+    SAME chapter happened to be mid-attempt each time silently exhausted its budget and
+    permanently stranded the revision with no failed chapter to point at -- refund the
+    attempt here so only real failures count against it.
+    """
     await db.execute("""UPDATE graph_job SET state='failed',
         error='CancelledError: extraction interrupted',category=%s,
-        retry_at=now(),updated_at=now()
+        attempts=greatest(attempts-1,0),retry_at=now(),updated_at=now()
         WHERE revision_id=%s AND chapter_index=%s""",(CANCELLED,rid,index))
 
 
@@ -260,11 +376,13 @@ async def resume(db,cfg,rid, *, limit=None):
             r = await revision(db,rid)
             if r['state']=='archived' or r['legacy']:
                 raise ValueError('revision cannot be rebuilt')
-            live = await local_model(cfg,r['model']['name'])
-            if live != r['model']:
+            live = await graph_model_identity(
+                db,cfg,r['novel_id'],r['model']['provider'],r['model']['name'])
+            if _without_num_ctx(live) != _without_num_ctx(r['model']):
                 raise ValueError('installed model or inference configuration changed since snapshot; '
                                  f'create a new revision ({model_drift(r["model"], live)})')
-            engine = KnowledgeEngine(db,cfg,r)
+            provider=await graph_completion_provider(db,cfg,r)
+            engine = KnowledgeEngine(db,cfg,r,provider=provider)
             client = objects(cfg)
             lang = await (await db.execute('SELECT source_lang,target_lang FROM novel WHERE id=%s',(r['novel_id'],))).fetchone()
             jobs = await (await db.execute('SELECT chapter_index FROM graph_job WHERE revision_id=%s AND state<>%s ORDER BY chapter_index',
@@ -283,8 +401,9 @@ async def resume(db,cfg,rid, *, limit=None):
             print(json.dumps(dict(revision=rid,chapter=index,state='processing')),flush=True)
             try:
                 output = await engine.extract(r['novel_id'],index,source,display,lang[1])
-                live = await local_model(cfg,r['model']['name'])
-                if live != r['model']:
+                live = await graph_model_identity(
+                    db,cfg,r['novel_id'],r['model']['provider'],r['model']['name'])
+                if _without_num_ctx(live) != _without_num_ctx(r['model']):
                     raise ValueError('model or inference configuration changed during extraction; '
                                      f'publication refused ({model_drift(r["model"], live)})')
                 state = PipelineState(envelope=ChapterEnvelope(novel_id=r['novel_id'],chapter_index=index,
@@ -504,7 +623,7 @@ async def record_review(db,cfg,rid,document):
 async def switch(db,cfg,rid,review_hash=None, *, rollback=False):
     # Object integrity is rechecked before acquiring the short cutover lock.
     report = None if rollback else await preview(db,cfg,rid)
-    if not rollback and await local_model(cfg,report['model']['name'])!=report['model']:
+    if not rollback and _without_num_ctx(await local_model(cfg,report['model']['name'])) != _without_num_ctx(report['model']):
         raise ValueError('model changed after review')
     async with db.transaction():
         r = await revision(db,rid)
@@ -707,7 +826,9 @@ async def main(args):
         return
     async with await psycopg.AsyncConnection.connect(cfg.database_url,autocommit=True) as db:
         if args.command=='prepare':
-            result = dict(revision=await prepare(db,cfg,args.novel,args.model,upto_chapter=args.upto),status='quarantined; awaiting evaluation and rebuild')
+            result = dict(revision=await prepare(db,cfg,args.novel,args.model,
+                upto_chapter=args.upto,provider=args.provider),
+                status='quarantined; awaiting evaluation and rebuild')
         elif args.command=='extend':
             result = await extend(db,cfg,args.novel,upto_chapter=args.upto)
         elif args.command=='resume':
@@ -730,7 +851,7 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command',required=True)
     p=commands.add_parser('select-model');p.add_argument('--reports',nargs='+',required=True)
-    p = commands.add_parser('prepare'); p.add_argument('--novel',required=True); p.add_argument('--model',required=True); p.add_argument('--upto',type=int)
+    p = commands.add_parser('prepare'); p.add_argument('--novel',required=True); p.add_argument('--model',required=True); p.add_argument('--upto',type=int); p.add_argument('--provider',choices=['ollama','anthropic','deepseek','gemini'],default='ollama')
     p = commands.add_parser('extend'); p.add_argument('--novel',required=True); p.add_argument('--upto',type=int,required=True)
     for name in ['resume','preview','review','activate','rollback']:
         p = commands.add_parser(name); p.add_argument('--revision',required=True)

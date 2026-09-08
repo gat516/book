@@ -141,14 +141,16 @@ async def test_focused_mode_and_pause_preserve_queue_and_claims(scheduled):
 
 
 async def test_queue_controls_also_gate_idle_graph_work(scheduled, monkeypatch):
-    from pipeline import event_rebuild, graph_rebuild
+    from pipeline import event_rebuild, graph_rebuild, repair
     client, keys = scheduled
     worker = Worker.__new__(Worker)
     worker.redis, worker.cfg = client, make_config()
     drain = AsyncMock()
     drain_events = AsyncMock()
+    drain_requests = AsyncMock(return_value=None)
     monkeypatch.setattr(graph_rebuild, "drain_active", drain)
     monkeypatch.setattr(event_rebuild, "drain_active", drain_events)
+    monkeypatch.setattr(repair, "drain_requests", drain_requests)
     for mode in ("paused", "focused"):
         await client.hset(keys[5], "mode", mode)
         await worker._drain_background()
@@ -164,6 +166,17 @@ async def test_queue_controls_also_gate_idle_graph_work(scheduled, monkeypatch):
     await worker._drain_background()
     drain_events.assert_awaited_once_with(worker.cfg, novel_id=None)
     drain.assert_awaited_once_with(worker.cfg, novel_id=None, preferred_novel="b")
+    assert drain_requests.await_count == 3
+
+
+async def test_embedding_preflight_failure_still_drains_explicit_repair(monkeypatch):
+    worker = Worker.__new__(Worker)
+    worker.stopping = asyncio.Event()
+    worker._assert_embed_dim = AsyncMock(side_effect=RuntimeError("embedding endpoint unavailable"))
+    worker._drain_repair_requests = AsyncMock(return_value="discard")
+    with pytest.raises(RuntimeError, match="embedding endpoint unavailable"):
+        await worker.start()
+    worker._drain_repair_requests.assert_awaited_once_with()
 
 
 async def test_heartbeat_protects_slow_job_then_crash_recovers_once(scheduled):
@@ -207,7 +220,7 @@ async def test_worker_reaper_does_not_enqueue_twice(scheduled, monkeypatch):
 
 
 @pytest.mark.parametrize("fail", [False, True])
-async def test_shutdown_finishes_current_claim_and_preserves_pending(scheduled, fail):
+async def test_shutdown_preserves_work_that_completes_with_the_signal(scheduled, fail):
     client, keys = scheduled
     worker = Worker.__new__(Worker)
     worker.redis = client
@@ -228,6 +241,65 @@ async def test_shutdown_finishes_current_claim_and_preserves_pending(scheduled, 
     assert await client.llen(keys[1]) == 0
     assert await client.hlen(keys[2]) == 0
     assert await client.hlen(keys[4]) == 0
+
+
+async def test_shutdown_cancels_current_claim_and_requeues_after_cleanup(scheduled):
+    client, keys = scheduled
+    worker = Worker.__new__(Worker)
+    worker.redis = client
+    worker.stopping = asyncio.Event()
+    worker.cfg = SimpleNamespace(queue_timeout=1, visibility_timeout=300)
+    worker._watch_novel = keep_novel_alive
+    entered, cleaned = asyncio.Event(), asyncio.Event()
+
+    async def handle(raw):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            # Represents provider/transaction cleanup that must finish before RELEASE.
+            await asyncio.sleep(0)
+            cleaned.set()
+
+    worker._handle = handle
+    raw = message(2)
+    await client.lpush(keys[0], raw)
+    run = asyncio.create_task(worker._loop())
+    await asyncio.wait_for(entered.wait(), 1)
+    worker.request_stop()
+    await asyncio.wait_for(run, 1)
+
+    assert cleaned.is_set()
+    assert await client.lrange(keys[0], 0, -1) == [raw]
+    assert await client.llen(keys[1]) == 0
+    assert await client.hlen(keys[2]) == 0
+    assert await client.hlen(keys[4]) == 0
+
+
+async def test_shutdown_cancels_background_rebuild_promptly(scheduled):
+    client, _ = scheduled
+    worker = Worker.__new__(Worker)
+    worker.redis = client
+    worker.stopping = asyncio.Event()
+    worker.cfg = SimpleNamespace(queue_timeout=1)
+    entered, cleaned = asyncio.Event(), asyncio.Event()
+
+    async def drain_background():
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            # graph_rebuild.resume records the interrupted job in this cleanup path.
+            await asyncio.sleep(0)
+            cleaned.set()
+
+    worker._drain_background = drain_background
+    run = asyncio.create_task(worker._loop())
+    await asyncio.wait_for(entered.wait(), 1)
+    worker.request_stop()
+    await asyncio.wait_for(run, 1)
+
+    assert cleaned.is_set()
 
 
 async def test_completed_pointer_does_not_repeat_any_model_work():

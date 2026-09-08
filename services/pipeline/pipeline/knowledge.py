@@ -1,10 +1,11 @@
-"""Local-only, revision-scoped enrichment of saved prose (§0, §5.4).
+"""Revision-scoped enrichment of saved prose (§0, §5.4).
 
 All model outputs remain proposals until literal and independent semantic checks pass.
 Only publish() consumes PipelineState.resolutions; it never performs name matching.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import time
@@ -17,8 +18,9 @@ from pgvector.psycopg import register_vector_async
 from psycopg.types.json import Jsonb
 
 from pipeline.evidence import (
-    PROMPT_VERSION, Names, Proposals, IdentityDecisions, ClaimProposals,
-    Decision, Claim, Alignments, Verification, digest, stable_id,
+    PROMPT_VERSION, Names, Proposals, IdentityDecisions, ClaimProposals, HostedClaimProposals,
+    Decision, Claim, Alignments, Verification, Verdict, EvidenceReading,
+    FactComponentVerification, HostedFactReviews, FactRenderings, digest, stable_id,
     source_mentions, validate_proposals, approved, aligned_mentions, passage,
 )
 from pipeline.llm.ollama import OllamaProvider
@@ -27,7 +29,7 @@ from pipeline.config import graph_runtime
 from pipeline.passages import PassageContract, source_passages
 from pipeline.knowledge_contract import (
     identity_schema, materialize_identity, materialize_names, materialize_verification,
-    name_schema,
+    name_schema, NAME_SLOT_COUNT,
     unique_json_object, verification_schema,
 )
 
@@ -38,9 +40,22 @@ IDENTITY_BATCH_SIZE = 12
 CLAIM_LIMIT = 12
 CLAIM_PASSAGE_CHARS = 1200
 MIN_CLAIM_PASSAGE_CHARS = 100
+# Mirrors Alignments.alignments' Field(max_length=...) in evidence.py.
+ALIGNMENT_LIMIT = 24
+MIN_ALIGNMENT_CHARS = 800
+# graph_ollama_total_timeout_seconds defaults to None (no cap) because the streaming
+# provider's own idle/first-token budgets already catch a stuck call. embed() has no
+# such per-chunk detector -- it is one flat request -- so it always needs a real ceiling
+# even when the operator has left the streaming cap disabled.
+EMBED_FALLBACK_TIMEOUT_SECONDS = 300
+# A genuine stall (no bytes for the idle/first-token budget) gets retried in place this
+# many extra times before it is allowed to fail the whole chapter attempt. graph_completion
+# caches every OTHER call in the chapter, so this is cheap: only the stuck request repeats.
+STALL_RETRY_ATTEMPTS = 2
+STALL_RETRY_DELAY_SECONDS = 5
 
 
-def _outside(ranges: list, focus: dict) -> list[tuple[int,int]]:
+def _outside(ranges: list, focus: dict | list[dict]) -> list[tuple[int,int]]:
     """Antecedent context minus the focus span.
 
     A synthetic context range that contains the focus text lets the model cite its
@@ -48,7 +63,9 @@ def _outside(ranges: list, focus: dict) -> list[tuple[int,int]]:
     rejects. Clipping keeps the antecedent — the only reason these ranges exist — while
     leaving the focus citable solely through its own ID.
     """
-    start,end=focus['char_start'],focus['char_end']
+    focuses=focus if isinstance(focus,list) else [focus]
+    start=min(row['char_start'] for row in focuses)
+    end=max(row['char_end'] for row in focuses)
     result=[]
     for lo,hi in ranges:
         if hi<=start or lo>=end:
@@ -61,28 +78,41 @@ def _outside(ranges: list, focus: dict) -> list[tuple[int,int]]:
 
 
 class KnowledgeEngine:
-    def __init__(self, db, cfg, revision: dict, *, run_id: str | None = None):
+    def __init__(self, db, cfg, revision: dict, *, run_id: str | None = None,
+                 provider=None):
         self.db, self.cfg, self.revision = db, cfg, revision
         self.run_id, self.current_chapter = run_id, None
         if revision.get('prompt_version',PROMPT_VERSION)!=PROMPT_VERSION:
             raise ValueError('extraction prompt changed; create a new revision')
-        if urlparse(cfg.ollama_host).hostname not in {'localhost','127.0.0.1','::1'}:
-            raise ValueError('graph repair requires a loopback Ollama endpoint')
         self.model = revision['model']['name']
-        if revision['model']['provider'] != 'ollama':
-            raise ValueError('graph repair does not permit hosted providers')
-        self.runtime = graph_runtime(cfg)
+        self.provider_id = revision['model']['provider']
+        self.hosted = revision['model'].get('strategy') == 'api_two_pass'
+        self.runtime = (dict(identity={},limits=dict(
+            idle_timeout_seconds=cfg.graph_ollama_timeout_seconds or 120,
+            total_timeout_seconds=cfg.graph_ollama_total_timeout_seconds,
+            first_token_timeout_seconds=cfg.graph_ollama_first_token_seconds or 120))
+            if self.hosted else graph_runtime(cfg))
         # A revision pins output-affecting options. Deadline tuning remains live config:
         # it changes whether a call gets to finish, not what a finished call contains.
         identity = revision['model'].get('identity', self.runtime['identity'])
         limits = self.runtime['limits']
-        self.provider = OllamaProvider(host=cfg.ollama_host, model=self.model,
-            timeout=limits['idle_timeout_seconds'], total_timeout=limits['total_timeout_seconds'],
-            first_token_timeout=limits['first_token_timeout_seconds'],
-            num_ctx=identity['num_ctx'], num_predict=identity['num_predict'], stream=True,
-            think=identity.get('think'))
+        if self.provider_id == 'ollama':
+            if urlparse(cfg.ollama_host).hostname not in {'localhost','127.0.0.1','::1'}:
+                raise ValueError('graph repair requires a loopback Ollama endpoint')
+            self.provider = provider or OllamaProvider(host=cfg.ollama_host, model=self.model,
+                timeout=limits['idle_timeout_seconds'], total_timeout=limits['total_timeout_seconds'],
+                first_token_timeout=limits['first_token_timeout_seconds'],
+                num_ctx=identity.get('num_ctx'), num_predict=identity['num_predict'], stream=True,
+                think=identity.get('think'))
+        elif provider is None:
+            raise ValueError('hosted graph repair requires its pinned provider')
+        else:
+            self.provider = provider
+        self.claim_limit = 48 if self.hosted else CLAIM_LIMIT
+        self.prompt_hard_bytes = 256 * 1024 if self.hosted else PROMPT_HARD_BYTES
         self.embedder = OllamaProvider(host=cfg.ollama_host,model=cfg.embed_model,
-            timeout=limits['idle_timeout_seconds'], total_timeout=limits['total_timeout_seconds'])
+            timeout=limits['idle_timeout_seconds'],
+            total_timeout=limits['total_timeout_seconds'] or EMBED_FALLBACK_TIMEOUT_SECONDS)
 
     async def _ensure_run(self, novel: str, chapter: int, source: str, display: str) -> None:
         self._novel_id = novel
@@ -128,9 +158,15 @@ class KnowledgeEngine:
         instructions = {
             'names': 'Inventory explicitly named subjects in the source passages. Include named locations, buildings, organizations, factions, schools and other named things, not only people. A name mentioned once still counts. Use the most appropriate offered kind. Include explicitly used short names as separate surface proposals, without asserting aliases. Each entry contains ONLY the EXACT source spelling, ontology kind, and ID of a passage containing it. Do not copy or rewrite quotations. Do not translate names. Exclude generic titles, pronouns and unnamed categories. An empty inventory is correct; never invent names.',
             'identity': 'Return exactly one decision for every identity_occurrence. References are request-local opaque tokens; never use a name string as an identity key. An empty existing_candidates list means there is no earlier entity to choose, and DOES permit a supported new identity. For new, target_ref must be one of that occurrence\'s allowed_new_representatives and the representative must decide new with itself as target. For existing, target_ref must be in that occurrence\'s existing_candidates. Keep kinds compatible. If evidence is ambiguous, return unresolved with null target_ref. Example first appearance: o1 has no candidates and names a person, so o1 -> new o1. Example existing identity: the passage explicitly links o2 to offered e1, so o2 -> existing e1. Example ambiguity or homonym: same spelling without coreference evidence -> unresolved. Cite one offered passage and use a reason_code plus at most 200 explanation characters.',
-            'claims': 'Extract only explicitly supported source-language claims from the focus passages. Neighboring passages provide antecedent context, including pronoun-only continuations. Use only verified_occurrences request-local refs; never use name strings as identity keys. A claim may cite one to three offered passage_ids when both an antecedent and assertion are needed. The assertion itself must occur in a focus passage. Return at most 12 claims, with values at most 400 characters. Candidate facts are context, not evidence. Do not translate values and do not require a value to be a literal substring; semantic verification will independently check support. Also fill value_en with a short English rendering of value, at most 200 characters, for display only; it is never evidence and is never checked. Use the English spelling already used for a named subject. Return an empty string when you cannot render it faithfully.',
+            'claims': 'Extract only atomic, explicitly supported source-language claims from the focus passages. Neighboring passages provide antecedent context, including pronoun-only continuations. Use only verified_occurrences request-local refs; never use name strings as identity keys. A claim may cite one to three offered passage_ids when both an antecedent and assertion are needed. The assertion itself must occur in a focus passage. Preserve attribution, uncertainty, quantities, location, and scope inside value; do not turn an observation about some members into a universal property. Return at most 12 claims, with values at most 400 characters. Candidate facts are context, not evidence. Do not translate values and do not require a value to be a literal substring; semantic verification will independently check support.',
+            'evidence': 'Read only the offered source passages, without guessing what a proposed fact might be. Inventory their explicit atomic statements. Copy the subject and assertion as exact source substrings. Copy every attribution, uncertainty, quantity, location, subset, or temporal qualifier as a separate exact source substring. Resolve pronouns only when the offered text establishes the antecedent, but still copy the named subject phrase. Do not translate, paraphrase, add background knowledge, or infer uses. Return an empty list when the passages establish no durable statement.',
+            'fact_verify': 'Check the single proposed claim against the original offered source and the claim-independent evidence reading. The original source is authoritative; the reading is only an index. Judge four components separately: the cited subject owns or performs the assertion; the complete assertion is stated; all attribution, uncertainty, quantities, subsets, locations, and time limits are preserved; and the cited evidence is sufficient. Any uncertainty is false. A real quote is not proof. Reject these known error patterns: attaching beasts\' traits to a pond, claiming a plant emits mist when beasts emit it toward the plant, inventing uses not stated in the passage, and turning a report about a few inner-area specimens into a universal property.',
+            'fact_review': 'Independently review every proposed claim against only the offered source passages. Judge subject ownership, the complete assertion, every qualifier, and evidence sufficiency separately. Unsupported or uncertain means false. For each supported claim, render its value concisely in target_language without adding, strengthening, weakening, or omitting meaning. Fill every item_ref exactly once. This is the second and final model pass for hosted fact extraction; be conservative.',
+            'render': 'Translate each already verified source-language fact value into concise English. Preserve attribution, uncertainty, quantities, subsets, locations, time limits, and who owns or performs the assertion. Do not add explanation or background knowledge. Fill every offered item_ref exactly once; use an empty string if a faithful concise rendering is not possible.',
+            'render_verify': 'Check whether each English rendering preserves the complete meaning of its verified source claim: subject ownership, assertion, attribution, uncertainty, quantities, subsets, locations, and time limits. The English may be concise but may add nothing. Unsupported, stronger, weaker, or uncertain means false.',
             'propose': 'Extract only the requested bounded proposals and cite offered passages.',
             'align': 'Align the saved translation to the offered SOURCE OCCURRENCES. Return exact displayed named phrases, their zero-based occurrence number in the translation, and the matching source mention ID plus supporting passage ID. Different translated spellings can name the same source subject; identical spellings may name different subjects. Include unaligned displayed names with null mention_id and null passage_id. Never infer identity from capitalization alone. Do not rewrite the translation.',
+            'name_verify': 'Check whether EACH offered surface is a proper name or explicitly named story-specific person, place, group, creature, object, technique, realm, or other ontology concept of the offered kind. Reject generic objects, actions, quantities, colors, body parts, directions, titles, pronouns, and descriptive fragments. Fill every required item_ref exactly once. Unsupported or uncertain means false. Keep each reason at most 200 characters.',
             'verify': 'Independently check EACH offered item and fill every required item_ref JSON slot exactly once. supported=true only when the evidence explicitly establishes the identity, assertion, or source-to-translation alignment. Same spelling, vector proximity, plausibility and prior mistaken labels are not identity evidence. Check occurrence identity and kind. Unsupported or uncertain means false. A real quotation does not prove a false assertion attached to it. Keep each reason at most 200 characters.',
         }
         selected=set(payload['_passage_ids']) if '_passage_ids' in payload else None
@@ -159,10 +195,11 @@ class KnowledgeEngine:
             return item
         guidance=' Cite offered passage references instead of generating quote text or offsets. A selected passage is evidence to verify, never proof by itself. Null references leave identities unsupported.' if stage in {'propose','identity','claims','align'} else ''
         if stage == 'name_slots':
-            instructions[stage] = ('Inventory names in every offered source passage. Fill all six request-local slots. '
-                'For every actual name use one slot containing its exact source spelling, most appropriate kind, and passage ID. '
+            instructions[stage] = (f'Inventory distinct names in every offered source passage. Fill all {NAME_SLOT_COUNT} request-local slots. '
+                'For every actual proper name or explicitly named story-specific concept use one slot containing its exact source spelling, most appropriate kind, and passage ID. '
                 'Set every unused slot to null. Do not translate, infer aliases, or list generic titles or pronouns. If all slots '
-                'are used, report the six clearest explicit names; the application will retry the passages separately for coverage.')
+                'are used, report the clearest explicit names; the application will recursively divide the source window for coverage. '
+                'Generic objects, actions, quantities, colors, body parts, directions, and descriptive fragments are not names.')
             wire_schema=name_schema(list(contract.by_id),ontology['kinds'])
         elif stage == 'identity_slots':
             instructions[stage] = ('Resolve each occurrence by selecting exactly one offered choice in its required JSON slot. '
@@ -190,22 +227,59 @@ class KnowledgeEngine:
                 variants.append(variant)
             decisions['items']=dict(oneOf=variants)
         elif stage == 'claims':
+            if self.hosted:
+                instructions[stage]=instructions[stage].replace(
+                    'Return at most 12 claims','Return at most 48 claims')
             claims=wire_schema['properties']['claims']
-            claims['maxItems']=CLAIM_LIMIT
+            claims['maxItems']=self.claim_limit
             item_schema('claims')['properties']['occurrence_refs']['items']['enum']=[o['occurrence_ref'] for o in payload['verified_occurrences']]
-        elif stage == 'verify':
+        elif stage in {'verify','name_verify'}:
+            wire_schema=verification_schema([i['item_ref'] for i in payload['items']])
+        elif stage == 'fact_verify':
+            refs=[i['item_ref'] for i in payload['items']]
+            fields={
+                'subject_supported':dict(type='boolean'),
+                'assertion_supported':dict(type='boolean'),
+                'qualifiers_supported':dict(type='boolean'),
+                'evidence_sufficient':dict(type='boolean'),
+                'reason':dict(type='string',maxLength=200)}
+            verdict_item=dict(type='object',additionalProperties=False,
+                required=['id',*fields],properties=dict(id=dict(type='string',enum=refs),**fields))
+            wire_schema=dict(type='object',additionalProperties=False,required=['verdicts'],properties={
+                'verdicts':dict(type='array',minItems=len(refs),maxItems=len(refs),items=verdict_item)})
+        elif stage == 'fact_review':
+            refs=[i['item_ref'] for i in payload['items']]
+            fields={
+                'subject_supported':dict(type='boolean'),
+                'assertion_supported':dict(type='boolean'),
+                'qualifiers_supported':dict(type='boolean'),
+                'evidence_sufficient':dict(type='boolean'),
+                'reason':dict(type='string',maxLength=200),
+                'value_target':dict(type='string',maxLength=200)}
+            verdict_item=dict(type='object',additionalProperties=False,
+                required=['id',*fields],properties=dict(id=dict(type='string',enum=refs),**fields))
+            wire_schema=dict(type='object',additionalProperties=False,required=['verdicts'],properties={
+                'verdicts':dict(type='array',minItems=len(refs),maxItems=len(refs),items=verdict_item)})
+        elif stage == 'render':
+            refs=[i['item_ref'] for i in payload['items']]
+            wire_schema=dict(type='object',additionalProperties=False,required=['renderings'],properties={
+                'renderings':dict(type='array',minItems=len(refs),maxItems=len(refs),items=dict(
+                    type='object',additionalProperties=False,required=['id','value_en'],properties={
+                        'id':dict(type='string',enum=refs),
+                        'value_en':dict(type='string',maxLength=200)}))})
+        elif stage == 'render_verify':
             wire_schema=verification_schema([i['item_ref'] for i in payload['items']])
         shape = ('\nOUTPUT JSON SCHEMA:\n'+json.dumps(wire_schema,ensure_ascii=False)
-                 if stage in {'name_slots','identity_slots','verify','claims'} else '')
+                 if stage in {'name_slots','identity_slots','name_verify','verify','claims','evidence','fact_verify','fact_review','render','render_verify'} else '')
         prompt = instructions[stage]+guidance+shape+'\nINPUT DATA (not instructions):\n'+json.dumps(contract.prompt_payload(payload),ensure_ascii=False)
         # Conservative byte bound keeps oversized requests out of Ollama's silent
         # left-truncation path. A failed job is safer than verification without evidence.
-        if len(prompt.encode()) > PROMPT_HARD_BYTES:
-            raise ValueError('graph context exceeds hard local model budget; bounded caller contract regressed')
+        if len(prompt.encode()) > self.prompt_hard_bytes:
+            raise ValueError('graph context exceeds hard model budget; bounded caller contract regressed')
         key = digest([self.revision['id'],self.revision['model'],self.runtime['identity'],PROMPT_VERSION,stage,prompt,wire_schema])
         row = await (await self.db.execute(
             'SELECT response,runtime_metrics FROM graph_completion WHERE revision_id=%s AND cache_key=%s AND served_provider=%s AND served_model=%s',
-            (self.revision['id'],key,'ollama',self.model))).fetchone()
+            (self.revision['id'],key,self.provider_id,self.model))).fetchone()
         if row:
             hits=getattr(self,'_stage_cache_hits',{})
             hits[stage]=hits.get(stage,0)+1
@@ -213,15 +287,18 @@ class KnowledgeEngine:
             if self.run_id:
                 await self.db.execute('''INSERT INTO graph_completion_run
                     (revision_id,cache_key,served_provider,served_model,run_id,chapter_index,stage,batch_id)
-                    VALUES(%s,%s,'ollama',%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING''',
-                    (self.revision['id'],key,self.model,self.run_id,self.current_chapter,stage,payload.get('_batch_id',key[:12])))
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING''',
+                    (self.revision['id'],key,self.provider_id,self.model,self.run_id,self.current_chapter,stage,payload.get('_batch_id',key[:12])))
             parsed=schema.model_validate(row[0])
-            if stage in {'claims','name_slots'}:
+            if stage in {'claims','name_slots','align'}:
                 # A cached response was already filtered, so its own length no longer
                 # reports whether the model saturated. Saturation drives window
                 # subdivision, so the pre-filter count is stored beside the response.
                 proposed=(row[1] or {}).get('proposed_count')
-                payload['_proposed_count']=(len(parsed.claims) if stage=='claims' else len(parsed.names)) if proposed is None else proposed
+                if proposed is None:
+                    proposed=(len(parsed.claims) if stage=='claims' else
+                              len(parsed.names) if stage=='name_slots' else len(parsed.alignments))
+                payload['_proposed_count']=proposed
             await self._proposal_activity(stage,parsed)
             return parsed
         started=time.monotonic()
@@ -230,20 +307,39 @@ class KnowledgeEngine:
         print(json.dumps(dict(diagnostic,event='inference_started')),file=sys.stderr,flush=True)
         async def progress(update):
             print(json.dumps(dict(diagnostic,**update)),file=sys.stderr,flush=True)
-        self.provider.progress_sink = progress
+        if hasattr(self.provider,'progress_sink'):
+            self.provider.progress_sink = progress
         try:
-            response = await self.provider.complete(prompt, json_schema=wire_schema,
-                                                      cls=Class.BATCH, model=self.model, pin_model=True)
+            for attempt in range(STALL_RETRY_ATTEMPTS + 1):
+                try:
+                    response = await self.provider.complete(prompt, json_schema=wire_schema,
+                                                              cls=Class.BATCH, model=self.model,
+                                                              pin_model=not self.hosted)
+                    break
+                except TimeoutError as exc:
+                    # A stall, not a bad chapter: the idle/first-token budget fired
+                    # because no bytes arrived, which is exactly what retrying THIS one
+                    # request (not the whole chapter) is for. Every other call this
+                    # chapter has already made is in graph_completion, so re-entering
+                    # extract() from a chapter-level retry would skip straight back to
+                    # here anyway -- doing it in place just skips the wait.
+                    if attempt >= STALL_RETRY_ATTEMPTS:
+                        raise
+                    print(json.dumps(dict(diagnostic,event='inference_stalled_retrying',
+                                          attempt=attempt+1,elapsed_seconds=time.monotonic()-started,
+                                          error=str(exc))),file=sys.stderr,flush=True)
+                    await asyncio.sleep(STALL_RETRY_DELAY_SECONDS)
         except Exception as exc:
             print(json.dumps(dict(diagnostic,event='inference_failed',elapsed_seconds=time.monotonic()-started,
                                   error_type=type(exc).__name__,error=str(exc),
-                                  stream=self.provider.last_stream_diagnostics)),file=sys.stderr,flush=True)
+                                  stream=getattr(self.provider,'last_stream_diagnostics',{}))),file=sys.stderr,flush=True)
             raise
         finally:
-            self.provider.progress_sink = None
+            if hasattr(self.provider,'progress_sink'):
+                self.provider.progress_sink = None
         print(json.dumps(dict(diagnostic,event='inference_completed',timings=response.timings,
                               input_tokens=response.input_tokens,output_tokens=response.output_tokens)),file=sys.stderr,flush=True)
-        if response.served_provider != 'ollama' or response.served_model != self.model:
+        if response.served_provider != self.provider_id or response.served_model != self.model:
             raise RuntimeError('serving identity changed; new benchmark/revision required')
         try:
             body=json.loads(response.text,object_pairs_hook=unique_json_object)
@@ -267,12 +363,14 @@ class KnowledgeEngine:
                 body=dict(body,claims=kept)
             elif stage == 'name_slots' and isinstance(body,dict):
                 payload['_proposed_count']=sum(item is not None for item in body.values())
+            elif stage == 'align' and isinstance(body,dict) and isinstance(body.get('alignments'),list):
+                payload['_proposed_count']=len(body['alignments'])
             parsed = (materialize_names(body,contract,ontology)
                       if stage=='name_slots' else
                       materialize_identity(body,payload['identity_occurrences'],contract)
                       if stage=='identity_slots' else
                       materialize_verification(body,[i['item_ref'] for i in payload['items']])
-                      if stage=='verify' else contract.materialize(stage,schema,body,ontology))
+                      if stage in {'name_verify','verify','render_verify'} else contract.materialize(stage,schema,body,ontology))
         except Exception as exc:
             print(json.dumps(dict(diagnostic,event='contract_rejected',
                                   error_type=type(exc).__name__,error=str(exc))),
@@ -283,6 +381,7 @@ class KnowledgeEngine:
             (self.revision['id'],key,response.served_provider,response.served_model,Jsonb(parsed.model_dump()),time.monotonic()-started,
              Jsonb(dict(response.timings,input_tokens=response.input_tokens,output_tokens=response.output_tokens,
                         stage=stage,batch_id=diagnostic['batch_id'],
+                        stall_retries=attempt,
                         **({'proposed_count':payload['_proposed_count']} if '_proposed_count' in payload else {}))),
              self.current_chapter,stage,diagnostic['batch_id'],self.run_id))
         if self.run_id:
@@ -296,23 +395,43 @@ class KnowledgeEngine:
 
     @staticmethod
     def _passage_batches(source: str, *, budget: int = 8192,
-                         max_passages: int = 4) -> list[list[str]]:
+                         max_passages: int = 64, max_chars: int = 400) -> list[list[str]]:
         """Amortize name-inventory prefill over a bounded adjacent context.
 
-        Six compact nullable output slots keep generation bounded. A full response is a
-        saturation signal; discover_names then retries each passage separately so
+        Compact nullable output slots keep generation bounded. A full response is a
+        saturation signal; discover_names recursively divides only that source window so
         batching cannot silently lower recall. Aggregation remains application-owned
         (§0, §5.4), so a surface never becomes an identity binding.
         """
-        batches=[];current=[];size=0
+        batches=[];current=[];size=0;chars=0
         for p in PassageContract(source).passages:
             cost=len(json.dumps(dict(id=p['id'],text=p['text']),ensure_ascii=False).encode())+2
-            if current and (size+cost>budget or len(current)>=max_passages):
-                batches.append(current);current=[];size=0
-            current.append(p['id']);size+=cost
+            if current and (size+cost>budget or chars+len(p['text'])>max_chars
+                            or len(current)>=max_passages):
+                batches.append(current);current=[];size=0;chars=0
+            current.append(p['id']);size+=cost;chars+=len(p['text'])
         if current:
             batches.append(current)
         return batches
+
+    @staticmethod
+    def _claim_focus_batches(source: str, *, max_chars: int = CLAIM_PASSAGE_CHARS
+                             ) -> list[list[dict]]:
+        """Pack short paragraphs into bounded focus requests without coarsening evidence."""
+        groups=[];current=[];chars=0
+        for row in source_passages(source,max_chars=max_chars,overlap=0):
+            size=len(row['text'])
+            if current and chars+size>max_chars:
+                groups.append(current);current=[];chars=0
+            current.append(row);chars+=size
+        if current:
+            groups.append(current)
+        return groups
+
+    def _claim_batches(self, source: str) -> list[list[dict]]:
+        """Make ordinary hosted chapters one extraction request, splitting large ones."""
+        return self._claim_focus_batches(
+            source, max_chars=24_000 if getattr(self,'hosted',False) else CLAIM_PASSAGE_CHARS)
 
     @staticmethod
     def _mention_passages(source: str, mentions: list[dict]) -> list[str]:
@@ -464,8 +583,9 @@ class KnowledgeEngine:
         result=Verification(verdicts=[])
         by_mid={m['id']:m for m in mentions or []}
         entities={c['id']:c for rows in (candidates or {}).values() for c in rows}
-        for start in range(0,len(items),12):
-            batch=items[start:start+12]
+        batch_size=16 if contract_name=='name eligibility' else 12
+        for start in range(0,len(items),batch_size):
+            batch=items[start:start+batch_size]
             refs={item['id']:f'v{i+1}' for i,item in enumerate(batch)}
             wire=[]
             occurrence_refs={}
@@ -494,28 +614,199 @@ class KnowledgeEngine:
                     for i in batch if i.get('evidence_start') is not None]
             passage_ids=[p['id'] for p in PassageContract(source).passages
                          if any(p['char_start']<end and start<p['char_end'] for start,end in ranges)]
-            checked=await self.call('verify',Verification,dict(source=source,items=wire,
+            stage='name_verify' if contract_name=='name eligibility' else 'verify'
+            checked=await self.call(stage,Verification,dict(source=source,items=wire,
                 contract=contract_name,display_contexts=[],_passage_ids=passage_ids,
-                _batch_id=f'verify-{batch_identity or contract_name}-{start//12+1}'))
+                _batch_id=f'verify-{batch_identity or contract_name}-{start//batch_size+1}'))
             by_ref={v.id:v for v in checked.verdicts}
             if len(checked.verdicts)!=len(batch) or set(by_ref)!=set(refs.values()):
                 raise ValueError('verification must contain one unique verdict per offered item')
             for item in batch:
                 verdict=by_ref[refs[item['id']]]
-                from pipeline.evidence import Verdict
                 result.verdicts.append(Verdict(id=item['id'],supported=verdict.supported,reason=verdict.reason))
         return result
 
+    @staticmethod
+    def _evidence_passage_ids(source: str, items: list[dict]) -> list[str]:
+        ranges=[(i['evidence_start'],i['evidence_start']+len(i.get('quote','')))
+                for i in items if i.get('evidence_start') is not None]
+        return [p['id'] for p in PassageContract(source).passages
+                if any(p['char_start']<end and start<p['char_end'] for start,end in ranges)]
+
+    async def _verify_facts(self, source: str, items: list[dict], mentions: list[dict]) -> Verification:
+        """Verify complete atomic facts against a claim-independent source reading (§0.1).
+
+        Each claim gets its own verdict call so another proposal cannot prime the judge to
+        repeat an invented assertion. The source-only reading is cached by its exact offered
+        passages and never sees the proposal it will later help check.
+        """
+        result=Verification(verdicts=[])
+        by_mid={m['id']:m for m in mentions}
+        readings={}
+        for item in items:
+            if not passage(source,item.get('quote',''),start=item.get('evidence_start')):
+                result.verdicts.append(Verdict(id=item['id'],supported=False,
+                                                reason='literal evidence is absent'))
+                continue
+            passage_ids=self._evidence_passage_ids(source,[item])
+            if not passage_ids:
+                result.verdicts.append(Verdict(id=item['id'],supported=False,
+                                                reason='evidence has no offered source passage'))
+                continue
+            reading_key=tuple(passage_ids)
+            if reading_key not in readings:
+                readings[reading_key]=await self.call('evidence',EvidenceReading,dict(
+                    source=source,_passage_ids=passage_ids,
+                    _batch_id='evidence-'+digest(reading_key)[:12]))
+            contract=PassageContract(source,set(passage_ids))
+            offered_text='\n'.join(p['text'] for p in contract.passages)
+            grounded=[statement for statement in readings[reading_key].statements
+                      if statement.subject in offered_text and statement.assertion in offered_text
+                      and all(q in offered_text for q in statement.qualifiers)]
+            subjects=([self._subject_context(by_mid[mid]) for mid in item['mention_ids']]
+                      if item.get('mention_ids') else [dict(surface=item['subject'])])
+            wire=dict(item_ref='v1',type=item['type'],subjects=subjects,
+                      attribute=item['attribute'],value=item['value'],
+                      evidence_reading=[s.model_dump() for s in grounded])
+            checked=await self.call('fact_verify',FactComponentVerification,dict(
+                source=source,items=[wire],_passage_ids=passage_ids,
+                _batch_id='fact-verify-'+digest(item['id'])[:12]))
+            if len(checked.verdicts)!=1 or checked.verdicts[0].id!='v1':
+                raise ValueError('fact verification must return exactly the offered item')
+            verdict=checked.verdicts[0]
+            components={name:getattr(verdict,name) for name in (
+                'subject_supported','assertion_supported','qualifiers_supported','evidence_sufficient')}
+            failed=[name for name,value in components.items() if not value]
+            reason=verdict.reason if not failed else ', '.join(failed)+': '+verdict.reason
+            await self._activity('fact',item['id'],'verified',dict(
+                supported=not failed,components=components,reason=verdict.reason))
+            result.verdicts.append(Verdict(id=item['id'],supported=not failed,reason=reason[:200]))
+        return result
+
+    async def _review_hosted_claims(self, source: str, items: list[dict], mentions: list[dict],
+                                    target: str) -> tuple[list[dict],list[dict]]:
+        """Verify and render a hosted chapter's claims in one independent second pass."""
+        if not items:
+            return [],[]
+        by_mid={m['id']:m for m in mentions}
+        accepted=[];rejected=[]
+        for start in range(0,len(items),48):
+            batch=items[start:start+48]
+            refs={item['id']:f'v{i+1}' for i,item in enumerate(batch)}
+            wire=[dict(item_ref=refs[item['id']],type=item['type'],
+                       subjects=[self._subject_context(by_mid[mid]) for mid in item['mention_ids']],
+                       attribute=item['attribute'],value=item['value']) for item in batch]
+            checked=await self.call('fact_review',HostedFactReviews,dict(
+                source=source,items=wire,target_language=target,
+                _passage_ids=self._evidence_passage_ids(source,batch),
+                _batch_id=f'fact-review-{start//48+1}'))
+            verdicts={v.id:v for v in checked.verdicts}
+            if len(checked.verdicts)!=len(batch) or set(verdicts)!=set(refs.values()):
+                raise ValueError('hosted fact review must contain exactly one verdict per claim')
+            for item in batch:
+                verdict=verdicts[refs[item['id']]]
+                components={name:getattr(verdict,name) for name in (
+                    'subject_supported','assertion_supported','qualifiers_supported','evidence_sufficient')}
+                supported=all(components.values()) and bool(verdict.value_target.strip())
+                await self._activity('fact',item['id'],'verified',dict(
+                    supported=supported,components=components,reason=verdict.reason))
+                if supported:
+                    accepted.append(dict(item,value_en=verdict.value_target))
+                else:
+                    failed=[name for name,value in components.items() if not value]
+                    reason=(', '.join(failed)+': ' if failed else '')+verdict.reason
+                    rejected.append(dict(item,rejection=reason[:200] or 'empty target-language rendering'))
+        return accepted,rejected
+
+    async def _render_facts(self, source: str, items: list[dict], mentions: list[dict]) -> list[dict]:
+        """Create and independently validate display English only after source approval."""
+        if not items:
+            return []
+        by_mid={m['id']:m for m in mentions}
+        result=[]
+        for start in range(0,len(items),12):
+            batch=items[start:start+12]
+            refs={item['id']:f'r{i+1}' for i,item in enumerate(batch)}
+            wire=[dict(item_ref=refs[item['id']],
+                       subject=self._subject_context(by_mid[item['mention_ids'][0]]),
+                       attribute=item['attribute'],value=item['value']) for item in batch]
+            passage_ids=self._evidence_passage_ids(source,batch)
+            rendered=await self.call('render',FactRenderings,dict(source=source,items=wire,
+                _passage_ids=passage_ids,_batch_id=f'render-facts-{start//12+1}'))
+            by_ref={row.id:row.value_en for row in rendered.renderings}
+            if len(rendered.renderings)!=len(batch) or set(by_ref)!=set(refs.values()):
+                raise ValueError('fact rendering must contain one unique rendering per offered item')
+            checks=[dict(item_ref=refs[item['id']],source_value=item['value'],
+                         value_en=by_ref[refs[item['id']]]) for item in batch]
+            verified=await self.call('render_verify',Verification,dict(source=source,items=checks,
+                _passage_ids=passage_ids,_batch_id=f'verify-render-facts-{start//12+1}'))
+            verdicts={v.id:v for v in verified.verdicts}
+            if len(verified.verdicts)!=len(batch) or set(verdicts)!=set(refs.values()):
+                raise ValueError('render verification must contain one unique verdict per offered item')
+            for item in batch:
+                ref=refs[item['id']]
+                supported=verdicts[ref].supported and bool(by_ref[ref].strip())
+                if not supported:
+                    self._render_rejections=getattr(self,'_render_rejections',0)+1
+                    await self._activity('fact',item['id'],'rejected',dict(
+                        value_en=by_ref[ref],reason=verdicts[ref].reason))
+                result.append(dict(item,value_en=by_ref[ref] if supported else ''))
+        return result
+
+    async def _align_window(self, novel: str, chapter: int, source: str, display: str,
+                            mentions: list[dict], lo: int, hi: int, display_identity: str
+                            ) -> list[dict]:
+        """Align one translated window, splitting it if the model saturates ALIGNMENT_LIMIT.
+
+        A name that recurs often in one window (a recurring protagonist, say) forces the
+        model to emit one alignment object per occurrence with nothing capping the count
+        -- unbounded, that reliably exhausted num_predict and truncated the whole response
+        into unparseable partial JSON, failing the chapter over a call that was never
+        stuck, just asked to do too much at once (§0: never publish a partial extraction).
+        Same fix as claim saturation in _claims_for_focus: detect the model returned
+        exactly the capped amount, halve the window, and recurse for the remainder.
+        """
+        window=display[lo:hi]
+        if not window.strip() or not mentions:
+            return []
+        request=dict(source=source,translation=window,mentions=mentions,
+            _passage_ids=self._mention_passages(source,mentions),_batch_id=f'align-{lo}-{hi}')
+        alignment=await self.call('align',Alignments,request)
+        proposed=request.get('_proposed_count',len(alignment.alignments))
+        if proposed>=ALIGNMENT_LIMIT and len(mentions)>1 and (hi-lo)>MIN_ALIGNMENT_CHARS:
+            self._alignment_subdivisions=getattr(self,'_alignment_subdivisions',0)+1
+            mid_display=lo+(hi-lo)//2
+            mid_mentions=len(mentions)//2
+            left=await self._align_window(novel,chapter,source,display,
+                mentions[:mid_mentions],lo,mid_display,display_identity)
+            right=await self._align_window(novel,chapter,source,display,
+                mentions[mid_mentions:],mid_display,hi,display_identity)
+            return left+right
+        if proposed>=ALIGNMENT_LIMIT:
+            # Smallest window reached and it's still saturated: keep what verified rather
+            # than failing the chapter, the same fallback claim saturation uses.
+            await self._activity('run','run','rejected',dict(
+                reason='alignment coverage failure: saturated window could not be subdivided further',
+                window_chars=hi-lo,mentions=len(mentions)))
+        return aligned_mentions(novel,chapter,source,window,mentions,alignment,
+            display_offset=lo,display_identity=display_identity)
+
     async def _claims_for_focus(self, source: str, verified_mentions: list[dict], ontology: dict,
-                                focus: dict, *, passage_chars: int = CLAIM_PASSAGE_CHARS,
+                                focus: dict | list[dict], *, passage_chars: int = CLAIM_PASSAGE_CHARS,
                                 context_ranges: list | None = None
                                 ) -> tuple[list[Claim],list[dict],int]:
         passages=source_passages(source,max_chars=passage_chars,overlap=0)
+        focuses=focus if isinstance(focus,list) else [focus]
+        focus_ids={row['id'] for row in focuses}
         try:
-            index=next(i for i,p in enumerate(passages) if p['id']==focus['id'])
+            indices=[i for i,p in enumerate(passages) if p['id'] in focus_ids]
+            if len(indices)!=len(focuses):
+                raise StopIteration
         except StopIteration:
-            return [],[dict(rejection='claim coverage window could not be reconstructed',batch_id=focus['id'])],0
-        context=passages[max(0,index-1):min(len(passages),index+2)]
+            return [],[dict(rejection='claim coverage window could not be reconstructed',
+                            batch_id=','.join(sorted(focus_ids)))],0
+        first,last=min(indices),max(indices)
+        context=passages[max(0,first-1):min(len(passages),last+2)]
         # Only a subdivided call needs synthetic ranges: it re-slices the source at a
         # smaller size, so the parent's antecedent context no longer matches any offered
         # passage. At the top level those ranges ARE the offered passages, and sending
@@ -532,25 +823,35 @@ class KnowledgeEngine:
         occurrence_refs={m['id']:f'o{i+1}' for i,m in enumerate(in_context)}
         wire_mentions=[dict(occurrence_ref=occurrence_refs[m['id']],surface=m['surface'],
                             kind=m['kind'],context=m['quote']) for m in in_context]
-        batch_id=f'claims-{focus["char_start"]}-{passage_chars}'
+        batch_id=(f'claims-{focuses[0]["char_start"]}-'
+                  f'{focuses[-1]["char_end"]}-{passage_chars}')
         request=dict(source=source,verified_occurrences=wire_mentions,ontology=ontology,
-            focus_passage_ids=[focus['id']],_passage_ids=selected_ids,
+            focus_passage_ids=[row['id'] for row in focuses],_passage_ids=selected_ids,
             _passage_max_chars=passage_chars,_passage_overlap=0,_batch_id=batch_id,
             _context_ranges=forwarded)
         try:
-            response=await self.call('claims',ClaimProposals,request)
+            response=await self.call(
+                'claims', HostedClaimProposals if getattr(self,'hosted',False) else ClaimProposals, request)
         except ValueError as exc:
-            if ('graph context exceeds hard local model budget' not in str(exc)
+            if (not any(text in str(exc) for text in (
+                    'graph context exceeds hard model budget',
+                    'graph context exceeds hard local model budget'))
                     or passage_chars<=MIN_CLAIM_PASSAGE_CHARS):
                 raise
             self._claim_context_splits=getattr(self,'_claim_context_splits',0)+1
-            smaller=max(MIN_CLAIM_PASSAGE_CHARS,passage_chars//2)
-            children=[p for p in source_passages(source,max_chars=smaller,overlap=0)
-                      if focus['char_start']<=p['char_start'] and p['char_end']<=focus['char_end']]
-            if not children:
+            if len(focuses)>1:
+                pivot=max(1,len(focuses)//2)
+                child_groups=[focuses[:pivot],focuses[pivot:]]
+                smaller=passage_chars
+            else:
+                smaller=max(MIN_CLAIM_PASSAGE_CHARS,passage_chars//2)
+                child_groups=[[p] for p in source_passages(source,max_chars=smaller,overlap=0)
+                              if focuses[0]['char_start']<=p['char_start']
+                              and p['char_end']<=focuses[0]['char_end']]
+            if not child_groups:
                 raise
             claims=[];rejected=[];proposed=0
-            for child in children:
+            for child in child_groups:
                 got,no,count=await self._claims_for_focus(source,verified_mentions,ontology,child,
                                                           passage_chars=smaller,context_ranges=context_ranges)
                 claims.extend(got);rejected.extend(no);proposed+=count
@@ -558,22 +859,29 @@ class KnowledgeEngine:
         # Saturation is a property of what the model emitted, not of what survived the
         # focus filter, so prefer the pre-filter count `call` reports back.
         proposed=request.get('_proposed_count',len(response.claims))
-        if proposed==CLAIM_LIMIT:
+        claim_limit=getattr(self,'claim_limit',CLAIM_LIMIT)
+        if proposed==claim_limit:
             self._claim_subdivisions=getattr(self,'_claim_subdivisions',0)+1
-            if passage_chars<=MIN_CLAIM_PASSAGE_CHARS:
+            if len(focuses)==1 and passage_chars<=MIN_CLAIM_PASSAGE_CHARS:
                 return [],[dict(rejection='claim coverage failure: smallest source window reached claim limit',
-                                batch_id=batch_id,claim_limit=CLAIM_LIMIT)],proposed
-            smaller=max(MIN_CLAIM_PASSAGE_CHARS,passage_chars//2)
-            children=[p for p in source_passages(source,max_chars=smaller,overlap=0)
-                      if focus['char_start']<=p['char_start'] and p['char_end']<=focus['char_end']]
+                                batch_id=batch_id,claim_limit=claim_limit)],proposed
+            if len(focuses)>1:
+                pivot=max(1,len(focuses)//2)
+                child_groups=[focuses[:pivot],focuses[pivot:]]
+                smaller=passage_chars
+            else:
+                smaller=max(MIN_CLAIM_PASSAGE_CHARS,passage_chars//2)
+                child_groups=[[p] for p in source_passages(source,max_chars=smaller,overlap=0)
+                              if focuses[0]['char_start']<=p['char_start']
+                              and p['char_end']<=focuses[0]['char_end']]
             claims=[];rejected=[]
-            for child in children:
+            for child in child_groups:
                 got,no,count=await self._claims_for_focus(source,verified_mentions,ontology,child,
                                                           passage_chars=smaller,context_ranges=context_ranges)
                 claims.extend(got);rejected.extend(no);proposed+=count
-            if not children:
+            if not child_groups:
                 rejected.append(dict(rejection='claim coverage failure: saturated window could not be subdivided',
-                                     batch_id=batch_id,claim_limit=CLAIM_LIMIT))
+                                     batch_id=batch_id,claim_limit=claim_limit))
             return claims,rejected,proposed
         reverse={ref:mid for mid,ref in occurrence_refs.items()}
         claims=[]
@@ -582,7 +890,7 @@ class KnowledgeEngine:
             if any(mid is None for mid in mids):
                 raise ValueError('claim references an unoffered occurrence')
             claims.append(Claim(type=proposal.type,mention_ids=mids,attribute=proposal.attribute,
-                value=proposal.value,value_en=proposal.value_en,quote=proposal.quote,
+                value=proposal.value,quote=proposal.quote,
                 evidence_start=proposal.evidence_start))
         return claims,[],proposed
 
@@ -633,25 +941,52 @@ class KnowledgeEngine:
         ontology=self.revision['ontology']
         batches=self._passage_batches(source) if source.strip() else []
         self._name_metrics=dict(passages=sum(len(batch) for batch in batches),
-                                top_level_batches=len(batches),saturation_retries=0)
+                                top_level_batches=len(batches),saturation_splits=0,
+                                incomplete_windows=0)
         if source.strip():
             collected=[];rejected=[]
-            for batch_number,passage_ids in enumerate(batches,1):
+            async def inventory(passage_ids: list[str], batch_id: str):
                 request=dict(source=source,ontology=ontology,_passage_ids=passage_ids,
-                             _batch_id=f'names-{batch_number}')
+                             _batch_id=batch_id)
                 found=await self.call('name_slots',Names,request)
-                if len(passage_ids)>1 and request.get('_proposed_count',len(found.names))==6:
-                    self._name_metrics['saturation_retries']+=1
-                    for part,passage_id in enumerate(passage_ids,1):
-                        child=await self.call('name_slots',Names,dict(source=source,ontology=ontology,
-                            _passage_ids=[passage_id],_batch_id=f'names-{batch_number}.{part}'))
-                        collected.extend(child.names);rejected.extend(child.rejected)
-                else:
-                    collected.extend(found.names);rejected.extend(found.rejected)
+                collected.extend(found.names);rejected.extend(found.rejected)
+                if request.get('_proposed_count',len(found.names))<NAME_SLOT_COUNT:
+                    return
+                if len(passage_ids)<=1:
+                    self._name_metrics['incomplete_windows']+=1
+                    rejected.append(dict(rejection='name coverage failure: smallest source passage reached slot limit',
+                                         batch_id=batch_id,name_limit=NAME_SLOT_COUNT))
+                    return
+                self._name_metrics['saturation_splits']+=1
+                # Balance by offered source characters rather than paragraph count so a
+                # single long paragraph cannot leave one child near the original size.
+                sizes={p['id']:len(p['text']) for p in PassageContract(source).passages}
+                total=sum(sizes[pid] for pid in passage_ids);running=0;pivot=1
+                for index,pid in enumerate(passage_ids[:-1],1):
+                    running+=sizes[pid]
+                    pivot=index
+                    if running>=total/2:
+                        break
+                await inventory(passage_ids[:pivot],batch_id+'.1')
+                await inventory(passage_ids[pivot:],batch_id+'.2')
+
+            for batch_number,passage_ids in enumerate(batches,1):
+                await inventory(passage_ids,f'names-{batch_number}')
             unique={}
             for name in collected:
-                unique[(name.surface,name.kind,name.evidence_start)]=name
-            names=Names(names=list(unique.values()),reviewed_kinds=ontology['kinds'],rejected=rejected)
+                key=(name.surface,name.kind)
+                if key not in unique or name.evidence_start<unique[key].evidence_start:
+                    unique[key]=name
+            inventory=list(unique.values())
+            eligibility_items=[dict(id='name:'+digest([name.surface,name.kind]),type='name',
+                surface=name.surface,kind=name.kind,quote=name.quote,
+                evidence_start=name.evidence_start) for name in inventory]
+            verdicts=await self._verify_items(source,eligibility_items,'name eligibility')
+            accepted,no=approved(eligibility_items,verdicts);rejected.extend(no)
+            accepted_ids={item['id'] for item in accepted}
+            names=Names(names=[name for name,item in zip(inventory,eligibility_items,strict=True)
+                               if item['id'] in accepted_ids],
+                        reviewed_kinds=ontology['kinds'],rejected=rejected)
         else:
             names=Names(names=[],reviewed_kinds=ontology['kinds'])
         mentions=source_mentions(novel,chapter,source,names,ontology)
@@ -661,29 +996,44 @@ class KnowledgeEngine:
 
     def _runtime_diagnostics(self, source: str, display: str) -> dict:
         """Metrics needed to compare chunk policy across chapter sizes (§5.4)."""
+        hosted=getattr(self,'hosted',False)
+        requests=dict(getattr(self,'_stage_requests',{}))
+        cache_hits=dict(getattr(self,'_stage_cache_hits',{}))
+        stages=set(requests)|set(cache_hits)
         return dict(
             input_size=dict(source_chars=len(source),source_bytes=len(source.encode()),
                             display_chars=len(display),display_bytes=len(display.encode())),
-            chunk_policy=dict(name_passages_per_batch=4,name_slots=6,
+            chunk_policy=dict(name_passages_per_batch=64,name_focus_chars=400,
+                name_slots=NAME_SLOT_COUNT,
                 identity_occurrences_per_batch=IDENTITY_BATCH_SIZE,
-                claim_focus_chars=CLAIM_PASSAGE_CHARS,claim_min_chars=MIN_CLAIM_PASSAGE_CHARS,
-                claims_per_response=CLAIM_LIMIT,verification_items_per_batch=12,
+                claim_focus_chars=24_000 if hosted else CLAIM_PASSAGE_CHARS,
+                claim_min_chars=MIN_CLAIM_PASSAGE_CHARS,
+                claims_per_response=getattr(self,'claim_limit',CLAIM_LIMIT),
+                fact_verification_items_per_call=48 if hosted else 1,
+                fact_strategy='api_two_pass' if hosted else 'local_staged',
+                name_verification_items_per_batch=16,
+                other_verification_items_per_batch=12,fact_render_items_per_batch=12,
                 alignment_display_chars=12000,alignment_mentions=48,
-                prompt_hard_bytes=PROMPT_HARD_BYTES),
+                alignments_per_response=ALIGNMENT_LIMIT,alignment_min_chars=MIN_ALIGNMENT_CHARS,
+                prompt_hard_bytes=getattr(self,'prompt_hard_bytes',PROMPT_HARD_BYTES)),
             name_chunking=getattr(self,'_name_metrics',dict(
-                passages=0,top_level_batches=0,saturation_retries=0)),
+                passages=0,top_level_batches=0,saturation_splits=0,incomplete_windows=0)),
             claim_subdivisions=getattr(self,'_claim_subdivisions',0),
             claim_context_splits=getattr(self,'_claim_context_splits',0),
+            alignment_subdivisions=getattr(self,'_alignment_subdivisions',0),
+            render_rejections=getattr(self,'_render_rejections',0),
             identity_chunking=dict(batch_sizes=list(getattr(self,'_identity_batch_sizes',[])),
                                    context_splits=getattr(self,'_identity_context_splits',0)),
-            stage_requests=dict(getattr(self,'_stage_requests',{})),
-            stage_cache_hits=dict(getattr(self,'_stage_cache_hits',{})))
+            stage_requests=requests,stage_cache_hits=cache_hits,
+            stage_fresh_calls={stage:requests.get(stage,0)-cache_hits.get(stage,0)
+                               for stage in sorted(stages)})
 
     async def extract(self, novel: str, chapter: int, source: str, display: str, target: str,
                       *, include_terms: bool = True, include_facts: bool = True) -> dict:
         await self._ensure_run(novel,chapter,source,display)
         self._stage_requests={};self._stage_cache_hits={}
-        self._claim_subdivisions=0;self._claim_context_splits=0
+        self._claim_subdivisions=0;self._claim_context_splits=0;self._render_rejections=0
+        self._alignment_subdivisions=0
         ontology = self.revision['ontology']
         names,mentions,coverage = await self.discover_names(novel,chapter,source)
         if include_terms:
@@ -724,8 +1074,10 @@ class KnowledgeEngine:
         verified_mentions=[m for m in mentions if m['id'] in verified_occurrence_ids]
         all_claims=[];claim_coverage_rejected=[];proposed_claim_count=0
         if include_facts:
-            for focus in source_passages(source,max_chars=CLAIM_PASSAGE_CHARS,overlap=0):
-                found,no,count=await self._claims_for_focus(source,verified_mentions,ontology,focus)
+            claim_passage_chars=24_000 if self.hosted else CLAIM_PASSAGE_CHARS
+            for focus in self._claim_batches(source):
+                found,no,count=await self._claims_for_focus(
+                    source,verified_mentions,ontology,focus,passage_chars=claim_passage_chars)
                 all_claims.extend(found);claim_coverage_rejected.extend(no);proposed_claim_count+=count
         # Neighboring context deliberately overlaps. Exact application-owned evidence
         # offsets make duplicate elimination deterministic without using names as keys.
@@ -738,9 +1090,22 @@ class KnowledgeEngine:
             source,mentions,candidates,Proposals(decisions=[],claims=all_claims),ontology)
         rejected.extend(claim_coverage_rejected+claim_rejected)
         if include_facts:
-            claim_verdicts=await self._verify_items(source,claim_items,'claims',mentions=mentions)
-            verified_claims,no=approved(claim_items,claim_verdicts)
-            rejected.extend(no)
+            if self.hosted:
+                verified_claims,no=await self._review_hosted_claims(
+                    source,claim_items,mentions,target)
+                rejected.extend(no)
+            else:
+                facts=[item for item in claim_items if item['type']=='fact']
+                other_claims=[item for item in claim_items if item['type']!='fact']
+                fact_verdicts=await self._verify_facts(source,facts,mentions)
+                other_verdicts=await self._verify_items(source,other_claims,'claims',mentions=mentions)
+                fact_claims,no=approved(facts,fact_verdicts)
+                rejected.extend(no)
+                verified_other,no=approved(other_claims,other_verdicts)
+                rejected.extend(no)
+                # Display text is downstream of source acceptance. A bad translation now
+                # falls back to the source value instead of becoming an unchecked fact.
+                verified_claims=await self._render_facts(source,fact_claims,mentions)+verified_other
         else:
             verified_claims=[]
         spans=[]
@@ -751,13 +1116,8 @@ class KnowledgeEngine:
         for i in range(window_count):
             lo=len(display)*i//window_count;hi=len(display)*(i+1)//window_count
             mlo=len(mentions)*i//window_count;mhi=len(mentions)*(i+1)//window_count
-            batch=mentions[mlo:mhi]
-            if not display[lo:hi].strip():
-                continue
-            alignment=await self.call('align',Alignments,dict(source=source,translation=display[lo:hi],mentions=batch,
-                _passage_ids=self._mention_passages(source,batch)))
-            spans.extend(aligned_mentions(novel,chapter,source,display[lo:hi],batch,alignment,
-                display_offset=lo,display_identity=display_identity))
+            spans.extend(await self._align_window(novel,chapter,source,display,
+                mentions[mlo:mhi],lo,hi,display_identity))
         by_span={}
         for span in spans:
             key=(span['char_start'],span['char_end'])

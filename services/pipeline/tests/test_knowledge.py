@@ -40,7 +40,106 @@ async def test_graph_uses_configured_runtime_and_keeps_deadlines_out_of_identity
     with pytest.raises(ValueError,match='timeouts'):
         graph_runtime(replace(cfg,graph_ollama_total_timeout_seconds=float('inf')))
     with pytest.raises(ValueError,match='output budget'):
-        graph_runtime(replace(cfg,graph_ollama_num_ctx=4096))
+        graph_runtime(replace(cfg,graph_ollama_num_predict=0))
+
+
+async def test_discover_num_ctx_reads_back_what_ollama_actually_loaded(monkeypatch):
+    """§ dynamic context sizing: the window comes from a load probe, not from config.
+
+    POST /api/generate with no prompt loads without generating (Ollama's own contract);
+    GET /api/ps then reports the context length that host actually resident it with.
+    """
+    import httpx
+    from pipeline.config import Config
+    from pipeline.graph_rebuild import discover_num_ctx
+    seen = []
+    def handle(request):
+        seen.append((request.method, request.url.path))
+        if request.url.path == '/api/generate':
+            return httpx.Response(200, json={'model': 'qwen3', 'done': True})
+        return httpx.Response(200, json={'models': [
+            {'name': 'qwen3', 'context_length': 8192},
+            {'name': 'other-model', 'context_length': 4096},
+        ]})
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original(**kwargs, transport=httpx.MockTransport(handle)))
+    num_ctx = await discover_num_ctx(Config.load(), 'qwen3')
+    assert num_ctx == 8192
+    assert seen == [('POST', '/api/generate'), ('GET', '/api/ps')]
+
+
+async def test_discover_num_ctx_refuses_a_model_that_never_became_resident(monkeypatch):
+    import httpx
+    from pipeline.config import Config
+    from pipeline.graph_rebuild import discover_num_ctx
+    def handle(request):
+        if request.url.path == '/api/generate':
+            return httpx.Response(200, json={'model': 'qwen3', 'done': True})
+        return httpx.Response(200, json={'models': []})
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original(**kwargs, transport=httpx.MockTransport(handle)))
+    with pytest.raises(ValueError, match='resident context length'):
+        await discover_num_ctx(Config.load(), 'qwen3')
+
+
+def test_without_num_ctx_strips_only_num_ctx():
+    from pipeline.graph_rebuild import _without_num_ctx
+    model = dict(provider='ollama', name='m', digest='d',
+                 identity=dict(version='v', stream=True, num_ctx=16384, num_predict=4096))
+    stripped = _without_num_ctx(model)
+    assert stripped == dict(model, identity=dict(version='v', stream=True, num_predict=4096))
+    # A model with no identity, or an identity with no num_ctx, passes through unchanged --
+    # both are real shapes local_model() returns depending on caller.
+    assert _without_num_ctx(dict(provider='ollama', name='m')) == dict(provider='ollama', name='m')
+    assert _without_num_ctx(dict(model, identity=dict(version='v'))) == dict(model, identity=dict(version='v'))
+
+
+@pytest.mark.db
+async def test_prepare_pins_discovered_num_ctx_and_resume_tolerates_it_drifting(db_conn, monkeypatch):
+    """The regression this whole feature is for: cj-desktop's available VRAM (and so its
+    own vram-based num_ctx) can legitimately differ between prepare and a later resume
+    without anything about the pinned model actually changing. Only a real change --
+    here, the digest -- may still refuse to resume."""
+    from unittest.mock import AsyncMock
+    from novel_llm import AdmissionRejected
+    from pipeline import graph_rebuild
+    from pipeline.config import Config
+
+    cfg = Config.load()
+    ontology = {"kinds": ["character"], "attributes": [], "relations": []}
+    base_identity = {"provider": "ollama", "name": "test", "digest": "digest-1",
+                      "identity": {"num_predict": 4096}}
+    monkeypatch.setattr(graph_rebuild, "objects", lambda _cfg: None)
+    monkeypatch.setattr(graph_rebuild, "read_object", lambda *_args: "source")
+
+    async with db_conn.transaction(force_rollback=True):
+        novel = await make_novel(db_conn, ontology=json.dumps(ontology))
+        await db_conn.execute('''INSERT INTO chapter
+            (novel_id,chapter_index,raw_hash,raw_uri,translated_uri,source_meta,status,translation_ready)
+            VALUES(%s,1,'raw-1','raw-1','raw-1','{}','done',true)''', (novel,))
+
+        monkeypatch.setattr(graph_rebuild, "local_model", AsyncMock(return_value=base_identity))
+        monkeypatch.setattr(graph_rebuild, "discover_num_ctx", AsyncMock(return_value=16384))
+        rid = await graph_rebuild.prepare(db_conn, cfg, novel, "test")
+
+        pinned = (await (await db_conn.execute(
+            "SELECT model FROM graph_revision WHERE id=%s", (rid,))).fetchone())[0]
+        assert pinned["identity"]["num_ctx"] == 16384
+
+        # A later resume sees a different num_ctx (VRAM shifted) but the same model --
+        # the preamble must not refuse to run.
+        drifted_ctx_identity = dict(base_identity, identity=dict(base_identity["identity"], num_ctx=8192))
+        monkeypatch.setattr(graph_rebuild, "local_model", AsyncMock(return_value=drifted_ctx_identity))
+        monkeypatch.setattr(KnowledgeEngine, "extract", AsyncMock(side_effect=AdmissionRejected()))
+        with pytest.raises(AdmissionRejected):
+            await graph_rebuild.resume(db_conn, cfg, rid, limit=1)
+
+        # A genuine model change (different digest) must still refuse.
+        changed_digest = dict(base_identity, digest="digest-2",
+                              identity=dict(base_identity["identity"], num_ctx=8192))
+        monkeypatch.setattr(graph_rebuild, "local_model", AsyncMock(return_value=changed_digest))
+        with pytest.raises(ValueError, match="model or inference configuration changed"):
+            await graph_rebuild.resume(db_conn, cfg, rid, limit=1)
 
 
 async def test_runtime_preflight_never_generates_or_loads_models(monkeypatch):
@@ -92,6 +191,55 @@ async def test_graph_cache_preserves_runtime_metrics_and_avoids_repeat_inference
             assert {k:timing[k] for k in ('load_seconds','eval_seconds','input_tokens','output_tokens')}==dict(
                 load_seconds=1,eval_seconds=2,input_tokens=42,output_tokens=5)
             assert timing['stage']=='names' and timing['batch_id']
+        finally:
+            await engine.close()
+
+
+@pytest.mark.db
+async def test_a_stalled_call_is_retried_in_place_rather_than_failing_the_chapter(db_conn,monkeypatch):
+    """A stuck CALL, not a bad chapter: retrying the one request that stalled must not
+    require re-entering extract() and paying the chapter-level backoff."""
+    from unittest.mock import AsyncMock
+    from pipeline.config import Config
+    from novel_llm.provider import Completion
+    from pipeline import knowledge as knowledge_module
+    monkeypatch.setattr(knowledge_module.asyncio,'sleep',AsyncMock())
+    async with db_conn.transaction(force_rollback=True):
+        novel=await make_novel(db_conn,ontology=json.dumps(ONTOLOGY))
+        rid=str((await(await db_conn.execute('INSERT INTO graph_revision(novel_id,ontology) VALUES(%s,%s) RETURNING id',(novel,Jsonb(ONTOLOGY)))).fetchone())[0])
+        engine=KnowledgeEngine(db_conn,Config.load(),dict(id=rid,ontology=ONTOLOGY,model=dict(provider='ollama',name='test')))
+        source='凌峰走进梦魇神殿。'
+        pid=source_passages(source)[0]['id']
+        body=dict(reviewed={kind:True for kind in ONTOLOGY['kinds']},names=[])
+        ok=Completion(text=json.dumps(body),served_provider='ollama',served_model='test')
+        engine.provider.complete=AsyncMock(side_effect=[TimeoutError('stalled'),TimeoutError('stalled'),ok])
+        engine.provider.last_stream_diagnostics={}
+        try:
+            result=await engine.call('names',Names,dict(source=source))
+            assert result.names==[]
+            assert engine.provider.complete.await_count==3
+            assert knowledge_module.asyncio.sleep.await_count==2
+        finally:
+            await engine.close()
+
+
+@pytest.mark.db
+async def test_a_stalled_call_still_fails_the_chapter_once_retries_are_exhausted(db_conn,monkeypatch):
+    from unittest.mock import AsyncMock
+    from pipeline.config import Config
+    from pipeline import knowledge as knowledge_module
+    monkeypatch.setattr(knowledge_module.asyncio,'sleep',AsyncMock())
+    async with db_conn.transaction(force_rollback=True):
+        novel=await make_novel(db_conn,ontology=json.dumps(ONTOLOGY))
+        rid=str((await(await db_conn.execute('INSERT INTO graph_revision(novel_id,ontology) VALUES(%s,%s) RETURNING id',(novel,Jsonb(ONTOLOGY)))).fetchone())[0])
+        engine=KnowledgeEngine(db_conn,Config.load(),dict(id=rid,ontology=ONTOLOGY,model=dict(provider='ollama',name='test')))
+        source='凌峰走进梦魇神殿。'
+        engine.provider.complete=AsyncMock(side_effect=TimeoutError('stalled'))
+        engine.provider.last_stream_diagnostics={}
+        try:
+            with pytest.raises(TimeoutError):
+                await engine.call('names',Names,dict(source=source))
+            assert engine.provider.complete.await_count==knowledge_module.STALL_RETRY_ATTEMPTS+1
         finally:
             await engine.close()
 
@@ -294,7 +442,7 @@ def test_oversized_explanations_and_fact_values_fail_model_validation():
             reason_code='ambiguous',explanation='x'*201,quote='甲',evidence_start=0)])
     with pytest.raises(ValueError):
         ClaimProposals(claims=[dict(type='fact',occurrence_refs=['o1'],attribute='description',
-            value='x'*401,value_en='',quote='甲',evidence_start=0)])
+            value='x'*401,quote='甲',evidence_start=0)])
 
 
 def test_claim_materialization_supports_pronoun_continuation_and_cross_paragraph_evidence():
@@ -302,7 +450,7 @@ def test_claim_materialization_supports_pronoun_continuation_and_cross_paragraph
     first,second=c.passages
     result=c.materialize('claims',ClaimProposals,dict(claims=[dict(type='fact',
         occurrence_refs=['o1'],attribute='description',value='指出西南方向',
-        value_en='points southwest',passage_ids=[first['id'],second['id']])]),ONTOLOGY)
+        passage_ids=[first['id'],second['id']])]),ONTOLOGY)
     assert result.claims[0].quote==source and result.claims[0].evidence_start==0
 
 
@@ -315,7 +463,7 @@ async def test_saturated_claim_windows_subdivide_and_smallest_window_records_fai
         payload=_args[2]
         passage_id=payload['focus_passage_ids'][0]
         return ClaimProposals(claims=[dict(type='fact',occurrence_refs=['o1'],attribute='description',
-            value=f'事实{i}',value_en=f'fact {i}',quote='甲做了一件事。',evidence_start=0) for i in range(12)])
+            value=f'事实{i}',quote='甲做了一件事。',evidence_start=0) for i in range(12)])
     engine.call=AsyncMock(side_effect=saturated)
     focus=source_passages(source,max_chars=400,overlap=0)[0]
     claims,rejected,count=await engine._claims_for_focus(
@@ -325,12 +473,40 @@ async def test_saturated_claim_windows_subdivide_and_smallest_window_records_fai
     assert engine.call.await_count>1
 
 
+async def test_saturated_alignment_windows_subdivide_and_smallest_window_records_failure():
+    """The regression this exists for: an unbounded alignments list let a recurring name
+    force the model to emit one object per occurrence with no ceiling, exhausting
+    num_predict and truncating the whole chapter's align response into unparseable
+    partial JSON. Saturation must subdivide the window like claim extraction does,
+    rather than let the chapter fail over a call that was never actually stuck."""
+    from unittest.mock import AsyncMock
+    from pipeline.knowledge import ALIGNMENT_LIMIT, MIN_ALIGNMENT_CHARS
+    source='凌峰做了一件事。'*40
+    display='Ling Feng did a thing. '*40
+    mentions=[dict(id=f'm{i}',surface='凌峰',kind='character',
+                   char_start=i*8,char_end=i*8+2,quote='凌峰做了一件事。') for i in range(40)]
+    engine=object.__new__(KnowledgeEngine)
+    engine.call=AsyncMock(return_value=Alignments(alignments=[
+        dict(phrase='Ling Feng',occurrence=0,mention_id=None,quote='') for _ in range(ALIGNMENT_LIMIT)]))
+    spans=await engine._align_window('book',1,source,display,mentions,0,len(display),'digest')
+    assert engine.call.await_count>1, 'a saturated window must subdivide rather than accept a partial list'
+    assert engine._alignment_subdivisions>0
+    # Recursion terminated (this line runs at all) once windows shrank to the floor,
+    # proving MIN_ALIGNMENT_CHARS actually bounds it rather than looping forever.
+    windows=[len(c.args[2]['translation']) for c in engine.call.await_args_list]
+    assert windows[-1]<=MIN_ALIGNMENT_CHARS*2
+    assert isinstance(spans,list)
+
+
 async def test_application_can_aggregate_more_than_64_names_across_bounded_requests(monkeypatch):
     from unittest.mock import AsyncMock
     from pipeline.config import Config
     source='\n'.join(f'Name{i} arrived.' for i in range(65))
     engine=KnowledgeEngine(None,Config.load(),dict(id='test',ontology=ONTOLOGY,model=dict(provider='ollama',name='test')))
     async def discover(_stage,_schema,payload):
+        if _stage=='name_verify':
+            return Verification(verdicts=[dict(id=item['item_ref'],supported=True,reason='named')
+                                          for item in payload['items']])
         contract=PassageContract(source,set(payload['_passage_ids']))
         rows=[]
         for p in contract.passages:
@@ -347,13 +523,17 @@ async def test_application_can_aggregate_more_than_64_names_across_bounded_reque
 
 
 async def test_saturated_batched_name_inventory_retries_each_passage():
+    from pipeline.knowledge_contract import NAME_SLOT_COUNT
     source='\n'.join(f'Name{i} arrived.' for i in range(4))
     engine=object.__new__(KnowledgeEngine)
     calls=[]
     async def discover(_stage,_schema,payload):
+        if _stage=='name_verify':
+            return Verification(verdicts=[dict(id=item['item_ref'],supported=True,reason='named')
+                                          for item in payload['items']])
         calls.append(list(payload['_passage_ids']))
         if len(payload['_passage_ids'])>1:
-            payload['_proposed_count']=6
+            payload['_proposed_count']=NAME_SLOT_COUNT
             return Names(names=[],reviewed_kinds=ONTOLOGY['kinds'])
         p=PassageContract(source,set(payload['_passage_ids'])).passages[0]
         surface=p['text'].split()[0]
@@ -362,40 +542,75 @@ async def test_saturated_batched_name_inventory_retries_each_passage():
     engine.call=discover
     engine.revision=dict(ontology=ONTOLOGY)
     names,mentions,_=await engine.discover_names('book',1,source)
-    assert len(calls)==5 and len(calls[0])==4
-    assert all(len(batch)==1 for batch in calls[1:])
+    assert [len(batch) for batch in calls]==[4,2,1,1,2,1,1]
     assert len(names.names)==len(mentions)==4
-    assert engine._name_metrics==dict(passages=4,top_level_batches=1,saturation_retries=1)
+    assert engine._name_metrics==dict(passages=4,top_level_batches=1,
+                                      saturation_splits=3,incomplete_windows=0)
+
+
+async def test_name_eligibility_rejects_generic_fragments_before_occurrence_expansion():
+    source='凌峰看见淡银色。'
+    engine=object.__new__(KnowledgeEngine)
+    engine.revision=dict(ontology=ONTOLOGY)
+    async def call(stage,_schema,payload):
+        if stage=='name_slots':
+            return Names(names=[
+                dict(surface='凌峰',kind='character',quote=source,evidence_start=0,named=True),
+                dict(surface='淡银色',kind='place',quote=source,evidence_start=0,named=True),
+            ],reviewed_kinds=ONTOLOGY['kinds'])
+        return Verification(verdicts=[dict(id=item['item_ref'],
+            supported=item['surface']=='凌峰',reason='proper name' if item['surface']=='凌峰' else 'color')
+            for item in payload['items']])
+    engine.call=call
+    names,mentions,_=await engine.discover_names('book',1,source)
+    assert [name.surface for name in names.names]==['凌峰']
+    assert [mention['surface'] for mention in mentions]==['凌峰']
+    assert any(row.get('surface')=='淡银色' for row in names.rejected)
 
 
 def test_runtime_diagnostics_record_input_size_policy_and_request_counts():
     engine=object.__new__(KnowledgeEngine)
     engine._stage_requests={'name_slots':3,'claims':2}
     engine._stage_cache_hits={'name_slots':1}
-    engine._name_metrics=dict(passages=12,top_level_batches=3,saturation_retries=1)
+    engine._name_metrics=dict(passages=12,top_level_batches=3,
+                              saturation_splits=1,incomplete_windows=0)
     engine._claim_subdivisions=2
     metrics=engine._runtime_diagnostics('甲乙','Alpha')
     assert metrics['input_size']==dict(source_chars=2,source_bytes=6,
                                        display_chars=5,display_bytes=5)
     assert metrics['chunk_policy']['claim_focus_chars']==1200
     assert metrics['chunk_policy']['identity_occurrences_per_batch']==12
-    assert metrics['name_chunking']['saturation_retries']==1
+    assert metrics['name_chunking']['saturation_splits']==1
     assert metrics['claim_subdivisions']==2
     assert metrics['stage_requests']['claims']==2
     assert metrics['stage_cache_hits']=={'name_slots':1}
+    assert metrics['stage_fresh_calls']=={'claims':2,'name_slots':2}
 
 
 def test_long_chapters_are_split_below_the_prompt_target_budget():
     source='\n'.join(('段落'+str(i)+'。')*100 for i in range(200))
     batches=KnowledgeEngine._passage_batches(source)
     passages={p['id']:p for p in PassageContract(source).passages}
-    assert all(len(batch)<=4 for batch in batches)
+    assert all(len(batch)<=64 for batch in batches)
     assert all(sum(len(json.dumps(dict(id=pid,text=passages[pid]['text']),ensure_ascii=False).encode())+2
                    for pid in batch)<=8192 for batch in batches)
     assert len(source.encode())>42000 and len(batches)>1
     passages={p['id']:p for p in source_passages(source)}
     assert all(sum(len(json.dumps(dict(id=pid,text=passages[pid]['text']),ensure_ascii=False).encode())+2 for pid in batch)<=24000
                for batch in batches)
+
+
+def test_short_paragraphs_are_packed_by_content_budget_not_line_count():
+    source='\n'.join('安若素描述了星莲的位置。' for _ in range(20))
+    name_batches=KnowledgeEngine._passage_batches(source)
+    claim_batches=KnowledgeEngine._claim_focus_batches(source)
+    assert len(name_batches)==1
+    assert len(claim_batches)==1
+    assert sum(len(row['text']) for row in claim_batches[0])<=1200
+    assert [pid for batch in name_batches for pid in batch]==[
+        row['id'] for row in PassageContract(source).passages]
+    assert [row['id'] for batch in claim_batches for row in batch]==[
+        row['id'] for row in source_passages(source,max_chars=1200,overlap=0)]
 
 
 def test_passage_references_still_require_identity_and_claim_verification():
@@ -722,36 +937,82 @@ async def test_optional_bool_refuses_a_value_it_cannot_read(monkeypatch):
         _optional_bool('BOOK_TEST_FLAG')
 
 
-async def test_display_gloss_is_never_offered_to_verification():
-    """value_en renders a fact; `value` is the only thing evidence has to support.
-
-    Handing the verifier the English too would quietly change the question it answers
-    from "does the source establish this claim?" to "is this translation good?", and
-    spend tokens in the batch that is already closest to the output cap.
-    """
-    from unittest.mock import AsyncMock
-    source='甲做了一件事。'
-    mention=dict(id='m1',surface='甲',kind='character',char_start=0,char_end=1,quote=source)
-    engine=object.__new__(KnowledgeEngine)
-    seen=[]
-    async def call(_stage,_schema,payload):
-        seen.append(payload)
-        return Verification(verdicts=[dict(id='v1',supported=True,reason='ok')])
-    engine.call=AsyncMock(side_effect=call)
-    await engine._verify_items(source,[dict(id='claim:0',type='fact',mention_ids=['m1'],
-        attribute='description',value='做了一件事',value_en='did a thing',
-        quote=source,evidence_start=0)],'claims',mentions=[mention])
-    wire=seen[0]['items'][0]
-    assert 'value_en' not in wire and wire['value']=='做了一件事'
-
-
-def test_display_gloss_is_bounded_and_optional_on_the_internal_claim():
-    from pipeline.evidence import Claim, MAX_FACT_GLOSS_CHARS
-    # Bounded on the wire: an unbounded gloss is output tokens the cap has to absorb.
-    with pytest.raises(ValueError):
+def test_claim_proposal_cannot_generate_unchecked_display_english():
+    from pipeline.evidence import Claim
+    with pytest.raises(ValueError,match='extra'):
         ClaimProposals(claims=[dict(type='fact',occurrence_refs=['o1'],attribute='description',
-            value='甲',value_en='x'*(MAX_FACT_GLOSS_CHARS+1),quote='甲',evidence_start=0)])
-    # Optional internally, so a claim assembled without one still publishes; the reader
-    # path COALESCEs back to the source value rather than showing a blank fact.
+            value='甲',value_en='invented gloss',quote='甲',evidence_start=0)])
     assert Claim(type='fact',mention_ids=['m1'],attribute='description',
                  value='甲',quote='甲',evidence_start=0).value_en==''
+
+
+async def test_fact_verification_reads_evidence_before_and_separately_from_each_claim():
+    from unittest.mock import AsyncMock
+    from pipeline.evidence import EvidenceReading, FactComponentVerification
+    source='莲池在海湾深处。星源兽喷吐雾气。'
+    mentions=[
+        dict(id='pond',surface='莲池',kind='place',char_start=0,char_end=2,quote=source),
+        dict(id='beast',surface='星源兽',kind='group',char_start=8,char_end=11,quote=source),
+    ]
+    items=[
+        dict(id='claim:0',type='fact',mention_ids=['pond'],attribute='description',
+             value='喷吐雾气',quote=source,evidence_start=0),
+        dict(id='claim:1',type='fact',mention_ids=['beast'],attribute='description',
+             value='喷吐雾气',quote=source,evidence_start=0),
+    ]
+    engine=object.__new__(KnowledgeEngine);seen=[]
+    async def call(stage,_schema,payload):
+        seen.append((stage,payload))
+        if stage=='evidence':
+            # This call must be claim-independent: the proposed pond error cannot prime it.
+            assert 'items' not in payload
+            return EvidenceReading(statements=[
+                dict(subject='星源兽',assertion='喷吐雾气'),
+                dict(subject='莲池',assertion='蕴藏强大力量')])
+        assert payload['items'][0]['evidence_reading']==[
+            dict(subject='星源兽',assertion='喷吐雾气',qualifiers=[])]
+        subject=payload['items'][0]['subjects'][0]['surface']
+        return FactComponentVerification(verdicts=[dict(id='v1',
+            subject_supported=subject=='星源兽',assertion_supported=True,
+            qualifiers_supported=True,evidence_sufficient=True,reason='source assigns action to beasts')])
+    engine.call=AsyncMock(side_effect=call)
+    verdicts=await engine._verify_facts(source,items,mentions)
+    assert [v.supported for v in verdicts.verdicts]==[False,True]
+    assert [stage for stage,_ in seen]==['evidence','fact_verify','fact_verify']
+
+
+async def test_fact_verification_requires_every_component():
+    from unittest.mock import AsyncMock
+    from pipeline.evidence import EvidenceReading, FactComponentVerification
+    source='据安若素观察，深处几株星莲呈暗金色。'
+    mention=dict(id='lotus',surface='星莲',kind='group',char_start=10,char_end=12,quote=source)
+    item=dict(id='claim:0',type='fact',mention_ids=['lotus'],attribute='description',
+              value='所有星莲呈暗金色',quote=source,evidence_start=0)
+    engine=object.__new__(KnowledgeEngine)
+    async def call(stage,_schema,_payload):
+        if stage=='evidence':
+            return EvidenceReading(statements=[dict(subject='深处几株星莲',assertion='呈暗金色',
+                qualifiers=['据安若素观察','深处几株'])])
+        return FactComponentVerification(verdicts=[dict(id='v1',subject_supported=True,
+            assertion_supported=True,qualifiers_supported=False,evidence_sufficient=True,
+            reason='claim drops reporter and subset')])
+    engine.call=AsyncMock(side_effect=call)
+    verdict=(await engine._verify_facts(source,[item],[mention])).verdicts[0]
+    assert not verdict.supported and verdict.reason.startswith('qualifiers_supported:')
+
+
+async def test_unfaithful_english_is_not_attached_to_verified_source_fact():
+    from unittest.mock import AsyncMock
+    from pipeline.evidence import FactRenderings
+    source='星源兽向石莲喷吐雾气。'
+    mention=dict(id='beast',surface='星源兽',kind='group',char_start=0,char_end=3,quote=source)
+    items=[dict(id='claim:0',type='fact',mention_ids=['beast'],attribute='description',
+                value='向石莲喷吐雾气',quote=source,evidence_start=0)]
+    engine=object.__new__(KnowledgeEngine)
+    async def call(stage,_schema,_payload):
+        if stage=='render':
+            return FactRenderings(renderings=[dict(id='r1',value_en='the lotuses emit mist')])
+        return Verification(verdicts=[dict(id='r1',supported=False,reason='reverses actor')])
+    engine.call=AsyncMock(side_effect=call)
+    rendered=await engine._render_facts(source,items,[mention])
+    assert rendered[0]['value_en']=='' and rendered[0]['value']=='向石莲喷吐雾气'

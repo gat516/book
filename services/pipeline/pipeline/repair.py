@@ -213,6 +213,12 @@ STALE_AFTER_MINUTES = 30
 # backoff policy in the codebase rather than two.
 TRANSIENT_CATEGORIES = {"model_unreachable", "timeout"}
 
+# No per-revision attempt counter exists to back off against (unlike graph_job's
+# attempts + graph_retry_delay_minutes), so this is a flat cooldown rather than an
+# escalating one. resume()'s preamble check is cheap (metadata only, no model call), so a
+# flat 5 minutes just bounds how often a still-down endpoint gets re-probed.
+BLOCKED_RETRY_MINUTES = 5
+
 
 def retry_delay_minutes(attempt: int) -> int | None:
     from pipeline.graph_rebuild import graph_retry_delay_minutes
@@ -299,8 +305,11 @@ async def _run(db, cfg, row: dict) -> dict:
         if not isinstance(model, str) or not model.strip():
             raise ValueError("prepare requires a model name")
         if row["track"] == "graph":
-            revision = await module.prepare(db, cfg, row["novel_id"], model.strip(),
-                                            upto_chapter=params.get("upto_chapter"))
+            provider = params.get("provider", "ollama")
+            kwargs={"upto_chapter":params.get("upto_chapter")}
+            if "provider" in params:
+                kwargs["provider"]=provider
+            revision = await module.prepare(db, cfg, row["novel_id"], model.strip(),**kwargs)
         else:
             if "upto_chapter" in params:
                 raise ValueError("chapter ceilings apply only to the entity graph")
@@ -357,6 +366,26 @@ async def _run(db, cfg, row: dict) -> dict:
         # that rolling back fixed anything.
         return {"status": "rolled back", "revision": row["revision_id"],
                 "note": "trust is not restored by rollback; facts stay withheld"}
+
+    if action == "retry":
+        # A blocked revision otherwise clears itself only for TRANSIENT_CATEGORIES, and
+        # only after BLOCKED_RETRY_MINUTES (see _next_staging_revision). This lets an
+        # operator who has fixed the actual cause -- restarted the tunnel, installed the
+        # pinned model, added a credential -- unstick it immediately instead of waiting
+        # out a cooldown that assumes nothing changed. resume()'s preamble re-checks
+        # everything before spending a call, so clearing the marker here costs nothing if
+        # the cause has not actually cleared; it just re-blocks with a fresh blocked_at.
+        table = "graph_revision" if row["track"] == "graph" else "event_revision"
+        before = await (await db.execute(
+            f"SELECT blocked_category FROM {table} WHERE id=%s AND state='staging'",
+            (row["revision_id"],))).fetchone()
+        if not before:
+            raise ValueError("no such staging rebuild to retry")
+        await db.execute(
+            f"UPDATE {table} SET blocked_category=NULL, blocked_at=NULL WHERE id=%s",
+            (row["revision_id"],))
+        return {"status": "retry requested", "revision": row["revision_id"],
+                "was_blocked": before[0] is not None}
 
     if action == "discard":
         if row["track"] != "graph":
@@ -462,13 +491,24 @@ async def _next_staging_revision(db, revision_table: str, job_table: str,
     The same fencing rule as the active drain: only the EARLIEST unfinished chapter may
     move, so a terminal failure holds the rest of the revision rather than letting later
     chapters publish identity state built on a gap.
+
+    A revision blocked on a TRANSIENT_CATEGORIES cause (the local Ollama endpoint was
+    down, or a call timed out) is still eligible once BLOCKED_RETRY_MINUTES has passed
+    since it was blocked. resume()'s preamble re-checks reachability before spending any
+    model call, so retrying costs nothing when the cause hasn't actually cleared -- it
+    just re-blocks with a fresh blocked_at. Without this, a transient outage (e.g. an SSH
+    tunnel to a remote Ollama flapping) left every staging revision stuck forever: nothing
+    else ever clears blocked_at, and the repair panel has no "retry" action for a blocked
+    revision, only for individual failed chapters.
     """
     cursor = await db.execute(
         f"""WITH newest AS (
               SELECT DISTINCT ON (r.novel_id) r.id, r.novel_id, r.created_at
                FROM {revision_table} r
                WHERE r.state = 'staging'
-                 AND r.blocked_at IS NULL
+                 AND (r.blocked_at IS NULL
+                      OR (r.blocked_category = ANY(%s)
+                          AND r.blocked_at <= now() - (%s * interval '1 minute')))
                  AND (%s::uuid IS NULL OR r.novel_id = %s::uuid)
                ORDER BY r.novel_id, r.created_at DESC
             )
@@ -479,7 +519,7 @@ async def _next_staging_revision(db, revision_table: str, job_table: str,
              WHERE j.state IN ('pending', 'processing')
                 OR (j.state = 'failed' AND j.attempts <= 3 AND j.retry_at <= now())
              ORDER BY n.created_at LIMIT 1""",
-        (novel_id, novel_id),
+        (list(TRANSIENT_CATEGORIES), BLOCKED_RETRY_MINUTES, novel_id, novel_id),
     )
     row = await cursor.fetchone()
     return row[0] if row else None
