@@ -539,9 +539,23 @@ export interface RepairTrack {
   // chapter -- the only counter that moves *inside* a chapter, and so the only honest
   // "still alive" signal on hardware where one call can take ten minutes.
   published: { claims: number; entities: number; calls: number };
+  // Content-free graph_job telemetry. The separate Redis heartbeat says whether the
+  // process is alive; these timestamps say whether this particular model call is moving.
+  worker?: RepairWorkerReport;
   // Which chapter is being read right now. "0 of 26" cannot tell you whether it is stuck
   // on the first chapter or working through the twentieth.
   current: { chapter: number; since: string } | null;
+}
+
+export interface RepairWorkerReport {
+  job_state: "pending" | "processing" | "done" | "failed";
+  stage?: string;
+  stage_started_at?: string;
+  last_progress_at?: string;
+  attempts: number;
+  category?: string;
+  detail?: string;
+  updated_at: string;
 }
 
 export interface RepairBlocked {

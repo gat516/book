@@ -85,6 +85,16 @@ body {
 .knowledge-actions { display: inline-flex; flex-wrap: wrap; gap: .35rem; margin: .35rem 0 0 .5rem; }
 .knowledge-activity { padding-left: 1.4rem; }
 .knowledge-activity time { color: #777; font-variant-numeric: tabular-nums; }
+.graph-build-status { margin-top: .65rem; padding: .8rem; border: 1px solid #ddd6c8; border-radius: 8px; background: #faf8f2; }
+.graph-build-heading { display: flex; justify-content: space-between; gap: 1rem; margin-bottom: .35rem; }
+.graph-build-heading span { color: #666; font-variant-numeric: tabular-nums; }
+.graph-build-status progress { display: block; width: 100%; height: .8rem; accent-color: #4f7651; }
+.graph-build-failed progress { accent-color: #a94b43; }
+.graph-build-reports { display: grid; grid-template-columns: repeat(auto-fit,minmax(9rem,1fr)); gap: .45rem .8rem; margin: .75rem 0 0; }
+.graph-build-reports div { min-width: 0; }
+.graph-build-reports dt { color: #777; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
+.graph-build-reports dd { margin: 0; font-variant-numeric: tabular-nums; }
+.graph-build-status .reader-pane-error { margin-bottom: 0; }
 .phase-proposed { background: #fff1c9; }.phase-verified { background: #dcebf8; }.phase-published { background: #dcefdc; }.phase-rejected { background: #f4dddd; }
 .knowledge-review { margin-top: .8rem; padding: .8rem; background: #faf8f2; border-radius: 6px; }
 .knowledge-review label { display: flex; justify-content: space-between; gap: .8rem; padding: .35rem 0; }

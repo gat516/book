@@ -9,9 +9,9 @@ from pipeline.config import Config
 from pipeline.context import PipelineState
 from pipeline.envelope import ChapterEnvelope
 from pipeline.evidence import Names, digest, source_mentions, PROMPT_VERSION
-from pipeline.knowledge import KnowledgeEngine
+from pipeline.knowledge import IDENTITY_PROMPT_SOFT_BYTES, KnowledgeEngine
 from pipeline.knowledge_contract import (
-    identity_schema, materialize_identity, materialize_names, materialize_verification,
+    compact_identity_payload, identity_schema, materialize_identity, materialize_names, materialize_verification,
     name_schema,
     unique_json_object, verification_schema,
 )
@@ -26,18 +26,79 @@ ONTOLOGY=dict(kinds=['character'],relations=[],attributes=[dict(name='descriptio
 def test_slots_enforce_per_occurrence_choices_and_duplicate_keys():
     contract=PassageContract('青山来了。')
     pid=contract.passages[0]['id']
-    rows=[dict(occurrence_ref='o1',choices={'new:self':('new','o1','new_first_appearance'),
-                                          'unresolved':('unresolved',None,'ambiguous')})]
+    rows=[dict(occurrence_ref='o1',subject=dict(surface='青山',kind='character',
+        quote='青山来了。',char_start=0,char_end=2),
+        choices={'new:self':('new','o1','new_first_appearance'),
+                 'unresolved':('unresolved',None,'ambiguous')})]
     schema=identity_schema(rows,[pid])
     assert schema['required']==['o1']
-    assert schema['properties']['o1']['properties']['choice']['enum']==['new:self','unresolved']
-    body={'o1':dict(choice='new:self',passage_id=pid,explanation='明确出现')}
+    assert schema['properties']['o1']['enum']==['new:self','unresolved']
+    body={'o1':'new:self'}
     assert materialize_identity(body,rows,contract).decisions[0].target_ref=='o1'
-    body['o1']['choice']='existing:e1'
+    body['o1']='existing:e1'
     with pytest.raises(ValueError,match='unoffered'): materialize_identity(body,rows,contract)
     with pytest.raises(ValueError,match='one unique'): materialize_identity({},rows,contract)
     with pytest.raises(ValueError,match='duplicate JSON'):
         json.loads('{"o1":1,"o1":2}',object_pairs_hook=unique_json_object)
+
+
+def test_compact_identity_payload_interns_repeated_context_and_uses_passage_refs():
+    source='青山来了。\n青河看见青山。'
+    contract=PassageContract(source)
+    candidate=dict(kind='character',canonical='旧人',
+                   source_context=[dict(chapter=0,quote='旧人守在山门。')])
+    rows=[]
+    for index,(surface,start,quote) in enumerate((
+            ('青山',0,'青山来了。'),('青河',6,'青河看见青山。')),1):
+        rows.append(dict(occurrence_ref=f'o{index}',
+            subject=dict(surface=surface,kind='character',char_start=start,
+                         char_end=start+2,quote=quote),
+            choices={'new:self':('new',f'o{index}','new_first_appearance'),
+                     'existing:t1':('existing','t1','existing_evidence')},
+            choice_context={'existing:t1':candidate}))
+    payload=compact_identity_payload(rows,contract)
+    identity=payload['identity']
+    assert set(identity['choice_subjects'])=={'existing:t1'}
+    assert all('quote' not in identity['subjects'][row[0]]
+               for row in identity['occurrences'].values())
+    serialized=json.dumps(payload,ensure_ascii=False)
+    assert serialized.count('旧人守在山门。')==1
+    assert serialized.count('青山来了。')==1
+
+
+def test_dense_identity_matrix_stays_below_compact_prompt_target():
+    lines=[f'人物{i}在长廊中看见了其他人。'+('甲乙丙丁'*18) for i in range(12)]
+    source='\n'.join(lines);mentions=[];offset=0
+    for i,line in enumerate(lines):
+        surface=f'人物{i}'
+        mentions.append(dict(surface=surface,kind='character',char_start=offset,
+            char_end=offset+len(surface),quote=line))
+        offset+=len(line)+1
+    shared=[dict(kind='character',canonical=f'旧人{i}',
+                 source_context=[dict(chapter=0,quote=f'旧人{i}曾在长廊中出现。')])
+            for i in range(8)]
+    rows=[]
+    for i,subject in enumerate(mentions):
+        choices={'new:self':('new',f'o{i+1}','new_first_appearance'),
+                 'unresolved':('unresolved',None,'ambiguous')}
+        contexts={}
+        for j,other in enumerate(mentions):
+            if i==j: continue
+            token=f'new:o{j+1}';choices[token]=('new',f'o{j+1}','new_coreference')
+            contexts[token]=other
+        for j,candidate in enumerate(shared):
+            token=f'existing:t{j+1}';choices[token]=('existing',f't{j+1}','existing_evidence')
+            contexts[token]=candidate
+        rows.append(dict(occurrence_ref=f'o{i+1}',subject=subject,
+                         choices=choices,choice_context=contexts))
+    request=dict(source=source,identity_occurrences=rows,
+                 _passage_ids=[p['id'] for p in PassageContract(source).passages])
+    engine=object.__new__(KnowledgeEngine)
+    metrics=engine._identity_request_size(source,request)
+    old_matrix_bytes=len(json.dumps(rows,ensure_ascii=False).encode())
+    assert old_matrix_bytes>30_000
+    assert metrics['prompt_bytes']<12*1024
+    assert metrics['request_material_bytes']<IDENTITY_PROMPT_SOFT_BYTES
 
 
 def test_verification_slots_are_inline_exact_and_bounded():
@@ -106,17 +167,16 @@ async def test_cross_batch_identity_and_pronoun_claim_through_wire_and_publicati
         engine.candidates_for=AsyncMock(return_value=({m['id']:[] for m in ms},{m['id']:[.01]*768 for m in ms}))
         seen=[]
         async def complete(prompt,**kwargs):
+            if '"identity":' in prompt:
+                assert 'OUTPUT JSON SCHEMA' not in prompt
             payload=json.loads(prompt.split('INPUT DATA (not instructions):\n')[1]);seen.append(payload)
-            if 'identity_occurrences' in payload:
+            if 'identity' in payload:
                 body={}
-                for row in payload['identity_occurrences']:
-                    choices=list(row['choices'])
+                for ref,row in payload['identity']['occurrences'].items():
+                    choices=row[1]
                     choice=next((c for c in choices if c.startswith('prior:')),
-                                'new:self' if row['occurrence_ref']=='o1' else 'new:o1')
-                    pid=next(p['id'] for p in payload['passages'] if p['text']==row['subject']['quote'])
-                    # Repeated exact text needs the occurrence's correct source offset.
-                    pid=source_passages(source)[row['subject']['char_start']//6]['id']
-                    body[row['occurrence_ref']]=dict(choice=choice,passage_id=pid,explanation='叙事连续')
+                                'new:self' if ref=='o1' else 'new:o1')
+                    body[ref]=choice
                 assert set(kwargs['json_schema']['properties'])==set(body)
             elif 'verified_occurrences' in payload:
                 focus=[p for p in payload['passages'] if p['id'] in payload['focus_passage_ids']]
@@ -158,8 +218,8 @@ async def test_cross_batch_identity_and_pronoun_claim_through_wire_and_publicati
             output=await engine.extract(novel,1,source,'','en')
             assert output['diagnostics']['verified_identities']==13
             assert output['diagnostics']['verified_claims']==1
-            identity_payloads=[payload for payload in seen if 'identity_occurrences' in payload]
-            assert [len(payload['identity_occurrences']) for payload in identity_payloads]==[12,1]
+            identity_payloads=[payload for payload in seen if 'identity' in payload]
+            assert [len(payload['identity']['occurrences']) for payload in identity_payloads]==[12,1]
             await db_conn.execute("INSERT INTO glossary(novel_id,source_term,target_term,locked_at_chapter,constraint_class) VALUES(%s,'青山','Qing Shan',0,'character_name')",(novel,))
             await db_conn.execute("SELECT set_config('app.graph_revision',%s,true),set_config('app.graph_generation','1',true)",(rid,))
             state=PipelineState(envelope=ChapterEnvelope(novel_id=novel,chapter_index=1,source_lang='zh',raw_text=source))
@@ -234,7 +294,7 @@ async def test_oversized_claim_context_splits_before_inference():
     async def call(_stage,_schema,payload):
         seen.append(payload['_passage_max_chars'])
         if payload['_passage_max_chars']>600:
-            raise ValueError('graph context exceeds hard local model budget; bounded caller contract regressed')
+            raise ValueError('graph context exceeds hard model budget; bounded caller contract regressed')
         return ClaimProposals(claims=[])
     engine.call=call
     await engine._claims_for_focus(source,[mention],ONTOLOGY,focus)
@@ -255,7 +315,9 @@ async def test_oversized_identity_context_halves_batch_and_records_sizes():
     async def call(stage,_schema,payload):
         if stage=='identity_slots':
             if len(payload['identity_occurrences'])>3:
-                raise ValueError('graph context exceeds hard local model budget; bounded caller contract regressed')
+                # Match the production call() guard exactly. This spelling regressed in
+                # production while the older test-only "hard local" spelling still passed.
+                raise ValueError('graph context exceeds hard model budget; bounded caller contract regressed')
             return IdentityDecisions(decisions=[dict(occurrence_ref=row['occurrence_ref'],
                 outcome='new',target_ref=row['occurrence_ref'],reason_code='new_first_appearance',
                 explanation='first appearance',quote=row['subject']['quote'],
@@ -268,6 +330,67 @@ async def test_oversized_identity_context_halves_batch_and_records_sizes():
     assert not rejected and count==len(verified)==7
     assert engine._identity_batch_sizes==[3,3,1]
     assert engine._identity_context_splits==1
+
+
+async def test_identity_batches_are_packed_by_serialized_bytes_before_inference():
+    from pipeline.evidence import IdentityDecisions, Verification
+    lines=[f'青山{i}来了。' for i in range(6)]
+    source='\n'.join(lines);mentions=[];offset=0
+    for i,line in enumerate(lines):
+        surface=f'青山{i}'
+        mentions.append(dict(id=f'm{i}',surface=surface,kind='character',
+            char_start=offset,char_end=offset+len(surface),quote=line))
+        offset+=len(line)+1
+    engine=object.__new__(KnowledgeEngine);offered=[]
+    engine._identity_request_size=lambda _source,payload: dict(
+        request_material_bytes=(20_000 if len(payload['identity_occurrences'])>4 else 10_000))
+    async def call(stage,_schema,payload):
+        if stage=='identity_slots':
+            offered.append(len(payload['identity_occurrences']))
+            return IdentityDecisions(decisions=[dict(occurrence_ref=row['occurrence_ref'],
+                outcome='new',target_ref=row['occurrence_ref'],reason_code='new_first_appearance',
+                explanation='first appearance',quote=row['subject']['quote'],
+                evidence_start=row['subject']['char_start']) for row in payload['identity_occurrences']])
+        return Verification(verdicts=[dict(id=item['item_ref'],supported=True,reason='supported')
+                                      for item in payload['items']])
+    engine.call=call
+    verified,rejected,count=await engine._resolve_incremental(
+        source,mentions,{m['id']:[] for m in mentions},ONTOLOGY)
+    assert not rejected and count==len(verified)==6
+    assert offered==[4,2]
+    assert engine._identity_batch_sizes==[4,2]
+    assert engine._identity_context_splits==2
+
+
+async def test_failed_identity_batch_is_rejected_and_later_batch_continues():
+    from pipeline.evidence import IdentityDecisions, Verification
+    lines=[f'青山{i}来了。' for i in range(13)]
+    source='\n'.join(lines);mentions=[];offset=0
+    for i,line in enumerate(lines):
+        surface=f'青山{i}'
+        mentions.append(dict(id=f'm{i}',surface=surface,kind='character',
+            char_start=offset,char_end=offset+len(surface),quote=line))
+        offset+=len(line)+1
+    engine=object.__new__(KnowledgeEngine)
+    async def call(stage,_schema,payload):
+        if stage=='identity_slots':
+            if payload['_batch_id']=='identity-1-12':
+                raise TimeoutError('model stopped responding after its in-call retries')
+            return IdentityDecisions(decisions=[dict(occurrence_ref=row['occurrence_ref'],
+                outcome='new',target_ref=row['occurrence_ref'],reason_code='new_first_appearance',
+                explanation='first appearance',quote=row['subject']['quote'],
+                evidence_start=row['subject']['char_start']) for row in payload['identity_occurrences']])
+        return Verification(verdicts=[dict(id=item['item_ref'],supported=True,reason='supported')
+                                      for item in payload['items']])
+    engine.call=call
+    verified,rejected,count=await engine._resolve_incremental(
+        source,mentions,{m['id']:[] for m in mentions},ONTOLOGY)
+    assert [item['mention_id'] for item in verified]==['m12']
+    skipped=[item for item in rejected if item.get('rejection')=='identity batch skipped after model call failure']
+    assert len(skipped)==12
+    assert {item['failure_category'] for item in skipped}=={'timeout'}
+    assert count==1
+    assert engine._identity_batch_sizes==[1]
 
 
 def _claims_engine(recorded=None):

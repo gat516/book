@@ -1,4 +1,6 @@
 """Request-local graph choices. Grammar and application enforce the same allowlists."""
+import json
+
 from pipeline.evidence import IdentityDecisions, Names, Verification, Verdict
 
 
@@ -45,13 +47,14 @@ def materialize_names(body, contract, ontology):
 
 
 def identity_schema(rows, passage_ids):
-    slots = {}
-    for row in rows:
-        slots[row['occurrence_ref']] = dict(type='object', additionalProperties=False,
-            required=['choice', 'passage_id', 'explanation'], properties={
-                'choice': dict(type='string', enum=list(row['choices'])),
-                'passage_id': dict(type='string', enum=passage_ids),
-                'explanation': dict(type='string', maxLength=200)})
+    """Constrain output to the only datum the identity selector actually owns.
+
+    Evidence is application-selected and the independent verifier owns the semantic
+    verdict. Echoing either one enlarged the prompt and completion without adding
+    authority (§0.3, §5.4).
+    """
+    slots = {row['occurrence_ref']: dict(type='string',enum=list(row['choices']))
+             for row in rows}
     return dict(type='object', additionalProperties=False, required=list(slots), properties=slots)
 
 
@@ -60,19 +63,67 @@ def materialize_identity(body, rows, contract):
         raise ValueError('identity response must contain one unique decision per occurrence')
     decisions = []
     for row in rows:
-        slot = body[row['occurrence_ref']]
-        if not isinstance(slot, dict) or set(slot) != {'choice', 'passage_id', 'explanation'}:
-            raise ValueError('invalid identity slot fields')
-        choice = slot['choice']
-        if choice not in row['choices']:
+        choice = body[row['occurrence_ref']]
+        if not isinstance(choice,str) or choice not in row['choices']:
             raise ValueError('unoffered identity choice')
-        evidence = contract.resolve(slot['passage_id'])
-        if evidence is None:
-            raise ValueError('unoffered identity passage')
+        subject=row.get('subject') or {}
+        quote=subject.get('quote');start=subject.get('context_start',subject.get('char_start'))
+        if not isinstance(quote,str) or not isinstance(start,int):
+            raise ValueError('identity occurrence lacks application-owned evidence')
         outcome, target, reason = row['choices'][choice]
         decisions.append(dict(occurrence_ref=row['occurrence_ref'], outcome=outcome,
-            target_ref=target, reason_code=reason, explanation=slot['explanation'], **evidence))
+            target_ref=target, reason_code=reason, explanation=reason.replace('_',' '),
+            quote=quote,evidence_start=start))
     return IdentityDecisions(decisions=decisions)
+
+
+def compact_identity_payload(rows, contract):
+    """Normalize repeated identity contexts into one request-local subject table.
+
+    Every offered choice remains present, while each quote or candidate description is
+    serialized once rather than once per comparison (§0.7).
+    """
+    subjects={};subject_refs={}
+
+    def compact(context):
+        context=dict(context)
+        start=context.get('char_start');end=context.get('char_end')
+        passage_ids=[]
+        if isinstance(start,int):
+            passage_ids=[p['id'] for p in contract.passages
+                if p['char_start']<=start and (not isinstance(end,int) or end<=p['char_end'])]
+        if passage_ids:
+            # Passage text already contains the exact quote. `at` preserves narrative
+            # order and distinguishes repeated surfaces inside the same passage.
+            result={k:context[k] for k in ('surface','kind') if k in context}
+            result.update(at=start,passages=passage_ids)
+            return result
+        return {k:v for k,v in context.items()
+                if k not in {'char_start','char_end','context_start','context_end'}}
+
+    def intern(context):
+        normalized=compact(context)
+        key=json.dumps(normalized,ensure_ascii=False,sort_keys=True,separators=(',',':'))
+        ref=subject_refs.get(key)
+        if ref is None:
+            ref=f's{len(subjects)+1}'
+            subject_refs[key]=ref;subjects[ref]=normalized
+        return ref
+
+    occurrences={};choice_subjects={}
+    for row in rows:
+        for choice,context in row.get('choice_context',{}).items():
+            if context is not None:
+                ref=intern(context)
+                existing=choice_subjects.setdefault(choice,ref)
+                if existing!=ref:
+                    raise ValueError('identity choice token describes multiple subjects')
+        # [current subject ref, allowed choices]. Choice descriptions live once in the
+        # request-wide table; self/unresolved deliberately have no comparison subject.
+        occurrences[row['occurrence_ref']]=[intern(row['subject']),list(row['choices'])]
+    return dict(identity=dict(subjects=subjects,choice_subjects=choice_subjects,
+                              occurrences=occurrences),
+                passages=[dict(id=p['id'],text=p['text']) for p in contract.passages])
 
 
 def verification_schema(item_refs):

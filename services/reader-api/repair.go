@@ -50,15 +50,15 @@ type RepairStatus struct {
 }
 
 type RepairRequestView struct {
-	ID          string     `json:"id"`
-	Track       string     `json:"track"`
-	Action      string     `json:"action"`
-	State       string     `json:"state"`
-	Attempts    int        `json:"attempts"`
-	Category    string     `json:"category,omitempty"`
+	ID       string `json:"id"`
+	Track    string `json:"track"`
+	Action   string `json:"action"`
+	State    string `json:"state"`
+	Attempts int    `json:"attempts"`
+	Category string `json:"category,omitempty"`
 	// Detail is repairFailureDetail[Category] -- the same fixed, safe sentence RepairFailure
 	// uses, never the stored exception text (migration 0046's discipline applies here too).
-	Detail      string     `json:"detail,omitempty"`
+	Detail string `json:"detail,omitempty"`
 	// Set only while state is 'pending' and the request is backing off after a failed
 	// attempt -- absent for a freshly queued request with nothing to retry yet, so the UI
 	// can tell "waiting for the worker's first attempt" from "retrying after a failure"
@@ -162,6 +162,21 @@ type RepairTrack struct {
 	// once per chapter, and a chapter is many inference calls, so this is what shows a
 	// long rebuild is alive between those boundaries.
 	Published RepairPublished `json:"published"`
+	// Worker is content-free stage/liveness metadata for the graph job. Combined with the
+	// Redis process heartbeat in /pipeline, it distinguishes slow inference from silence
+	// after a worker crash without exposing staging facts (§0).
+	Worker *RepairWorkerReport `json:"worker,omitempty"`
+}
+
+type RepairWorkerReport struct {
+	JobState       string     `json:"job_state"`
+	Stage          string     `json:"stage,omitempty"`
+	StageStartedAt *time.Time `json:"stage_started_at,omitempty"`
+	LastProgressAt *time.Time `json:"last_progress_at,omitempty"`
+	Attempts       int        `json:"attempts"`
+	Category       string     `json:"category,omitempty"`
+	Detail         string     `json:"detail,omitempty"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type RepairBlocked struct {
@@ -293,21 +308,21 @@ type RepairFailure struct {
 // map below would render as a blank explanation. tests/test_repair.py enforces the match
 // across the language boundary — that guard is now the only thing catching a new class.
 const (
-	repairModelChanged  = "model_changed"
-	repairInputChanged  = "input_changed"
-	repairPromptTooBig  = "prompt_too_large"
-	repairServingDrift  = "serving_identity_changed"
-	repairFenced        = "fenced"
-	repairTimeout       = "timeout"
-	repairUnreachable   = "model_unreachable"
+	repairModelChanged = "model_changed"
+	repairInputChanged = "input_changed"
+	repairPromptTooBig = "prompt_too_large"
+	repairServingDrift = "serving_identity_changed"
+	repairFenced       = "fenced"
+	repairTimeout      = "timeout"
+	repairUnreachable  = "model_unreachable"
 	// Reached, answered, and the answer was a 5xx — distinct from "unreachable" on
 	// purpose. The observed cause is the model server aborting a load it was still
 	// making progress on, which no client-side budget can extend.
 	repairModelServerErr = "model_server_error"
-	repairTruncated     = "output_truncated"
-	repairCredentialErr = "credential_missing"
-	repairUnknownCause  = "unknown"
-	repairNotRebuildErr = "revision_not_rebuildable"
+	repairTruncated      = "output_truncated"
+	repairCredentialErr  = "credential_missing"
+	repairUnknownCause   = "unknown"
+	repairNotRebuildErr  = "revision_not_rebuildable"
 	// These three are only ever produced by pipeline/repair.py, for failures of a repair
 	// ACTION rather than of a chapter rebuild. They live in the same vocabulary on
 	// purpose: the UI renders one category map, and a category with no sentence would
@@ -413,6 +428,9 @@ func (s *Store) RepairStatus(ctx context.Context, novelID string) (RepairStatus,
 
 	status.Graph = buildTrack(byTrack["graph"], failures["graph"], targets["graph"], "facts")
 	status.Events = buildTrack(byTrack["events"], failures["events"], targets["events"], "chapter events")
+	if status.Graph.Worker, err = s.graphWorkerReport(ctx, novelID); err != nil {
+		return RepairStatus{}, err
+	}
 
 	if status.Requests, err = s.repairRequests(ctx, novelID); err != nil {
 		return RepairStatus{}, err
@@ -421,6 +439,32 @@ func (s *Store) RepairStatus(ctx context.Context, novelID string) (RepairStatus,
 		return RepairStatus{}, err
 	}
 	return status, nil
+}
+
+func (s *Store) graphWorkerReport(ctx context.Context, novelID string) (*RepairWorkerReport, error) {
+	var report RepairWorkerReport
+	var stage, category *string
+	err := s.readerDB.QueryRow(ctx, `SELECT job_state,current_stage,stage_started_at,
+		last_progress_at,attempts,category,updated_at FROM reader_graph_worker_report($1)`, novelID).
+		Scan(&report.JobState, &stage, &report.StageStartedAt, &report.LastProgressAt,
+			&report.Attempts, &category, &report.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read graph worker report: %w", err)
+	}
+	if stage != nil {
+		report.Stage = *stage
+	}
+	if category != nil {
+		report.Category = *category
+		report.Detail = repairFailureDetail[*category]
+		if report.Detail == "" {
+			report.Detail = repairFailureDetail[repairUnknownCause]
+		}
+	}
+	return &report, nil
 }
 
 func (s *Store) repairRollbackTargets(ctx context.Context, novelID string) (map[string][]RepairRollbackTarget, error) {

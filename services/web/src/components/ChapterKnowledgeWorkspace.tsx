@@ -2,11 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import {
   applyChapterReextract, cancelRepair, correctFact, correctGlossaryTerm, deleteGlossaryTerm,
   editFactDisplay, getChapterKnowledge, getChapterKnowledgeActivity, getProviderConfig,
-  getRepairStatus, listOllamaModels, removeFact, requestRepair, retryRepairNow, startChapterReextract,
+  getPipelineStatus, getRepairStatus, listOllamaModels, removeFact, requestRepair, retryRepairNow, startChapterReextract,
 } from "../api";
 import { DEFAULT_MODEL, MODEL_OPTIONS, PROVIDER_LABELS } from "../providers";
 import type {
-  ChapterKnowledgeActivity, ChapterKnowledgeResponse, ProviderName, RepairRequestView, RepairStatus,
+  ChapterKnowledgeActivity, ChapterKnowledgeResponse, ProviderName, RepairRequestView, RepairStatus, RepairTrack,
 } from "../types";
 import { RepairReview } from "./RepairReview";
 
@@ -68,6 +68,59 @@ function graphBuildActivity(status: RepairStatus | null) {
     return { at: request.created_at, stage: request.state === "pending" ? "queued" : "starting", text, request };
   }
   return null;
+}
+
+const GRAPH_STAGE_LABELS: Record<string,string> = {
+  name_slots: "Discovering names",
+  name_verify: "Verifying names",
+  identity_slots: "Resolving identities",
+  verify: "Checking identity evidence",
+  claims: "Extracting claims",
+  evidence: "Reading evidence",
+  fact_verify: "Verifying facts",
+  fact_review: "Reviewing facts",
+  render: "Rendering facts in English",
+  render_verify: "Checking English renderings",
+  align: "Aligning translated names",
+};
+
+function durationSince(value: string | undefined, now: number) {
+  if (!value) return "unknown";
+  const seconds=Math.max(0,Math.floor((now-new Date(value).getTime())/1000));
+  if(seconds<60)return `${seconds}s`;
+  const minutes=Math.floor(seconds/60);
+  return minutes<60?`${minutes}m ${seconds%60}s`:`${Math.floor(minutes/60)}h ${minutes%60}m`;
+}
+
+function GraphBuildStatus({track,workerOnline}:{track:RepairTrack;workerOnline:boolean|null}) {
+  const [now,setNow]=useState(Date.now());
+  useEffect(()=>{const timer=window.setInterval(()=>setNow(Date.now()),1000);return()=>window.clearInterval(timer)},[]);
+  const worker=track.worker;
+  const silence=worker?.last_progress_at?Math.max(0,now-new Date(worker.last_progress_at).getTime()):0;
+  const possiblyStuck=track.state==="rebuilding"&&workerOnline!==false&&worker?.job_state==="processing"&&silence>5*60_000;
+  const health=track.state==="failed"?"Failed"
+    :track.blocked?"Blocked"
+    :track.state==="awaiting_review"?"Ready for review"
+    :workerOnline===false?"Worker offline"
+    :possiblyStuck?"No recent progress"
+    :track.state==="rebuilding"?"Working":"Waiting";
+  const progressMax=Math.max(1,track.chapters.total);
+  return <div className={`graph-build-status graph-build-${track.state}`}>
+    <div className="graph-build-heading"><strong>{health}</strong><span>{track.chapters.done}/{track.chapters.total} chapters</span></div>
+    <progress aria-label="Book graph rebuild progress" max={progressMax} value={track.chapters.done} />
+    <dl className="graph-build-reports">
+      {worker?.stage&&<div><dt>Stage</dt><dd>{GRAPH_STAGE_LABELS[worker.stage]??worker.stage}</dd></div>}
+      {track.current&&<div><dt>Chapter</dt><dd>{track.current.chapter}</dd></div>}
+      <div><dt>Model calls</dt><dd>{track.published.calls} completed</dd></div>
+      {worker?.stage_started_at&&<div><dt>Stage time</dt><dd>{durationSince(worker.stage_started_at,now)}</dd></div>}
+      {worker?.last_progress_at&&<div><dt>Last signal</dt><dd>{durationSince(worker.last_progress_at,now)} ago</dd></div>}
+      <div><dt>Worker</dt><dd>{workerOnline===null?"Checking…":workerOnline?"Online":"Offline or crashed"}</dd></div>
+      {track.chapters.failed>0&&<div><dt>Failures</dt><dd>{track.chapters.failed} chapter · {worker?.attempts??0} attempts</dd></div>}
+    </dl>
+    {possiblyStuck&&<p role="alert" className="reader-pane-error">The worker is online, but this model call has sent no progress signal for {durationSince(worker?.last_progress_at,now)}. It may be stuck.</p>}
+    {workerOnline===false&&track.state==="rebuilding"&&<p role="alert" className="reader-pane-error">The rebuild is unfinished but the worker heartbeat is gone. The worker stopped or crashed and must come back before work can continue.</p>}
+    {(worker?.detail||track.blocked?.detail)&&<p role="alert" className="reader-pane-error">{worker?.detail??track.blocked?.detail}</p>}
+  </div>;
 }
 
 // The one-time build a never-rebuilt or not-yet-included book needs: KnowledgeEngine
@@ -228,10 +281,9 @@ function QuarantineGate({ novelId, chapter, onDone }: { novelId: string; chapter
   return (
     <div className="knowledge-gate-action">
       <p>
-        Facts are withheld while a rebuild is unfinished. Started{" "}
+        Rebuild started{" "}
         {replacement.created_at ? new Date(replacement.created_at).toLocaleString() : "recently"}, revision{" "}
-        {shortId(replacement.revision_id)}, {track.chapters.done}/{track.chapters.total} chapters extracted.
-        {" "}It resumes automatically when the worker is not busy with a chapter someone is waiting to read.
+        {shortId(replacement.revision_id)}. {track.reason}
       </p>
       {track.blocked && (
         <p role="alert" className="reader-pane-error">
@@ -346,6 +398,7 @@ export function ChapterKnowledgeWorkspace({novelId,chapter,at}:{novelId:string;c
   const [data,setData]=useState<ChapterKnowledgeResponse|null>(null);
   const [activity,setActivity]=useState<ChapterKnowledgeActivity[]>([]);
   const [repairStatus,setRepairStatus]=useState<RepairStatus|null>(null);
+  const [workerOnline,setWorkerOnline]=useState<boolean|null>(null);
   const [ollamaStatus,setOllamaStatus]=useState<"checking"|"connected"|"unreachable">("checking");
   const [error,setError]=useState(""); const [busy,setBusy]=useState(false);
   const [editing,setEditing]=useState<number|null>(null); const [draft,setDraft]=useState("");
@@ -365,6 +418,7 @@ export function ChapterKnowledgeWorkspace({novelId,chapter,at}:{novelId:string;c
   },[data?.run?.id,data?.run?.state,novelId,chapter,load]);
 
   const graphActivity = graphBuildActivity(repairStatus);
+  const graphVisible = !!graphActivity;
   const graphMoving = repairStatus?.requests.some(
     (item) => item.track === "graph" && (item.state === "pending" || item.state === "running"),
   ) || repairStatus?.graph.state === "rebuilding";
@@ -373,6 +427,16 @@ export function ChapterKnowledgeWorkspace({novelId,chapter,at}:{novelId:string;c
     const timer=window.setInterval(()=>{void refresh().catch(()=>undefined)},2000);
     return()=>window.clearInterval(timer);
   },[graphMoving,refresh]);
+  useEffect(()=>{
+    if(!graphVisible){setWorkerOnline(null);return}
+    let cancelled=false;let timer:number|undefined;
+    async function checkWorker(){
+      try{const status=await getPipelineStatus(novelId);if(!cancelled)setWorkerOnline(status.worker_online)}
+      catch{if(!cancelled)setWorkerOnline(null)}
+      finally{if(!cancelled)timer=window.setTimeout(checkWorker,8000)}
+    }
+    void checkWorker();return()=>{cancelled=true;if(timer)window.clearTimeout(timer)};
+  },[graphVisible,novelId]);
   const watchOllama = !data?.can_extract || !!graphMoving || !!data?.run && !terminal.has(data.run.state);
   useEffect(()=>{
     if(!watchOllama)return;
@@ -404,11 +468,11 @@ export function ChapterKnowledgeWorkspace({novelId,chapter,at}:{novelId:string;c
     {watchOllama&&ollamaStatus==="unreachable"&&<p role="alert" className="reader-pane-error">Local Ollama is unreachable. Graph extraction cannot continue until the server and its connection are available.</p>}
     {error&&<p role="alert" className="reader-pane-error">{error}</p>}
     {!writable&&<KnowledgeGate novelId={novelId} chapter={chapter} reason={data.blocked_reason} repairStatus={repairStatus} onDone={refresh} />}
-    <details open><summary>Activity {data.run?`— ${data.run.scope} ${data.run.state.replace("_"," ")}`:graphActivity&&"— book graph"}</summary>
-      {!graphActivity&&activity.length===0?<p>No active extraction activity.</p>:<ol className="knowledge-activity">
-        {graphActivity&&<li key="graph-build">{graphActivity.at&&<time>{new Date(graphActivity.at).toLocaleTimeString()}</time>} <span className="knowledge-badge">{graphActivity.stage}</span> {graphActivity.text}</li>}
+    <details open><summary>Status {data.run?`— ${data.run.scope} ${data.run.state.replace("_"," ")}`:graphActivity&&"— book graph"}</summary>
+      {graphActivity&&repairStatus&&<GraphBuildStatus track={repairStatus.graph} workerOnline={workerOnline}/>}
+      {!graphActivity&&activity.length===0?<p>No active extraction activity.</p>:activity.length>0&&<><h3>Chapter extraction report</h3><ol className="knowledge-activity">
         {activity.map(a=><li key={a.sequence}><time>{new Date(a.created_at).toLocaleTimeString()}</time> <span className={`knowledge-badge phase-${a.phase}`}>{a.phase}</span> {a.item_kind} {a.phase==="proposed"&&<em> — unverified</em>}</li>)}
-      </ol>}
+      </ol></>}
       {data.run?.state==="awaiting_review"&&<div className="knowledge-review"><h3>{data.run.scope==="terms"?"Term extraction review":"Fact extraction review"}</h3><p>{data.run.scope==="terms"?"Publish verified term occurrences. This does not extract or change facts.":"Nothing below changes the graph unless you explicitly select it. Missing model claims default to retain."}</p>
         {preview.map(item=><label key={item.item_key}><span>{item.item_kind}: {item.classification.replace("_"," ")}</span>{item.item_kind==="term"?<small>Verified terms will be published; the term itself remains editable below.</small>:<select value={decisions[item.item_key]??"retain"} onChange={e=>setDecisions(old=>({...old,[item.item_key]:e.target.value}))}><option value="retain">Retain current knowledge</option>{item.classification==="new"&&<option value="approve">Publish new item</option>}{item.classification==="display_update"&&<option value="update_display">Update English display</option>}{item.classification==="possible_replacement"&&<option value="replace">Publish correction</option>}{item.classification==="missing"&&<option value="remove">Publish retraction</option>}</select>}</label>)}
         <button disabled={busy} onClick={()=>void mutate(current=>applyChapterReextract(novelId,chapter,current.run?.id||data.run!.id,{revision_id:current.revision_id,version:current.version,decisions}))}>{data.run.scope==="terms"?"Publish verified terms":Object.values(decisions).some(v=>v!=="retain")?"Apply selected changes":"Finish review — retain everything"}</button></div>}

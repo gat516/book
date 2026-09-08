@@ -76,7 +76,7 @@ def failure_category(exc: BaseException) -> str:
         return "serving_identity_changed"
     if "saved prose changed" in text or "chapter input changed" in text:
         return "input_changed"
-    if "hard local model budget" in text:
+    if "graph context exceeds hard model budget" in text:
         return "prompt_too_large"
     # docs/knowledge-repair.md: hitting GRAPH_OLLAMA_NUM_PREDICT is a failure, never
     # publishable partial output.

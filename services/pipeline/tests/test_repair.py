@@ -100,7 +100,7 @@ def test_category_vocabulary_matches_reader_api():
             ValueError("review must approve"), ValueError("novel not found"),
             ValueError("installed model or inference configuration changed"),
             ValueError("saved prose changed since snapshot"),
-            ValueError("graph context exceeds hard local model budget"),
+            ValueError("graph context exceeds hard model budget"),
             ValueError("revision cannot be rebuilt"),
             ValueError("requested model is not installed; no automatic download"),
             RuntimeError("Gemini event extraction has no configured API key"),

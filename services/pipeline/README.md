@@ -65,12 +65,13 @@ revision and never changes `active_graph_revision`.
 
 ## Exact source passage references
 
-`evidence-v4-bounded-candidates` offers bounded, unchanged source passages with stable IDs.
-The model supplies `passage_id` for names, identity decisions, claims and alignments;
-it cannot supply quote text or offsets. The application resolves each reference against
-the current saved source and retains exact code-point offsets, including for repeated
-passages. Invalid references do not publish claims or identity links. An independently
-verified decision is still required: a real passage alone does not establish a fact.
+Bounded, unchanged source passages have stable request-local IDs. The model supplies
+passage references for names, claims and alignments; it cannot supply quote text or
+offsets. Identity selection is smaller still: passages and candidate descriptions are
+interned once, occurrences contain only subject/choice references, and the model returns
+one choice token per occurrence. The application attaches that occurrence's exact source
+context and maps the token to an outcome and durable target before independent semantic
+verification. A real passage or selected token alone never establishes identity or a fact.
 
 Name discovery uses 8 fixed nullable slots over adjacent passages packed to 400 source
 characters and the hard byte budget.
@@ -80,6 +81,12 @@ spellings then pass a separate eligibility check before occurrence expansion, pr
 generic colors, actions, quantities and descriptive fragments from multiplying into
 identity and alignment calls. Each accepted name retains an ontology kind and exact
 passage citation; this eligibility check never binds equal spellings to one entity.
+
+Identity requests are packed by their serialized byte size rather than occurrence count,
+targeting at most 16 KiB including the separately enforced output schema and refusing a
+model-visible prompt above 24 KiB. Runtime diagnostics retain prompt, schema, and input
+component sizes without retaining their content. The measured v19→v20 byte breakdown is
+recorded in [`eval/knowledge/PROMPT-OPTIMIZATION.md`](../../eval/knowledge/PROMPT-OPTIMIZATION.md).
 
 Claim extraction similarly packs short passages into 1,200-character focus requests while
 retaining the constituent passage IDs for exact evidence. Saturated focus requests split
