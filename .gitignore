@@ -6,6 +6,7 @@ PLAN.md
 CLAUDE.md
 notes/
 .claude/
+.Codex/
 docs/
 
 __pycache__/
