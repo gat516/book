@@ -7,7 +7,7 @@ from psycopg.types.json import Jsonb
 
 from pipeline.context import PipelineState
 from pipeline.envelope import ChapterEnvelope
-from pipeline.evidence import (Names, Proposals, IdentityDecisions, ClaimProposals,
+from pipeline.evidence import (Names, Proposals, IdentityDecisions, ClaimProposals, Decision,
     Verification, Alignments, source_mentions,
     validate_proposals, aligned_mentions, approved, digest, stable_id, passage, PROMPT_VERSION)
 from pipeline.passages import PassageContract, source_passages
@@ -305,133 +305,91 @@ def test_name_contract_requires_all_kinds_and_exact_containing_passage():
         c.materialize('names',Names,body,ONTOLOGY)
 
 
-def test_identity_and_claim_wire_schemas_are_separate_and_bounded():
+def test_claim_wire_schema_is_bounded_and_never_carries_quotes():
     source='凌峰来了。\n他成为首领。';c=PassageContract(source)
-    identity=c.schema('identity',IdentityDecisions,ONTOLOGY)
     claims=c.schema('claims',ClaimProposals,ONTOLOGY)
-    idef=identity['$defs']['IdentityDecision'];cdef=claims['$defs']['ClaimProposal']
-    assert set(identity['properties'])=={'decisions'} and set(claims['properties'])=={'claims'}
-    assert idef['properties']['explanation']['maxLength']==200
-    assert idef['properties']['passage_id']==dict(type='string',enum=[p['id'] for p in c.passages])
+    cdef=claims['$defs']['ClaimProposal']
+    assert set(claims['properties'])=={'claims'}
     assert claims['properties']['claims']['maxItems']==12
     assert cdef['properties']['value']['maxLength']==400
     assert cdef['properties']['passage_ids']['maxItems']==3
-    assert 'quote' not in json.dumps(identity) and 'quote' not in json.dumps(claims)
+    assert 'quote' not in json.dumps(claims)
 
 
-async def test_identity_call_schema_binds_target_and_reason_to_outcome(monkeypatch):
-    from unittest.mock import AsyncMock
-    from pipeline.config import Config
-    from novel_llm.provider import Completion
-    source='凌峰来了。';pid=source_passages(source)[0]['id']
-    class Cursor:
-        async def fetchone(self): return None
-    class DB:
-        async def execute(self,*_args,**_kwargs): return Cursor()
-    engine=KnowledgeEngine(DB(),Config.load(),dict(id='test',ontology=ONTOLOGY,
-        model=dict(provider='ollama',name='test')))
-    body=dict(decisions=[dict(occurrence_ref='o1',outcome='new',target_ref='o1',
-        reason_code='new_first_appearance',explanation='first appearance',passage_id=pid)])
-    engine.provider.complete=AsyncMock(return_value=Completion(text=json.dumps(body),
-        served_provider='ollama',served_model='test'))
-    try:
-        result=await engine.call('identity',IdentityDecisions,dict(source=source,
-            identity_occurrences=[dict(occurrence_ref='o1')],_passage_ids=[pid]))
-        assert result.decisions[0].target_ref=='o1'
-        variants=engine.provider.complete.call_args.kwargs['json_schema']['properties']['decisions']['items']['oneOf']
-        by_outcome={v['properties']['outcome']['const']:v for v in variants}
-        assert by_outcome['new']['properties']['target_ref']=={'type':'string'}
-        assert by_outcome['unresolved']['properties']['target_ref']=={'type':'null'}
-        assert by_outcome['new']['properties']['reason_code']['enum']==[
-            'new_first_appearance','new_coreference']
-    finally:
-        await engine.close()
-
-
-async def test_empty_candidates_allow_new_self_root_with_only_short_wire_refs(monkeypatch):
-    from unittest.mock import AsyncMock
-    source='凌峰来了。';names=Names(names=[dict(surface='凌峰',kind='character',quote=source,named=True)])
-    ms=source_mentions('book',1,source,names,ONTOLOGY)
+def _homonym_engine(decide):
+    """A KnowledgeEngine stub whose identity selector is `decide` and whose verifier passes."""
+    from pipeline.evidence import IdentityDecisions as _ID, Verification as _V
     engine=object.__new__(KnowledgeEngine)
-    async def answer(stage,schema,payload):
-        assert stage=='identity' and schema is IdentityDecisions
-        occurrence=payload['identity_occurrences'][0]
-        assert occurrence['occurrence_ref']=='o1' and occurrence['existing_candidates']==[]
-        assert occurrence['allowed_new_representatives']==[
-            dict(ref='o1',kind='character',surface='凌峰')]
-        assert ms[0]['id'] not in json.dumps(payload)
-        return IdentityDecisions(decisions=[dict(occurrence_ref='o1',outcome='new',target_ref='o1',
-            reason_code='new_first_appearance',explanation='Explicitly named first appearance.',
-            quote=source,evidence_start=0)])
-    engine.call=AsyncMock(side_effect=answer)
-    decisions,count=await engine._identity_decisions(source,ms,{ms[0]['id']:[]},ONTOLOGY)
-    assert count==1 and decisions[0].mention_id==ms[0]['id']
-    assert decisions[0].target_id==ms[0]['id'] and decisions[0].outcome=='new'
+    async def call(stage,_schema,payload):
+        if stage=='identity_slots':
+            return _ID(decisions=decide(payload['identity_occurrences']))
+        return _V(verdicts=[dict(id=item['item_ref'],supported=True,reason='supported')
+                            for item in payload['items']])
+    engine.call=call
+    return engine
 
 
 async def test_same_spelling_occurrences_can_remain_distinct_new_identities():
-    from unittest.mock import AsyncMock
+    """Two 青山 in one chapter are two subjects unless coreference is established (§0)."""
     source='青山来了。\n另一个青山离开。'
     ms=source_mentions('book',1,source,Names(names=[
         dict(surface='青山',kind='character',quote=source,named=True)]),ONTOLOGY)
     assert len(ms)==2
-    engine=object.__new__(KnowledgeEngine)
-    engine.call=AsyncMock(return_value=IdentityDecisions(decisions=[
-        dict(occurrence_ref='o1',outcome='new',target_ref='o1',reason_code='new_first_appearance',
-             explanation='first person',quote=source,evidence_start=0),
-        dict(occurrence_ref='o2',outcome='new',target_ref='o2',reason_code='new_first_appearance',
-             explanation='explicitly another person',quote=source,evidence_start=0)]))
-    decisions,_=await engine._identity_decisions(source,ms,{m['id']:[] for m in ms},ONTOLOGY)
-    assert [d.target_id for d in decisions]==[m['id'] for m in ms]
+    engine=_homonym_engine(lambda rows:[dict(occurrence_ref=row['occurrence_ref'],
+        outcome='new',target_ref=row['occurrence_ref'],reason_code='new_first_appearance',
+        explanation='explicitly another person',quote=row['subject']['surface'],
+        evidence_start=row['subject']['char_start']) for row in rows])
+    verified,rejected,count=await engine._resolve_incremental(
+        source,ms,{m['id']:[] for m in ms},ONTOLOGY)
+    assert not rejected and count==2
+    # Each occurrence roots itself: the surfaces were never merged on spelling alone.
+    assert [item['target_id'] for item in verified]==[m['id'] for m in ms]
 
 
-@pytest.mark.parametrize('mode,match',[
-    ('missing','one unique decision'),('duplicate','one unique decision')])
-async def test_identity_response_rejects_missing_duplicate_and_invalid_refs(mode,match):
-    from unittest.mock import AsyncMock
-    source='甲见到乙。';names=Names(names=[
-        dict(surface='甲',kind='character',quote=source,named=True),
-        dict(surface='乙',kind='character',quote=source,named=True)])
-    ms=source_mentions('book',1,source,names,ONTOLOGY)
-    engine=object.__new__(KnowledgeEngine)
-    row=lambda ref,target:dict(occurrence_ref=ref,outcome='new',target_ref=target,
-        reason_code='new_first_appearance',explanation='supported',quote=source,evidence_start=0)
-    bodies={'missing':[row('o1','o1')],
-            'duplicate':[row('o1','o1'),row('o1','o1')]}
-    engine.call=AsyncMock(return_value=IdentityDecisions(decisions=bodies[mode]))
-    with pytest.raises(ValueError,match=match):
-        await engine._identity_decisions(source,ms,{m['id']:[] for m in ms},ONTOLOGY)
+async def test_empty_candidates_allow_new_self_root():
+    """No earlier entity is not a reason to withhold a supported first appearance."""
+    source='凌峰来了。'
+    ms=source_mentions('book',1,source,Names(names=[
+        dict(surface='凌峰',kind='character',quote=source,named=True)]),ONTOLOGY)
+    offered={}
+    def decide(rows):
+        offered.update(rows[0]['choices'])
+        return [dict(occurrence_ref='o1',outcome='new',target_ref='o1',
+            reason_code='new_first_appearance',explanation='Explicitly named first appearance.',
+            quote=source,evidence_start=0)]
+    engine=_homonym_engine(decide)
+    verified,rejected,count=await engine._resolve_incremental(
+        source,ms,{ms[0]['id']:[]},ONTOLOGY)
+    # An empty candidate set still offers new:self, and never a durable ID on the wire.
+    assert set(offered)=={'new:self','unresolved'}
+    assert not rejected and count==1
+    assert verified[0]['mention_id']==ms[0]['id']==verified[0]['target_id']
 
 
+# The two checks below own validate_proposals, not the wire. They build decisions
+# directly so a selector change cannot quietly stop exercising the validator.
 async def test_invalid_identity_reference_rejects_only_that_complete_proposal():
-    from unittest.mock import AsyncMock
     source='甲见到乙。';ms=source_mentions('book',1,source,Names(names=[
         dict(surface='甲',kind='character',quote=source,named=True),
         dict(surface='乙',kind='character',quote=source,named=True)]),ONTOLOGY)
-    engine=object.__new__(KnowledgeEngine)
-    row=lambda ref,target:dict(occurrence_ref=ref,outcome='new',target_ref=target,
-        reason_code='new_first_appearance',explanation='supported',quote=source,evidence_start=0)
-    engine.call=AsyncMock(return_value=IdentityDecisions(decisions=[
-        row('o1','not-offered'),row('o2','o2')]))
-    decisions,_=await engine._identity_decisions(source,ms,{m['id']:[] for m in ms},ONTOLOGY)
+    decisions=[Decision(mention_id=ms[0]['id'],outcome='new',target_id='not-offered',
+                        quote=source,evidence_start=0,reason='supported'),
+               Decision(mention_id=ms[1]['id'],outcome='new',target_id=ms[1]['id'],
+                        quote=source,evidence_start=0,reason='supported')]
     yes,no=validate_proposals(source,ms,{m['id']:[] for m in ms},
         Proposals(decisions=decisions,claims=[]),ONTOLOGY)
     assert len(yes)==1 and yes[0]['mention_id']==ms[1]['id']
     assert len(no)==1 and no[0]['rejection']=='new identity must reference an offered mention of the same kind'
 
 
-async def test_identity_rejects_incompatible_existing_candidate_kind():
-    from unittest.mock import AsyncMock
+def test_identity_rejects_incompatible_existing_candidate_kind():
     source='甲来了。';ms=source_mentions('book',1,source,Names(names=[
         dict(surface='甲',kind='character',quote=source,named=True)]),ONTOLOGY)
     # Deliberately malformed retrieval input proves application validation remains
     # authoritative even if a schema-constrained model selects the offered ref.
     candidates={ms[0]['id']:[dict(id='place-id',kind='place',canonical='甲地')]}
-    engine=object.__new__(KnowledgeEngine)
-    engine.call=AsyncMock(return_value=IdentityDecisions(decisions=[dict(
-        occurrence_ref='o1',outcome='existing',target_ref='e1',reason_code='existing_evidence',
-        explanation='same',quote=source,evidence_start=0)]))
-    decisions,_=await engine._identity_decisions(source,ms,candidates,ONTOLOGY)
+    decisions=[Decision(mention_id=ms[0]['id'],outcome='existing',target_id='place-id',
+                        quote=source,evidence_start=0,reason='same')]
     yes,no=validate_proposals(source,ms,candidates,Proposals(decisions=decisions,claims=[]),ONTOLOGY)
     assert not yes and no[0]['rejection']=='invented candidate ID or incompatible kind'
 

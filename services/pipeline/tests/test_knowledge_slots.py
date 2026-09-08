@@ -504,3 +504,159 @@ async def test_hosted_fact_review_batches_verification_and_target_rendering_once
     engine.call.assert_awaited_once()
     assert engine.call.await_args.args[:2]==('fact_review',HostedFactReviews)
     assert engine.call.await_args.args[2]['target_language']=='en'
+
+
+def _engine(limit=1):
+    """A bare engine carrying only the scheduling primitives `_fan_out` reads."""
+    import asyncio
+    engine=object.__new__(KnowledgeEngine)
+    engine.max_concurrent_calls=limit
+    engine._call_slots=asyncio.Semaphore(limit)
+    engine._db_lock=asyncio.Lock()
+    return engine
+
+
+async def test_fan_out_preserves_order_and_overlaps_only_when_allowed():
+    """Independent calls may overlap, but results still arrive in submission order."""
+    import asyncio, functools
+    for limit,expect_overlap in ((1,False),(4,True)):
+        engine=_engine(limit);live=0;peak=0
+        async def unit(value):
+            nonlocal live,peak
+            live+=1;peak=max(peak,live)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            live-=1
+            return value
+        results=await engine._fan_out([functools.partial(unit,i) for i in range(6)])
+        assert results==[0,1,2,3,4,5]
+        assert (peak>1) is expect_overlap
+    # _fan_out itself does not throttle: it starts every unit and lets the semaphore
+    # inside call() decide how many reach the provider at once.
+    assert peak==6
+
+
+async def test_call_semaphore_bounds_how_many_requests_reach_the_provider():
+    """The budget has to bind at the provider, not at the fan-out: that is what keeps a
+    local model's VRAM and a hosted provider's rate limit out of trouble."""
+    import asyncio, functools
+    engine=_engine(2);live=0;peak=0
+    async def request(_i):
+        nonlocal live,peak
+        async with engine._call_slots:
+            live+=1;peak=max(peak,live)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            live-=1
+    await engine._fan_out([functools.partial(request,i) for i in range(6)])
+    assert peak==2
+
+
+async def test_fan_out_reraises_the_first_failure_after_siblings_settle():
+    """Callers catch precise types (ValueError, TimeoutError); an ExceptionGroup would
+    silently stop matching, and an abandoned sibling would keep writing after the raise."""
+    import asyncio, functools
+    engine=_engine(4);finished=[]
+    async def ok(tag):
+        await asyncio.sleep(0);finished.append(tag);return tag
+    async def boom(tag):
+        await asyncio.sleep(0);finished.append(tag)
+        raise ValueError(f'{tag} failed')
+    with pytest.raises(ValueError,match='second failed'):
+        await engine._fan_out([functools.partial(ok,'first'),
+                               functools.partial(boom,'second'),
+                               functools.partial(boom,'third'),
+                               functools.partial(ok,'fourth')])
+    # Every sibling ran to completion before the raise: nothing is left in flight.
+    assert sorted(finished)==['first','fourth','second','third']
+
+
+def test_passage_split_is_memoized_and_hands_back_an_independent_list():
+    from pipeline.passages import _split_passages
+    source='青山来了。\n另一个青山离开。'
+    _split_passages.cache_clear()
+    first=source_passages(source)
+    second=source_passages(source)
+    assert first==second and _split_passages.cache_info().hits==1
+    # A caller may append a synthetic context range to its own result (call() does)
+    # without corrupting the memo every other caller shares.
+    first.append(dict(id='synthetic'))
+    assert len(source_passages(source))==len(second)
+
+
+async def test_identity_packing_bisects_to_the_largest_fitting_batch():
+    from pipeline.evidence import IdentityDecisions, Verification
+    lines=[f'青山{i}来了。' for i in range(12)]
+    source='\n'.join(lines);mentions=[];offset=0
+    for i,line in enumerate(lines):
+        surface=f'青山{i}'
+        mentions.append(dict(id=f'm{i}',surface=surface,kind='character',
+            char_start=offset,char_end=offset+len(surface),quote=line))
+        offset+=len(line)+1
+    engine=_engine();offered=[];probes=[]
+    def measure(_source,payload):
+        size=len(payload['identity_occurrences'])
+        probes.append(size)
+        return dict(request_material_bytes=10_000 if size<=7 else 20_000)
+    engine._identity_request_size=measure
+    async def call(stage,_schema,payload):
+        if stage=='identity_slots':
+            offered.append(len(payload['identity_occurrences']))
+            return IdentityDecisions(decisions=[dict(occurrence_ref=row['occurrence_ref'],
+                outcome='new',target_ref=row['occurrence_ref'],reason_code='new_first_appearance',
+                explanation='first appearance',quote=row['subject']['surface'],
+                evidence_start=row['subject']['char_start']) for row in payload['identity_occurrences']])
+        return Verification(verdicts=[dict(id=item['item_ref'],supported=True,reason='supported')
+                                      for item in payload['items']])
+    engine.call=call
+    verified,rejected,count=await engine._resolve_incremental(
+        source,mentions,{m['id']:[] for m in mentions},ONTOLOGY)
+    assert not rejected and count==len(verified)==12
+    # 7 is the largest size that fits, and the metric still reports dropped occurrences.
+    assert offered==[7,5] and engine._identity_batch_sizes==[7,5]
+    assert engine._identity_context_splits==12-7
+    # A decrement-and-rebuild scan would have probed 12,11,10,9,8,7 for the first batch.
+    assert len([p for p in probes if p>5])<6
+
+
+async def test_identity_sizing_probes_never_mutate_the_candidate_map():
+    """Packing is a measurement. Only the batch actually sent may widen `candidates`,
+    or a probe at a size that was never sent would leak into a later batch."""
+    from copy import deepcopy
+    from pipeline.evidence import IdentityDecisions, Verification
+    lines=[f'青山{i}来了。' for i in range(6)]
+    source='\n'.join(lines);mentions=[];offset=0
+    for i,line in enumerate(lines):
+        surface=f'青山{i}'
+        mentions.append(dict(id=f'm{i}',surface=surface,kind='character',
+            char_start=offset,char_end=offset+len(surface),quote=line))
+        offset+=len(line)+1
+    candidates={m['id']:[] for m in mentions}
+    candidates['m0']=[dict(id='e1',kind='character',canonical='旧青山',source_context=[])]
+    baseline=deepcopy(candidates);seen=[]
+    engine=_engine()
+    def measure(_source,payload):
+        # Snapshot at every probe: a pure prepare() leaves the map untouched here.
+        seen.append(deepcopy(candidates))
+        return dict(request_material_bytes=10_000
+                    if len(payload['identity_occurrences'])<=2 else 20_000)
+    engine._identity_request_size=measure
+    async def call(stage,_schema,payload):
+        if stage=='identity_slots':
+            return IdentityDecisions(decisions=[dict(occurrence_ref=row['occurrence_ref'],
+                outcome=('existing' if 'existing:t1' in row['choices'] else 'new'),
+                target_ref=('t1' if 'existing:t1' in row['choices'] else row['occurrence_ref']),
+                reason_code=('existing_evidence' if 'existing:t1' in row['choices']
+                             else 'new_first_appearance'),
+                explanation='supported',quote=row['subject']['surface'],
+                evidence_start=row['subject']['char_start']) for row in payload['identity_occurrences']])
+        return Verification(verdicts=[dict(id=item['item_ref'],supported=True,reason='supported')
+                                      for item in payload['items']])
+    engine.call=call
+    await engine._resolve_incremental(source,mentions,candidates,ONTOLOGY)
+    assert seen, 'the packer never measured a request'
+    # No probe observed a wider map than the one its own sent batch had already produced.
+    assert seen[0]==baseline
+    for snapshot in seen:
+        for mid,rows in snapshot.items():
+            assert len(rows)==len({c['id'] for c in rows}), f'{mid} accumulated a duplicate'

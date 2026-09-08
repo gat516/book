@@ -144,6 +144,14 @@ class Config:
     # already recorded on an existing revision byte-identical.
     graph_ollama_think: bool | None = None
 
+    # Independent extraction calls (fact verification, claim focuses, alignment windows)
+    # have no data dependency on each other, but they were always awaited one at a time.
+    # This is a scheduling budget, never part of revision identity: it cannot change what
+    # a finished call contains, only how many are in flight. It defaults to 1 because a
+    # loopback Ollama serving one model gains little from client-side fan-out and can be
+    # pushed into VRAM pressure by it; hosted providers are where raising it pays.
+    graph_max_concurrent_calls: int = 1
+
     # Event extraction served by a hosted provider needs one wall-clock bound, not the
     # prefill/gap split above: that pair exists because CPU prefill can run for minutes
     # before the first token, which is not how a remote call behaves or fails.
@@ -203,6 +211,7 @@ class Config:
             graph_ollama_timeout_seconds=_optional_float("GRAPH_OLLAMA_TIMEOUT_SECONDS"),
             graph_ollama_total_timeout_seconds=_optional_float("GRAPH_OLLAMA_TOTAL_TIMEOUT_SECONDS"),
             graph_ollama_num_ctx_target=int(_getenv("GRAPH_OLLAMA_NUM_CTX_TARGET", "16384")),
+            graph_max_concurrent_calls=max(1,int(_getenv("GRAPH_MAX_CONCURRENT_CALLS", "1"))),
             graph_ollama_num_predict=int(_getenv("GRAPH_OLLAMA_NUM_PREDICT", "4096")),
             graph_ollama_think=_optional_bool("GRAPH_OLLAMA_THINK"),
             event_remote_timeout_seconds=float(_getenv("EVENT_REMOTE_TIMEOUT_SECONDS", "300")),

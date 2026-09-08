@@ -84,15 +84,37 @@ passage citation; this eligibility check never binds equal spellings to one enti
 
 Identity requests are packed by their serialized byte size rather than occurrence count,
 targeting at most 16 KiB including the separately enforced output schema and refusing a
-model-visible prompt above 24 KiB. Runtime diagnostics retain prompt, schema, and input
-component sizes without retaining their content. The measured v19→v20 byte breakdown is
-recorded in [`eval/knowledge/PROMPT-OPTIMIZATION.md`](../../eval/knowledge/PROMPT-OPTIMIZATION.md).
+model-visible prompt above 24 KiB. Serialized size is monotone in batch size, so the
+largest fitting batch is found by binary search; the packer is a pure measurement, and only
+the batch actually sent may widen the retrieval candidate map. Runtime diagnostics retain
+prompt, schema, and input component sizes without retaining their content. The measured
+v19→v20 byte breakdown is recorded in
+[`eval/knowledge/PROMPT-OPTIMIZATION.md`](../../eval/knowledge/PROMPT-OPTIMIZATION.md).
 
 Claim extraction similarly packs short passages into 1,200-character focus requests while
 retaining the constituent passage IDs for exact evidence. Saturated focus requests split
 recursively. Runtime diagnostics report request counts, cache hits, fresh calls, split
 counts and input sizes; benchmark reports also aggregate calls, tokens, inference time and
 stall retries by stage so efficiency changes can be judged beside fact and identity recall.
+
+## Call scheduling
+
+Occurrence identity is sequential by construction: each batch carries forward the verified
+representatives of the batches before it. Everything else in a chapter is independent --
+name inventory batches, claim focuses, per-fact verification, rendering batches, alignment
+windows and their verifiers -- and those fan out under `GRAPH_MAX_CONCURRENT_CALLS`
+(default 1). Isolation is about what one call may *see*, not when it runs: each fact still
+gets its own verdict call against a claim-independent reading, so no proposal can prime the
+judge for another. Results are reassembled in submission order and a failure is re-raised
+with its original type only after every sibling has settled, so callers keep matching on
+`ValueError`/`TimeoutError` and nothing is left writing after the raise.
+
+The budget binds at the provider, not at the fan-out. Because the shared psycopg
+connection is not safe for concurrent cursors, engine writes on that path are serialized by
+a lock, and streaming token progress is attached only when the engine is serial -- the
+provider exposes a single `progress_sink` slot that concurrent calls would clobber. The
+setting is scheduling only: it is deliberately absent from revision identity and the
+completion cache key, so it cannot change what a finished call contains.
 
 For a bounded discovery diagnostic on one reviewed saved chapter:
 

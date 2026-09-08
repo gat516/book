@@ -6,11 +6,12 @@ Only publish() consumes PipelineState.resolutions; it never performs name matchi
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import functools
 import json
 import math
 import time
 import sys
-from copy import deepcopy
 from urllib.parse import urlparse
 
 from pgvector import Vector
@@ -132,6 +133,46 @@ class KnowledgeEngine:
         self.embedder = OllamaProvider(host=cfg.ollama_host,model=cfg.embed_model,
             timeout=limits['idle_timeout_seconds'],
             total_timeout=limits['total_timeout_seconds'] or EMBED_FALLBACK_TIMEOUT_SECONDS)
+        # Scheduling only (see Config.graph_max_concurrent_calls): deliberately absent
+        # from `runtime['identity']` and so from the completion cache key.
+        self.max_concurrent_calls = max(1,getattr(cfg,'graph_max_concurrent_calls',1))
+        self._call_slots = asyncio.Semaphore(self.max_concurrent_calls)
+        # psycopg's AsyncConnection is one connection shared by every in-flight call, and
+        # it is not safe for concurrent cursors. execute() buffers the whole result for a
+        # client-side cursor, so holding this only across execute() is sufficient.
+        self._db_lock = asyncio.Lock()
+
+    async def _exec(self, sql, params=None):
+        """Serialized access to the shared connection. Returns a fully buffered cursor.
+
+        Tests build engines with object.__new__, so a missing lock means nothing
+        concurrent was ever started and the plain connection is already safe.
+        """
+        lock=getattr(self,'_db_lock',None)
+        if lock is None:
+            return await (self.db.execute(sql,params) if params is not None
+                          else self.db.execute(sql))
+        async with lock:
+            return await (self.db.execute(sql,params) if params is not None
+                          else self.db.execute(sql))
+
+    async def _fan_out(self, factories: list):
+        """Run independent calls with bounded concurrency, preserving input order.
+
+        `factories` are zero-argument coroutine functions so the serial path never builds
+        a coroutine it does not await. A TaskGroup would wrap failures in an
+        ExceptionGroup and break the precise `except ValueError` and failure_category
+        handling every caller here depends on, so settle every sibling first and then
+        re-raise the first failure in input order -- exactly how the serial loop failed.
+        """
+        if max(1,getattr(self,'max_concurrent_calls',1)) == 1:
+            return [await make() for make in factories]
+        results = await asyncio.gather(*(make() for make in factories),
+                                       return_exceptions=True)
+        for result in results:
+            if isinstance(result,BaseException):
+                raise result
+        return list(results)
 
     async def _ensure_run(self, novel: str, chapter: int, source: str, display: str) -> None:
         self._novel_id = novel
@@ -156,7 +197,7 @@ class KnowledgeEngine:
         if not getattr(self,'run_id',None) or getattr(self,'current_chapter',None) is None:
             return
         identity=digest([kind,key,phase,payload])
-        await self.db.execute('''INSERT INTO chapter_knowledge_activity
+        await self._exec('''INSERT INTO chapter_knowledge_activity
             (run_id,novel_id,chapter_index,item_kind,item_key,phase,payload,idempotency_key)
             VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(run_id,idempotency_key) DO NOTHING''',
             (self.run_id,getattr(self,'_novel_id',self.revision.get('novel_id')),self.current_chapter,kind,key,phase,Jsonb(payload),identity))
@@ -165,7 +206,7 @@ class KnowledgeEngine:
         """Persist stage/liveness metadata without persisting source or model output."""
         if getattr(self,'current_chapter',None) is None:
             return
-        await self.db.execute('''UPDATE graph_job SET
+        await self._exec('''UPDATE graph_job SET
             stage_started_at=CASE WHEN current_stage IS DISTINCT FROM %s THEN now()
                                   ELSE stage_started_at END,
             current_stage=%s,last_progress_at=now(),
@@ -210,7 +251,6 @@ class KnowledgeEngine:
         self._stage_requests=requests
         instructions = {
             'names': 'Inventory explicitly named subjects in the source passages. Include named locations, buildings, organizations, factions, schools and other named things, not only people. A name mentioned once still counts. Use the most appropriate offered kind. Include explicitly used short names as separate surface proposals, without asserting aliases. Each entry contains ONLY the EXACT source spelling, ontology kind, and ID of a passage containing it. Do not copy or rewrite quotations. Do not translate names. Exclude generic titles, pronouns and unnamed categories. An empty inventory is correct; never invent names.',
-            'identity': 'Return exactly one decision for every identity_occurrence. References are request-local opaque tokens; never use a name string as an identity key. An empty existing_candidates list means there is no earlier entity to choose, and DOES permit a supported new identity. For new, target_ref must be one of that occurrence\'s allowed_new_representatives and the representative must decide new with itself as target. For existing, target_ref must be in that occurrence\'s existing_candidates. Keep kinds compatible. If evidence is ambiguous, return unresolved with null target_ref. Example first appearance: o1 has no candidates and names a person, so o1 -> new o1. Example existing identity: the passage explicitly links o2 to offered e1, so o2 -> existing e1. Example ambiguity or homonym: same spelling without coreference evidence -> unresolved. Cite one offered passage and use a reason_code plus at most 200 explanation characters.',
             'claims': 'Extract only atomic, explicitly supported source-language claims from the focus passages. Neighboring passages provide antecedent context, including pronoun-only continuations. Use only verified_occurrences request-local refs; never use name strings as identity keys. A claim may cite one to three offered passage_ids when both an antecedent and assertion are needed. The assertion itself must occur in a focus passage. Preserve attribution, uncertainty, quantities, location, and scope inside value; do not turn an observation about some members into a universal property. Return at most 12 claims, with values at most 400 characters. Candidate facts are context, not evidence. Do not translate values and do not require a value to be a literal substring; semantic verification will independently check support.',
             'evidence': 'Read only the offered source passages, without guessing what a proposed fact might be. Inventory their explicit atomic statements. Copy the subject and assertion as exact source substrings. Copy every attribution, uncertainty, quantity, location, subset, or temporal qualifier as a separate exact source substring. Resolve pronouns only when the offered text establishes the antecedent, but still copy the named subject phrase. Do not translate, paraphrase, add background knowledge, or infer uses. Return an empty list when the passages establish no durable statement.',
             'fact_verify': 'Check the single proposed claim against the original offered source and the claim-independent evidence reading. The original source is authoritative; the reading is only an index. Judge four components separately: the cited subject owns or performs the assertion; the complete assertion is stated; all attribution, uncertainty, quantities, subsets, locations, and time limits are preserved; and the cited evidence is sufficient. Any uncertainty is false. A real quote is not proof. Reject these known error patterns: attaching beasts\' traits to a pond, claiming a plant emits mist when beasts emit it toward the plant, inventing uses not stated in the passage, and turning a report about a few inner-area specimens into a universal property.',
@@ -246,7 +286,7 @@ class KnowledgeEngine:
             if '$ref' in item:
                 return wire_schema['$defs'][item['$ref'].rsplit('/',1)[-1]]
             return item
-        guidance=' Cite offered passage references instead of generating quote text or offsets. A selected passage is evidence to verify, never proof by itself. Null references leave identities unsupported.' if stage in {'propose','identity','claims','align'} else ''
+        guidance=' Cite offered passage references instead of generating quote text or offsets. A selected passage is evidence to verify, never proof by itself. Null references leave identities unsupported.' if stage in {'propose','claims','align'} else ''
         if stage == 'name_slots':
             instructions[stage] = (f'Inventory distinct names in every offered source passage. Fill all {NAME_SLOT_COUNT} request-local slots. '
                 'For every actual proper name or explicitly named story-specific concept use one slot containing its exact source spelling, most appropriate kind, and passage ID. '
@@ -257,23 +297,6 @@ class KnowledgeEngine:
         elif stage == 'identity_slots':
             instructions[stage] = IDENTITY_SLOT_INSTRUCTIONS
             wire_schema=identity_schema(payload['identity_occurrences'],list(contract.by_id))
-        elif stage == 'identity':
-            decisions=wire_schema['properties']['decisions']
-            count=len(payload['identity_occurrences'])
-            decisions.update(minItems=count,maxItems=count)
-            base=item_schema('decisions')
-            variants=[]
-            for outcome,target_schema,reasons in (
-                ('existing',dict(type='string'),['existing_evidence']),
-                ('new',dict(type='string'),['new_first_appearance','new_coreference']),
-                ('unresolved',dict(type='null'),['ambiguous','insufficient_evidence'])):
-                variant=deepcopy(base)
-                variant['properties']['occurrence_ref']['enum']=[o['occurrence_ref'] for o in payload['identity_occurrences']]
-                variant['properties']['outcome']=dict(type='string',const=outcome)
-                variant['properties']['target_ref']=target_schema
-                variant['properties']['reason_code']=dict(type='string',enum=reasons)
-                variants.append(variant)
-            decisions['items']=dict(oneOf=variants)
         elif stage == 'claims':
             if self.hosted:
                 instructions[stage]=instructions[stage].replace(
@@ -340,7 +363,7 @@ class KnowledgeEngine:
         if len(prompt.encode()) > hard_bytes:
             raise ValueError('graph context exceeds hard model budget; bounded caller contract regressed')
         key = digest([self.revision['id'],self.revision['model'],self.runtime['identity'],PROMPT_VERSION,stage,prompt,wire_schema])
-        row = await (await self.db.execute(
+        row = await (await self._exec(
             'SELECT response,runtime_metrics FROM graph_completion WHERE revision_id=%s AND cache_key=%s AND served_provider=%s AND served_model=%s',
             (self.revision['id'],key,self.provider_id,self.model))).fetchone()
         if row:
@@ -348,7 +371,7 @@ class KnowledgeEngine:
             hits[stage]=hits.get(stage,0)+1
             self._stage_cache_hits=hits
             if self.run_id:
-                await self.db.execute('''INSERT INTO graph_completion_run
+                await self._exec('''INSERT INTO graph_completion_run
                     (revision_id,cache_key,served_provider,served_model,run_id,chapter_index,stage,batch_id)
                     VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING''',
                     (self.revision['id'],key,self.provider_id,self.model,self.run_id,self.current_chapter,stage,payload.get('_batch_id',key[:12])))
@@ -378,35 +401,42 @@ class KnowledgeEngine:
             if now-last_heartbeat>=10:
                 await self._worker_progress(stage,heartbeat=True)
                 last_heartbeat=now
-        if hasattr(self.provider,'progress_sink'):
+        # `progress_sink` is a single mutable slot on the provider, so two in-flight
+        # calls would overwrite each other's sink and the first `finally` would clear the
+        # survivor's. Stream progress only when this engine is serial; the per-stage
+        # _worker_progress writes around every call keep the job visibly alive either way.
+        streaming = (max(1,getattr(self,'max_concurrent_calls',1)) == 1
+                     and hasattr(self.provider,'progress_sink'))
+        if streaming:
             self.provider.progress_sink = progress
         try:
-            for attempt in range(STALL_RETRY_ATTEMPTS + 1):
-                try:
-                    response = await self.provider.complete(prompt, json_schema=wire_schema,
-                                                              cls=Class.BATCH, model=self.model,
-                                                              pin_model=not self.hosted)
-                    break
-                except TimeoutError as exc:
-                    # A stall, not a bad chapter: the idle/first-token budget fired
-                    # because no bytes arrived, which is exactly what retrying THIS one
-                    # request (not the whole chapter) is for. Every other call this
-                    # chapter has already made is in graph_completion, so re-entering
-                    # extract() from a chapter-level retry would skip straight back to
-                    # here anyway -- doing it in place just skips the wait.
-                    if attempt >= STALL_RETRY_ATTEMPTS:
-                        raise
-                    print(json.dumps(dict(diagnostic,event='inference_stalled_retrying',
-                                          attempt=attempt+1,elapsed_seconds=time.monotonic()-started,
-                                          error=str(exc))),file=sys.stderr,flush=True)
-                    await asyncio.sleep(STALL_RETRY_DELAY_SECONDS)
+            async with (getattr(self,'_call_slots',None) or contextlib.nullcontext()):
+                for attempt in range(STALL_RETRY_ATTEMPTS + 1):
+                    try:
+                        response = await self.provider.complete(prompt, json_schema=wire_schema,
+                                                                  cls=Class.BATCH, model=self.model,
+                                                                  pin_model=not self.hosted)
+                        break
+                    except TimeoutError as exc:
+                        # A stall, not a bad chapter: the idle/first-token budget fired
+                        # because no bytes arrived, which is exactly what retrying THIS one
+                        # request (not the whole chapter) is for. Every other call this
+                        # chapter has already made is in graph_completion, so re-entering
+                        # extract() from a chapter-level retry would skip straight back to
+                        # here anyway -- doing it in place just skips the wait.
+                        if attempt >= STALL_RETRY_ATTEMPTS:
+                            raise
+                        print(json.dumps(dict(diagnostic,event='inference_stalled_retrying',
+                                              attempt=attempt+1,elapsed_seconds=time.monotonic()-started,
+                                              error=str(exc))),file=sys.stderr,flush=True)
+                        await asyncio.sleep(STALL_RETRY_DELAY_SECONDS)
         except Exception as exc:
             print(json.dumps(dict(diagnostic,event='inference_failed',elapsed_seconds=time.monotonic()-started,
                                   error_type=type(exc).__name__,error=str(exc),
                                   stream=getattr(self.provider,'last_stream_diagnostics',{}))),file=sys.stderr,flush=True)
             raise
         finally:
-            if hasattr(self.provider,'progress_sink'):
+            if streaming:
                 self.provider.progress_sink = None
         print(json.dumps(dict(diagnostic,event='inference_completed',timings=response.timings,
                               input_tokens=response.input_tokens,output_tokens=response.output_tokens)),file=sys.stderr,flush=True)
@@ -447,7 +477,7 @@ class KnowledgeEngine:
                                   error_type=type(exc).__name__,error=str(exc))),
                   file=sys.stderr,flush=True)
             raise
-        await self.db.execute('''INSERT INTO graph_completion(revision_id,cache_key,served_provider,served_model,response,elapsed_seconds,runtime_metrics,
+        await self._exec('''INSERT INTO graph_completion(revision_id,cache_key,served_provider,served_model,response,elapsed_seconds,runtime_metrics,
             chapter_index,stage,batch_id,run_id) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING''',
             (self.revision['id'],key,response.served_provider,response.served_model,Jsonb(parsed.model_dump()),time.monotonic()-started,
              Jsonb(dict(response.timings,input_tokens=response.input_tokens,output_tokens=response.output_tokens,
@@ -457,7 +487,7 @@ class KnowledgeEngine:
                         **({'proposed_count':payload['_proposed_count']} if '_proposed_count' in payload else {}))),
              self.current_chapter,stage,diagnostic['batch_id'],self.run_id))
         if self.run_id:
-            await self.db.execute('''INSERT INTO graph_completion_run
+            await self._exec('''INSERT INTO graph_completion_run
                 (revision_id,cache_key,served_provider,served_model,run_id,chapter_index,stage,batch_id)
                 VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING''',
                 (self.revision['id'],key,response.served_provider,response.served_model,self.run_id,
@@ -514,52 +544,6 @@ class KnowledgeEngine:
                 result.append(p['id'])
         return result
 
-    async def _identity_decisions(self, source: str, mentions: list[dict],
-                                  candidates: dict[str,list[dict]], ontology: dict) -> tuple[list[Decision],int]:
-        """Resolve opaque request refs back to application-owned occurrence/entity IDs."""
-        decisions=[];proposed_count=0
-        for start in range(0,len(mentions),IDENTITY_BATCH_SIZE):
-            batch=mentions[start:start+IDENTITY_BATCH_SIZE]
-            occurrence_refs={m['id']:f'o{i+1}' for i,m in enumerate(batch)}
-            entity_refs={}
-            for m in batch:
-                for candidate in candidates[m['id']]:
-                    entity_refs.setdefault(candidate['id'],f'e{len(entity_refs)+1}')
-            rows=[]
-            for m in batch:
-                same_kind=[r for r in batch if r['kind']==m['kind']]
-                rows.append(dict(
-                    occurrence_ref=occurrence_refs[m['id']],surface=m['surface'],kind=m['kind'],
-                    context=m['quote'],passage_ids=self._mention_passages(source,[m]),
-                    existing_candidates=[dict(ref=entity_refs[c['id']],kind=c['kind'],canonical=c['canonical'])
-                                         for c in candidates[m['id']]],
-                    allowed_new_representatives=[dict(ref=occurrence_refs[r['id']],kind=r['kind'],surface=r['surface'])
-                                                 for r in same_kind]))
-            batch_id=f'identity-{start//IDENTITY_BATCH_SIZE+1}'
-            response=await self.call('identity',IdentityDecisions,dict(
-                source=source,identity_occurrences=rows,ontology=ontology,
-                _passage_ids=self._mention_passages(source,batch),_batch_id=batch_id))
-            proposed_count += len(response.decisions)
-            by_ref={d.occurrence_ref:d for d in response.decisions}
-            expected=set(occurrence_refs.values())
-            if len(response.decisions)!=len(batch) or set(by_ref)!=expected:
-                raise ValueError('identity response must contain one unique decision per occurrence')
-            reverse_occurrence={ref:mid for mid,ref in occurrence_refs.items()}
-            reverse_entity={ref:eid for eid,ref in entity_refs.items()}
-            for m in batch:
-                d=by_ref[occurrence_refs[m['id']]]
-                if d.outcome=='unresolved':
-                    if d.target_ref is not None:
-                        raise ValueError('unresolved identity must have a null target')
-                    target=None
-                elif d.outcome=='existing':
-                    target=reverse_entity.get(d.target_ref)
-                else:
-                    target=reverse_occurrence.get(d.target_ref)
-                decisions.append(Decision(mention_id=m['id'],outcome=d.outcome,target_id=target,
-                    quote=d.quote,evidence_start=d.evidence_start,reason=d.explanation))
-        return decisions,proposed_count
-
     async def _resolve_incremental(self, source, mentions, candidates, ontology):
         """Carry only verified representatives across bounded requests (§0)."""
         verified=[];rejected=[];count=0
@@ -577,7 +561,11 @@ class KnowledgeEngine:
             prior=list(recent.values())
 
             def prepare(size):
+                """Build one candidate request. Pure: `added` is applied only if sent."""
                 batch=mentions[start:start+size]
+                added={}
+                def visible(mid):
+                    return candidates[mid]+added.get(mid,[])
                 offered_mentions={m['id']:m for m in batch}
                 offered_mentions.update({d['mention_id']:by_mid[d['mention_id']] for d in prior})
                 refs={mid:f'o{i+1}' for i,mid in enumerate(offered_mentions)}
@@ -607,10 +595,14 @@ class KnowledgeEngine:
                         choices[key]=(d['outcome'],token,
                             'new_coreference' if d['outcome']=='new' else 'existing_evidence')
                         descriptions[key]=self._subject_context(other)
+                        # A prior "existing" target must also become a retrieval candidate
+                        # or validate_proposals would reject the very choice being offered.
+                        # Only the chosen size may apply this; a sizing probe that mutated
+                        # `candidates` would leak into batches it never sent.
                         if d['outcome']=='existing' and not any(
-                                c['id']==d['target_id'] for c in candidates[m['id']]):
-                            candidates[m['id']].append(entity_context[d['target_id']])
-                    for c in candidates[m['id']]:
+                                c['id']==d['target_id'] for c in visible(m['id'])):
+                            added.setdefault(m['id'],[]).append(entity_context[d['target_id']])
+                    for c in visible(m['id']):
                         if c['kind']!=m['kind']: continue
                         token=target_ref('existing',c['id'])
                         key='existing:'+token
@@ -620,16 +612,31 @@ class KnowledgeEngine:
                         choices=choices,choice_context=descriptions))
                 payload=dict(source=source,ontology=ontology,identity_occurrences=rows,
                     _passage_ids=self._mention_passages(source,list(offered_mentions.values())))
-                return batch,refs,targets,rows,payload
+                return batch,refs,targets,rows,payload,added
 
-            size=min(batch_limit,len(mentions)-start)
-            while True:
-                batch,refs,targets,rows,request=prepare(size)
-                measured=self._identity_request_size(source,request)
-                if measured['request_material_bytes']<=IDENTITY_PROMPT_SOFT_BYTES or size==1:
-                    break
-                size-=1
-                self._identity_context_splits+=1
+            # Adding an occurrence adds both its own row and a choice on every same-kind
+            # row already present, so serialized size is monotone in `size`. That makes the
+            # largest fitting batch a binary search instead of a decrement-and-rebuild scan.
+            requested=min(batch_limit,len(mentions)-start)
+            def fits(prepared):
+                return (self._identity_request_size(source,prepared[4])['request_material_bytes']
+                        <=IDENTITY_PROMPT_SOFT_BYTES)
+            chosen=prepare(requested);size=requested
+            if requested>1 and not fits(chosen):
+                # `low` is the largest size known to fit (1 is the floor and always sent,
+                # since a single occurrence cannot be divided further); `high` never fits.
+                low,high=1,requested;chosen=prepare(1)
+                while low+1<high:
+                    middle=(low+high)//2
+                    probe=prepare(middle)
+                    if fits(probe): low,chosen=middle,probe
+                    else: high=middle
+                size=low
+            # Keep the established metric: how many occurrences the packer had to drop.
+            self._identity_context_splits+=requested-size
+            batch,refs,targets,rows,request,added=chosen
+            for mid,extra in added.items():
+                candidates[mid].extend(extra)
             identity_batch=f'identity-{start+1}-{start+len(batch)}'
             request['_batch_id']=identity_batch
             try:
@@ -692,11 +699,12 @@ class KnowledgeEngine:
                             mentions: list[dict] | None = None, candidates: dict | None = None,
                             batch_identity: str | None = None) -> Verification:
         """Require a complete, unique verdict set and hide durable IDs from the wire."""
-        result=Verification(verdicts=[])
         by_mid={m['id']:m for m in mentions or []}
         entities={c['id']:c for rows in (candidates or {}).values() for c in rows}
         batch_size=16 if contract_name=='name eligibility' else 12
-        for start in range(0,len(items),batch_size):
+        # Verdicts are per-item and no batch reads another's result, so the batches fan
+        # out and their verdicts are concatenated in batch order.
+        async def check(start):
             batch=items[start:start+batch_size]
             refs={item['id']:f'v{i+1}' for i,item in enumerate(batch)}
             wire=[]
@@ -733,10 +741,11 @@ class KnowledgeEngine:
             by_ref={v.id:v for v in checked.verdicts}
             if len(checked.verdicts)!=len(batch) or set(by_ref)!=set(refs.values()):
                 raise ValueError('verification must contain one unique verdict per offered item')
-            for item in batch:
-                verdict=by_ref[refs[item['id']]]
-                result.verdicts.append(Verdict(id=item['id'],supported=verdict.supported,reason=verdict.reason))
-        return result
+            return [Verdict(id=item['id'],supported=by_ref[refs[item['id']]].supported,
+                            reason=by_ref[refs[item['id']]].reason) for item in batch]
+        verdicts=await self._fan_out([functools.partial(check,start)
+                                      for start in range(0,len(items),batch_size)])
+        return Verification(verdicts=[v for batch_verdicts in verdicts for v in batch_verdicts])
 
     @staticmethod
     def _evidence_passage_ids(source: str, items: list[dict]) -> list[str]:
@@ -751,35 +760,51 @@ class KnowledgeEngine:
         Each claim gets its own verdict call so another proposal cannot prime the judge to
         repeat an invented assertion. The source-only reading is cached by its exact offered
         passages and never sees the proposal it will later help check.
+
+        Isolation is about what one call may see, not about when it runs: no fact's verdict
+        depends on another's, so the per-fact calls fan out. Readings are resolved first,
+        deduplicated by their offered passages, so concurrent facts sharing a key wait on
+        one reading instead of racing to request it twice.
         """
-        result=Verification(verdicts=[])
         by_mid={m['id']:m for m in mentions}
-        readings={}
-        for item in items:
+        # Phase 1: local evidence checks. These decide some verdicts outright and never
+        # reach the model, so they stay in item order and out of the fan-out.
+        slots=[None]*len(items);eligible=[]
+        for index,item in enumerate(items):
             if not passage(source,item.get('quote',''),start=item.get('evidence_start')):
-                result.verdicts.append(Verdict(id=item['id'],supported=False,
-                                                reason='literal evidence is absent'))
+                slots[index]=Verdict(id=item['id'],supported=False,
+                                     reason='literal evidence is absent')
                 continue
             passage_ids=self._evidence_passage_ids(source,[item])
             if not passage_ids:
-                result.verdicts.append(Verdict(id=item['id'],supported=False,
-                                                reason='evidence has no offered source passage'))
+                slots[index]=Verdict(id=item['id'],supported=False,
+                                     reason='evidence has no offered source passage')
                 continue
-            reading_key=tuple(passage_ids)
-            if reading_key not in readings:
-                readings[reading_key]=await self.call('evidence',EvidenceReading,dict(
-                    source=source,_passage_ids=passage_ids,
-                    _batch_id='evidence-'+digest(reading_key)[:12]))
-            contract=PassageContract(source,set(passage_ids))
-            offered_text='\n'.join(p['text'] for p in contract.passages)
-            grounded=[statement for statement in readings[reading_key].statements
-                      if statement.subject in offered_text and statement.assertion in offered_text
-                      and all(q in offered_text for q in statement.qualifiers)]
+            eligible.append((index,item,passage_ids))
+
+        # Phase 2: one claim-independent reading per distinct set of offered passages.
+        keys=list(dict.fromkeys(tuple(passage_ids) for _i,_item,passage_ids in eligible))
+        async def read(reading_key):
+            reading=await self.call('evidence',EvidenceReading,dict(
+                source=source,_passage_ids=list(reading_key),
+                _batch_id='evidence-'+digest(reading_key)[:12]))
+            offered_text='\n'.join(p['text'] for p in
+                                  PassageContract(source,set(reading_key)).passages)
+            # The grounding filter depends only on the offered passages, so apply it once
+            # here rather than rebuilding the contract for every fact sharing the key.
+            return [statement.model_dump() for statement in reading.statements
+                    if statement.subject in offered_text and statement.assertion in offered_text
+                    and all(q in offered_text for q in statement.qualifiers)]
+        readings=dict(zip(keys,await self._fan_out(
+            [functools.partial(read,reading_key) for reading_key in keys])))
+
+        # Phase 3: one verdict call per fact, each seeing only its own proposal.
+        async def verify(item, passage_ids):
             subjects=([self._subject_context(by_mid[mid]) for mid in item['mention_ids']]
                       if item.get('mention_ids') else [dict(surface=item['subject'])])
             wire=dict(item_ref='v1',type=item['type'],subjects=subjects,
                       attribute=item['attribute'],value=item['value'],
-                      evidence_reading=[s.model_dump() for s in grounded])
+                      evidence_reading=readings[tuple(passage_ids)])
             checked=await self.call('fact_verify',FactComponentVerification,dict(
                 source=source,items=[wire],_passage_ids=passage_ids,
                 _batch_id='fact-verify-'+digest(item['id'])[:12]))
@@ -792,8 +817,12 @@ class KnowledgeEngine:
             reason=verdict.reason if not failed else ', '.join(failed)+': '+verdict.reason
             await self._activity('fact',item['id'],'verified',dict(
                 supported=not failed,components=components,reason=verdict.reason))
-            result.verdicts.append(Verdict(id=item['id'],supported=not failed,reason=reason[:200]))
-        return result
+            return Verdict(id=item['id'],supported=not failed,reason=reason[:200])
+        for (index,_item,_ids),verdict in zip(eligible,await self._fan_out(
+                [functools.partial(verify,item,passage_ids)
+                 for _i,item,passage_ids in eligible])):
+            slots[index]=verdict
+        return Verification(verdicts=[verdict for verdict in slots if verdict is not None])
 
     async def _review_hosted_claims(self, source: str, items: list[dict], mentions: list[dict],
                                     target: str) -> tuple[list[dict],list[dict]]:
@@ -835,8 +864,10 @@ class KnowledgeEngine:
         if not items:
             return []
         by_mid={m['id']:m for m in mentions}
-        result=[]
-        for start in range(0,len(items),12):
+        # render -> render_verify is sequential WITHIN a batch, but batches share nothing,
+        # so the pairs fan out and results are concatenated in batch order.
+        async def render(start):
+            result=[]
             batch=items[start:start+12]
             refs={item['id']:f'r{i+1}' for i,item in enumerate(batch)}
             wire=[dict(item_ref=refs[item['id']],
@@ -863,7 +894,10 @@ class KnowledgeEngine:
                     await self._activity('fact',item['id'],'rejected',dict(
                         value_en=by_ref[ref],reason=verdicts[ref].reason))
                 result.append(dict(item,value_en=by_ref[ref] if supported else ''))
-        return result
+            return result
+        return [row for batch_rows in await self._fan_out(
+                    [functools.partial(render,start) for start in range(0,len(items),12)])
+                for row in batch_rows]
 
     async def _align_window(self, novel: str, chapter: int, source: str, display: str,
                             mentions: list[dict], lo: int, hi: int, display_identity: str
@@ -1020,30 +1054,80 @@ class KnowledgeEngine:
         source_lang = (await (await self.db.execute(
             'SELECT source_lang FROM novel WHERE id=%s',(novel_id,)
         )).fetchone())[0]
-        for mention,vector in zip(mentions,vectors):
-            exact=await (await self.db.execute('''SELECT DISTINCT e.id::text AS entity_id,e.kind,e.canonical
+        # One statement per retrieval step instead of per occurrence. The old shape cost
+        # two queries per mention plus one per candidate -- roughly 400 round trips for a
+        # 40-occurrence chapter -- to compute a result that is one set-returning join.
+        # Ordering is made explicit (entity_id, then distance) rather than inherited from
+        # LATERAL row order, which Postgres does not guarantee.
+        rid=self.revision['id']
+        rows=[(index,m['kind'],m['surface']) for index,m in enumerate(mentions)]
+        placeholders=','.join(['(%s::int,%s::text,%s::text)']*len(rows))
+        exact_hits={}
+        for index,eid,kind,canonical in await (await self.db.execute(f'''
+            SELECT q.idx,c.entity_id,c.kind,c.canonical
+            FROM (VALUES {placeholders}) AS q(idx,kind,surface)
+            CROSS JOIN LATERAL (
+                SELECT DISTINCT e.id::text AS entity_id,e.kind,e.canonical
                 FROM entity e JOIN alias a ON a.entity_id=e.id AND a.revision_id=e.revision_id
-                WHERE e.revision_id=%s AND e.kind=%s AND e.first_seen_chapter<%s
-                AND a.surface=%s AND a.lang=%s AND a.first_seen_chapter<%s
-                ORDER BY entity_id LIMIT %s''',(self.revision['id'],mention['kind'],chapter,
-                    mention['surface'],source_lang,chapter,CANDIDATE_LIMIT))).fetchall()
-            dense=await (await self.db.execute('''SELECT e.id::text,e.kind,e.canonical
-                FROM entity e WHERE e.revision_id=%s AND e.kind=%s AND e.first_seen_chapter<%s
-                AND e.embedding IS NOT NULL ORDER BY e.embedding <=> %s LIMIT %s''',
-                (self.revision['id'],mention['kind'],chapter,Vector(vector),CANDIDATE_LIMIT))).fetchall()
+                WHERE e.revision_id=%s AND e.kind=q.kind AND e.first_seen_chapter<%s
+                AND a.surface=q.surface AND a.lang=%s AND a.first_seen_chapter<%s
+                ORDER BY entity_id LIMIT %s) c''',
+            [value for row in rows for value in row]
+            +[rid,chapter,source_lang,chapter,CANDIDATE_LIMIT])).fetchall():
+            exact_hits.setdefault(index,[]).append((eid,kind,canonical))
+        for hits in exact_hits.values():
+            hits.sort(key=lambda hit:hit[0])
+
+        vector_rows=[(index,m['kind'],Vector(v))
+                     for index,(m,v) in enumerate(zip(mentions,vectors))]
+        placeholders=','.join(['(%s::int,%s::text,%s::vector)']*len(vector_rows))
+        dense_hits={}
+        for index,eid,kind,canonical,distance in await (await self.db.execute(f'''
+            SELECT q.idx,c.entity_id,c.kind,c.canonical,c.distance
+            FROM (VALUES {placeholders}) AS q(idx,kind,vec)
+            CROSS JOIN LATERAL (
+                SELECT e.id::text AS entity_id,e.kind,e.canonical,e.embedding <=> q.vec AS distance
+                FROM entity e WHERE e.revision_id=%s AND e.kind=q.kind
+                AND e.first_seen_chapter<%s AND e.embedding IS NOT NULL
+                ORDER BY e.embedding <=> q.vec LIMIT %s) c''',
+            [value for row in vector_rows for value in row]
+            +[rid,chapter,CANDIDATE_LIMIT])).fetchall():
+            dense_hits.setdefault(index,[]).append((distance,eid,kind,canonical))
+        for hits in dense_hits.values():
+            # Stable, so ties keep the order the index returned them in.
+            hits.sort(key=lambda hit:hit[0])
+
+        for index,mention in enumerate(mentions):
             ordered=[];seen=set()
-            for eid,kind,canonical in [*exact,*dense]:
+            for eid,kind,canonical in (exact_hits.get(index,[])
+                                       +[hit[1:] for hit in dense_hits.get(index,[])]):
                 if eid not in seen and len(ordered)<CANDIDATE_LIMIT:
                     ordered.append(dict(id=eid,kind=kind,canonical=canonical));seen.add(eid)
-            for candidate in ordered:
-                rows=await(await self.db.execute('''SELECT v.chapter_index,v.quote
-                    FROM alias a JOIN graph_evidence v ON v.id=a.evidence_id
-                    WHERE a.entity_id=%s AND a.revision_id=%s AND v.revision_id=%s
-                    AND a.first_seen_chapter<%s AND v.chapter_index<%s
-                    ORDER BY v.chapter_index DESC LIMIT 2''',
-                    (candidate['id'],self.revision['id'],self.revision['id'],chapter,chapter))).fetchall()
-                candidate['source_context']=[dict(chapter=c,quote=q) for c,q in rows]
             result[mention['id']]=ordered
+
+        # Prior source context depends only on the entity, so ask once per distinct
+        # candidate rather than once per (occurrence, candidate) pair.
+        entity_ids=sorted({c['id'] for rows_ in result.values() for c in rows_})
+        contexts={}
+        if entity_ids:
+            placeholders=','.join(['(%s::uuid)']*len(entity_ids))
+            for eid,chapter_index,quote in await (await self.db.execute(f'''
+                SELECT q.eid::text,v.chapter_index,v.quote
+                FROM (VALUES {placeholders}) AS q(eid)
+                CROSS JOIN LATERAL (
+                    SELECT v2.chapter_index,v2.quote
+                    FROM alias a JOIN graph_evidence v2 ON v2.id=a.evidence_id
+                    WHERE a.entity_id=q.eid AND a.revision_id=%s AND v2.revision_id=%s
+                    AND a.first_seen_chapter<%s AND v2.chapter_index<%s
+                    ORDER BY v2.chapter_index DESC LIMIT 2) v''',
+                [*entity_ids,rid,rid,chapter,chapter])).fetchall():
+                contexts.setdefault(eid,[]).append((chapter_index,quote))
+        for rows_ in result.values():
+            for candidate in rows_:
+                # A fresh list per candidate: two occurrences can share an entity, and
+                # _resolve_incremental hands these dicts on to per-occurrence choices.
+                candidate['source_context']=[dict(chapter=c,quote=q) for c,q in
+                    sorted(contexts.get(candidate['id'],[]),key=lambda row:-row[0])]
         return result,{m['id']:v for m,v in zip(mentions,vectors)}
 
     async def discover_names(self, novel: str, chapter: int, source: str):
@@ -1054,17 +1138,21 @@ class KnowledgeEngine:
                                 incomplete_windows=0)
         if source.strip():
             collected=[];rejected=[]
-            async def inventory(passage_ids: list[str], batch_id: str):
+            # Each top-level batch accumulates into its own lists so a fan-out cannot make
+            # the merge order depend on which call happened to finish first. Saturation
+            # splits stay serial inside a batch: they are a refinement of one window.
+            async def inventory(passage_ids: list[str], batch_id: str,
+                                names: list, refused: list):
                 request=dict(source=source,ontology=ontology,_passage_ids=passage_ids,
                              _batch_id=batch_id)
                 found=await self.call('name_slots',Names,request)
-                collected.extend(found.names);rejected.extend(found.rejected)
+                names.extend(found.names);refused.extend(found.rejected)
                 if request.get('_proposed_count',len(found.names))<NAME_SLOT_COUNT:
                     return
                 if len(passage_ids)<=1:
                     self._name_metrics['incomplete_windows']+=1
-                    rejected.append(dict(rejection='name coverage failure: smallest source passage reached slot limit',
-                                         batch_id=batch_id,name_limit=NAME_SLOT_COUNT))
+                    refused.append(dict(rejection='name coverage failure: smallest source passage reached slot limit',
+                                        batch_id=batch_id,name_limit=NAME_SLOT_COUNT))
                     return
                 self._name_metrics['saturation_splits']+=1
                 # Balance by offered source characters rather than paragraph count so a
@@ -1076,11 +1164,15 @@ class KnowledgeEngine:
                     pivot=index
                     if running>=total/2:
                         break
-                await inventory(passage_ids[:pivot],batch_id+'.1')
-                await inventory(passage_ids[pivot:],batch_id+'.2')
+                await inventory(passage_ids[:pivot],batch_id+'.1',names,refused)
+                await inventory(passage_ids[pivot:],batch_id+'.2',names,refused)
 
-            for batch_number,passage_ids in enumerate(batches,1):
-                await inventory(passage_ids,f'names-{batch_number}')
+            per_batch=[([],[]) for _ in batches]
+            await self._fan_out([
+                functools.partial(inventory,passage_ids,f'names-{number}',*per_batch[number-1])
+                for number,passage_ids in enumerate(batches,1)])
+            for names,refused in per_batch:
+                collected.extend(names);rejected.extend(refused)
             unique={}
             for name in collected:
                 key=(name.surface,name.kind)
@@ -1187,9 +1279,13 @@ class KnowledgeEngine:
         all_claims=[];claim_coverage_rejected=[];proposed_claim_count=0
         if include_facts:
             claim_passage_chars=24_000 if self.hosted else CLAIM_PASSAGE_CHARS
-            for focus in self._claim_batches(source):
-                found,no,count=await self._claims_for_focus(
-                    source,verified_mentions,ontology,focus,passage_chars=claim_passage_chars)
+            # Each focus is a disjoint source window whose extraction reads nothing the
+            # others produce, so they fan out; results are reassembled in window order to
+            # keep duplicate elimination below deterministic.
+            for found,no,count in await self._fan_out([
+                    functools.partial(self._claims_for_focus,source,verified_mentions,
+                                      ontology,focus,passage_chars=claim_passage_chars)
+                    for focus in self._claim_batches(source)]):
                 all_claims.extend(found);claim_coverage_rejected.extend(no);proposed_claim_count+=count
         # Neighboring context deliberately overlaps. Exact application-owned evidence
         # offsets make duplicate elimination deterministic without using names as keys.
@@ -1225,11 +1321,15 @@ class KnowledgeEngine:
         # fail closed at boundaries; they never manufacture a global offset.
         window_count=max(1,math.ceil(len(display)/12000),math.ceil(len(mentions)/48)) if include_terms else 0
         display_identity=digest(display)
-        for i in range(window_count):
+        def window(i):
             lo=len(display)*i//window_count;hi=len(display)*(i+1)//window_count
             mlo=len(mentions)*i//window_count;mhi=len(mentions)*(i+1)//window_count
-            spans.extend(await self._align_window(novel,chapter,source,display,
-                mentions[mlo:mhi],lo,hi,display_identity))
+            return functools.partial(self._align_window,novel,chapter,source,display,
+                mentions[mlo:mhi],lo,hi,display_identity)
+        # Windows cover disjoint display ranges and disjoint occurrences, so they fan out;
+        # extending in window order keeps the by_span last-writer-wins below deterministic.
+        for window_spans in await self._fan_out([window(i) for i in range(window_count)]):
+            spans.extend(window_spans)
         by_span={}
         for span in spans:
             key=(span['char_start'],span['char_end'])
@@ -1238,15 +1338,13 @@ class KnowledgeEngine:
             by_span[key]=span
         spans=sorted(by_span.values(),key=lambda s:s['char_start'])
         alignment_items = [dict(s,id='alignment:'+s['id'],type='alignment') for s in spans if s['mention_id']]
-        alignment_verdicts=Verification(verdicts=[])
-        for start in range(0,len(alignment_items),12):
-            batch=alignment_items[start:start+12]
+        # Alignment retains its established display-context contract. Its verifier also
+        # gets request-local item refs and exact-one validation. _verify_items already
+        # batches by 12 and slices display_contexts to match, so hand it the whole list
+        # rather than re-batching by 12 here into calls that each held one batch.
+        alignment_verdicts=await self._verify_items(source,alignment_items,'alignment',
             display_contexts=[display[max(0,i['char_start']-120):min(len(display),i['char_end']+120)]
-                              for i in batch if i.get('type')=='alignment']
-            # Alignment retains its established display-context contract. Its verifier
-            # also gets request-local item refs and exact-one validation.
-            checked=await self._verify_items(source,batch,'alignment',display_contexts=display_contexts,mentions=mentions)
-            alignment_verdicts.verdicts.extend(checked.verdicts)
+                              for i in alignment_items],mentions=mentions)
         verified_alignments, no = approved(alignment_items,alignment_verdicts)
         rejected += no
         verified_ids = {i['id'] for i in verified_alignments}

@@ -6,16 +6,19 @@ quotes/offsets and the authoritative resolution map; a reference is not proof of
 from __future__ import annotations
 
 from copy import deepcopy
+from functools import lru_cache
 import re
 
 from pipeline.evidence import Names, digest, passage
 
 
-def source_passages(source: str, *, max_chars: int = 400, overlap: int = 80) -> list[dict]:
-    """Stable chapter-content-scoped IDs, retaining whitespace and punctuation.
+@lru_cache(maxsize=32)
+def _split_passages(source: str, max_chars: int, overlap: int) -> tuple[dict,...]:
+    """Memoized paragraph split. See `source_passages` for the contract.
 
-    Paragraphs are capped at ``max_chars`` code points. Long paragraphs overlap, so a
-    maximum-length named surface cannot disappear at a hard split. No text is rewritten.
+    One chapter's source is re-split many times per extraction: inside every `call()`,
+    once per fact in `_evidence_passage_ids`, and once per candidate size while packing
+    identity batches. The split is a pure function of its arguments, so compute it once.
     """
     result=[]
     source_hash=digest(source)
@@ -30,18 +33,24 @@ def source_passages(source: str, *, max_chars: int = 400, overlap: int = 80) -> 
             if stop==end:
                 break
             start=stop-overlap
-    return result
+    return tuple(result)
 
 
-def source_windows(source: str, *, max_chars: int = 1600, overlap: int = 200) -> list[dict]:
-    """Contiguous evidence windows that retain antecedents across paragraph breaks.
+def source_passages(source: str, *, max_chars: int = 400, overlap: int = 80) -> list[dict]:
+    """Stable chapter-content-scoped IDs, retaining whitespace and punctuation.
 
-    Event roles often use a name in one paragraph and a pronoun in the next. The generic
-    claim extractor keeps paragraph-sized evidence, while chapter events opt into these
-    larger exact slices so a cited record can prove both identity and action (§0.2).
+    Paragraphs are capped at ``max_chars`` code points. Long paragraphs overlap, so a
+    maximum-length named surface cannot disappear at a hard split. No text is rewritten.
+
+    Passage dicts are shared with the memo and must be treated as immutable; the list
+    is a fresh copy, so a caller may append a synthetic range to its own result.
     """
-    if max_chars <= overlap or overlap < 0:
-        raise ValueError("passage window must be larger than its overlap")
+    return list(_split_passages(source,max_chars,overlap))
+
+
+@lru_cache(maxsize=32)
+def _split_windows(source: str, max_chars: int, overlap: int) -> tuple[dict,...]:
+    """Memoized window split. See `source_windows` for the contract."""
     result = []
     source_hash = digest(source)
     start = 0
@@ -58,7 +67,21 @@ def source_windows(source: str, *, max_chars: int = 1600, overlap: int = 200) ->
         if stop == len(source):
             break
         start = max(start + 1, stop - overlap)
-    return result
+    return tuple(result)
+
+
+def source_windows(source: str, *, max_chars: int = 1600, overlap: int = 200) -> list[dict]:
+    """Contiguous evidence windows that retain antecedents across paragraph breaks.
+
+    Event roles often use a name in one paragraph and a pronoun in the next. The generic
+    claim extractor keeps paragraph-sized evidence, while chapter events opt into these
+    larger exact slices so a cited record can prove both identity and action (§0.2).
+
+    Same immutability contract as `source_passages`.
+    """
+    if max_chars <= overlap or overlap < 0:
+        raise ValueError("passage window must be larger than its overlap")
+    return list(_split_windows(source,max_chars,overlap))
 
 
 class PassageContract:
@@ -104,8 +127,6 @@ class PassageContract:
             fields.pop('quote');fields.pop('evidence_start',None)
             fields['passage_id']=reference
             definition['required']=[k for k in definition.get('required',[]) if k not in {'quote','evidence_start'}]+['passage_id']
-        if stage == 'identity':
-            result['$defs']['IdentityDecision']['properties']['passage_id'] = dict(type='string',enum=ids)
         if stage == 'claims':
             definition = result['$defs']['ClaimProposal']
             fields = definition['properties']
@@ -148,12 +169,12 @@ class PassageContract:
                     continue
                 names.append(dict(surface=surface,kind=kind,named=True,**evidence))
             return Names(names=names,reviewed_kinds=list(kinds),rejected=rejected)
-        if stage not in {'propose','identity','claims','align'}:
+        if stage not in {'propose','claims','align'}:
             return internal_schema.model_validate(body)
         result=deepcopy(body)
         # Event extraction shares this evidence contract with graph proposals: the model
         # selects an offered passage_id but never supplies a quote or offset (§0.2).
-        keys = {'propose':['decisions','claims','events'], 'identity':['decisions'],
+        keys = {'propose':['decisions','claims','events'],
                 'claims':['claims'], 'align':['alignments']}[stage]
         for key in keys:
             for item in result.get(key,[]):
