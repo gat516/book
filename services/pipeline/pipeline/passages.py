@@ -260,17 +260,22 @@ class PassageContract:
                     holder=dict(item,subject_ref=value); participants.append(ref(holder,'subject_ref'))
                 out['occurrences'].append(dict(item,participant_refs=participants))
             return out
-        if stage != 'align':
+        if stage not in {'propose','align'}:
             return internal_schema.model_validate(body)
+        # 'propose' is the SEPARATE structured-event track's stage (pipeline/events.py,
+        # event_rebuild.py's lineage -- CLAUDE.md: "do not merge with the structured-
+        # event track"), not part of Phase B's merged extract. It shares this evidence
+        # contract with 'align': the model selects an offered passage_id but never
+        # supplies a quote or offset (§0.2).
         result=deepcopy(body)
-        # align shares this evidence contract with the old 'propose' stage: the model
-        # selects an offered passage_id but never supplies a quote or offset (§0.2).
-        for item in result.get('alignments',[]):
-            if 'quote' in item or 'evidence_start' in item or 'passage_id' not in item:
-                raise ValueError('model must cite offered passages, not generate evidence text or offsets')
-            ref=item.pop('passage_id')
-            ev=self.resolve(ref)
-            # Invalid/unlinked references retain empty evidence. Existing literal
-            # validation rejects links; unaligned cards stay clickable.
-            item.update(ev or dict(quote='',evidence_start=None))
+        keys = {'propose':['decisions','claims','events'],'align':['alignments']}[stage]
+        for key in keys:
+            for item in result.get(key,[]):
+                if 'quote' in item or 'evidence_start' in item or 'passage_id' not in item:
+                    raise ValueError('model must cite offered passages, not generate evidence text or offsets')
+                ref=item.pop('passage_id')
+                ev=self.resolve(ref)
+                # Invalid/unlinked references retain empty evidence. Existing literal
+                # validation rejects links; unaligned cards stay clickable.
+                item.update(ev or dict(quote='',evidence_start=None))
         return internal_schema.model_validate(result)

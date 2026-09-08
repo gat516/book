@@ -1125,6 +1125,11 @@ class KnowledgeEngine:
         result=[]
         unknown=[]
         for claim in claims:
+            # C.9: occurrences are deliberately not a vocabulary type -- event.summary
+            # stays free text, so this whole lookup is skipped for claim.type=='event'.
+            if claim.type == 'event':
+                result.append(claim)
+                continue
             term_type = 'relation' if claim.type == 'relationship' else 'attribute'
             required = 2 if claim.type == 'relationship' else 1
             if len(claim.mention_ids) != required or any(mid not in mention_by_id for mid in claim.mention_ids):
