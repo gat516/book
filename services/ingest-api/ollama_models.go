@@ -12,10 +12,23 @@ import (
 
 func validateOllamaBaseURL(raw string, allowed map[string]bool) error {
 	parsed, err := url.Parse(raw)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" ||
-		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.User != nil ||
-		!allowed[strings.ToLower(parsed.Hostname())] {
-		return fmt.Errorf("Ollama URL must use an allowed http(s) host with no path")
+	if err != nil {
+		return fmt.Errorf("invalid Ollama URL: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("Ollama URL scheme must be http or https")
+	}
+	if parsed.Hostname() == "" {
+		return fmt.Errorf("Ollama URL must include a hostname")
+	}
+	if parsed.Path != "" && parsed.Path != "/" {
+		return fmt.Errorf("Ollama URL must not include a path (the server adds /api/tags)")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
+		return fmt.Errorf("Ollama URL must not include credentials, a query, or a fragment")
+	}
+	if !allowed[strings.ToLower(parsed.Hostname())] {
+		return fmt.Errorf("Ollama hostname %q is not in OLLAMA_ALLOWED_HOSTS", parsed.Hostname())
 	}
 	return nil
 }
