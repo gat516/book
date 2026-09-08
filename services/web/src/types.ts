@@ -698,7 +698,10 @@ export interface RepairProgressFact {
 
 export type RepairTrackName = "graph" | "events";
 
-export type RepairAction = "prepare" | "review" | "activate" | "rollback" | "discard" | "extend" | "reextract" | "reextract_apply";
+// "review"/"activate" now apply only to the structured-event track; the entity graph
+// uses "adopt"/"quarantine" instead (Phase E, migration 0077) -- pipeline/repair.py's
+// dispatch enforces the split, not this type.
+export type RepairAction = "prepare" | "review" | "activate" | "rollback" | "discard" | "extend" | "reextract" | "reextract_apply" | "adopt" | "quarantine";
 
 export interface RepairRequestView {
   id: string;

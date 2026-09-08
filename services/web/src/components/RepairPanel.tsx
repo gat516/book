@@ -88,7 +88,9 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   const [rollbackTo, setRollbackTo] = useState<Record<RepairTrackName, string>>({ graph: "", events: "" });
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [reviewing, setReviewing] = useState<RepairTrackName | null>(null);
+  // Events-only: Phase E deleted the whole-revision review gate for the entity graph, so
+  // RepairReview has nothing left to review there (see its own header comment).
+  const [reviewing, setReviewing] = useState<"events" | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -392,37 +394,80 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
                 ? `Confirm — re-extract all ${track.chapters.total || "?"} chapters`
                 : "Start fresh rebuild"}
             </button>
-            {replacement?.review_hash && (
-              <button type="button" disabled={busy} onClick={() => setReviewing(name)}>
+            {name === "events" && replacement?.review_hash && (
+              <button type="button" disabled={busy} onClick={() => setReviewing("events")}>
                 Review claims
               </button>
             )}
-            {replacement?.review_hash ? (
+            {name === "events" && (
+              replacement?.review_hash ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    confirming === `activate-${name}`
+                      ? void act(
+                          name,
+                          "activate",
+                          { review_hash: replacement.review_hash },
+                          replacement.revision_id,
+                        )
+                      : setConfirming(`activate-${name}`)
+                  }
+                >
+                  {confirming === `activate-${name}` ? "Confirm activate" : "Activate"}
+                </button>
+              ) : (
+                replacement?.reviewed && (
+                  // record_review stores its metrics and clears `review` in one step, so
+                  // the activation hash does not exist until the worker freezes a fresh
+                  // report. A disabled button that says why beats one that vanishes.
+                  <button type="button" disabled title="Waiting for a fresh report">
+                    Activate (report pending)
+                  </button>
+                )
+              )
+            )}
+            {name === "graph" && replacement && (
+              // Phase E deleted the whole-revision review gate: adopting no longer
+              // certifies any fact's correctness (that is Phase D's per-item
+              // review_state now), only how much of the TERMS track -- entities,
+              // aliases, mention/display links, which have no held state of their own --
+              // becomes visible. The button copy says so rather than implying "Adopt"
+              // means "approved".
+              <button
+                type="button"
+                disabled={busy || track.chapters.done < 1}
+                onClick={() =>
+                  confirming === `adopt-${name}`
+                    ? void act(name, "adopt", {}, replacement.revision_id)
+                    : setConfirming(`adopt-${name}`)
+                }
+                title={
+                  track.chapters.done < 1
+                    ? "Adoption needs at least one completed chapter"
+                    : undefined
+                }
+              >
+                {confirming === `adopt-${name}` ? "Confirm adopt" : "Adopt"}
+              </button>
+            )}
+            {name === "graph" && track.active_revision && track.active_trusted && (
+              // The panic button that makes dropping the whole-revision review gate safe:
+              // sets trusted=false on the active revision, with an audit row, and starts
+              // no rebuild. This is the same flip prepare() already takes automatically
+              // whenever a fresh rebuild starts -- this is that decision taken on demand.
               <button
                 type="button"
                 disabled={busy}
                 onClick={() =>
-                  confirming === `activate-${name}`
-                    ? void act(
-                        name,
-                        "activate",
-                        { review_hash: replacement.review_hash },
-                        replacement.revision_id,
-                      )
-                    : setConfirming(`activate-${name}`)
+                  confirming === `quarantine-${name}`
+                    ? void act(name, "quarantine", {}, track.active_revision)
+                    : setConfirming(`quarantine-${name}`)
                 }
               >
-                {confirming === `activate-${name}` ? "Confirm activate" : "Activate"}
+                {confirming === `quarantine-${name}` ? "Confirm quarantine" : "Quarantine"}
               </button>
-            ) : (
-              replacement?.reviewed && (
-                // record_review stores its metrics and clears `review` in one step, so
-                // the activation hash does not exist until the worker freezes a fresh
-                // report. A disabled button that says why beats one that vanishes.
-                <button type="button" disabled title="Waiting for a fresh report">
-                  Activate (report pending)
-                </button>
-              )
             )}
             {track.rollback_targets.length > 0 && (
               <>
@@ -475,6 +520,29 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
             {chosen && !chosen.trusted
               ? "That revision is quarantined. Rolling back to it does not restore its facts — they stay withheld. Use this to undo an activation, not to recover from quarantine."
               : "Rolling back replaces the active revision. The one it replaces becomes archived and can be rolled back to in turn."}
+          </p>
+        )}
+
+        {confirming === `adopt-${name}` && (
+          <p className="novel-create-form-hint">
+            Adoption makes this replacement the active graph. Its resolved names and terms
+            become visible to readers and Ask AI immediately — hover cards, glossary
+            bindings, that sort of thing — and so does anything a reviewer has already
+            individually passed in the chapter knowledge workspace. It does not itself
+            approve any fact, relationship or event: those stay held, chapter by chapter,
+            until a human passes them there. {track.chapters.done} of {track.chapters.total}{" "}
+            chapters have completed so far; the rest keep extracting after adoption.
+          </p>
+        )}
+
+        {confirming === `quarantine-${name}` && (
+          <p className="novel-create-form-hint">
+            Quarantine hides every fact, relationship and event on the active graph from
+            readers and Ask AI immediately, without starting a rebuild — the same
+            RESTRICTIVE-policy effect a fresh rebuild triggers automatically, taken here on
+            demand. Use this if you have found a problem and want knowledge withheld while
+            you investigate or prepare a replacement. Chapter text and translations stay
+            readable throughout.
           </p>
         )}
       </div>

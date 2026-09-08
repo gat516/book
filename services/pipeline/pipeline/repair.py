@@ -352,6 +352,14 @@ async def _run(db, cfg, row: dict) -> dict:
         raise ValueError(f"{action} requires a revision")
 
     if action == "review":
+        # Phase E deleted graph_rebuild.qualified()/record_review(): the entity graph
+        # publishes per chapter now, and per-item correctness is Phase D's review_state,
+        # not a whole-revision reviewer sign-off. The structured-event track (event_rebuild)
+        # keeps its own separate activation/quarantine/review lifecycle unchanged -- see
+        # this module's own header and CLAUDE.md's "THE TRAP" note.
+        if row["track"] != "events":
+            raise ValueError("review applies only to the structured-event track; "
+                              "the entity graph publishes per chapter and is reviewed per fact/edge/event")
         document = params.get("document")
         if not isinstance(document, dict):
             raise ValueError("review requires a document")
@@ -361,14 +369,32 @@ async def _run(db, cfg, row: dict) -> dict:
         return await module.record_review(db, cfg, row["revision_id"], document)
 
     if action == "activate":
+        if row["track"] != "events":
+            raise ValueError("activate applies only to the structured-event track; use adopt for the entity graph")
         review_hash = params.get("review_hash")
         if not isinstance(review_hash, str) or not review_hash:
             raise ValueError("activate requires the review hash from the recorded review")
         await module.switch(db, cfg, row["revision_id"], review_hash)
         return {"status": "activated", "revision": row["revision_id"]}
 
+    if action == "adopt":
+        if row["track"] != "graph":
+            raise ValueError("adopt applies only to the entity graph; use activate for the structured-event track")
+        # adopt() re-derives its own gate from a fresh preview() -- see its docstring --
+        # and re-implements no threshold this module doesn't already delegate.
+        return await module.adopt(db, cfg, row["revision_id"])
+
+    if action == "quarantine":
+        if row["track"] != "graph":
+            raise ValueError("quarantine applies only to the entity graph; the event track "
+                              "keeps its own activation/quarantine lifecycle")
+        return await module.quarantine(db, cfg, row["revision_id"])
+
     if action == "rollback":
-        await module.switch(db, cfg, row["revision_id"], rollback=True)
+        if row["track"] == "graph":
+            await module.switch(db, cfg, row["revision_id"])
+        else:
+            await module.switch(db, cfg, row["revision_id"], rollback=True)
         # Rollback deliberately preserves trust: returning to a contaminated revision does
         # not restore its facts.  Say so in the result rather than letting the UI imply
         # that rolling back fixed anything.

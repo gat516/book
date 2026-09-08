@@ -10,6 +10,13 @@ import type {
 
 interface Props {
   novelId: string;
+  // RepairPanel only ever passes "events" now: Phase E deleted the entity graph's
+  // whole-revision review gate (qualified()/record_review()) — that track publishes per
+  // chapter and is approved per fact/edge/event, not by a reviewer signing off a frozen
+  // report — so this form has nothing left to do for "graph" there. The type stays
+  // RepairTrackName (rather than narrowing to "events") because ChapterKnowledgeWorkspace
+  // still reuses this component for its own, separate chapter-level re-extraction review,
+  // which is unrelated to Phase E and out of this change's scope.
   track: RepairTrackName;
   onSubmitted: () => void;
   onClose: () => void;
@@ -18,7 +25,7 @@ interface Props {
 type MentionVerdict = { correct: boolean; unambiguous: boolean };
 
 /**
- * Review the staged claims against their source quotes.
+ * Review the staged structured events against their source quotes.
  *
  * This component collects booleans and nothing else. It computes no scores and asserts no
  * aggregates, because record_review deliberately derives every metric itself from these
@@ -91,9 +98,16 @@ export function RepairReview({ novelId, track, onSubmitted, onClose }: Props) {
 
   const assessedMentions = Object.keys(mentions).length;
   const assessedFacts = Object.keys(facts).length;
+  // The events track's report has no `mentions`/`claims` lists (event_rebuild.preview
+  // reports `events` instead), so both are always empty here and this exhaustiveness
+  // gate has never actually applied to this component -- preserved as-is rather than
+  // rewritten, since narrowing `track` to "events" changes nothing about what report
+  // shape actually arrives.
   const allMentionsAssessed = reportMentions.length > 0 && assessedMentions === reportMentions.length;
   const allFactsAssessed = reportClaims.length > 0 && assessedFacts === reportClaims.length;
-  const exhaustiveGraphReview = track !== "graph" || (allMentionsAssessed && allFactsAssessed);
+  const exhaustiveReview = reportMentions.length === 0 && reportClaims.length === 0
+    ? true
+    : allMentionsAssessed && allFactsAssessed;
 
   async function submit() {
     if (!reviewHash || !reviewer.trim()) return;
@@ -312,10 +326,10 @@ export function RepairReview({ novelId, track, onSubmitted, onClose }: Props) {
           />
         </label>
         <button type="button" onClick={() => void submit()}
-          disabled={saving || !reviewer.trim() || !exhaustiveGraphReview}>
+          disabled={saving || !reviewer.trim() || !exhaustiveReview}>
           {saving ? "Submitting…" : "Submit review"}
         </button>
-        {track === "graph" && !exhaustiveGraphReview && (
+        {!exhaustiveReview && (
           <p className="novel-create-form-hint">
             Every source identity and published claim must be assessed. Small revisions
             can activate once everything present is reviewed and passes the accuracy gate.

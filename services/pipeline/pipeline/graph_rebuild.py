@@ -1,14 +1,21 @@
-"""Review-gated local graph repair. Never rewrites source, translations or glossary.
+"""Per-chapter publication graph repair. Never rewrites source, translations or glossary.
 
 python -m pipeline.graph_rebuild prepare --novel UUID --model llama3.2:3b
 python -m pipeline.graph_rebuild extend --novel UUID --upto 10
 python -m pipeline.graph_rebuild resume --revision UUID
 python -m pipeline.graph_rebuild preview --revision UUID --output report.json
-python -m pipeline.graph_rebuild activate --revision UUID --review-hash SHA256
+python -m pipeline.graph_rebuild adopt --revision UUID
+python -m pipeline.graph_rebuild quarantine --revision UUID
 python -m pipeline.graph_rebuild rollback --revision UUID
+python -m pipeline.graph_rebuild purge --novel UUID
 
-Activation is an explicit operator action and requires a frozen qualifying report.
-Bounded revisions grow only through their recorded chapter ceiling (§0.2).
+Adoption is an explicit operator action, but (Phase E) no longer an accuracy judgment: it
+authorizes the terms track (entities, aliases, mention/display links) for a revision that
+has completed at least one chapter with unchanged evidence. Individual fact/relation/event
+correctness is a separate, per-item human pass (Phase D's review_state), not anything
+frozen here. Quarantine withdraws that authorization on demand, without starting a
+rebuild. Bounded revisions grow only through their recorded chapter ceiling (§0.2). Purge
+is destructive and operator-only (F.1) -- see its docstring before running it.
 """
 from __future__ import annotations
 
@@ -47,7 +54,14 @@ async def revision(db, rid, *, lock=False):
     return row
 
 
-def qualified(metrics: dict) -> bool:
+def _benchmark_qualifies(metrics: dict) -> bool:
+    """Threshold check for offline `benchmark_knowledge.py` reports against a labeled
+    fixture set. Unrelated to the per-revision whole-book review gate Phase E removes
+    (that was `qualified()`, which this inlines the surviving half of): this compares a
+    candidate LOCAL model's accuracy against a fixed golden dataset before anyone points a
+    real book at it, and stays useful even though nothing in the adopt/quarantine path
+    below calls it anymore.
+    """
     total_mentions=metrics.get('total_mentions',metrics.get('reviewed_mentions',0))
     total_facts=metrics.get('total_facts',metrics.get('reviewed_facts',0))
     return (total_mentions>0 and total_facts>0
@@ -57,8 +71,7 @@ def qualified(metrics: dict) -> bool:
             and metrics.get('reviewed_facts',0)>=min(30,total_facts)
             and (metrics.get('link_precision') or 0)>=.98 and metrics.get('unambiguous_recall',0)>=.90
             and (metrics.get('fact_precision') or 0)>=.95 and metrics.get('merge_regressions',1)==0
-            and metrics.get('evidence_valid',False) and metrics.get('reviewed',False)
-            and metrics.get('publication_review_complete',False))
+            and metrics.get('evidence_valid',False) and metrics.get('reviewed',False))
 
 
 def select_model(reports):
@@ -69,7 +82,7 @@ def select_model(reports):
             and m.get('tested_mentions',0)>=60 and m.get('tested_facts',0)>=30
             and m.get('candidate_recall')==1
             and m.get('model_inference_seconds') is not None
-            and qualified(dict(m,publication_review_complete=True))):
+            and _benchmark_qualifies(m)):
             candidates.append(report)
     if not candidates:
         return None
@@ -580,53 +593,47 @@ async def preview(db,cfg,rid):
     evidence=await(await db.execute('SELECT chapter_index,source_hash,char_start,char_end,quote FROM graph_evidence WHERE revision_id=%s',(rid,))).fetchall()
     report['evidence_valid']=all(ch in sources and digest(sources[ch])==h and sources[ch][a:b]==q
         for ch,h,a,b,q in evidence)
-    report['activation_eligible'] = (r['prompt_version']==PROMPT_VERSION and qualified(r['evaluation']) and all(checks) and len(jobs)>0
-                                   and report['evidence_valid'] and all(j[1]=='done' for j in jobs) and all(c[4] for c in claims))
-    report['review_hash'] = digest(report)
+    # Phase E: no `activation_eligible`/`review_hash` here. Those encoded the deleted
+    # whole-revision review gate (qualified() + record_review()'s reviewer-approved hash).
+    # This is reporting only now; adopt() computes its own, much smaller gate directly
+    # from saved_prose_unchanged/evidence_valid/completed, and per-fact correctness moved
+    # to Phase D's review_state, not anything frozen here.
     await db.execute('UPDATE graph_revision SET review=%s WHERE id=%s AND version=%s',
                      (Jsonb(report),rid,r['version']))
     return report
 
 
-async def record_review(db,cfg,rid,document):
-    """Record explicit operator assessments, not caller-supplied aggregate scores."""
-    report=await preview(db,cfg,rid)
-    if document.get('review_hash')!=report['review_hash'] or not document.get('reviewer') or document.get('approved') is not True:
-        raise ValueError('review must explicitly approve the current report hash and name its reviewer')
-    mentions=document.get('mentions',[]);facts=document.get('facts',[])
-    actual={str(mid):bool(linked) for mid,linked in await(await db.execute('''SELECT m.id,EXISTS(SELECT 1 FROM mention_binding b
-        WHERE b.revision_id=m.revision_id AND b.mention_id=m.id) FROM source_mention m WHERE revision_id=%s''',(rid,))).fetchall()}
-    mids=[m['id'] for m in mentions];fids=[f['id'] for f in facts]
-    if len(set(mids))!=len(mids) or set(mids)!=set(actual):
-        raise ValueError('review must assess every source mention exactly once')
-    if len(set(fids))!=len(fids) or set(fids)!={c['id'] for c in report['claims']}:
-        raise ValueError('review must assess every published fact exactly once')
-    if any(type(x.get('correct')) is not bool for x in mentions+facts) or any(type(x.get('unambiguous')) is not bool for x in mentions):
-        raise ValueError('review assessments must contain explicit boolean judgments')
-    linked=[m for m in mentions if actual[m['id']]]
-    unambiguous=[m for m in mentions if m['unambiguous']]
-    metrics=dict(reviewed=True,publication_review_complete=True,
-        total_mentions=len(actual),total_facts=len(report['claims']),
-        reviewed_mentions=len(mentions),reviewed_facts=len(facts),
-        link_precision=sum(m['correct'] for m in linked)/len(linked) if linked else 0,
-        unambiguous_recall=sum(m['correct'] and actual[m['id']] for m in unambiguous)/len(unambiguous) if unambiguous else 0,
-        fact_precision=sum(f['correct'] for f in facts)/len(facts) if facts else 0,
-        merge_regressions=document.get('known_merge_regressions',1),evidence_valid=all(c['quote'] for c in report['claims']))
-    async with db.transaction():
-        r=await revision(db,rid,lock=True)
-        if r['version']!=report['version'] or r['state']!='staging':
-            raise ValueError('revision changed while reviewing')
-        await db.execute('UPDATE graph_revision SET evaluation=%s,review=NULL WHERE id=%s',(Jsonb(metrics),rid))
-        await db.execute('INSERT INTO graph_audit(novel_id,revision_id,action,detail) VALUES(%s,%s,%s,%s)',
-            (r['novel_id'],rid,'review',Jsonb(document)))
-    return await preview(db,cfg,rid)
+async def adopt(db,cfg,rid):
+    """Make a staging revision the active graph (Phase E's replacement for switch/activate).
 
+    Deleting qualified()/record_review() means adoption carries no assessment of any
+    single fact's correctness -- that judgment now belongs to Phase D's per-item
+    review_state pass (fact/edge/event, individually held until a human passes them). What
+    adoption still authorizes for real is the TERMS track: entity, alias, mention_binding,
+    display_mention have no held state of their own (Phase D's "What is not held"), so
+    before this call `reader_graph_revision()` returns NULL for the whole book and every
+    RESTRICTIVE policy bound to it -- including for an entity that carries no controversial
+    fact at all -- returns zero rows. That is a real authorization transition (§0.3), which
+    is why it stays an explicit operator action rather than something that fires the moment
+    a chapter finishes (see "The simplification available here, and why it is declined").
 
-async def switch(db,cfg,rid,review_hash=None, *, rollback=False):
-    # Object integrity is rechecked before acquiring the short cutover lock.
-    report = None if rollback else await preview(db,cfg,rid)
-    if not rollback and _without_num_ctx(await local_model(cfg,report['model']['name'])) != _without_num_ctx(report['model']):
-        raise ValueError('model changed after review')
+    The gate shrinks accordingly: no accuracy thresholds, no reviewer-approved hash --
+    only the structural preconditions that made whole-revision activation safe to begin
+    with. `promote_verified_glossary` only fires once a revision is `active AND trusted`
+    (resume(), guarded there), so adopting is also what finally lets glossary_binding
+    accumulate rows for a rebuild.
+    """
+    report = await preview(db,cfg,rid)
+    r = await revision(db,rid)
+    live = await graph_model_identity(db,cfg,r['novel_id'],r['model']['provider'],r['model']['name'])
+    if _without_num_ctx(live) != _without_num_ctx(report['model']):
+        raise ValueError('model or inference configuration changed since this revision was prepared')
+    if not report['saved_prose_unchanged']:
+        raise ValueError('saved prose changed since this revision was snapshotted; adoption refused')
+    if not report['evidence_valid']:
+        raise ValueError('stored evidence no longer matches the saved chapter text; adoption refused')
+    if report['completed']<1:
+        raise ValueError('adoption requires at least one completed chapter')
     async with db.transaction():
         r = await revision(db,rid)
         old = (await (await db.execute('SELECT active_graph_revision FROM novel WHERE id=%s FOR UPDATE',(r['novel_id'],))).fetchone())[0]
@@ -634,23 +641,63 @@ async def switch(db,cfg,rid,review_hash=None, *, rollback=False):
         revision_ids=[rid] if old is None else [str(old),rid]
         await db.execute('SELECT id FROM graph_revision WHERE id=ANY(%s::uuid[]) ORDER BY id FOR UPDATE',(revision_ids,))
         r = await revision(db,rid)
-        if not rollback:
-            if (not report['activation_eligible'] or report['review_hash']!=review_hash
-                or r['version']!=report['version'] or r['generation']!=report['generation']
-                or r['evaluation']!=report['evaluation'] or r['review']!=report):
-                raise ValueError('activation requires the current qualifying report and explicit matching review hash')
-            if r['state']!='staging':
-                raise ValueError('only a staging revision can be activated')
-        elif r['state']!='archived':
+        if r['state']!='staging':
+            raise ValueError('only a staging revision can be adopted')
+        if r['version']!=report['version'] or r['generation']!=report['generation']:
+            raise ValueError('revision changed while adopting; fenced, take a fresh report and retry')
+        if old is not None:
+            await db.execute("UPDATE graph_revision SET state='archived',generation=generation+1,version=version+1 WHERE id=%s",(old,))
+        await db.execute("UPDATE graph_revision SET state='active',trusted=true,generation=generation+1,version=version+1 WHERE id=%s",(rid,))
+        await db.execute('UPDATE novel SET active_graph_revision=%s WHERE id=%s',(rid,r['novel_id']))
+        await db.execute('INSERT INTO graph_audit(novel_id,revision_id,action,detail) VALUES(%s,%s,%s,%s)',
+                         (r['novel_id'],rid,'adopt',Jsonb(dict(previous=str(old)))))
+    await enqueue_completed(db,cfg,r['novel_id'])
+    return dict(revision=rid,status='adopted')
+
+
+async def quarantine(db,cfg,rid):
+    """Set trusted=false on the active revision, with an audit row, and start nothing.
+
+    prepare() already flips this bit as a side effect the instant a rebuild starts -- a
+    precaution, not a verdict. This is the same flip taken deliberately, on demand, with no
+    replacement in flight: the panic button that makes dropping the whole-revision review
+    gate safe, because adopt() no longer certifies any fact's correctness -- only Phase D's
+    per-item review_state does that now. Quarantine remains a human decision (§0.3):
+    nothing here infers corruption, it only records that an operator asserted it.
+    """
+    async with db.transaction():
+        r = await revision(db,rid,lock=True)
+        if r['state']!='active':
+            raise ValueError('only the active revision can be quarantined')
+        if not r['trusted']:
+            raise ValueError('revision is already quarantined')
+        await db.execute('UPDATE graph_revision SET trusted=false,generation=generation+1,version=version+1 WHERE id=%s',(rid,))
+        await db.execute('INSERT INTO graph_audit(novel_id,revision_id,action,detail) VALUES(%s,%s,%s,%s)',
+                         (r['novel_id'],rid,'quarantine',Jsonb(dict(manual=True))))
+    return dict(revision=rid,status='quarantined')
+
+
+async def switch(db,cfg,rid):
+    """Roll back to an archived revision. The only remaining case for this verb (Phase E
+    moved the activate case to adopt()); trust is deliberately NOT restored -- switching
+    back to a once-quarantined revision leaves it exactly as untrusted as it was (§0: that
+    stays a human decision, same discipline as discard()'s own note).
+    """
+    async with db.transaction():
+        r = await revision(db,rid)
+        old = (await (await db.execute('SELECT active_graph_revision FROM novel WHERE id=%s FOR UPDATE',(r['novel_id'],))).fetchone())[0]
+        # Deterministic lock order avoids cutover/cutover deadlocks.
+        revision_ids=[rid] if old is None else [str(old),rid]
+        await db.execute('SELECT id FROM graph_revision WHERE id=ANY(%s::uuid[]) ORDER BY id FOR UPDATE',(revision_ids,))
+        r = await revision(db,rid)
+        if r['state']!='archived':
             raise ValueError('rollback target must be an archived revision')
         if old is not None:
             await db.execute("UPDATE graph_revision SET state='archived',generation=generation+1,version=version+1 WHERE id=%s",(old,))
-        await db.execute("UPDATE graph_revision SET state='active',trusted=CASE WHEN %s THEN trusted ELSE true END,generation=generation+1,version=version+1 WHERE id=%s",(rollback,rid))
+        await db.execute("UPDATE graph_revision SET state='active',generation=generation+1,version=version+1 WHERE id=%s",(rid,))
         await db.execute('UPDATE novel SET active_graph_revision=%s WHERE id=%s',(rid,r['novel_id']))
         await db.execute('INSERT INTO graph_audit(novel_id,revision_id,action,detail) VALUES(%s,%s,%s,%s)',
-                         (r['novel_id'],rid,'rollback' if rollback else 'activate',Jsonb(dict(previous=str(old),review_hash=review_hash))))
-    if not rollback:
-        await enqueue_completed(db,cfg,r['novel_id'])
+                         (r['novel_id'],rid,'rollback',Jsonb(dict(previous=str(old)))))
 
 
 async def discard(db,cfg,rid):
@@ -718,6 +765,58 @@ async def discard(db,cfg,rid):
         await db.execute('INSERT INTO graph_audit(novel_id,revision_id,action,detail) VALUES(%s,%s,%s,%s)',
                          (r['novel_id'],rid,'discard',Jsonb(dict(restored=restored))))
     return dict(revision=rid,restored=restored)
+
+
+async def purge(db,cfg,novel):
+    """F.1's operator command: permanently delete every NON-legacy revision for a novel.
+
+    Unlike ingest-api's `deleteGraph` (which removes the legacy revision too, for a full
+    graph reset), this keeps it (0023:24-31) -- deleting it would break the legacy
+    fallback every unmanaged reader path still depends on. It lives here rather than
+    beside deleteGraph because F.0's qualification gate is meant to run before anyone
+    calls this: purge is the destructive half of "discard all 17 and re-extract"
+    (Context, "Decisions taken before designing"), not a routine reader action.
+
+    Every FK from entity/fact/edge/event/alias/graph_evidence/source_mention/
+    mention_binding/display_mention/graph_job/graph_completion/chapter_knowledge_run down
+    to graph_revision already cascades -- migration 0030's blanket rewrite, plus the
+    later per-table follow-ups (0053, 0059) it predates -- so `DELETE FROM graph_revision`
+    already does the whole subtree; deleteGraph is the existing proof it works. Two things
+    are deliberately NOT touched:
+      - `mention_span`: its FK cascades too, but every row is written under the LEGACY
+        revision (guard_mention_write() forcibly assigns it, §A.5), so purging non-legacy
+        revisions never reaches it -- the invariant does the work, not this function.
+      - `completion_cache`: novel-scoped, not revision-scoped (§A.1), kept so already-paid
+        completions stay reusable across a purge and re-extraction. Only
+        `completion_cache_run`'s own revision_id FK cascades, discarding just that run's
+        attribution, exactly as intended.
+    `term_rendering_occurrence` carries no revision_id at all and is untouched for the
+    same reason as mention_span: nothing here can orphan a row it was never linked to.
+    """
+    async with db.transaction():
+        found = await (await db.execute('SELECT 1 FROM novel WHERE id=%s FOR UPDATE',(novel,))).fetchone()
+        if not found:
+            raise ValueError('novel not found')
+        targets = await (await db.execute(
+            'SELECT id::text FROM graph_revision WHERE novel_id=%s AND NOT legacy',(novel,))).fetchall()
+        # Fence every revision this is about to remove the same way resume() fences one:
+        # a worker mid-chapter on a revision purge is about to delete must not be allowed
+        # to publish underneath it. Session and transaction-scoped advisory locks share the
+        # same lock table, so this correctly blocks on resume()'s own pg_advisory_lock.
+        for (rid,) in targets:
+            locked = (await (await db.execute(
+                'SELECT pg_try_advisory_xact_lock(hashtextextended(%s,0))',(rid,))).fetchone())[0]
+            if not locked:
+                raise RuntimeError(f'revision {rid} is currently being enriched; wait for it '
+                                    'to finish, or discard it, before purging')
+        # A repair action queued between here and the DELETE below would resurrect exactly
+        # the state purge exists to remove (the running case is refused above already).
+        await db.execute("""UPDATE repair_request SET state='failed',category='cancelled',updated_at=now()
+            WHERE novel_id=%s AND track='graph' AND state IN ('pending','running')""",(novel,))
+        cursor = await db.execute('DELETE FROM graph_revision WHERE novel_id=%s AND NOT legacy',(novel,))
+        deleted = cursor.rowcount
+    return dict(novel=novel,revisions_deleted=deleted,
+                note='legacy revision preserved; chapters, translations, glossary and reading progress unchanged')
 
 
 async def enqueue_completed(db,cfg,novel, *, upto_chapter=None):
@@ -838,11 +937,15 @@ async def main(args):
             result = dict(status='resume finished')
         elif args.command=='preview':
             result = await preview(db,cfg,args.revision)
-        elif args.command=='review':
-            result = await record_review(db,cfg,args.revision,json.loads(Path(args.file).read_text()))
+        elif args.command=='adopt':
+            result = await adopt(db,cfg,args.revision)
+        elif args.command=='quarantine':
+            result = await quarantine(db,cfg,args.revision)
+        elif args.command=='purge':
+            result = await purge(db,cfg,args.novel)
         else:
-            await switch(db,cfg,args.revision,getattr(args,'review_hash',None),rollback=args.command=='rollback')
-            result = dict(status=args.command,revision=args.revision)
+            await switch(db,cfg,args.revision)
+            result = dict(status='rollback',revision=args.revision)
         rendered = json.dumps(result,ensure_ascii=False,indent=2,default=str)
         if getattr(args,'output',None):
             Path(args.output).write_text(rendered+'\n')
@@ -855,10 +958,10 @@ if __name__=='__main__':
     p=commands.add_parser('select-model');p.add_argument('--reports',nargs='+',required=True)
     p = commands.add_parser('prepare'); p.add_argument('--novel',required=True); p.add_argument('--model',required=True); p.add_argument('--upto',type=int); p.add_argument('--provider',choices=['ollama','anthropic','deepseek','gemini'],default='ollama')
     p = commands.add_parser('extend'); p.add_argument('--novel',required=True); p.add_argument('--upto',type=int,required=True)
-    for name in ['resume','preview','review','activate','rollback']:
+    # F.1: destructive, operator-only, never called by the worker. See purge()'s docstring.
+    p = commands.add_parser('purge'); p.add_argument('--novel',required=True)
+    for name in ['resume','preview','adopt','quarantine','rollback']:
         p = commands.add_parser(name); p.add_argument('--revision',required=True)
         if name=='resume': p.add_argument('--limit',type=int)
         if name=='preview': p.add_argument('--output')
-        if name=='review': p.add_argument('--file',required=True)
-        if name=='activate': p.add_argument('--review-hash',required=True)
     asyncio.run(main(parser.parse_args()))

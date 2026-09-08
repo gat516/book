@@ -67,7 +67,12 @@ func validRepairTrack(track string) bool {
 
 func validRepairAction(action string) bool {
 	switch action {
-	case "prepare", "review", "activate", "rollback", "reextract", "reextract_apply", "discard", "extend", "retry":
+	case "prepare", "review", "activate", "rollback", "reextract", "reextract_apply", "discard", "extend", "retry",
+		// adopt/quarantine (migration 0077, Phase E): the entity graph's replacements for
+		// activate on the per-chapter publication model. review/activate remain valid for
+		// the structured-event track, which keeps its own separate lifecycle unchanged —
+		// pipeline/repair.py's dispatch is what actually enforces which track owns which verb.
+		"adopt", "quarantine":
 		return true
 	}
 	return false
