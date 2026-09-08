@@ -234,26 +234,41 @@ class PassageContract:
                 return dict(mention_index=ni,passage_id=pid,occurrence_index=oi,char_start=lo,char_end=hi,
                             surface=names[ni]['surface'],kind=names[ni]['kind'])
             def citations(item):
+                # Genuine contract violations only (A.6): 0/3+/duplicate/unoffered
+                # refs cannot be salvaged and correctly hard-fail the whole response.
+                # Non-adjacency is NOT one of these -- it's a soft per-item drop
+                # (below), because with the merged pass one bad citation from the
+                # model must not destroy a whole window's names/attributes/relations/
+                # occurrences together.
                 refs=item.get('passage_ids')
                 if not isinstance(refs,list) or not 1<=len(refs)<=2 or len(set(refs))!=len(refs):
                     raise ValueError('extract items must cite one or two distinct passages')
                 if any(r not in self.by_id for r in refs): raise ValueError('extract citation is not offered')
-                if len(refs)==2 and not self.claim_refs_are_adjacent(refs):
-                    raise ValueError('extract citations must be adjacent')
                 return refs
-            out=dict(names=[] ,attributes=[],relations=[],occurrences=[])
+            out=dict(names=[],attributes=[],relations=[],occurrences=[],rejected=[])
             for n in names:
                 ev=self.resolve(n['passage_id'])
                 if not ev or n['surface'] not in ev['quote']: raise ValueError('name surface absent from cited passage')
                 out['names'].append(dict(surface=n['surface'],kind=n['kind'],**ev))
             for item in body['attributes']:
-                citations(item); subject=ref(item,'subject_ref')
+                refs=citations(item)
+                if len(refs)==2 and not self.claim_refs_are_adjacent(refs):
+                    out['rejected'].append(dict(item,rejection='extract citations must be adjacent'))
+                    continue
+                subject=ref(item,'subject_ref')
                 out['attributes'].append(dict(item,subject_ref=subject))
             for item in body['relations']:
-                citations(item); src=ref(item,'src_ref'); dst=ref(item,'dst_ref')
+                refs=citations(item)
+                if len(refs)==2 and not self.claim_refs_are_adjacent(refs):
+                    out['rejected'].append(dict(item,rejection='extract citations must be adjacent'))
+                    continue
+                src=ref(item,'src_ref'); dst=ref(item,'dst_ref')
                 out['relations'].append(dict(item,src_ref=src,dst_ref=dst))
             for item in body['occurrences']:
-                citations(item)
+                refs=citations(item)
+                if len(refs)==2 and not self.claim_refs_are_adjacent(refs):
+                    out['rejected'].append(dict(item,rejection='extract citations must be adjacent'))
+                    continue
                 # Participant refs are validated with the same anchor contract.
                 participants=[]
                 for value in item.get('participant_refs',[]):

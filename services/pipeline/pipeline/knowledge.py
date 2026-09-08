@@ -1050,6 +1050,16 @@ class KnowledgeEngine:
             if not _is_prompt_budget_error(exc) or (hi-lo)<=MIN_EXTRACT_WINDOW_CHARS:
                 raise
             return await split()
+        # A.6, applied to the merged pass: non-adjacent citations are a soft per-item
+        # drop, not a materialize() ValueError. One bad citation from the model must
+        # not destroy a whole window's names/attributes/relations/occurrences
+        # together -- pre-merge, it only killed one claims call; post-merge the blast
+        # radius is the whole window, so passages.materialize returns these rejects
+        # instead of raising, and this (async, DB-owning) caller is where they get
+        # audited: the complete proposal, passage_ids included, is preserved.
+        adjacency_rejected=response.pop('rejected',[])
+        for item in adjacency_rejected:
+            await self._activity('fact',str(stable_id('extract-adjacency',item)),'rejected',item)
         counts=request.get('_proposed_counts',dict(
             names=len(response['names']),attributes=len(response['attributes']),
             relations=len(response['relations']),occurrences=len(response['occurrences'])))
@@ -1060,15 +1070,15 @@ class KnowledgeEngine:
             saturation[key]+=1
         self._extract_saturation=saturation
         if not saturated:
-            return response,[]
+            return response,adjacency_rejected
         if (hi-lo)<=MIN_EXTRACT_WINDOW_CHARS or len(passages)<=1:
             await self._activity('run','run','rejected',dict(
                 reason='extract coverage failure: smallest window still saturated',
                 window_chars=hi-lo,saturated=saturated))
-            return response,[]
+            return response,adjacency_rejected
         self._extract_subdivisions=getattr(self,'_extract_subdivisions',0)+1
         child,no=await split()
-        return self._merge_extract(response,child),no
+        return self._merge_extract(response,child),adjacency_rejected+no
 
     async def _merged_extract(self, source: str, ontology: dict) -> tuple[dict,list[dict]]:
         """Split the chapter into overlapping windows and merge/dedupe their proposals.
