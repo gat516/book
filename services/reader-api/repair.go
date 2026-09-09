@@ -166,6 +166,16 @@ type RepairTrack struct {
 	// Redis process heartbeat in /pipeline, it distinguishes slow inference from silence
 	// after a worker crash without exposing staging facts (§0).
 	Worker *RepairWorkerReport `json:"worker,omitempty"`
+	// WaitingOnProvider is live backpressure for the revision. RetryAfterSecs is
+	// computed from the durable deadline when this response is read, so the browser can
+	// render a countdown without polling a stale duration.
+	WaitingOnProvider *RepairWaiting `json:"waiting_on_provider,omitempty"`
+}
+
+type RepairWaiting struct {
+	Since          time.Time `json:"since"`
+	RetryAfterSecs float64   `json:"retry_after_s"`
+	Category       string    `json:"category"`
 }
 
 type RepairWorkerReport struct {
@@ -318,11 +328,15 @@ const (
 	// Reached, answered, and the answer was a 5xx — distinct from "unreachable" on
 	// purpose. The observed cause is the model server aborting a load it was still
 	// making progress on, which no client-side budget can extend.
-	repairModelServerErr = "model_server_error"
-	repairTruncated      = "output_truncated"
-	repairCredentialErr  = "credential_missing"
-	repairUnknownCause   = "unknown"
-	repairNotRebuildErr  = "revision_not_rebuildable"
+	repairModelServerErr   = "model_server_error"
+	repairTruncated        = "output_truncated"
+	repairCredentialErr    = "credential_missing"
+	repairCredentialRej    = "credential_rejected"
+	repairRateLimited      = "rate_limited"
+	repairQuotaExhausted   = "quota_exhausted"
+	repairModelUnavailable = "model_not_available"
+	repairUnknownCause     = "unknown"
+	repairNotRebuildErr    = "revision_not_rebuildable"
 	// These three are only ever produced by pipeline/repair.py, for failures of a repair
 	// ACTION rather than of a chapter rebuild. They live in the same vocabulary on
 	// purpose: the UI renders one category map, and a category with no sentence would
@@ -335,52 +349,59 @@ const (
 )
 
 var repairFailureDetail = map[string]string{
-	repairModelChanged:   "the local model or its inference settings changed after this rebuild was snapshotted, so publishing was refused",
-	repairInputChanged:   "the saved chapter text changed after this rebuild was snapshotted",
-	repairPromptTooBig:   "a chapter produced more context than the local model can be given safely",
-	repairServingDrift:   "the model that answered was not the model this rebuild is pinned to",
-	repairFenced:         "the rebuild was superseded by a newer revision while this chapter was running",
-	repairTimeout:        "the local model produced no output for a call after several retries; each retry reuses everything already completed for this chapter",
-	repairTruncated:      "the local model hit its output limit mid-answer; a partial extraction is never published",
-	repairCredentialErr:  "the configured extraction provider has no usable API credential; add the book or account credential, then start a fresh rebuild",
-	repairUnreachable:    "the local model could not be reached",
-	repairModelServerErr: "the local model server answered with a server error; most often it gave up loading the model before the load finished, which its own OLLAMA_LOAD_TIMEOUT bounds and no setting here can extend, or its runner process died. This is retried automatically",
-	repairNotRebuildErr:  "this revision cannot be rebuilt",
-	repairUnknownCause:   "processing failed; the cause was not recognised",
-	repairReviewRejected: "the review was rejected: it must approve the current report hash, name a reviewer, and assess every published claim exactly once",
-	repairNotFound:       "the book or revision this action referred to no longer exists",
-	repairCancelled:      "the request was withdrawn before it started",
-	repairAbandoned:      "the worker stopped while running this action and it had no attempts left to retry",
-	repairModelMissing:   "the model this rebuild is pinned to is not installed on the configured Ollama endpoint; it cannot be substituted, so start a fresh rebuild pinned to a model that is there",
+	repairModelChanged:     "the configured model or its inference settings changed after this rebuild was snapshotted, so publishing was refused",
+	repairInputChanged:     "the saved chapter text changed after this rebuild was snapshotted",
+	repairPromptTooBig:     "a chapter produced more context than the configured model can be given safely",
+	repairServingDrift:     "the model that answered was not the model this rebuild is pinned to",
+	repairFenced:           "the rebuild was superseded by a newer revision while this chapter was running",
+	repairTimeout:          "the configured provider produced no output for a call after several retries; each retry reuses everything already completed for this chapter",
+	repairTruncated:        "the configured provider hit its output limit mid-answer; a partial extraction is never published",
+	repairCredentialErr:    "the configured extraction provider has no usable API credential; add the book or account credential, then start a fresh rebuild",
+	repairCredentialRej:    "the configured provider rejected its API credential; update the book or account credential, then start a fresh rebuild",
+	repairRateLimited:      "the configured provider is rate limiting requests; the rebuild will retry automatically",
+	repairQuotaExhausted:   "the configured provider quota is exhausted; wait for its reset or use a provider with available quota, then start a fresh rebuild",
+	repairModelUnavailable: "the configured provider could not find the pinned model; choose an available model and start a fresh rebuild",
+	repairUnreachable:      "the configured model provider could not be reached",
+	repairModelServerErr:   "the configured model provider answered with a server error; it may have failed while loading the model or its serving process may have stopped. This is retried automatically",
+	repairNotRebuildErr:    "this revision cannot be rebuilt",
+	repairUnknownCause:     "processing failed; the cause was not recognised",
+	repairReviewRejected:   "the review was rejected: it must approve the current report hash, name a reviewer, and assess every published claim exactly once",
+	repairNotFound:         "the book or revision this action referred to no longer exists",
+	repairCancelled:        "the request was withdrawn before it started",
+	repairAbandoned:        "the worker stopped while running this action and it had no attempts left to retry",
+	repairModelMissing:     "the configured provider does not have the model this rebuild is pinned to; it cannot be substituted, so start a fresh rebuild pinned to an available model",
 }
 
 // repairRow is one row of reader_repair_status, before the API decides what it means.
 type repairRow struct {
-	track          string
-	activeRevision *string
-	activeTrusted  bool
-	activeLegacy   bool
-	withheldClaims int
-	replacementID  *string
-	model          *string
-	promptVersion  *string
-	createdAt      *time.Time
-	total          int
-	done           int
-	failed         int
-	running        int
-	eligible       *bool
-	reviewHash     *string
-	retryable      bool
-	reviewed       bool
-	superseded     int
-	blockedCat     *string
-	blockedAt      *time.Time
-	claims         int
-	entities       int
-	calls          int
-	currentChapter *int
-	currentSince   *time.Time
+	track           string
+	activeRevision  *string
+	activeTrusted   bool
+	activeLegacy    bool
+	withheldClaims  int
+	replacementID   *string
+	model           *string
+	promptVersion   *string
+	createdAt       *time.Time
+	total           int
+	done            int
+	failed          int
+	running         int
+	eligible        *bool
+	reviewHash      *string
+	retryable       bool
+	reviewed        bool
+	superseded      int
+	blockedCat      *string
+	blockedAt       *time.Time
+	claims          int
+	entities        int
+	calls           int
+	currentChapter  *int
+	currentSince    *time.Time
+	waitingSince    *time.Time
+	waitingRetryAt  *time.Time
+	waitingCategory *string
 }
 
 func (s *Store) RepairStatus(ctx context.Context, novelID string) (RepairStatus, error) {
@@ -392,7 +413,8 @@ func (s *Store) RepairStatus(ctx context.Context, novelID string) (RepairStatus,
 		        chapters_total, chapters_done, chapters_failed, chapters_running,
 		        activation_eligible, review_hash, retryable, reviewed, superseded,
 		        blocked_category, blocked_at, claims_published, entities_created,
-		        calls_completed, current_chapter, current_since
+			        calls_completed, current_chapter, current_since,
+			        waiting_since, waiting_retry_at, waiting_category
 		   FROM reader_repair_status($1)`, novelID)
 	if err != nil {
 		return RepairStatus{}, fmt.Errorf("read repair status: %w", err)
@@ -408,7 +430,8 @@ func (s *Store) RepairStatus(ctx context.Context, novelID string) (RepairStatus,
 			&row.eligible, &row.reviewHash, &row.retryable,
 			&row.reviewed, &row.superseded,
 			&row.blockedCat, &row.blockedAt, &row.claims, &row.entities,
-			&row.calls, &row.currentChapter, &row.currentSince); err != nil {
+			&row.calls, &row.currentChapter, &row.currentSince,
+			&row.waitingSince, &row.waitingRetryAt, &row.waitingCategory); err != nil {
 			return RepairStatus{}, fmt.Errorf("scan repair status: %w", err)
 		}
 		byTrack[row.track] = row
@@ -720,6 +743,22 @@ func buildTrack(row repairRow, failures []RepairFailure, targets []RepairRollbac
 		track.Current = &RepairCurrent{Chapter: *row.currentChapter}
 		if row.currentSince != nil {
 			track.Current.Since = *row.currentSince
+		}
+	}
+	if row.waitingSince != nil {
+		category := "rate_limited"
+		if row.waitingCategory != nil && *row.waitingCategory != "" {
+			category = *row.waitingCategory
+		}
+		remaining := 0.0
+		if row.waitingRetryAt != nil {
+			remaining = row.waitingRetryAt.Sub(time.Now()).Seconds()
+			if remaining < 0 {
+				remaining = 0
+			}
+		}
+		track.WaitingOnProvider = &RepairWaiting{
+			Since: *row.waitingSince, RetryAfterSecs: remaining, Category: category,
 		}
 	}
 

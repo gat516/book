@@ -195,6 +195,9 @@ export interface ChapterListItem {
   // "error". This is what lets the UI say "still being translated" up front instead of
   // bouncing off the chapter endpoint.
   status: string;
+  // Safe category derived server-side from chapter_failure.error_code. Raw diagnostics
+  // never appear in the ungated chapter index.
+  failure_category?: string;
   translation_warning: TranslationWarning | null;
 }
 
@@ -244,6 +247,24 @@ export interface TranslationHealth {
   warning_chapters: number;
   warn: boolean;
   reason?: string;
+}
+
+export type ProviderHealthTrack = "graph" | "events" | "translate" | "extract";
+
+export interface ProviderHealth {
+  provider: ProviderName;
+  endpoint_kind: "local" | "hosted";
+  state: "serving" | "unavailable";
+  category:
+    | "ok"
+    | "unreachable"
+    | "credential_missing"
+    | "credential_rejected"
+    | "rate_limited"
+    | "quota_exhausted"
+    | "model_not_available"
+    | "model_server_error"
+    | "unknown";
 }
 
 export interface KnowledgeStatus {
@@ -325,6 +346,7 @@ export interface ChapterKnowledgeRun {
   scope: "all" | "terms" | "facts";
   state: "pending" | "processing" | "awaiting_review" | "applying" | "published" | "rejected" | "failed";
   created_at: string; preview?: { items: ReextractPreviewItem[] };
+  blocked_category?: string; blocked_detail?: string; blocked_at?: string;
 }
 export interface ReextractPreviewItem {
   item_key: string; item_kind: "fact" | "term";
@@ -510,32 +532,30 @@ export interface Progress {
 
 export type ProviderName = "anthropic" | "deepseek" | "gemini" | "ollama";
 
-// Write shape. api_key is plaintext in transit and encrypted (AES-GCM) before it reaches
-// Postgres; it is never stored or returned as such.
+// Write shape. Carries no secret: a book names a provider, and the key for that provider
+// is entered once in Settings (ProviderCredentialView) rather than per book (0068).
 export interface SaveProviderConfigRequest {
   provider: ProviderName;
   model?: string;
   translate_model?: string;
   extract_model?: string;
   base_url?: string;
-  api_key?: string;
 }
 
-// Read shape (ingest-api's ProviderConfigView). Deliberately asymmetric with the write
-// shape: the key is never read back, only whether one exists.
+// Read shape (ingest-api's ProviderConfigView), now symmetric with the write shape --
+// every field here is one the client sent and can send back unchanged.
 export interface ProviderConfigView {
   provider: ProviderName;
   model?: string;
   translate_model?: string;
   extract_model?: string;
   base_url?: string;
-  api_key_set: boolean;
 }
 
 
-// One shared credential per provider (migration 0035): entered once in Settings and used
-// by every book, unless a book carries its own key as an override. Read shape is masked
-// the same way ProviderConfigView is -- api_key_set, never the key.
+// One credential per provider (migrations 0035, 0068): entered once in Settings and used
+// by every book that names that provider. This is now the only shape that carries a key,
+// and the only masked read left -- api_key_set, never the key itself.
 export interface ProviderCredentialView {
   provider: ProviderName;
   base_url?: string;
@@ -639,6 +659,13 @@ export interface RepairTrack {
   // Which chapter is being read right now. "0 of 26" cannot tell you whether it is stuck
   // on the first chapter or working through the twentieth.
   current: { chapter: number; since: string } | null;
+  // Durable provider backpressure. The server derives this from the revision's pinned
+  // provider wait fields; it contains only a safe category and timing metadata.
+  waiting_on_provider?: {
+    since: string;
+    retry_after_s: number;
+    category: string;
+  };
 }
 
 export interface RepairWorkerReport {

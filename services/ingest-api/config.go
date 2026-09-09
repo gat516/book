@@ -28,9 +28,9 @@ type Config struct {
 	// auth/gate here" writer service its own doc comment describes.
 	IngestInternalToken string
 
-	// ProviderConfigKey encrypts/decrypts novel_provider_config.api_key_cipher (PLAN.md
-	// Phase N3). Zero value (unset) is valid at startup — most novels never set a
-	// provider_config at all — but any request that does one requires this to be set;
+	// ProviderConfigKey encrypts/decrypts provider_credential.api_key_cipher (migrations
+	// 0035, 0068). Zero value (unset) is valid at startup — an all-Ollama install stores
+	// no key at all — but any request that saves or uses one requires this to be set;
 	// see ErrProviderConfigKeyNotSet.
 	ProviderConfigKey    [32]byte
 	ProviderConfigKeySet bool
@@ -40,6 +40,10 @@ type Config struct {
 	// OllamaHost is the operator-selected server endpoint. It may be a loopback SSH
 	// tunnel to a GPU host; model discovery must use the same endpoint as the pipeline.
 	OllamaHost string
+	// ProviderHealthAllowedHosts is the explicit SSRF boundary for hosted provider
+	// catalog probes. Official provider hosts are included by default; custom account or
+	// novel endpoints require an operator entry in PROVIDER_HEALTH_ALLOWED_HOSTS.
+	ProviderHealthAllowedHosts map[string]bool
 }
 
 // getenv returns the env var if set and non-empty, otherwise the fallback.
@@ -68,6 +72,11 @@ func loadConfig() Config {
 		IngestInternalToken: os.Getenv("INGEST_INTERNAL_TOKEN"),
 		OllamaAllowedHosts:  map[string]bool{},
 		OllamaHost:          getenv("OLLAMA_HOST", "http://localhost:11434"),
+		ProviderHealthAllowedHosts: map[string]bool{
+			"api.anthropic.com":                 true,
+			"api.deepseek.com":                  true,
+			"generativelanguage.googleapis.com": true,
+		},
 	}
 	for _, host := range strings.Split(getenv("OLLAMA_ALLOWED_HOSTS", "localhost,127.0.0.1"), ",") {
 		if host = strings.TrimSpace(strings.ToLower(host)); host != "" {
@@ -76,6 +85,18 @@ func loadConfig() Config {
 	}
 	if parsed, err := url.Parse(cfg.OllamaHost); err == nil && parsed.Hostname() != "" {
 		cfg.OllamaAllowedHosts[strings.ToLower(parsed.Hostname())] = true
+	}
+	for _, host := range strings.Split(os.Getenv("PROVIDER_HEALTH_ALLOWED_HOSTS"), ",") {
+		if host = strings.TrimSpace(strings.ToLower(host)); host != "" {
+			cfg.ProviderHealthAllowedHosts[host] = true
+		}
+	}
+	// An explicitly configured process provider base is an operator choice and is
+	// therefore admitted without duplicating it in the allowlist environment variable.
+	for _, raw := range []string{os.Getenv("ANTHROPIC_BASE_URL"), os.Getenv("DEEPSEEK_BASE_URL"), os.Getenv("GEMINI_BASE_URL")} {
+		if parsed, err := url.Parse(raw); err == nil && parsed.Hostname() != "" {
+			cfg.ProviderHealthAllowedHosts[strings.ToLower(parsed.Hostname())] = true
+		}
 	}
 
 	if raw := os.Getenv("INGEST_PROVIDER_CONFIG_KEY"); raw != "" {

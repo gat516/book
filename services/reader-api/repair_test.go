@@ -30,10 +30,24 @@ func TestEveryFailureCategoryHasDetail(t *testing.T) {
 		repairFenced, repairTimeout, repairUnreachable, repairUnknownCause, repairNotRebuildErr,
 		repairTruncated, repairReviewRejected, repairNotFound, repairCancelled,
 		repairAbandoned, repairModelMissing, repairCredentialErr,
+		repairCredentialRej, repairRateLimited, repairQuotaExhausted,
+		repairModelUnavailable,
 	}
 	for _, category := range categories {
 		if strings.TrimSpace(repairFailureDetail[category]) == "" {
 			t.Errorf("category %q has no reader-facing detail", category)
+		}
+	}
+}
+
+func TestHostedFailureDetailsAreProviderNeutral(t *testing.T) {
+	for _, category := range []string{
+		repairCredentialRej, repairRateLimited, repairQuotaExhausted, repairModelUnavailable,
+	} {
+		detail := repairFailureDetail[category]
+		if strings.Contains(strings.ToLower(detail), "local ollama") ||
+			strings.Contains(strings.ToLower(detail), "local model") {
+			t.Errorf("hosted category %q has local-only wording: %q", category, detail)
 		}
 	}
 }
@@ -132,6 +146,27 @@ func TestBuildTrackStates(t *testing.T) {
 				t.Error("rollback_targets must serialise as [] rather than null")
 			}
 		})
+	}
+}
+
+func TestBuildTrackExposesLiveProviderWait(t *testing.T) {
+	active := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	since := time.Now().Add(-2 * time.Minute)
+	retryAt := time.Now().Add(20 * time.Second)
+	category := "rate_limited"
+
+	track := buildTrack(repairRow{
+		activeRevision: &active,
+		waitingSince:   &since, waitingRetryAt: &retryAt, waitingCategory: &category,
+	}, nil, nil, "facts")
+	if track.WaitingOnProvider == nil {
+		t.Fatal("expected provider wait")
+	}
+	if track.WaitingOnProvider.Category != category {
+		t.Fatalf("category = %q, want %q", track.WaitingOnProvider.Category, category)
+	}
+	if track.WaitingOnProvider.RetryAfterSecs <= 0 || track.WaitingOnProvider.RetryAfterSecs > 21 {
+		t.Fatalf("retry_after_s = %v, want a live countdown near 20s", track.WaitingOnProvider.RetryAfterSecs)
 	}
 }
 

@@ -17,21 +17,21 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [customModel, setCustomModel] = useState(false);
-  const [apiKey, setApiKey] = useState("");
   const [baseURL, setBaseURL] = useState("");
   const [ingestLookahead, setIngestLookahead] = useState("50");
   const [translateLookahead, setTranslateLookahead] = useState("5");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Providers that already have an account-level key saved in Settings (migration 0035).
-  // A novel with no key of its own falls back to it, so the box is optional there.
-  const [sharedKeyProviders, setSharedKeyProviders] = useState<Set<string>>(new Set());
+  // Providers with a key saved in Settings (migration 0035). Since 0068 that is the only
+  // place a key lives, so this decides whether the chosen provider can be used at all.
+  const [accountKeyProviders, setAccountKeyProviders] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    // Advisory: if this fails the form just shows the key box without the reassurance.
+    // Advisory: if this fails the form shows no key note. Creation still succeeds -- an
+    // unusable provider is fixed by adding the key in Settings, not by re-creating the book.
     listProviderCredentials()
       .then((res) =>
-        setSharedKeyProviders(
+        setAccountKeyProviders(
           new Set(res.credentials.filter((c) => c.api_key_set).map((c) => c.provider)),
         ),
       )
@@ -65,7 +65,6 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
               provider: provider as "anthropic" | "deepseek" | "gemini" | "ollama",
               model: model.trim() || undefined,
               base_url: baseURL.trim() || undefined,
-              api_key: apiKey.trim() || undefined,
             }
           : undefined,
         // Number("") is 0, which legitimately means "unlimited" — so an empty box has to
@@ -140,23 +139,16 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
               </label>
             )}
             {provider !== "ollama" ? (
-              <label>
-                API key{" "}
-                <span className="novel-create-form-hint">
-                  {sharedKeyProviders.has(provider)
-                    ? "(optional — a key saved in Settings is used unless you enter one here)"
-                    : "(encrypted before storage; never shown again)"}
-                </span>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  autoComplete="off"
-                  placeholder={
-                    sharedKeyProviders.has(provider) ? "using the account key" : undefined
-                  }
-                />
-              </label>
+              accountKeyProviders.has(provider) ? (
+                <p className="novel-create-form-hint">
+                  This book will use the {provider} key from Account settings.
+                </p>
+              ) : (
+                <p className="novel-create-form-hint">
+                  No {provider} key is saved yet. The book can still be created — add the key
+                  under Account settings → Provider keys before its first chapter runs.
+                </p>
+              )
             ) : (
               <label>
                 Host <span className="novel-create-form-hint">(blank = server's OLLAMA_HOST)</span>

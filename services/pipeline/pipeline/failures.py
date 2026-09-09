@@ -1,5 +1,7 @@
 """Persist safe operational diagnostics, never provider messages or story text."""
 
+import re
+
 import httpx
 from pydantic import ValidationError
 
@@ -55,6 +57,63 @@ CANCELLED = "cancelled"
 ABANDONED = "abandoned"
 
 
+# A provider's 429 response is inspected only while the exception is in memory.  The
+# response body is deliberately never returned or persisted: it can contain provider
+# request metadata, account details, or a key-bearing URL.  One hour is long enough to
+# separate an ordinary per-minute limiter from a daily/provider-wide quota without
+# treating a short server-directed pause as permanent.
+_QUOTA_LONG_DELAY_SECONDS = 3600.0
+_RETRY_DELAY = re.compile(
+    r"(?:retry\s+in|\"?retryDelay\"?\s*[:=])\s*\"?"
+    r"([0-9]+(?:\.[0-9]+)?)\s*s\"?",
+    re.IGNORECASE,
+)
+_DAILY_QUOTA = re.compile(
+    r"(?:\bper[- ]day\b|\bdaily\b|\b24\s*hours?\b|\bday\s+quota\b|"
+    r"\bquota\b.{0,80}\b(?:tomorrow|next\s+day|day)\b)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _is_model_request(response: httpx.Response) -> bool:
+    """Return whether a 404 came from a provider model endpoint.
+
+    A repair action can also encounter a 404 for a missing book/revision, which remains
+    ``not_found``.  Provider completion/model routes are stable enough to identify from
+    their URL path without looking at the provider's freeform response body.
+    """
+    path = response.request.url.path.lower()
+    return (
+        "/models/" in path
+        or path.endswith("/models")
+        or path.endswith("/chat/completions")
+        or path.endswith("/completions")
+        or path.endswith("/messages")
+        or path.endswith("/generate")
+    )
+
+
+def _is_quota_exhausted(response: httpx.Response) -> bool:
+    """Classify only provider-controlled quota indicators from a 429 response."""
+    retry_after = response.headers.get("retry-after", "")
+    try:
+        if float(retry_after) > _QUOTA_LONG_DELAY_SECONDS:
+            return True
+    except (TypeError, ValueError):
+        pass
+
+    # This read is intentionally local to classification.  Do not include it in the
+    # category, logs, or database values; §0/0046 allow only the safe class to persist.
+    try:
+        body = response.text
+    except Exception:  # noqa: BLE001
+        body = ""
+    if _DAILY_QUOTA.search(body):
+        return True
+    hinted = _RETRY_DELAY.search(body)
+    return bool(hinted and float(hinted.group(1)) > _QUOTA_LONG_DELAY_SECONDS)
+
+
 def failure_category(exc: BaseException) -> str:
     """Classify a repair failure into a safe class for the API to show.
 
@@ -64,6 +123,30 @@ def failure_category(exc: BaseException) -> str:
     "Ollama exhausted num_predict; refusing incomplete output" contains a word that would
     otherwise read as a refused connection.
     """
+    # AdmissionRejected carries a bounded category from the provider seam. The reader
+    # vocabulary calls transport admission ``model_unreachable``; revision wait state
+    # keeps the safer, more specific ``unreachable`` spelling separately.
+    admission_category = getattr(exc, "category", None)
+    if admission_category == "unreachable":
+        return "model_unreachable"
+    if admission_category in {
+        "rate_limited", "quota_exhausted", "embed_unavailable", "model_server_error",
+    }:
+        return admission_category
+
+    # Provider status codes are checked before exception text.  Provider wording is not
+    # ours to control, and the response body must never become a durable diagnostic.
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status in (401, 403):
+            return "credential_rejected"
+        if status == 404 and _is_model_request(exc.response):
+            return "model_not_available"
+        if status == 429:
+            return "quota_exhausted" if _is_quota_exhausted(exc.response) else "rate_limited"
+        if status >= 500:
+            return "model_server_error"
+
     text = f"{type(exc).__name__}: {exc}".lower()
     # A long-lived worker can encounter a revision created after its process loaded an
     # older prompt contract. This is actionable process/config drift, not an unknown
@@ -107,8 +190,6 @@ def failure_category(exc: BaseException) -> str:
     # to any value and will never widen a deadline the server enforces itself. Matched on
     # the exception object rather than its text; httpx's message carries only the status
     # and URL, so a phrase match would be guessing at wording it does not control.
-    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500:
-        return "model_server_error"
     # provider_error wraps transport exceptions as "provider unreachable: <type>".
     # Check that explicit wrapper before the generic timeout words: a ReadTimeout while
     # opening the Ollama response means the connection disappeared, not that an admitted

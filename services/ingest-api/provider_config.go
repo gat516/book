@@ -14,46 +14,40 @@ import (
 var ErrProviderConfigNotFound = errors.New("no provider config for this novel")
 
 // ProviderConfigInput is what a caller supplies to create/replace a novel's provider
-// config. APIKeyCipher/APIKeyNonce are already-encrypted (see crypto.go) — this package
-// never holds a plaintext key past the handler that called encryptProviderConfig.
+// config. It carries no key: secrets live in provider_credential, keyed by provider, and
+// a novel names a provider rather than holding its own copy (migration 0068).
 type ProviderConfigInput struct {
 	Provider       string
 	Model          string
 	TranslateModel string
 	ExtractModel   string
 	BaseURL        string
-	APIKeyCipher   []byte
-	APIKeyNonce    []byte
 }
 
-// ProviderConfigView is the masked read shape (§ Phase N3 "Done when"): never the key
-// itself, only whether one is set.
+// ProviderConfigView is the read shape. Nothing is masked any more -- every field here is
+// a per-book choice the client sent and can send back unchanged.
 type ProviderConfigView struct {
 	Provider       string `json:"provider"`
 	Model          string `json:"model,omitempty"`
 	TranslateModel string `json:"translate_model,omitempty"`
 	ExtractModel   string `json:"extract_model,omitempty"`
 	BaseURL        string `json:"base_url,omitempty"`
-	APIKeySet      bool   `json:"api_key_set"`
 }
 
 // insertProviderConfig writes cfg's row inside tx — called from insertNovel's transaction
 // (store.go) so a half-written provider config can never outlive a failed novel creation.
 func insertProviderConfig(ctx context.Context, tx pgx.Tx, novelID string, cfg ProviderConfigInput) error {
-	var modelArg, baseURLArg, cipherArg, nonceArg any
+	var modelArg, baseURLArg any
 	if cfg.Model != "" {
 		modelArg = cfg.Model
 	}
 	if cfg.BaseURL != "" {
 		baseURLArg = cfg.BaseURL
 	}
-	if cfg.APIKeyCipher != nil {
-		cipherArg, nonceArg = cfg.APIKeyCipher, cfg.APIKeyNonce
-	}
 	_, err := tx.Exec(ctx,
-		`INSERT INTO novel_provider_config (novel_id, provider, model, translate_model, extract_model, base_url, api_key_cipher, api_key_nonce)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		novelID, cfg.Provider, modelArg, nullableText(cfg.TranslateModel), nullableText(cfg.ExtractModel), baseURLArg, cipherArg, nonceArg,
+		`INSERT INTO novel_provider_config (novel_id, provider, model, translate_model, extract_model, base_url)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		novelID, cfg.Provider, modelArg, nullableText(cfg.TranslateModel), nullableText(cfg.ExtractModel), baseURLArg,
 	)
 	if err != nil {
 		return fmt.Errorf("insert novel_provider_config: %w", err)
@@ -66,11 +60,10 @@ func insertProviderConfig(ctx context.Context, tx pgx.Tx, novelID string, cfg Pr
 func (s *Store) GetProviderConfig(ctx context.Context, novelID string) (ProviderConfigView, error) {
 	var v ProviderConfigView
 	var model, translateModel, extractModel, baseURL *string
-	var cipher []byte
 	err := s.db.QueryRow(ctx,
-		`SELECT provider, model, translate_model, extract_model, base_url, api_key_cipher FROM novel_provider_config WHERE novel_id = $1`,
+		`SELECT provider, model, translate_model, extract_model, base_url FROM novel_provider_config WHERE novel_id = $1`,
 		novelID,
-	).Scan(&v.Provider, &model, &translateModel, &extractModel, &baseURL, &cipher)
+	).Scan(&v.Provider, &model, &translateModel, &extractModel, &baseURL)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ProviderConfigView{}, ErrProviderConfigNotFound
 	}
@@ -89,44 +82,33 @@ func (s *Store) GetProviderConfig(ctx context.Context, novelID string) (Provider
 	if baseURL != nil {
 		v.BaseURL = *baseURL
 	}
-	v.APIKeySet = cipher != nil
 	return v, nil
 }
 
-// UpsertProviderConfig replaces a novel's provider config wholesale (PATCH semantics —
-// the caller re-encrypts the key on every update; there is no partial-field merge, since
-// a masked read can't tell the handler what the old plaintext key was anyway).
+// UpsertProviderConfig replaces a novel's provider config wholesale (PATCH semantics).
+// Every column takes EXCLUDED: each one is a value the client can read back and send
+// again, so clearing any of them is a legitimate thing to express. That symmetry is only
+// possible because the key is gone -- it was the single field a masked read could not
+// round-trip, which is what forced the one-way COALESCE this used to carry (0068).
 func (s *Store) UpsertProviderConfig(ctx context.Context, novelID string, cfg ProviderConfigInput) error {
-	var modelArg, baseURLArg, cipherArg, nonceArg any
+	var modelArg, baseURLArg any
 	if cfg.Model != "" {
 		modelArg = cfg.Model
 	}
 	if cfg.BaseURL != "" {
 		baseURLArg = cfg.BaseURL
 	}
-	if cfg.APIKeyCipher != nil {
-		cipherArg, nonceArg = cfg.APIKeyCipher, cfg.APIKeyNonce
-	}
 	_, err := s.db.Exec(ctx,
-		`INSERT INTO novel_provider_config (novel_id, provider, model, translate_model, extract_model, base_url, api_key_cipher, api_key_nonce, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+		`INSERT INTO novel_provider_config (novel_id, provider, model, translate_model, extract_model, base_url, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, now())
 		 ON CONFLICT (novel_id) DO UPDATE SET
 		   provider = EXCLUDED.provider,
 		   model = EXCLUDED.model,
 		   translate_model = EXCLUDED.translate_model,
 		   extract_model = EXCLUDED.extract_model,
 		   base_url = EXCLUDED.base_url,
-		   -- COALESCE, unlike the columns above, because the key is the one field a
-		   -- client CANNOT round-trip: reads return api_key_set, never the key itself
-		   -- (ProviderConfigView). Overwriting it with EXCLUDED meant any edit that
-		   -- omitted the key -- changing just the model, say -- silently destroyed it,
-		   -- leaving a provider row that can no longer authenticate. Model and base_url
-		   -- keep EXCLUDED semantics: a client can read those back and send them again,
-		   -- so clearing them is a legitimate thing to express.
-		   api_key_cipher = COALESCE(EXCLUDED.api_key_cipher, novel_provider_config.api_key_cipher),
-		   api_key_nonce = COALESCE(EXCLUDED.api_key_nonce, novel_provider_config.api_key_nonce),
 		   updated_at = now()`,
-		novelID, cfg.Provider, modelArg, nullableText(cfg.TranslateModel), nullableText(cfg.ExtractModel), baseURLArg, cipherArg, nonceArg,
+		novelID, cfg.Provider, modelArg, nullableText(cfg.TranslateModel), nullableText(cfg.ExtractModel), baseURLArg,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert novel_provider_config: %w", err)

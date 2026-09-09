@@ -46,7 +46,8 @@ async def _reextract_preview(db, cfg, graph_rebuild, row, run_id):
     revision=await graph_rebuild.revision(db,rid)
     if revision['state']!='active' or not revision['trusted'] or revision['legacy'] or revision['generation']!=generation or revision['version']!=version:
         raise ValueError('active graph changed after re-extraction was requested')
-    live=await graph_rebuild.local_model(cfg,revision['model']['name'])
+    live=await graph_rebuild.graph_model_identity(
+        db, cfg, novel, revision['model']['provider'], revision['model']['name'])
     if digest(live)!=model_identity:
         raise ValueError('model identity changed after re-extraction was requested')
     saved=next((c for c in revision['snapshot']['chapters'] if c['chapter']==chapter),None)
@@ -57,7 +58,8 @@ async def _reextract_preview(db, cfg, graph_rebuild, row, run_id):
     if digest(source)!=input_hash or digest(display)!=display_hash:
         raise ValueError('chapter input changed after re-extraction was requested')
     lang=(await(await db.execute('SELECT target_lang FROM novel WHERE id=%s',(novel,))).fetchone())[0]
-    engine=graph_rebuild.KnowledgeEngine(db,cfg,revision,run_id=run_id)
+    provider=await graph_rebuild.graph_completion_provider(db,cfg,revision)
+    engine=graph_rebuild.KnowledgeEngine(db,cfg,revision,run_id=run_id,provider=provider)
     try: output=await engine.extract(novel,chapter,source,display,lang,
                                      include_terms=scope != 'facts', include_facts=scope != 'terms')
     finally: await engine.close()
@@ -118,7 +120,8 @@ async def _reextract_apply(db,cfg,graph_rebuild,row,run_id,decisions):
     revision=await graph_rebuild.revision(db,rid,lock=True)
     if revision['state']!='active' or not revision['trusted'] or revision['generation']!=generation or revision['version']!=version:
         raise ValueError('active graph changed after preview')
-    live=await graph_rebuild.local_model(cfg,revision['model']['name'])
+    live=await graph_rebuild.graph_model_identity(
+        db, cfg, row['novel_id'], revision['model']['provider'], revision['model']['name'])
     if digest(live)!=model_identity:
         raise ValueError('model identity changed after preview')
     saved=next((c for c in revision['snapshot']['chapters'] if c['chapter']==row['chapter_index']),None)
@@ -152,7 +155,8 @@ async def _reextract_apply(db,cfg,graph_rebuild,row,run_id,decisions):
     output['items']=[i for i in output['items'] if i['id'].startswith('identity:')]+selected
     source_lang,target_lang=(await(await db.execute('SELECT source_lang,target_lang FROM novel WHERE id=%s',(row['novel_id'],))).fetchone())
     state=PipelineState(envelope=ChapterEnvelope(novel_id=row['novel_id'],chapter_index=row['chapter_index'],raw_text=source,source_lang=source_lang,source_meta=SourceMeta()))
-    engine=graph_rebuild.KnowledgeEngine(db,cfg,revision,run_id=run_id)
+    provider=await graph_rebuild.graph_completion_provider(db,cfg,revision)
+    engine=graph_rebuild.KnowledgeEngine(db,cfg,revision,run_id=run_id,provider=provider)
     engine.current_chapter=row['chapter_index']
     try:
         async with db.transaction():
@@ -215,6 +219,12 @@ STALE_AFTER_MINUTES = 30
 # runs of it produces noise, not recovery.  Reusing graph_rebuild's delays keeps one
 # backoff policy in the codebase rather than two.
 TRANSIENT_CATEGORIES = {"model_unreachable", "timeout", "model_server_error"}
+
+# These provider configuration failures cannot recover on a retry timer. Keep the safe
+# class on the chapter run so reader progress can explain the stop without provider text.
+CHAPTER_TERMINAL_CATEGORIES = {
+    "credential_missing", "credential_rejected", "model_not_available", "quota_exhausted",
+}
 
 # No per-revision attempt counter exists to back off against (unlike graph_job's
 # attempts + graph_retry_delay_minutes), so this is a flat cooldown rather than an
@@ -416,7 +426,12 @@ async def _run(db, cfg, row: dict) -> dict:
         if not before:
             raise ValueError("no such staging rebuild to retry")
         await db.execute(
-            f"UPDATE {table} SET blocked_category=NULL, blocked_at=NULL WHERE id=%s",
+            f"""UPDATE {table}
+                       SET blocked_category=NULL, blocked_at=NULL,
+                           provider_wait_since=NULL,
+                           provider_wait_retry_at=NULL,
+                           provider_wait_category=NULL
+                     WHERE id=%s""",
             (row["revision_id"],))
         return {"status": "retry requested", "revision": row["revision_id"],
                 "was_blocked": before[0] is not None}
@@ -458,14 +473,30 @@ async def _fail(db, row: dict, exc: BaseException) -> None:
     run_id=(row.get('params') or {}).get('run_id')
     if run_id and row.get('action') in {'reextract','reextract_apply'}:
         terminal=('applying' if row.get('action')=='reextract_apply' else 'pending') if state=='pending' else 'failed'
-        await db.execute("UPDATE chapter_knowledge_run SET state=%s,error=%s,updated_at=now() WHERE id=%s",
-                         (terminal,f"{type(exc).__name__}: {exc}"[:2000],run_id))
+        run_category = category if category in CHAPTER_TERMINAL_CATEGORIES else None
+        run_error = run_category or f"{type(exc).__name__}: {exc}"[:2000]
+        if run_category:
+            await db.execute(
+                "UPDATE chapter_knowledge_run SET state='failed',blocked_category=%s,"
+                "blocked_at=now(),error=%s,updated_at=now() WHERE id=%s",
+                (run_category, run_error, run_id),
+            )
+        else:
+            await db.execute(
+                "UPDATE chapter_knowledge_run SET state=%s,blocked_category=NULL,"
+                "blocked_at=NULL,error=%s,updated_at=now() WHERE id=%s",
+                (terminal, run_error, run_id),
+            )
         if terminal=='failed':
+            # Reader-facing activity is ungated operator status.  Provider exception
+            # text may contain source prose or a credential-bearing URL (§0 spoiler
+            # authorization; migration 0046's safe-category discipline).
+            activity_error = run_category or "processing_failed"
             await db.execute('''INSERT INTO chapter_knowledge_activity
                 (run_id,novel_id,chapter_index,item_kind,item_key,phase,payload,idempotency_key)
                 VALUES(%s,%s,%s,'run','run','rejected',%s,'run:rejected')
                 ON CONFLICT(run_id,idempotency_key) DO NOTHING''',
-                (run_id,row['novel_id'],row['chapter_index'],Jsonb({'error':str(exc)[:500]})))
+                (run_id,row['novel_id'],row['chapter_index'],Jsonb({'error':activity_error})))
 
 
 async def refresh_reports(db, cfg, novel_id: str | None = None) -> str | None:
@@ -543,6 +574,7 @@ async def _next_staging_revision(db, revision_table: str, job_table: str,
                  AND (r.blocked_at IS NULL
                       OR (r.blocked_category = ANY(%s)
                           AND r.blocked_at <= now() - (%s * interval '1 minute')))
+                 AND (r.provider_wait_since IS NULL OR r.provider_wait_retry_at <= now())
                  AND (%s::uuid IS NULL OR r.novel_id = %s::uuid)
                ORDER BY r.novel_id, r.created_at DESC
             )
@@ -678,9 +710,24 @@ async def drain_requests(cfg: Config, novel_id: str | None = None) -> str | None
                 return None
             try:
                 result = await _run(db, cfg, row)
-            except AdmissionRejected:
+            except AdmissionRejected as exc:
                 # Backpressure, not failure: the model is busy with reader-facing work.
-                # Return the request to the queue without consuming an attempt.
+                # Return the request to the queue without consuming an attempt. Explicit
+                # quota exhaustion is terminal, so route it through the same safe chapter
+                # failure recorder used for rejected credentials and missing models.
+                if failure_category(exc) == "quota_exhausted":
+                    await _fail(db, row, exc)
+                    print(json.dumps(dict(repair=row["id"], action=row["action"],
+                                          state="failed", category="quota_exhausted")),
+                          flush=True)
+                    return f"{row['action']}:failed"
+                run_id = (row.get("params") or {}).get("run_id")
+                if run_id and row.get("action") in {"reextract", "reextract_apply"}:
+                    await db.execute(
+                        "UPDATE chapter_knowledge_run SET state='pending',"
+                        "blocked_category=NULL,blocked_at=NULL,updated_at=now() WHERE id=%s",
+                        (run_id,),
+                    )
                 await db.execute(
                     """UPDATE repair_request SET state='pending', attempts=attempts-1,
                               started_at=NULL, updated_at=now() WHERE id=%s""",

@@ -212,8 +212,11 @@ type ChapterListItem struct {
 	// Part of a multi-page source chapter (1-based; 1 for an ordinary chapter). Sites that
 	// paginate a chapter produce several rows sharing one SiteChapterNo, distinguished
 	// only by this.
-	Part               int                 `json:"part"`
-	Status             string              `json:"status"`
+	Part   int    `json:"part"`
+	Status string `json:"status"`
+	// FailureCategory is derived from chapter_failure.error_code's allowlisted provider
+	// vocabulary. Raw error_type/detail never crosses this metadata read path.
+	FailureCategory    string              `json:"failure_category,omitempty"`
 	GraphStatus        string              `json:"graph_status,omitempty"`
 	TranslationWarning *TranslationWarning `json:"translation_warning"`
 }
@@ -277,6 +280,9 @@ type ChapterPreviewResponse struct {
 	// it ready" from ONE read. Previously readiness was probed by repeatedly attempting
 	// PUT /progress — a write, several times a minute, to answer a read-only question.
 	Status string `json:"status"`
+	// FailureCategory is derived from chapter_failure.error_code's allowlisted provider
+	// vocabulary. Raw error_type/detail never crosses this preview read path.
+	FailureCategory string `json:"failure_category,omitempty"`
 }
 
 // TranslationHealth reports whether this novel's terminology is being translated
@@ -346,12 +352,15 @@ type ChapterTermView struct {
 }
 
 type ChapterKnowledgeRunView struct {
-	ID        string          `json:"id"`
-	Mode      string          `json:"mode"`
-	Scope     string          `json:"scope"`
-	State     string          `json:"state"`
-	CreatedAt time.Time       `json:"created_at"`
-	Preview   json.RawMessage `json:"preview,omitempty"`
+	ID              string          `json:"id"`
+	Mode            string          `json:"mode"`
+	Scope           string          `json:"scope"`
+	State           string          `json:"state"`
+	CreatedAt       time.Time       `json:"created_at"`
+	Preview         json.RawMessage `json:"preview,omitempty"`
+	BlockedCategory string          `json:"blocked_category,omitempty"`
+	BlockedDetail   string          `json:"blocked_detail,omitempty"`
+	BlockedAt       *time.Time      `json:"blocked_at,omitempty"`
 }
 
 // ChapterGraphExtractionView exposes only aggregate results from an untrusted staging

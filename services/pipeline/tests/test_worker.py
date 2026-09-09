@@ -169,14 +169,126 @@ async def test_queue_controls_also_gate_idle_graph_work(scheduled, monkeypatch):
     assert drain_requests.await_count == 3
 
 
-async def test_embedding_preflight_failure_still_drains_explicit_repair(monkeypatch):
+async def test_embedding_probe_is_memoized_after_a_successful_chapter_check():
     worker = Worker.__new__(Worker)
+    worker.cfg = SimpleNamespace(embed_dim=3, embed_model="test-embed")
+    worker._embeddings_ready = False
+    worker.embed_provider = SimpleNamespace(embed=AsyncMock(return_value=[[0.0, 0.0, 0.0]]))
+
+    await worker._ensure_embeddings()
+    await worker._ensure_embeddings()
+
+    worker.embed_provider.embed.assert_awaited_once_with(["dimension probe"])
+    assert worker._embeddings_ready is True
+
+
+async def test_embedding_transport_is_retryable_and_has_stable_category():
+    from novel_llm import AdmissionRejected
+
+    worker = Worker.__new__(Worker)
+    worker.cfg = SimpleNamespace(embed_dim=3, embed_model="test-embed")
+    worker._embeddings_ready = False
+    worker.embed_provider = SimpleNamespace(
+        embed=AsyncMock(side_effect=AdmissionRejected("provider unreachable: ConnectError",
+                                                      retry_after_s=7.5))
+    )
+
+    with pytest.raises(AdmissionRejected, match="^embed_unavailable$") as caught:
+        await worker._ensure_embeddings()
+
+    assert caught.value.category == "embed_unavailable"
+    assert caught.value.retry_after_s == 7.5
+    assert worker._embeddings_ready is False
+
+
+async def test_embedding_dimension_drift_remains_fatal():
+    worker = Worker.__new__(Worker)
+    worker.cfg = SimpleNamespace(embed_dim=3, embed_model="test-embed")
+    worker._embeddings_ready = False
+    worker.embed_provider = SimpleNamespace(embed=AsyncMock(return_value=[[0.0, 0.0]]))
+
+    with pytest.raises(RuntimeError, match="returned 2 dims"):
+        await worker._ensure_embeddings()
+
+    assert worker._embeddings_ready is False
+
+
+async def test_embedding_dimension_drift_escapes_the_worker_loop(scheduled, monkeypatch):
+    import pipeline.worker as module
+
+    client, keys = scheduled
+    heartbeat = keys[-1] + ":heartbeat"
+    monkeypatch.setattr(module, "WORKER_HEARTBEAT", heartbeat)
+    worker = Worker.__new__(Worker)
+    worker.redis = client
     worker.stopping = asyncio.Event()
-    worker._assert_embed_dim = AsyncMock(side_effect=RuntimeError("embedding endpoint unavailable"))
-    worker._drain_repair_requests = AsyncMock(return_value="discard")
-    with pytest.raises(RuntimeError, match="embedding endpoint unavailable"):
-        await worker.start()
-    worker._drain_repair_requests.assert_awaited_once_with()
+    worker.cfg = SimpleNamespace(queue_timeout=1, visibility_timeout=300)
+    worker._deferrals = 0
+    worker._ensure_embeddings = AsyncMock(
+        side_effect=module.EmbeddingDimensionMismatch("embedding dimension drift")
+    )
+    worker._handle = AsyncMock()
+    raw = message(2)
+    await client.lpush(keys[0], raw)
+
+    with pytest.raises(module.EmbeddingDimensionMismatch, match="dimension drift"):
+        await worker._loop()
+
+    worker._handle.assert_not_awaited()
+    await client.delete(heartbeat)
+
+
+async def test_worker_start_does_not_require_embeddings(monkeypatch):
+    import pipeline.worker as module
+
+    worker = Worker.__new__(Worker)
+    worker.cfg = SimpleNamespace(database_url="postgres://test")
+    worker.stopping = asyncio.Event()
+    worker.textproc = SimpleNamespace(aclose=AsyncMock())
+    worker._ensure_embeddings = AsyncMock(
+        side_effect=module.AdmissionRejected("embed_unavailable")
+    )
+    connection = SimpleNamespace(close=AsyncMock())
+
+    async def run_loop():
+        worker.request_stop()
+
+    worker._loop = run_loop
+    worker._reap_forever = AsyncMock()
+    connect = AsyncMock(return_value=connection)
+    monkeypatch.setattr(module.psycopg.AsyncConnection, "connect", connect)
+
+    await worker.start()
+
+    connect.assert_awaited_once_with("postgres://test", autocommit=True)
+    assert connection.close.await_count == 1
+    worker._ensure_embeddings.assert_not_awaited()
+
+
+async def test_worker_loop_heartbeats_and_drains_background_when_embeddings_are_down(
+    scheduled, monkeypatch
+):
+    import pipeline.worker as module
+
+    client, keys = scheduled
+    heartbeat = keys[-1] + ":heartbeat"
+    monkeypatch.setattr(module, "WORKER_HEARTBEAT", heartbeat)
+    worker = Worker.__new__(Worker)
+    worker.redis = client
+    worker.stopping = asyncio.Event()
+    worker.cfg = SimpleNamespace(queue_timeout=1, visibility_timeout=300)
+    worker._ensure_embeddings = AsyncMock(side_effect=module.AdmissionRejected("embed_unavailable"))
+
+    async def drain_background():
+        worker.request_stop()
+
+    worker._drain_background = AsyncMock(side_effect=drain_background)
+    await worker._loop()
+
+    assert await client.get(heartbeat) is not None
+    worker._drain_background.assert_awaited_once_with()
+    worker._ensure_embeddings.assert_not_awaited()
+    await client.delete(heartbeat)
 
 
 async def test_heartbeat_protects_slow_job_then_crash_recovers_once(scheduled):
@@ -329,6 +441,36 @@ async def test_runtime_reservation_requeues_without_losing_chapter(scheduled):
     assert await client.hlen(keys[4])==0
 
 
+async def test_embed_unavailable_requeues_claim_without_running_chapter(scheduled, monkeypatch):
+    import pipeline.worker as module
+    from novel_llm import AdmissionRejected
+
+    client, keys = scheduled
+    heartbeat = keys[-1] + ":heartbeat"
+    monkeypatch.setattr(module, "WORKER_HEARTBEAT", heartbeat)
+    worker = Worker.__new__(Worker)
+    worker.redis = client
+    worker.stopping = asyncio.Event()
+    worker.cfg = SimpleNamespace(queue_timeout=1, visibility_timeout=300)
+    worker._deferrals = 0
+    raw = message(2)
+    await client.lpush(keys[0], raw)
+
+    async def reject_probe():
+        worker.request_stop()
+        raise AdmissionRejected("embed_unavailable", retry_after_s=0)
+
+    worker._ensure_embeddings = reject_probe
+    worker._handle = AsyncMock()
+    await worker._loop()
+
+    assert await client.get(heartbeat) is not None
+    assert await client.lrange(keys[0], 0, -1) == [raw]
+    assert await client.llen(keys[1]) == 0
+    worker._handle.assert_not_awaited()
+    await client.delete(heartbeat)
+
+
 @pytest.mark.db
 @pytest.mark.parametrize("transient_outage", [False, True])
 async def test_deletion_cancels_inference_releases_claim_and_runs_next_novel(
@@ -361,6 +503,7 @@ async def test_deletion_cancels_inference_releases_claim_and_runs_next_novel(
     worker.cfg = make_config(database_url=os.getenv(
         "DATABASE_URL", "postgres://engine:engine@localhost:5432/novel_engine"
     ))
+    worker._ensure_embeddings = AsyncMock()
     entered, cancelled = asyncio.Event(), asyncio.Event()
     preview = module.PREVIEW_KEY.format(novel_id=deleted, chapter_index=1)
     served = []
@@ -413,6 +556,7 @@ async def test_deletion_cancels_inference_releases_claim_and_runs_next_novel(
 
 async def test_claim_cancellation_waits_for_work_and_watcher_cleanup():
     worker = Worker.__new__(Worker)
+    worker._ensure_embeddings = AsyncMock()
     started, cleaned = asyncio.Event(), asyncio.Event()
     worker._watch_novel = keep_novel_alive
     async def handle(raw):

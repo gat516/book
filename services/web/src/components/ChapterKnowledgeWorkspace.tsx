@@ -11,6 +11,7 @@ import type {
   KnowledgeReviewItem, ProviderName, RepairRequestView, RepairStatus, RepairTrack,
 } from "../types";
 import { RepairReview } from "./RepairReview";
+import { ProviderHealth, providerFailureDetail } from "./ProviderHealth";
 
 const terminal = new Set(["published", "rejected", "failed", "awaiting_review"]);
 
@@ -530,7 +531,6 @@ export function ChapterKnowledgeWorkspace({novelId,chapter,at}:{novelId:string;c
   const [activity,setActivity]=useState<ChapterKnowledgeActivity[]>([]);
   const [repairStatus,setRepairStatus]=useState<RepairStatus|null>(null);
   const [workerOnline,setWorkerOnline]=useState<boolean|null>(null);
-  const [ollamaStatus,setOllamaStatus]=useState<"checking"|"connected"|"unreachable">("checking");
   const [error,setError]=useState(""); const [busy,setBusy]=useState(false);
   const [editing,setEditing]=useState<number|null>(null); const [draft,setDraft]=useState("");
   const [editingTerm,setEditingTerm]=useState<string|null>(null); const [termDraft,setTermDraft]=useState("");
@@ -568,25 +568,17 @@ export function ChapterKnowledgeWorkspace({novelId,chapter,at}:{novelId:string;c
     }
     void checkWorker();return()=>{cancelled=true;if(timer)window.clearTimeout(timer)};
   },[graphVisible,novelId]);
-  const watchOllama = !data?.can_extract || !!graphMoving || !!data?.run && !terminal.has(data.run.state);
-  useEffect(()=>{
-    if(!watchOllama)return;
-    let cancelled=false;let timer:number|undefined;
-    async function check(){
-      try{await listOllamaModels(novelId,"graph");if(!cancelled)setOllamaStatus("connected")}
-      catch{if(!cancelled)setOllamaStatus("unreachable")}
-      finally{if(!cancelled)timer=window.setTimeout(check,2000)}
-    }
-    setOllamaStatus("checking");void check();
-    return()=>{cancelled=true;if(timer)window.clearTimeout(timer)};
-  },[novelId,watchOllama]);
-
+  const watchProvider = !data?.can_extract || !!graphMoving || !!data?.run && !terminal.has(data.run.state);
   // A chapter can finish background publication while this panel is open. Read the
   // current graph fence immediately before every write; §0 still rejects a genuinely
   // concurrent change, but a merely old browser snapshot no longer causes a false stale edit.
   async function mutate(work:(current:ChapterKnowledgeResponse)=>Promise<unknown>){setBusy(true);setError("");try{const current=await load();await work(current);await load()}catch(e){try{await load()}catch{/* retain the mutation error */}setError(errorMessage(e))}finally{setBusy(false)}}
   if(!data)return <section className="chapter-knowledge"><h2>Chapter knowledge</h2><p>{error||"Loading knowledge…"}</p></section>;
   const preview=data.run?.preview?.items??[];
+  const blockedRun = data.run && (data.run.state === "failed" || !!data.run.blocked_category);
+  const blockedDetail = blockedRun
+    ? data.run?.blocked_detail || providerFailureDetail(data.run?.blocked_category) || "the extraction run failed before it could publish knowledge"
+    : null;
   const writable=data.can_extract;
   return <section className="chapter-knowledge" aria-labelledby="chapter-knowledge-heading">
     <header><div><h2 id="chapter-knowledge-heading">Chapter knowledge</h2><p>Extract terms finds this chapter's named terms; extract facts finds the claims it supports. Proposed items stay out of cards and Ask AI until published.</p></div>
@@ -594,9 +586,9 @@ export function ChapterKnowledgeWorkspace({novelId,chapter,at}:{novelId:string;c
     <dl className="repair-review-progress" aria-label="Extraction status">
       <div><dt>Terms</dt><dd>{extractionStatus(data,"terms")}</dd></div>
       <div><dt>Facts</dt><dd>{extractionStatus(data,"facts")}</dd></div>
-      {watchOllama&&<div><dt>Local model</dt><dd>{ollamaStatus==="connected"?"Connected":ollamaStatus==="checking"?"Checking…":"Unreachable"}</dd></div>}
+      {watchProvider&&<div><dt>Provider</dt><dd><ProviderHealth novelId={novelId} track="graph" compact /></dd></div>}
     </dl>
-    {watchOllama&&ollamaStatus==="unreachable"&&<p role="alert" className="reader-pane-error">Local Ollama is unreachable. Graph extraction cannot continue until the server and its connection are available.</p>}
+    {blockedDetail&&<p role="alert" className="reader-pane-error"><strong>Extraction blocked:</strong> {blockedDetail}{data.run?.blocked_at&&<> <time dateTime={data.run.blocked_at}>({new Date(data.run.blocked_at).toLocaleString()})</time></>}</p>}
     {error&&<p role="alert" className="reader-pane-error">{error}</p>}
     {!writable&&<KnowledgeGate novelId={novelId} chapter={chapter} reason={data.blocked_reason} repairStatus={repairStatus} onDone={refresh} />}
     <details open><summary>Status {data.run?`— ${data.run.scope} ${data.run.state.replace("_"," ")}`:graphActivity&&"— book graph"}</summary>

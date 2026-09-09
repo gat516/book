@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { listChapters } from "../api";
 import type { ChapterListItem, ChapterListResponse, PipelineStatusResponse } from "../types";
 import { PipelineStatus } from "./PipelineStatus";
+import { providerFailureDetail } from "./ProviderHealth";
 
 interface Props {
   novelId: string;
@@ -156,6 +157,9 @@ export function ChapterList({ novelId, currentChapter, onOpen, onClose, onAdd }:
                               : chapter.status === "error"
                                 ? "Failed"
                                 : chapter.status}
+                      {chapter.status === "error" && chapter.failure_category && (
+                        <small> · {providerFailureDetail(chapter.failure_category)}</small>
+                      )}
                       {chapter.status === "done" && chapter.graph_status && chapter.graph_status !== "done" && (
                         <small> · {chapter.graph_status === "error" ? "Facts unavailable" : "Facts pending"}</small>
                       )}

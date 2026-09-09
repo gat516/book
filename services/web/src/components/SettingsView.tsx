@@ -14,7 +14,7 @@ const PROVIDERS: ProviderName[] = ["gemini", "deepseek", "anthropic", "ollama"];
 // Account-wide settings: the provider keys every book draws on, plus reading preferences.
 // Keys live here rather than per book (migration 0035) because the common case is several
 // books on one account -- re-pasting the same secret per book had no way to rotate it in
-// one place. A book still chooses its own provider and model, and may override the key.
+// one place. A book still chooses its own provider and model.
 export function SettingsView({ clickableEntities, onChangeClickableEntities, onClose }: Props) {
   const [credentials, setCredentials] = useState<ProviderCredentialView[]>([]);
   const [loading, setLoading] = useState(true);
@@ -97,8 +97,7 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
       <h3>Provider keys</h3>
       <p>
         Entered once and shared by every book. Each book then picks which provider and model
-        to use in its own “Model provider” panel, and can override the key there if it needs
-        to bill a different account.
+        to use in its own “Model provider” panel.
       </p>
       {error && <p role="alert" className="chapter-list-error">{error}</p>}
       {notice && <p role="status">{notice}</p>}

@@ -14,6 +14,7 @@ import signal
 import time
 from contextlib import suppress
 
+import httpx
 import psycopg
 import redis.asyncio as aredis
 from minio import Minio
@@ -80,6 +81,10 @@ class TranslationPublished(Exception):
     """Validated prose is durable; hand remaining work back as low-priority enrichment."""
 
 
+class EmbeddingDimensionMismatch(RuntimeError):
+    """Embedding configuration drift is fatal and must stop the worker process."""
+
+
 NOVEL_CHECK_SECONDS = 2
 TRANSLATE_STAGE = "translate"
 # Partial translation text, so a reader watching an in-progress chapter sees it arrive
@@ -140,6 +145,10 @@ class Worker:
         self.cache = LLMCache(self.redis)
         self.db: psycopg.AsyncConnection | None = None
         self.stopping = asyncio.Event()
+        # Embedding readiness belongs to chapter work, not worker startup (§0, §5.4).
+        # A hosted-provider repair can run without touching this local dependency, and
+        # the probe is shared by all chapters once the local embedding service answers.
+        self._embeddings_ready = False
         # Consecutive admission deferrals across chapters. A rate limit is a property of
         # the account, not the chapter, so backing off per-chapter would just round-robin
         # the same saturated quota. Reset by any completed chapter.
@@ -173,44 +182,43 @@ class Worker:
                     task.cancel()
             await asyncio.gather(work, stop, return_exceptions=True)
 
-    async def _assert_embed_dim(self) -> None:
-        """Fail fast at startup, not hundreds of chunks into a run (§10).
+    async def _ensure_embeddings(self) -> None:
+        """Probe embeddings once, when a chapter is actually about to run.
 
-        A dimension mismatch between EMBED_DIM and what the model actually returns is
-        otherwise a raw psycopg error on the first chunk insert of the first chapter —
-        this makes it a clear assertion before any work starts.
+        Embeddings are intentionally local even when completions are hosted (§5.4), but
+        that local dependency must not gate worker startup or repair control. A failed
+        transport is admission backpressure for the chapter claim; a reachable service
+        returning the wrong vector width is configuration drift and remains fatal.
         """
-        [vec] = await self.embed_provider.embed(["dimension probe"])
+        if self._embeddings_ready:
+            return
+        try:
+            [vec] = await self.embed_provider.embed(["dimension probe"])
+        except AdmissionRejected as exc:
+            # Ollama already maps transport failures to AdmissionRejected. Replace its
+            # provider-specific message with the safe, stable worker category while
+            # preserving the provider-selected delay and exact-hint bit.
+            rejected = AdmissionRejected(
+                "embed_unavailable",
+                retry_after_s=exc.retry_after_s,
+                exact_hint=exc.exact_hint,
+            )
+            rejected.category = "embed_unavailable"
+            raise rejected from exc
+        except (httpx.TransportError, TimeoutError, ConnectionError, OSError) as exc:
+            # Keep this boundary defensive for providers/test doubles that do not use the
+            # shared transient_as_backpressure adapter.
+            rejected = AdmissionRejected("embed_unavailable", retry_after_s=5.0)
+            rejected.category = "embed_unavailable"
+            raise rejected from exc
         if len(vec) != self.cfg.embed_dim:
-            raise RuntimeError(
+            raise EmbeddingDimensionMismatch(
                 f"embed model {self.cfg.embed_model!r} returned {len(vec)} dims, "
                 f"but EMBED_DIM={self.cfg.embed_dim} (must match chunk/entity.embedding, see 0004)"
             )
+        self._embeddings_ready = True
 
     async def start(self) -> None:
-        while not self.stopping.is_set():
-            try:
-                await self._run_until_stopping(self._assert_embed_dim())
-                break
-            except asyncio.CancelledError:
-                if self.stopping.is_set():
-                    return
-                raise
-            except AdmissionRejected as exc:
-                # Explicit control-plane work such as Discard does not need embeddings.
-                # Let it run while model admission is busy instead of leaving the UI's
-                # one-active-request guard stuck on a pending row (§0.1).
-                await self._drain_repair_requests()
-                await self._idle(max(exc.retry_after_s, 0.25))
-            except Exception:
-                # Keep fail-fast startup semantics for a bad embedding configuration, but
-                # first honor one already-authorized repair action. systemd retries startup,
-                # so a discard submitted while the model endpoint is down is still drained.
-                try:
-                    await self._drain_repair_requests()
-                except Exception:
-                    log.exception("repair control failed while embedding preflight was unavailable")
-                raise
         if self.stopping.is_set():
             return
         # autocommit for chapter-status updates outside graph-write; graph-write itself
@@ -245,6 +253,8 @@ class Worker:
                     log.info("shutdown cancelled background work; resumable state recorded")
                     break
                 except AdmissionRejected as exc:
+                    log.info("provider admission deferred category=%s retry_after_s=%.1f",
+                             getattr(exc, "category", "rate_limited"), exc.retry_after_s)
                     await self._idle(max(exc.retry_after_s, 0.25))
                 except Exception:
                     log.exception("revision enrichment failed; retained for explicit resume")
@@ -309,8 +319,17 @@ class Worker:
                 # SIGABRT the worker mid-backoff.
                 await self._idle(delay)
                 disposition = "retry"
-                log.info("model admission deferred chapter for %.1fs (deferral %d): %s",
-                         delay, self._deferrals, exc)
+                log.info(
+                    "provider admission deferred category=%s chapter_delay_s=%.1f "
+                    "retry_after_s=%.1f deferral=%d",
+                    getattr(exc, "category", "rate_limited"), delay, exc.retry_after_s,
+                    self._deferrals,
+                )
+            except EmbeddingDimensionMismatch:
+                # This is configuration drift against migration 0004, not chapter
+                # backpressure. Let it terminate the worker loudly instead of allowing
+                # the reaper to retry every claim against the same bad dimension.
+                raise
             except ChapterFailed:
                 # The outcome is recorded on the chapter row, so this job is not lost and
                 # must not be resurrected: drop the claim outright. Leaving it made failed
@@ -365,6 +384,10 @@ class Worker:
 
     async def _handle_claim(self, raw: str) -> None:
         msg = QueueMessage.model_validate_json(raw)
+        # This is the first point at which ordinary chapter work is about to begin.
+        # Keep hosted-provider repair/background work independent of local Ollama health
+        # and let AdmissionRejected return this claim to pending without chapter retries.
+        await self._ensure_embeddings()
         work = asyncio.create_task(self._handle(raw))
         owner = asyncio.create_task(self._watch_novel(msg.novel_id))
         try:

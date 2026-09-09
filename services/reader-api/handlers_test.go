@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -48,27 +49,28 @@ type fakeStore struct {
 	lastChapter     int
 	lastChapterArg  int
 
-	chapterList          []ChapterListItem
-	chapterListTotal     int
-	chapterListErr       error
-	lastChapterLimit     int
-	lastChapterOffset    int
-	pipelineStatusErr    error
-	previewText          string
-	previewStatus        string
-	previewErr           error
-	health               TranslationHealth
-	healthErr2           error
-	repair               RepairStatus
-	repairErr            error
-	repairPreview        RepairPreview
-	repairPreviewErr     error
-	repairProgress       []RepairProgressFact
-	repairProgressErr    error
-	chapterKnowledge     ChapterKnowledgeView
-	chapterKnowledgeErr  error
-	knowledgeActivity    []ChapterKnowledgeActivity
-	knowledgeActivityErr error
+	chapterList            []ChapterListItem
+	chapterListTotal       int
+	chapterListErr         error
+	lastChapterLimit       int
+	lastChapterOffset      int
+	pipelineStatusErr      error
+	previewText            string
+	previewStatus          string
+	previewFailureCategory string
+	previewErr             error
+	health                 TranslationHealth
+	healthErr2             error
+	repair                 RepairStatus
+	repairErr              error
+	repairPreview          RepairPreview
+	repairPreviewErr       error
+	repairProgress         []RepairProgressFact
+	repairProgressErr      error
+	chapterKnowledge       ChapterKnowledgeView
+	chapterKnowledgeErr    error
+	knowledgeActivity      []ChapterKnowledgeActivity
+	knowledgeActivityErr   error
 }
 
 func (f *fakeStore) ChapterKnowledge(_ context.Context, _ string, chapter, at int) (ChapterKnowledgeView, error) {
@@ -83,10 +85,12 @@ func (f *fakeStore) ChapterKnowledgeActivity(_ context.Context, _ string, chapte
 }
 
 type fakeIngestClient struct {
-	response json.RawMessage
-	status   int
-	err      error
-	lastBody json.RawMessage
+	response        json.RawMessage
+	status          int
+	err             error
+	lastBody        json.RawMessage
+	lastHealthNovel string
+	lastHealthTrack string
 }
 
 func (f *fakeIngestClient) QueueControl(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
@@ -158,6 +162,11 @@ func (f *fakeIngestClient) GetProviderConfig(_ context.Context, _ string) (json.
 
 func (f *fakeIngestClient) ListOllamaModels(_ context.Context, _ string, _ bool) (json.RawMessage, int, error) {
 	return json.RawMessage(`{"models":["qwen2.5:7b-instruct"]}`), http.StatusOK, nil
+}
+
+func (f *fakeIngestClient) ProviderHealth(_ context.Context, novelID, track string) (json.RawMessage, int, error) {
+	f.lastHealthNovel, f.lastHealthTrack = novelID, track
+	return f.response, f.status, f.err
 }
 
 func (f *fakeIngestClient) PutProviderConfig(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
@@ -323,8 +332,8 @@ func (f *fakeStore) PipelineStatus(_ context.Context, novelID string) (PipelineS
 	return PipelineStatusResponse{NovelID: novelID, InFlight: []InFlightChapter{}}, f.pipelineStatusErr
 }
 
-func (f *fakeStore) TranslationPreview(_ context.Context, _ string, _ int) (string, bool, string, error) {
-	return f.previewText, f.previewText != "", f.previewStatus, f.previewErr
+func (f *fakeStore) TranslationPreview(_ context.Context, _ string, _ int) (string, bool, string, string, error) {
+	return f.previewText, f.previewText != "", f.previewStatus, f.previewFailureCategory, f.previewErr
 }
 
 func (f *fakeStore) TranslationHealth(_ context.Context, novelID string) (TranslationHealth, error) {
@@ -556,6 +565,55 @@ func TestAskUsesEffectiveGateAndMapsAvailability(t *testing.T) {
 	}
 }
 
+func TestAskProviderFailurePreservesSafeCategory(t *testing.T) {
+	store := readyFake()
+	ask := &fakeAskClient{err: &AskProviderError{Category: "credential_rejected"}}
+	response := request(t, &API{store: store, ask: ask}, http.MethodPost,
+		"/novels/"+testNovelID+"/ask", `{"question":"What happened?"}`, "reader-a")
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", response.Code, response.Body.String())
+	}
+	if response.Body.String() != `{"category":"credential_rejected","error":"ask-ai provider failure"}`+"\n" {
+		t.Fatalf("body = %q, want category-only provider error", response.Body.String())
+	}
+}
+
+func TestAskHTTPClientReadsOnlyProviderCategory(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		status   int
+		category string
+	}{
+		{name: "credential rejected", status: http.StatusUnauthorized, category: "credential_rejected"},
+		{name: "quota exhausted", status: http.StatusTooManyRequests, category: "quota_exhausted"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			transport := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: test.status,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body: io.NopCloser(strings.NewReader(
+						`{"error":"ask-ai provider failure","category":"` + test.category + `","upstream":"must-never-echo"}`,
+					)),
+				}, nil
+			})
+			client := &askHTTPClient{url: "http://ask.test", token: "token", http: &http.Client{Transport: transport}}
+			_, err := client.Ask(context.Background(), testNovelID, "question", 5)
+			var providerErr *AskProviderError
+			if !errors.As(err, &providerErr) || providerErr.Category != test.category {
+				t.Fatalf("error = %v, want AskProviderError(%q)", err, test.category)
+			}
+			if strings.Contains(err.Error(), "must-never-echo") {
+				t.Fatal("provider response body leaked through error")
+			}
+		})
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
 func TestStoreErrorsMapToInternalServerError(t *testing.T) {
 	store := readyFake()
 	store.wikiErr = errors.New("database broke")
@@ -650,10 +708,28 @@ func TestGetChapterMapsChapterNotReady(t *testing.T) {
 	}
 }
 
+func TestGetChapterPreviewIncludesSafeFailureCategory(t *testing.T) {
+	store := readyFake()
+	store.previewStatus = "error"
+	store.previewFailureCategory = "credential_rejected"
+	response := request(t, &API{store: store}, http.MethodGet,
+		"/novels/"+testNovelID+"/chapter/7/preview", "", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	var body ChapterPreviewResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Status != "error" || body.FailureCategory != "credential_rejected" {
+		t.Fatalf("preview = %#v, want error with safe category", body)
+	}
+}
+
 func TestGetChaptersClampsLimitAndReportsProgress(t *testing.T) {
 	store := readyFake()
 	store.chapterList = []ChapterListItem{
-		{ChapterIndex: 1, SiteChapterNo: "第4610章 帝一！", Status: "done"},
+		{ChapterIndex: 1, SiteChapterNo: "第4610章 帝一！", Status: "done", FailureCategory: "credential_rejected"},
 		{ChapterIndex: 2, Status: "ingested"},
 	}
 	store.chapterListTotal = 29
@@ -682,7 +758,8 @@ func TestGetChaptersClampsLimitAndReportsProgress(t *testing.T) {
 	if body.Progress != 5 {
 		t.Fatalf("progress = %d, want 5 (readyFake's stored progress)", body.Progress)
 	}
-	if len(body.Chapters) != 2 || body.Chapters[1].Status != "ingested" {
+	if len(body.Chapters) != 2 || body.Chapters[1].Status != "ingested" ||
+		body.Chapters[0].FailureCategory != "credential_rejected" {
 		t.Fatalf("chapters = %+v", body.Chapters)
 	}
 }
@@ -783,6 +860,37 @@ func TestPostNovelMapsIngestUnavailable(t *testing.T) {
 	response := request(t, api, http.MethodPost, "/novels", `{"title":"New Novel"}`, "")
 	if response.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502; body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestProviderHealthProxiesSafeCategoryAndStatus(t *testing.T) {
+	ingest := &fakeIngestClient{
+		response: json.RawMessage(`{"provider":"gemini","endpoint_kind":"hosted","state":"unavailable","category":"credential_rejected"}`),
+		status:   http.StatusBadGateway,
+	}
+	api := &API{store: readyFake(), ingest: ingest}
+	response := request(t, api, http.MethodGet,
+		"/novels/"+testNovelID+"/provider-health?track=graph", "", "")
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"category":"credential_rejected"`) {
+		t.Fatalf("safe category missing: %s", response.Body.String())
+	}
+	if ingest.lastHealthNovel != testNovelID || ingest.lastHealthTrack != "graph" {
+		t.Fatalf("health request = (%q, %q), want (%q, graph)", ingest.lastHealthNovel, ingest.lastHealthTrack, testNovelID)
+	}
+	if strings.Contains(response.Body.String(), "SECRET") {
+		t.Fatalf("upstream body leaked: %s", response.Body.String())
+	}
+}
+
+func TestProviderHealthRejectsUnknownTrack(t *testing.T) {
+	api := &API{store: readyFake(), ingest: &fakeIngestClient{}}
+	response := request(t, api, http.MethodGet,
+		"/novels/"+testNovelID+"/provider-health?track=bogus", "", "")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
 	}
 }
 

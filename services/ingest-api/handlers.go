@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -19,6 +20,9 @@ import (
 type API struct {
 	store *Store
 	cfg   Config
+
+	providerHealthMu    sync.Mutex
+	providerHealthCache map[string]providerHealthCacheEntry
 }
 
 // --- request/response bodies ---
@@ -55,7 +59,6 @@ type providerConfigReq struct {
 	TranslateModel string `json:"translate_model,omitempty"`
 	ExtractModel   string `json:"extract_model,omitempty"`
 	BaseURL        string `json:"base_url,omitempty"`
-	APIKey         string `json:"api_key,omitempty"` // plaintext in the request; never stored as such
 }
 
 type createNovelResp struct {
@@ -139,10 +142,6 @@ func (a *API) createNovel(w http.ResponseWriter, r *http.Request) {
 	if req.ProviderConfig != nil {
 		pc, err := a.buildProviderConfigInput(*req.ProviderConfig)
 		if err != nil {
-			if errors.Is(err, ErrProviderConfigKeyNotSet) {
-				writeErr(w, http.StatusServiceUnavailable, "server is not configured to accept provider_config")
-				return
-			}
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -160,9 +159,8 @@ func (a *API) createNovel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, createNovelResp{ID: id})
 }
 
-// buildProviderConfigInput validates req and encrypts its API key (if any) under the
-// server's INGEST_PROVIDER_CONFIG_KEY. Returns ErrProviderConfigKeyNotSet if the request
-// needs the key but the server has none configured.
+// buildProviderConfigInput validates req. It handles no secret: a novel names a provider,
+// and the key for that provider comes from provider_credential (migration 0068).
 func (a *API) buildProviderConfigInput(req providerConfigReq) (ProviderConfigInput, error) {
 	switch req.Provider {
 	case "anthropic", "deepseek", "gemini", "ollama":
@@ -183,22 +181,10 @@ func (a *API) buildProviderConfigInput(req providerConfigReq) (ProviderConfigInp
 	if req.ExtractModel == "" {
 		req.ExtractModel = req.Model
 	}
-	in := ProviderConfigInput{Provider: req.Provider, Model: req.Model, TranslateModel: req.TranslateModel, ExtractModel: req.ExtractModel, BaseURL: req.BaseURL}
-	if req.APIKey != "" {
-		if !a.cfg.ProviderConfigKeySet {
-			return ProviderConfigInput{}, ErrProviderConfigKeyNotSet
-		}
-		cipher, nonce, err := encryptProviderConfig([]byte(req.APIKey), a.cfg.ProviderConfigKey)
-		if err != nil {
-			return ProviderConfigInput{}, fmt.Errorf("encrypt api_key: %w", err)
-		}
-		in.APIKeyCipher, in.APIKeyNonce = cipher, nonce
-	}
-	return in, nil
+	return ProviderConfigInput{Provider: req.Provider, Model: req.Model, TranslateModel: req.TranslateModel, ExtractModel: req.ExtractModel, BaseURL: req.BaseURL}, nil
 }
 
-// getProviderConfig handles GET /novels/{id}/provider-config — masked read, never
-// decrypts (returns api_key_set: bool, not the key).
+// getProviderConfig handles GET /novels/{id}/provider-config.
 func (a *API) getProviderConfig(w http.ResponseWriter, r *http.Request) {
 	novelID := r.PathValue("id")
 	view, err := a.store.GetProviderConfig(r.Context(), novelID)
@@ -215,7 +201,7 @@ func (a *API) getProviderConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // putProviderConfig handles PATCH /novels/{id}/provider-config — replaces the novel's
-// provider config wholesale, re-encrypting the API key if one is supplied.
+// provider config wholesale.
 func (a *API) putProviderConfig(w http.ResponseWriter, r *http.Request) {
 	novelID := r.PathValue("id")
 	var req providerConfigReq
@@ -225,10 +211,6 @@ func (a *API) putProviderConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	in, err := a.buildProviderConfigInput(req)
 	if err != nil {
-		if errors.Is(err, ErrProviderConfigKeyNotSet) {
-			writeErr(w, http.StatusServiceUnavailable, "server is not configured to accept provider_config")
-			return
-		}
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}

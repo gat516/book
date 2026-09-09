@@ -236,6 +236,7 @@ async def test_rate_limit_becomes_backpressure_honouring_retry_after():
         async with transient_as_backpressure():
             raise _status_error(429, {"retry-after": "42"})
     assert caught.value.retry_after_s == 42.0
+    assert caught.value.category == "rate_limited"
 
 
 async def test_rate_limit_without_a_header_uses_the_rate_limit_floor():
@@ -261,9 +262,30 @@ async def test_server_errors_use_the_ordinary_default_delay():
 async def test_unreachable_provider_becomes_backpressure():
     """The Ollama OOM case: five chapters died at once on ConnectError because a dead
     backend was recorded as five bad chapters."""
-    with pytest.raises(AdmissionRejected):
+    with pytest.raises(AdmissionRejected) as caught:
         async with transient_as_backpressure():
             raise httpx.ConnectError("all connection attempts failed")
+    assert caught.value.category == "unreachable"
+    assert str(caught.value) == "unreachable"
+
+
+async def test_daily_quota_category_is_safe_and_does_not_echo_provider_body():
+    request = httpx.Request("POST", "https://example.invalid/chat/completions")
+    body = '{"error":{"message":"private key should never persist; retry in 86400s"}}'
+    response = httpx.Response(429, request=request, text=body)
+    with pytest.raises(AdmissionRejected) as caught:
+        async with transient_as_backpressure():
+            raise httpx.HTTPStatusError("provider body", request=request, response=response)
+    assert caught.value.category == "quota_exhausted"
+    assert caught.value.retry_after_s == pytest.approx(86400)
+    assert "private key" not in str(caught.value)
+
+
+async def test_server_backpressure_has_server_error_category():
+    with pytest.raises(AdmissionRejected) as caught:
+        async with transient_as_backpressure(default_retry_s=7.5):
+            raise _status_error(503)
+    assert caught.value.category == "model_server_error"
 
 
 @pytest.mark.parametrize("code", [400, 401, 403, 404, 422])

@@ -1135,9 +1135,9 @@ func TestReadableTranslationSurvivesGraphFailure(t *testing.T) {
 		t.Fatalf("chapter statuses: %+v %v", chapters, err)
 	}
 	// A ready preview should neither need Redis nor return stale streaming text.
-	_, available, status, err := store.TranslationPreview(ctx, novelID, 1)
-	if err != nil || available || status != "done" {
-		t.Fatalf("preview: %v %s %v", available, status, err)
+	_, available, status, failureCategory, err := store.TranslationPreview(ctx, novelID, 1)
+	if err != nil || available || status != "done" || failureCategory != "" {
+		t.Fatalf("preview: %v %s %s %v", available, status, failureCategory, err)
 	}
 }
 

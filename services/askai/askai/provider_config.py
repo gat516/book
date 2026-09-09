@@ -35,7 +35,7 @@ def _decryption_key() -> bytes:
     raw = os.environ.get("PROVIDER_CONFIG_ENCRYPTION_KEY", "")
     if not raw:
         raise RuntimeError(
-            "a novel has a provider_config with an encrypted api_key, but "
+            "an account provider_credential holds an encrypted api_key, but "
             "PROVIDER_CONFIG_ENCRYPTION_KEY is not set"
         )
     key = base64.b64decode(raw)
@@ -45,20 +45,19 @@ def _decryption_key() -> bytes:
 
 
 async def load_provider_config(conn, novel_id: str) -> ProviderConfigRow | None:
+    """The novel's own choices. Holds no secret since migration 0068 — ``api_key`` is
+    always None here and is filled in by resolve_provider_config from the account
+    credential for whichever provider the novel names."""
     row = await (
         await conn.execute(
-            "SELECT provider, model, base_url, api_key_cipher, api_key_nonce "
-            "FROM novel_provider_config WHERE novel_id = %s",
+            "SELECT provider, model, base_url FROM novel_provider_config WHERE novel_id = %s",
             (novel_id,),
         )
     ).fetchone()
     if row is None:
         return None
-    provider, model, base_url, cipher, nonce = row
-    api_key = None
-    if cipher is not None:
-        api_key = AESGCM(_decryption_key()).decrypt(bytes(nonce), bytes(cipher), None).decode("utf-8")
-    return ProviderConfigRow(provider=provider, model=model, base_url=base_url, api_key=api_key)
+    provider, model, base_url = row
+    return ProviderConfigRow(provider=provider, model=model, base_url=base_url, api_key=None)
 
 
 async def load_provider_credential(conn, provider: str) -> tuple[str | None, str | None]:
@@ -85,6 +84,9 @@ async def resolve_provider_config(conn, novel_id: str, default_provider: str) ->
     must answer questions through the same backend that translated the book -- resolving
     differently here would mean the reader's answers came from a different model than the
     prose, with no indication anywhere that they had.
+
+    The key always comes from the account credential for the provider the novel names: a
+    book carries no key of its own (migration 0068).
     """
     row = await load_provider_config(conn, novel_id)
     provider = row.provider if row is not None else default_provider
@@ -95,7 +97,7 @@ async def resolve_provider_config(conn, novel_id: str, default_provider: str) ->
         provider=provider,
         model=row.model if row is not None else None,
         base_url=(row.base_url if row is not None else None) or global_base_url,
-        api_key=(row.api_key if row is not None else None) or global_api_key,
+        api_key=global_api_key,
     )
 
 

@@ -80,6 +80,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("POST /novels/{id}/name-reviews/{term}/approve", a.approveCharacterName)
 	mux.HandleFunc("GET /novels/{id}/provider-config", a.getProviderConfig)
 	mux.HandleFunc("GET /novels/{id}/provider-config/ollama-models", a.getOllamaModels)
+	mux.HandleFunc("GET /novels/{id}/provider-health", a.getProviderHealth)
 	mux.HandleFunc("GET /provider-credentials", a.listProviderCredentials)
 	mux.HandleFunc("PUT /provider-credentials/{provider}", a.putProviderCredential)
 	mux.HandleFunc("DELETE /provider-credentials/{provider}", a.deleteProviderCredential)
@@ -577,18 +578,19 @@ func (a *API) getChapterPreview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid chapter index")
 		return
 	}
-	text, available, status, err := a.store.TranslationPreview(r.Context(), novelID, n)
+	text, available, status, failureCategory, err := a.store.TranslationPreview(r.Context(), novelID, n)
 	if err != nil {
 		log.Printf("translation preview: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not read preview")
 		return
 	}
 	writeJSON(w, http.StatusOK, ChapterPreviewResponse{
-		NovelID:      novelID,
-		ChapterIndex: n,
-		Available:    available,
-		Text:         text,
-		Status:       status,
+		NovelID:         novelID,
+		ChapterIndex:    n,
+		Available:       available,
+		Text:            text,
+		Status:          status,
+		FailureCategory: failureCategory,
 	})
 }
 
@@ -1171,6 +1173,33 @@ func (a *API) getOllamaModels(w http.ResponseWriter, r *http.Request) {
 		r.Context(), novelID, r.URL.Query().Get("target") == "graph",
 	)
 	if err != nil {
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
+}
+
+// getProviderHealth proxies the safe provider probe. Ingest-api owns provider
+// resolution because it has the account credential decrypt key; reader-api preserves
+// the non-200 category response so the browser can distinguish the cause without ever
+// seeing an upstream error body.
+func (a *API) getProviderHealth(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	track := r.URL.Query().Get("track")
+	if track != "graph" && track != "events" && track != "translate" && track != "extract" {
+		writeError(w, http.StatusBadRequest, "track must be graph, events, translate, or extract")
+		return
+	}
+	result, status, err := a.ingest.ProviderHealth(r.Context(), novelID, track)
+	if err != nil {
+		log.Printf("provider health: %v", err)
 		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
 		return
 	}

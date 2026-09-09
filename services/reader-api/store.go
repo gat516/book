@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -45,7 +46,7 @@ type ReaderStore interface {
 	KnowledgeStatus(context.Context, string, int, int) (KnowledgeStatus, error)
 	ListChapters(context.Context, string, int, int) ([]ChapterListItem, int, error)
 	PipelineStatus(context.Context, string) (PipelineStatusResponse, error)
-	TranslationPreview(context.Context, string, int) (string, bool, string, error)
+	TranslationPreview(context.Context, string, int) (string, bool, string, string, error)
 	TranslationHealth(context.Context, string) (TranslationHealth, error)
 	RepairStatus(context.Context, string) (RepairStatus, error)
 	RepairPreview(context.Context, string, string) (RepairPreview, error)
@@ -285,13 +286,20 @@ func (s *Store) ListChapters(ctx context.Context, novelID string, limit, offset 
 	// ordinary non-paginated chapter is part 1 by definition — so the absent case and the
 	// default case are the same answer.
 	rows, err := s.progressDB.Query(ctx,
-		`SELECT chapter_index, source_meta->>'site_chapter_no', source_meta->>'source_url',
-		        COALESCE((source_meta->>'part')::int, 1),
-		        CASE WHEN translation_ready THEN 'done' ELSE status END,
-		        CASE WHEN status='done' THEN 'done' WHEN status='error' THEN 'error' ELSE 'pending' END,
-		        translation_warning_code,translation_warning_count
-		 FROM chapter WHERE novel_id = $1
-		 ORDER BY chapter_index
+		`SELECT c.chapter_index, c.source_meta->>'site_chapter_no', c.source_meta->>'source_url',
+		        COALESCE((c.source_meta->>'part')::int, 1),
+		        CASE WHEN c.translation_ready THEN 'done' ELSE c.status END,
+		        CASE WHEN c.status='done' THEN 'done' WHEN c.status='error' THEN 'error' ELSE 'pending' END,
+		        c.translation_warning_code,c.translation_warning_count,
+		        failure.error_code
+		 FROM chapter c
+		 LEFT JOIN LATERAL (
+			SELECT error_code FROM chapter_failure
+			 WHERE novel_id = c.novel_id AND chapter_index = c.chapter_index
+			 ORDER BY occurred_at DESC, id DESC LIMIT 1
+		 ) failure ON true
+		 WHERE c.novel_id = $1
+		 ORDER BY c.chapter_index
 		 LIMIT $2 OFFSET $3`,
 		novelID, limit, offset)
 	if err != nil {
@@ -305,8 +313,12 @@ func (s *Store) ListChapters(ctx context.Context, novelID string, limit, offset 
 		var siteChapterNo, sourceURL *string
 		var warningCode *string
 		var warningCount int
-		if err := rows.Scan(&item.ChapterIndex, &siteChapterNo, &sourceURL, &item.Part, &item.Status, &item.GraphStatus, &warningCode, &warningCount); err != nil {
+		var failureCode *string
+		if err := rows.Scan(&item.ChapterIndex, &siteChapterNo, &sourceURL, &item.Part, &item.Status, &item.GraphStatus, &warningCode, &warningCount, &failureCode); err != nil {
 			return nil, 0, err
+		}
+		if failureCode != nil {
+			item.FailureCategory = chapterFailureCategory(*failureCode)
 		}
 		if siteChapterNo != nil {
 			item.SiteChapterNo = *siteChapterNo
@@ -320,6 +332,35 @@ func (s *Store) ListChapters(ctx context.Context, novelID string, limit, offset 
 		chapters = append(chapters, item)
 	}
 	return chapters, total, rows.Err()
+}
+
+// chapterFailureCategory is the only translation from the operational ledger's error
+// codes to reader-facing causes. It never reads error_type or any freeform diagnostic;
+// chapter lists remain metadata-only and ungated.
+func chapterFailureCategory(code string) string {
+	switch code {
+	case "provider_http_401", "provider_http_403":
+		return "credential_rejected"
+	case "provider_http_404":
+		return "model_not_available"
+	case "provider_http_408", "provider_timeout":
+		return "timeout"
+	case "provider_http_429":
+		return "rate_limited"
+	case "provider_connection":
+		return "unreachable"
+	}
+	if strings.HasPrefix(code, "provider_http_") {
+		if raw := strings.TrimPrefix(code, "provider_http_"); raw != "" {
+			if status, err := strconv.Atoi(raw); err == nil && status >= 500 {
+				return "model_server_error"
+			}
+		}
+	}
+	if code != "" {
+		return "unknown"
+	}
+	return ""
 }
 
 // PipelineStatus reports the worker's live queue state for one novel. Read-only against
@@ -402,30 +443,42 @@ func (s *Store) PipelineStatus(ctx context.Context, novelID string) (PipelineSta
 // the feature pointless. What the gate actually protects is incidentally learning future
 // facts (hover cards, Ask-AI drawing on unread chapters); this shows only the one chapter
 // the reader deliberately opened and is waiting on. GetChapter's gate is untouched.
-func (s *Store) TranslationPreview(ctx context.Context, novelID string, chapterIndex int) (string, bool, string, error) {
+func (s *Store) TranslationPreview(ctx context.Context, novelID string, chapterIndex int) (string, bool, string, string, error) {
 	// Chapter status comes back with the preview so one poll answers both "how far along"
 	// and "can I read it now". A chapter with no row at all reports "" rather than
 	// erroring — the caller renders that the same as "nothing to show yet".
 	var status string
+	var failureCode *string
 	err := s.progressDB.QueryRow(ctx,
-		`SELECT CASE WHEN translation_ready THEN 'done' ELSE status END FROM chapter WHERE novel_id = $1 AND chapter_index = $2`,
+		`SELECT CASE WHEN c.translation_ready THEN 'done' ELSE c.status END, failure.error_code
+		 FROM chapter c
+		 LEFT JOIN LATERAL (
+			SELECT error_code FROM chapter_failure
+			 WHERE novel_id = c.novel_id AND chapter_index = c.chapter_index
+			 ORDER BY occurred_at DESC, id DESC LIMIT 1
+		 ) failure ON true
+		 WHERE c.novel_id = $1 AND c.chapter_index = $2`,
 		novelID, chapterIndex,
-	).Scan(&status)
+	).Scan(&status, &failureCode)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return "", false, "", fmt.Errorf("read chapter status: %w", err)
+		return "", false, "", "", fmt.Errorf("read chapter status: %w", err)
+	}
+	failureCategory := ""
+	if failureCode != nil {
+		failureCategory = chapterFailureCategory(*failureCode)
 	}
 
 	if status == "done" {
-		return "", false, status, nil
+		return "", false, status, failureCategory, nil
 	}
 	text, err := s.redis.Get(ctx, fmt.Sprintf(pipelinePreviewKeyFmt, novelID, chapterIndex)).Result()
 	if errors.Is(err, redis.Nil) {
-		return "", false, status, nil
+		return "", false, status, failureCategory, nil
 	}
 	if err != nil {
-		return "", false, status, fmt.Errorf("read translation preview: %w", err)
+		return "", false, status, failureCategory, fmt.Errorf("read translation preview: %w", err)
 	}
-	return text, true, status, nil
+	return text, true, status, failureCategory, nil
 }
 
 // Thresholds for warning about translation instability. Deliberately conservative: a

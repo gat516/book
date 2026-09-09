@@ -268,24 +268,37 @@ def test_hosted_event_engine_uses_resolved_credentials(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_event_connection_prefers_book_key_then_account_key(monkeypatch):
+async def test_event_connection_takes_the_key_from_the_account_and_base_url_from_the_book(monkeypatch):
+    """A book chooses where to call; only the account decides what to authenticate with.
+
+    Before migration 0068 a book could carry its own key and it won here. That key was
+    write-only (masked reads could not round-trip it, so the upsert COALESCEd it forward),
+    which meant it outlived the provider it was entered for -- a book switched to another
+    provider kept authenticating with the previous provider's secret. Dropping the column
+    removes the ambiguity rather than papering over it.
+    """
     from types import SimpleNamespace
     monkeypatch.setattr("pipeline.event_rebuild.load_provider_config",
                         lambda *_: _async_value(SimpleNamespace(
-                            provider="gemini", base_url="https://book.example/v1", api_key="book-key")))
+                            provider="gemini", base_url="https://book.example/v1", api_key=None)))
     monkeypatch.setattr("pipeline.event_rebuild.load_provider_credential",
                         lambda *_: _async_value(("https://account.example/v1", "account-key")))
     connection = await provider_connection(None, _Cfg(), "novel", "gemini")
-    assert connection == {"base_url": "https://book.example/v1", "api_key": "book-key"}
+    assert connection == {"base_url": "https://book.example/v1", "api_key": "account-key"}
 
 
 @pytest.mark.asyncio
-async def test_event_connection_uses_account_key_when_book_is_on_another_provider(monkeypatch):
+async def test_event_connection_ignores_the_base_url_of_a_book_on_another_provider(monkeypatch):
+    """The pinned provider is Gemini; the book has since moved to Ollama.
+
+    Its base_url now names a completely different backend, so borrowing it would point a
+    Gemini call at a local Ollama host. Only the account row for the PINNED provider is
+    eligible. The key needs no such guard any more -- it is always the account's.
+    """
     from types import SimpleNamespace
     monkeypatch.setattr("pipeline.event_rebuild.load_provider_config",
                         lambda *_: _async_value(SimpleNamespace(
-                            provider="ollama", base_url="http://localhost:11434",
-                            api_key="wrong-provider-key")))
+                            provider="ollama", base_url="http://localhost:11434", api_key=None)))
     monkeypatch.setattr("pipeline.event_rebuild.load_provider_credential",
                         lambda *_: _async_value(("https://account.example/v1", "account-key")))
     connection = await provider_connection(None, _Cfg(), "novel", "gemini")

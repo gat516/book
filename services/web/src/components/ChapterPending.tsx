@@ -3,6 +3,7 @@ import { getChapterPreview, prioritizeChapter, putProgress, translateAhead } fro
 import { usePolling } from "../usePolling";
 import { PipelineStatus } from "./PipelineStatus";
 import { NameReviewPanel } from "./NameReviewPanel";
+import { providerFailureDetail } from "./ProviderHealth";
 
 interface Props {
   novelId: string;
@@ -20,6 +21,7 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
   const [error, setError] = useState<string | null>(null);
   const [checks, setChecks] = useState(0);
   const [status, setStatus] = useState("");
+  const [failureCategory, setFailureCategory] = useState<string | undefined>();
 
   const [ready, setReady] = useState(false);
   const [requestingMore, setRequestingMore] = useState(false);
@@ -51,6 +53,7 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
       setError(null);
       setPreview(latest.available ? (latest.text ?? "") : null);
       setStatus(latest.status);
+      setFailureCategory(latest.failure_category);
       setChecks((n) => n + 1);
       if (latest.status === "done") {
         await putProgress(novelId, chapterIndex);
@@ -114,7 +117,7 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
         // old readiness probe couldn't tell "not ready yet" from "will never be ready".
         <p className="chapter-pending-error">
           This chapter failed during processing. Retry it with priority below. If it fails
-          again, check the pipeline error; failures can come from the model or a service.
+          again, {providerFailureDetail(failureCategory) ?? "the model or a service"}.
         </p>
       ) : (
         <p>This chapter is waiting for processing to finish. It will open automatically when it's ready.</p>

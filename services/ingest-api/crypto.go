@@ -9,10 +9,10 @@ import (
 	"io"
 )
 
-// ErrProviderConfigKeyNotSet is returned when a request includes a provider_config block
-// but INGEST_PROVIDER_CONFIG_KEY isn't configured — provider config is optional per-novel
-// (most novels have none), so this is only a startup-fatal condition once a request
-// actually needs the key, not unconditionally like INGEST_INTERNAL_TOKEN.
+// ErrProviderConfigKeyNotSet is returned when a request supplies a provider API key but
+// INGEST_PROVIDER_CONFIG_KEY isn't configured — account credentials are optional (an
+// all-Ollama install stores none), so this is only a startup-fatal condition once a
+// request actually needs the key, not unconditionally like INGEST_INTERNAL_TOKEN.
 var ErrProviderConfigKeyNotSet = errors.New("INGEST_PROVIDER_CONFIG_KEY is not set")
 
 // encryptProviderConfig AES-GCM encrypts plaintext (a provider API key) under key,
@@ -36,10 +36,9 @@ func encryptProviderConfig(plaintext []byte, key [32]byte) (ciphertext, nonce []
 	return ciphertext, nonce, nil
 }
 
-// decryptProviderConfig is the inverse — used by the masked-read/update paths, which
-// never actually need it (they return "api_key_set" not the key itself), but ingest-api
-// is the role that holds the key, so re-encryption on update goes through here too via
-// encrypt, not decrypt; kept for symmetry and any future debug tooling.
+// decryptProviderConfig is the inverse, used by GetProviderCredential when a caller needs
+// the plaintext key to actually make a provider call. The masked list/update paths never
+// call it: they report api_key_set, never the key itself.
 func decryptProviderConfig(ciphertext, nonce []byte, key [32]byte) ([]byte, error) {
 	block, err := aes.NewCipher(key[:])
 	if err != nil {

@@ -29,6 +29,7 @@ type IngestClient interface {
 	DeleteGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
 	GetProviderConfig(ctx context.Context, novelID string) (json.RawMessage, int, error)
 	ListOllamaModels(ctx context.Context, novelID string, graphTarget bool) (json.RawMessage, int, error)
+	ProviderHealth(ctx context.Context, novelID, track string) (json.RawMessage, int, error)
 	ListProviderCredentials(ctx context.Context) (json.RawMessage, int, error)
 	PutProviderCredential(ctx context.Context, provider string, body json.RawMessage) (json.RawMessage, int, error)
 	DeleteProviderCredential(ctx context.Context, provider string) (json.RawMessage, int, error)
@@ -169,6 +170,11 @@ func (c *ingestHTTPClient) ListOllamaModels(ctx context.Context, novelID string,
 	if graphTarget {
 		path += "?target=graph"
 	}
+	return c.send(ctx, http.MethodGet, path, nil, false)
+}
+
+func (c *ingestHTTPClient) ProviderHealth(ctx context.Context, novelID, track string) (json.RawMessage, int, error) {
+	path := "/novels/" + novelID + "/provider-health?track=" + url.QueryEscape(track)
 	return c.send(ctx, http.MethodGet, path, nil, false)
 }
 

@@ -342,6 +342,50 @@ def graph_retry_delay_minutes(attempt: int) -> int | None:
     return {1:5,2:15,3:45}.get(attempt)
 
 
+PROVIDER_WAIT_BUDGET_SECONDS = 15 * 60
+TERMINAL_PROVIDER_CATEGORIES = frozenset({
+    "credential_rejected", "model_not_available", "quota_exhausted",
+})
+
+
+async def _record_provider_wait(db, rid: str, exc: AdmissionRejected) -> bool:
+    """Record safe provider wait state; return whether its wall-clock budget expired."""
+    category = getattr(exc, "category", "rate_limited")
+    retry_after = max(float(exc.retry_after_s), 0.0)
+    row = await (await db.execute(
+        """UPDATE graph_revision
+              SET provider_wait_since=COALESCE(provider_wait_since,now()),
+                  provider_wait_retry_at=now()+(%s * interval '1 second'),
+                  provider_wait_category=%s
+            WHERE id=%s
+        RETURNING provider_wait_since,
+                  EXTRACT(EPOCH FROM now()-provider_wait_since)""",
+        (retry_after, category, rid),
+    )).fetchone()
+    if category == "quota_exhausted" or (
+        category == "rate_limited" and row and row[1] >= PROVIDER_WAIT_BUDGET_SECONDS
+    ):
+        exhausted = AdmissionRejected("quota_exhausted", category="quota_exhausted")
+        await record_blocked(db, "graph_revision", rid, exhausted)
+        await db.execute(
+            """UPDATE graph_revision SET provider_wait_since=NULL,
+                      provider_wait_retry_at=NULL, provider_wait_category=NULL
+                WHERE id=%s""",
+            (rid,),
+        )
+        return True
+    return False
+
+
+async def _clear_provider_wait(db, rid: str) -> None:
+    await db.execute(
+        """UPDATE graph_revision SET provider_wait_since=NULL,
+                  provider_wait_retry_at=NULL, provider_wait_category=NULL
+            WHERE id=%s""",
+        (rid,),
+    )
+
+
 async def record_job_failure(db,rid,index,exc):
     """Mark one chapter failed with a safe class and its next retry time.
 
@@ -413,6 +457,14 @@ async def resume(db,cfg,rid, *, limit=None):
             if digest(source)!=c['source_hash'] or digest(display)!=c['display_hash']:
                 raise ValueError('saved prose changed since snapshot')
             await db.execute("UPDATE graph_job SET state='processing',attempts=attempts+1,error=NULL,category=NULL,retry_at=NULL,generation=%s,updated_at=now() WHERE revision_id=%s AND chapter_index=%s",(r['generation'],rid,index))
+            # A manually resumed run may have been terminally blocked by a provider
+            # configuration error.  Starting the chapter is the explicit retry action;
+            # clear that durable marker before KnowledgeEngine reclaims the run.
+            await db.execute(
+                "UPDATE chapter_knowledge_run SET blocked_category=NULL,blocked_at=NULL "
+                "WHERE revision_id=%s AND chapter_index=%s",
+                (rid, index),
+            )
             print(json.dumps(dict(revision=rid,chapter=index,state='processing')),flush=True)
             try:
                 output = await engine.extract(r['novel_id'],index,source,display,lang[1])
@@ -434,16 +486,43 @@ async def resume(db,cfg,rid, *, limit=None):
                     await db.execute("SELECT set_config('app.graph_revision',%s,true),set_config('app.graph_generation',%s,true)",
                                      (rid,str(r['generation'])))
                     await engine.publish(state,output,source)
+                    if engine.run_id:
+                        await db.execute(
+                            "UPDATE chapter_knowledge_run SET blocked_category=NULL,blocked_at=NULL "
+                            "WHERE id=%s",
+                            (engine.run_id,),
+                        )
                     if current['state']=='active' and current['trusted']:
                         await promote_verified_glossary(db,current,index,lang[1])
                     await db.execute("UPDATE graph_job SET state='done',output=%s,retry_at=NULL,updated_at=now() WHERE revision_id=%s AND chapter_index=%s",
                                      (Jsonb(output),rid,index))
                     await db.execute('UPDATE graph_revision SET version=version+1,review=NULL WHERE id=%s',(rid,))
+                    await _clear_provider_wait(db, rid)
                 print(json.dumps(dict(revision=rid,chapter=index,state='done',linked=len(state.resolutions))),flush=True)
-            except AdmissionRejected:
-                if engine.run_id:
-                    await db.execute("UPDATE chapter_knowledge_run SET state='pending',updated_at=now() WHERE id=%s",(engine.run_id,))
+            except AdmissionRejected as exc:
                 await db.execute("UPDATE graph_job SET state='pending',error=NULL,category=NULL,retry_at=NULL,updated_at=now() WHERE revision_id=%s AND chapter_index=%s",(rid,index))
+                exhausted = await _record_provider_wait(db, rid, exc)
+                if engine.run_id:
+                    if exhausted:
+                        # The wait budget turns only a rate limit into a terminal
+                        # quota block.  The run itself must expose the same safe class
+                        # so the reader can explain why it stopped.
+                        await db.execute(
+                            "UPDATE chapter_knowledge_run SET state='failed',"
+                            "blocked_category='quota_exhausted',blocked_at=now(),"
+                            "error='quota_exhausted',updated_at=now() WHERE id=%s",
+                            (engine.run_id,),
+                        )
+                    else:
+                        # Admission deferrals remain resumable and never consume a
+                        # chapter attempt or leave a terminal marker behind.
+                        await db.execute(
+                            "UPDATE chapter_knowledge_run SET state='pending',"
+                            "blocked_category=NULL,blocked_at=NULL,updated_at=now() WHERE id=%s",
+                            (engine.run_id,),
+                        )
+                if exhausted:
+                    raise AdmissionRejected("quota_exhausted", category="quota_exhausted") from exc
                 raise
             except asyncio.CancelledError:
                 # SIGINT/SIGTERM must not leave a dead process looking like active work.
@@ -451,14 +530,28 @@ async def resume(db,cfg,rid, *, limit=None):
                 # resume immediately from its first incomplete request (§0, §5.4).
                 if engine.run_id:
                     await engine._activity('run','run','rejected',{'reason':'extraction interrupted'})
-                    await db.execute("UPDATE chapter_knowledge_run SET state='failed',error='extraction interrupted',updated_at=now() WHERE id=%s",(engine.run_id,))
+                    await db.execute("UPDATE chapter_knowledge_run SET state='failed',blocked_category=NULL,blocked_at=NULL,error='extraction interrupted',updated_at=now() WHERE id=%s",(engine.run_id,))
                 await record_job_interruption(db,rid,index)
                 raise
             except Exception as exc:
+                category = failure_category(exc)
                 if engine.run_id:
-                    await engine._activity('run','run','rejected',{'reason':str(exc)[:500]})
-                    await db.execute("UPDATE chapter_knowledge_run SET state='failed',error=%s,updated_at=now() WHERE id=%s",(str(exc)[:2000],engine.run_id))
+                    safe_error = category if category in TERMINAL_PROVIDER_CATEGORIES else str(exc)[:2000]
+                    await engine._activity('run','run','rejected',{'reason':category if category in TERMINAL_PROVIDER_CATEGORIES else str(exc)[:500]})
+                    if category in TERMINAL_PROVIDER_CATEGORIES:
+                        await db.execute(
+                            "UPDATE chapter_knowledge_run SET state='failed',"
+                            "blocked_category=%s,blocked_at=now(),error=%s,updated_at=now() WHERE id=%s",
+                            (category, safe_error, engine.run_id),
+                        )
+                    else:
+                        await db.execute("UPDATE chapter_knowledge_run SET state='failed',blocked_category=NULL,blocked_at=NULL,error=%s,updated_at=now() WHERE id=%s",(safe_error,engine.run_id))
+                if category in TERMINAL_PROVIDER_CATEGORIES:
+                    await record_blocked(db, "graph_revision", rid, exc)
+                    await _clear_provider_wait(db, rid)
                 await record_job_failure(db,rid,index,exc)
+                if category in TERMINAL_PROVIDER_CATEGORIES:
+                    raise
                 raise
     finally:
         if engine:
@@ -905,6 +998,7 @@ async def next_retryable_active_revision(db, novel_id=None, preferred_novel=None
                           ORDER BY chapter_index LIMIT 1) j ON true
             WHERE (%s::uuid IS NULL OR r.novel_id=%s::uuid) AND
               r.state='active' AND r.trusted AND NOT r.legacy AND
+              (r.provider_wait_since IS NULL OR r.provider_wait_retry_at <= now()) AND
               (j.state IN ('pending','processing') OR
                (j.state='failed' AND j.attempts<=3 AND j.retry_at<=now()))
             ORDER BY (r.novel_id=%s::uuid) DESC NULLS LAST, r.created_at LIMIT 1""",

@@ -3,11 +3,24 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from novel_llm import Class, Completion
+from novel_llm import AdmissionRejected, Class, Completion
 
 from askai.app import INSUFFICIENT, AskRequest, Service, create_app
 from askai.config import Config
 from askai.retrieval import Source, build_context
+
+
+def _status_error(code: int, *, body: str = "", path: str = "/chat/completions",
+                  headers: dict[str, str] | None = None) -> httpx.HTTPStatusError:
+    response = httpx.Response(
+        code,
+        headers=headers,
+        content=body.encode(),
+        request=httpx.Request("POST", "https://provider.example" + path),
+    )
+    with pytest.raises(httpx.HTTPStatusError) as caught:
+        response.raise_for_status()
+    return caught.value
 
 
 class FakeProvider:
@@ -105,3 +118,56 @@ async def test_startup_retries_temporary_runtime_reservation(monkeypatch):
     assert provider.embed.await_count==2
     sleep.assert_awaited_once_with(5)
     service.pool.open.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "status", "category"),
+    [
+        (_status_error(401, body="secret-key=never-echo"), 502, "credential_rejected"),
+        (_status_error(429, body='{"error":{"details":[{"retryDelay":"86400s"}]}}'),
+         429, "quota_exhausted"),
+        (AdmissionRejected("quota_exhausted", category="quota_exhausted"), 429, "quota_exhausted"),
+        # AdmissionRejected now carries the bounded category; its legacy-looking
+        # message must not override the explicit/default category.
+        (AdmissionRejected("429 from provider: daily quota exceeded"), 429, "rate_limited"),
+    ],
+)
+async def test_provider_failures_return_only_safe_categories(failure, status, category):
+    service = Service(config(), FakeProvider())
+
+    async def ask(_: AskRequest):
+        raise failure
+
+    service.ask = ask  # type: ignore[method-assign]
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service)), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/ask",
+            json={"novel_id": "n", "question": "q", "at": 1},
+            headers={"Authorization": "Bearer secret"},
+        )
+    assert response.status_code == status
+    assert response.json() == {"error": "ask-ai provider failure", "category": category}
+    assert "secret-key" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_missing_provider_credential_is_named():
+    service = Service(config(), FakeProvider())
+
+    async def ask(_: AskRequest):
+        raise RuntimeError("GeminiProvider needs an api_key or GEMINI_API_KEY")
+
+    service.ask = ask  # type: ignore[method-assign]
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service)), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/ask",
+            json={"novel_id": "n", "question": "q", "at": 1},
+            headers={"Authorization": "Bearer secret"},
+        )
+    assert response.status_code == 502
+    assert response.json() == {"error": "ask-ai provider failure", "category": "credential_missing"}

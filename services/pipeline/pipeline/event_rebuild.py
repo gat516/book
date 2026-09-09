@@ -66,10 +66,13 @@ async def provider_connection(db, cfg, novel: str, provider: str) -> dict:
     """Resolve secrets for the provider pinned by an event revision.
 
     Revisions pin provider+model but never credentials. Credentials remain rotatable and
-    come from the same per-book-over-account hierarchy as the ordinary pipeline (§5.4).
-    If the book has since switched providers, only the account credential for the pinned
-    provider is eligible; silently borrowing another provider's secret would cross trust
-    boundaries.
+    resolve the same way as the ordinary pipeline (§5.4): the key always comes from the
+    account credential for the pinned provider, since migration 0068 left no per-book key
+    that could silently belong to a different provider than the one being called.
+
+    base_url is still per-book-over-account, but only when the book still names the pinned
+    provider. A book that has since switched providers would otherwise point this call at
+    an endpoint belonging to a different backend entirely.
     """
     if provider == "ollama":
         return {}
@@ -77,7 +80,7 @@ async def provider_connection(db, cfg, novel: str, provider: str) -> dict:
     account_base_url, account_api_key = await load_provider_credential(db, provider)
     book_matches = book is not None and book.provider == provider
     base_url = (book.base_url if book_matches else None) or account_base_url
-    api_key = (book.api_key if book_matches else None) or account_api_key
+    api_key = account_api_key
     if provider == "gemini":
         api_key = api_key or cfg.gemini_api_key or None
         base_url = base_url or cfg.gemini_base_url
@@ -177,6 +180,50 @@ def retry_delay_minutes(attempt: int) -> int | None:
     return {1: 5, 2: 15, 3: 45}.get(attempt)
 
 
+PROVIDER_WAIT_BUDGET_SECONDS = 15 * 60
+TERMINAL_PROVIDER_CATEGORIES = frozenset({
+    "credential_rejected", "model_not_available", "quota_exhausted",
+})
+
+
+async def _record_provider_wait(db, rid: str, exc: AdmissionRejected) -> bool:
+    """Record safe provider wait state; return whether its wall-clock budget expired."""
+    category = getattr(exc, "category", "rate_limited")
+    retry_after = max(float(exc.retry_after_s), 0.0)
+    row = await (await db.execute(
+        """UPDATE event_revision
+              SET provider_wait_since=COALESCE(provider_wait_since,now()),
+                  provider_wait_retry_at=now()+(%s * interval '1 second'),
+                  provider_wait_category=%s
+            WHERE id=%s
+        RETURNING provider_wait_since,
+                  EXTRACT(EPOCH FROM now()-provider_wait_since)""",
+        (retry_after, category, rid),
+    )).fetchone()
+    if category == "quota_exhausted" or (
+        category == "rate_limited" and row and row[1] >= PROVIDER_WAIT_BUDGET_SECONDS
+    ):
+        exhausted = AdmissionRejected("quota_exhausted", category="quota_exhausted")
+        await record_blocked(db, "event_revision", rid, exhausted)
+        await db.execute(
+            """UPDATE event_revision SET provider_wait_since=NULL,
+                      provider_wait_retry_at=NULL, provider_wait_category=NULL
+                WHERE id=%s""",
+            (rid,),
+        )
+        return True
+    return False
+
+
+async def _clear_provider_wait(db, rid: str) -> None:
+    await db.execute(
+        """UPDATE event_revision SET provider_wait_since=NULL,
+                  provider_wait_retry_at=NULL, provider_wait_category=NULL
+            WHERE id=%s""",
+        (rid,),
+    )
+
+
 async def resume(db, cfg, rid: str, *, limit: int | None = None, chapter: int | None = None) -> None:
     locked = (await (await db.execute(
         "SELECT pg_try_advisory_lock(hashtextextended(%s,0))", ("event:" + rid,)
@@ -266,21 +313,28 @@ async def resume(db, cfg, rid: str, *, limit: int | None = None, chapter: int | 
                     await db.execute(
                         "UPDATE event_revision SET version=version+1,review=NULL WHERE id=%s", (rid,)
                     )
+                    await _clear_provider_wait(db, rid)
                 consecutive_failures = 0
-            except AdmissionRejected:
+            except AdmissionRejected as exc:
                 await db.execute(
                     "UPDATE event_job SET state='pending',error=NULL,category=NULL,retry_at=NULL,updated_at=now() "
                     "WHERE revision_id=%s AND chapter_index=%s", (rid, index),
                 )
+                if await _record_provider_wait(db, rid, exc):
+                    raise AdmissionRejected("quota_exhausted", category="quota_exhausted") from exc
                 raise
             except Exception as exc:
+                category = failure_category(exc)
+                if category in TERMINAL_PROVIDER_CATEGORIES:
+                    await record_blocked(db, "event_revision", rid, exc)
+                    await _clear_provider_wait(db, rid)
                 await record_job_failure(db, rid, index, exc)
                 consecutive_failures += 1
                 print(json.dumps(dict(revision=rid, chapter=index, state="failed",
                                       consecutive_failures=consecutive_failures,
                                       error=f"{type(exc).__name__}: {exc}"[:500])),
                       file=sys.stderr, flush=True)
-                if consecutive_failures >= MAX_CONSECUTIVE_CHAPTER_FAILURES:
+                if category in TERMINAL_PROVIDER_CATEGORIES or consecutive_failures >= MAX_CONSECUTIVE_CHAPTER_FAILURES:
                     raise
     finally:
         if engine:
@@ -529,6 +583,7 @@ async def next_retryable_active_revision(db, novel_id: str | None = None) -> str
                             ORDER BY chapter_index LIMIT 1) j ON true
             WHERE (%s::uuid IS NULL OR r.novel_id=%s::uuid)
               AND r.state='active' AND r.trusted
+              AND (r.provider_wait_since IS NULL OR r.provider_wait_retry_at <= now())
               AND (j.state IN ('pending','processing') OR
                    (j.state='failed' AND j.attempts<=3 AND j.retry_at<=now()))
             ORDER BY r.created_at LIMIT 1""", (novel_id, novel_id)

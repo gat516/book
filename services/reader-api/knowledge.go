@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -149,12 +150,19 @@ func (s *Store) ChapterKnowledge(ctx context.Context, novel string, chapter, at 
 		}
 		var run ChapterKnowledgeRunView
 		var preview []byte
-		err = tx.QueryRow(ctx, `SELECT id::text,mode,scope,state,created_at,preview FROM chapter_knowledge_run
+		var blockedCategory *string
+		var blockedAt *time.Time
+		err = tx.QueryRow(ctx, `SELECT id::text,mode,scope,state,created_at,preview,blocked_category,blocked_at FROM chapter_knowledge_run
 		 WHERE novel_id=$1 AND chapter_index=$2 ORDER BY created_at DESC LIMIT 1`, novel, chapter).
-			Scan(&run.ID, &run.Mode, &run.Scope, &run.State, &run.CreatedAt, &preview)
+			Scan(&run.ID, &run.Mode, &run.Scope, &run.State, &run.CreatedAt, &preview, &blockedCategory, &blockedAt)
 		if err == nil {
 			if len(preview) > 0 {
 				run.Preview = json.RawMessage(preview)
+			}
+			run.BlockedAt = blockedAt
+			if blockedCategory != nil && *blockedCategory != "" {
+				run.BlockedCategory = *blockedCategory
+				run.BlockedDetail = chapterKnowledgeBlockedDetail(*blockedCategory)
 			}
 			view.Run = &run
 		} else if !errors.Is(err, pgx.ErrNoRows) {
@@ -163,6 +171,16 @@ func (s *Store) ChapterKnowledge(ctx context.Context, novel string, chapter, at 
 		return nil
 	})
 	return view, err
+}
+
+// chapterKnowledgeBlockedDetail is presentation-only. The pipeline stores the safe
+// category beside its private error diagnostics; reader-api renders the same fixed
+// sentence used by repair status and never returns chapter_knowledge_run.error.
+func chapterKnowledgeBlockedDetail(category string) string {
+	if detail := repairFailureDetail[category]; detail != "" {
+		return detail
+	}
+	return repairFailureDetail[repairUnknownCause]
 }
 
 func (s *Store) ChapterKnowledgeActivity(ctx context.Context, novel string, chapter, at int, runID string, after int64) ([]ChapterKnowledgeActivity, error) {

@@ -45,6 +45,7 @@ class ApiError extends Error {
     public status: number,
     // reader-api's error envelope is always {"error": "..."} (writeError in handlers.go).
     public code: string,
+    public body?: unknown,
   ) {
     super(code);
   }
@@ -62,12 +63,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const body = await response.text();
     let code = body || response.statusText;
+    let parsed: unknown;
     try {
-      code = JSON.parse(body).error ?? code;
+      parsed = JSON.parse(body);
+      if (parsed && typeof parsed === "object" && "error" in parsed) {
+        const value = (parsed as { error?: unknown }).error;
+        if (typeof value === "string") code = value;
+      }
     } catch {
       // non-JSON error body: fall back to the raw text set above
     }
-    throw new ApiError(response.status, code);
+    throw new ApiError(response.status, code, parsed);
   }
   return response.json() as Promise<T>;
 }
@@ -284,12 +290,31 @@ export function getChapterPreview(
   // Pipeline status of the chapter itself, so one read answers both "how far along is it"
   // and "is it readable now".
   status: string;
+  // Safe provider category derived by reader-api from the latest chapter failure.
+  failure_category?: string;
 }> {
   return request(`/novels/${novelId}/chapter/${n}/preview`);
 }
 
 export function getTranslationHealth(novelId: string): Promise<TranslationHealth> {
   return request(`/novels/${novelId}/translation-health`);
+}
+
+export async function getProviderHealth(
+  novelId: string,
+  track: import("./types").ProviderHealthTrack,
+): Promise<import("./types").ProviderHealth> {
+  try {
+    return await request(`/novels/${novelId}/provider-health?track=${track}`);
+  } catch (err) {
+    // Health deliberately answers with a safe JSON body on non-2xx so the UI can render
+    // the cause. Transport failures still throw and are shown as a probe-unavailable state.
+    if (err instanceof ApiError && err.body && typeof err.body === "object" &&
+      "category" in err.body && "provider" in err.body && "endpoint_kind" in err.body) {
+      return err.body as import("./types").ProviderHealth;
+    }
+    throw err;
+  }
 }
 
 export function putProgress(novelId: string, chapter: number): Promise<Progress> {

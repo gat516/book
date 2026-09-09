@@ -15,6 +15,10 @@ import httpx
 # Statuses that mean "ask again later", not "this request is wrong". 429 is a rate limit,
 # 5xx and 408 are the backend failing to serve a request that is itself valid.
 TRANSIENT_STATUS = frozenset({408, 429, 500, 502, 503, 504})
+ADMISSION_CATEGORIES = frozenset({
+    "rate_limited", "quota_exhausted", "unreachable", "embed_unavailable",
+    "model_server_error",
+})
 
 
 class Class(Enum):
@@ -57,13 +61,18 @@ class AdmissionRejected(Exception):
     """Capacity backpressure that callers must retry without counting as failure."""
 
     def __init__(self, message: str = "admission rejected", *, retry_after_s: float = 0.0,
-                 exact_hint: bool = False) -> None:
+                 exact_hint: bool = False, category: str | None = None) -> None:
         super().__init__(message)
         self.retry_after_s = retry_after_s
         # True when retry_after_s came from the provider itself rather than a local
         # default, so callers know it is an instruction to obey rather than a guess to
         # escalate from.
         self.exact_hint = exact_hint
+        # This is a bounded vocabulary safe to persist and expose to readers. Infer only
+        # the one legacy transport phrase whose callers predate the category field; all
+        # other legacy admission errors are ordinary rate limiting/backpressure.
+        inferred = "unreachable" if "unreachable" in message.lower() else "rate_limited"
+        self.category = category if category in ADMISSION_CATEGORIES else inferred
 
 
 @runtime_checkable
@@ -164,6 +173,20 @@ def _body_of(exc: "httpx.HTTPStatusError") -> str:
         return ""
 
 
+def _quota_exhausted(body: str, retry_after: str) -> bool:
+    """Classify a 429 while its body is in memory; never return the body itself."""
+    try:
+        if float(retry_after) > 3600:
+            return True
+    except (TypeError, ValueError):
+        pass
+    lowered = body.lower()
+    if any(marker in lowered for marker in ("per-day", "per day", "daily", "24 hours", "day quota")):
+        return True
+    hinted = _retry_hint_seconds(body)
+    return hinted is not None and hinted > 3600
+
+
 @contextlib.asynccontextmanager
 async def transient_as_backpressure(*, default_retry_s: float = 5.0):
     """Re-raise transient transport failures as AdmissionRejected.
@@ -198,20 +221,22 @@ async def transient_as_backpressure(*, default_retry_s: float = 5.0):
             # 429 gets its own, much longer floor: a server that is out of quota this
             # minute will still be out of quota five seconds from now.
             delay = RATE_LIMIT_RETRY_S if exc.response.status_code == 429 else default_retry_s
-        # Carry a snippet of the body: a 429 says WHICH quota was exceeded (per-minute vs
-        # per-day) and often when it resets. Without it "429" is indistinguishable between
-        # "slow down" -- which backoff fixes -- and "you are out for the day", which it
-        # cannot. Truncated because provider errors can be verbose and this reaches logs,
-        # but generously: the quota PERIOD and Google's retryDelay both sit AFTER the limit
-        # number, so a tight cut hides exactly the part worth reading.
-        detail = _body_of(exc)[:1200]
+        body = _body_of(exc)
+        if exc.response.status_code == 429:
+            category = "quota_exhausted" if _quota_exhausted(
+                body, exc.response.headers.get("retry-after", "")
+            ) else "rate_limited"
+        elif exc.response.status_code >= 500:
+            category = "model_server_error"
+        else:
+            category = "unreachable"
         raise AdmissionRejected(
-            f"{exc.response.status_code} from provider: {detail}" if detail
-            else f"{exc.response.status_code} from provider",
+            category,
             retry_after_s=max(delay, 0.0),
             exact_hint=hinted,
+            category=category,
         ) from exc
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
             httpx.WriteTimeout, httpx.PoolTimeout, httpx.RemoteProtocolError) as exc:
-        raise AdmissionRejected(f"provider unreachable: {type(exc).__name__}",
-                                retry_after_s=default_retry_s) from exc
+        raise AdmissionRejected("unreachable", retry_after_s=default_retry_s,
+                                category="unreachable") from exc

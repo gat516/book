@@ -34,15 +34,12 @@ func validateOllamaBaseURL(raw string, allowed map[string]bool) error {
 }
 
 // listOllamaModels queries only Ollama's documented tags endpoint. A novel configured
-// for Ollama uses its saved, allowlisted endpoint. Graph repair always runs against the
-// server-local Ollama (KnowledgeEngine's loopback requirement), even when translation
-// uses Gemini or another hosted provider, so its model picker falls back to that local
-// endpoint instead of falsely treating a non-Ollama novel as an unreachable server.
+// for Ollama uses its saved, allowlisted endpoint. When the graph model picker selects
+// Ollama, that provider runs against the process Ollama endpoint; hosted graph revisions
+// use their own provider path and do not use this catalog route.
 func (a *API) listOllamaModels(w http.ResponseWriter, r *http.Request) {
-	// Graph extraction is deliberately pinned to the pipeline's loopback endpoint. Its
-	// health check must query that exact route: checking a book's directly-configured
-	// remote URL could say "connected" while the SSH forward the graph actually uses is
-	// down. Provider settings keep checking the book-specific URL.
+	// The graph target here is model discovery for an Ollama-pinned revision. Provider
+	// health has its own provider-aware route and does not call this handler.
 	graphTarget := r.URL.Query().Get("target") == "graph"
 	base := a.cfg.OllamaHost
 	if !graphTarget {

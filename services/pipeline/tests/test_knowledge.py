@@ -259,6 +259,47 @@ async def test_prepare_pins_discovered_num_ctx_and_resume_tolerates_it_drifting(
             await graph_rebuild.resume(db_conn, cfg, rid, limit=1)
 
 
+@pytest.mark.db
+async def test_graph_terminal_provider_failure_blocks_knowledge_run(db_conn, monkeypatch):
+    """A terminal provider class is durable on the chapter run, without provider text."""
+    from unittest.mock import AsyncMock
+    from novel_llm import AdmissionRejected
+    from pipeline import graph_rebuild
+    from pipeline.config import Config
+
+    cfg = Config.load()
+    identity = {"provider": "ollama", "name": "test", "digest": "digest-1",
+                "identity": {"num_predict": 4096}}
+    monkeypatch.setattr(graph_rebuild, "objects", lambda _cfg: None)
+    monkeypatch.setattr(graph_rebuild, "read_object", lambda *_args: "source")
+    monkeypatch.setattr(graph_rebuild, "local_model", AsyncMock(return_value=identity))
+    monkeypatch.setattr(graph_rebuild, "discover_num_ctx", AsyncMock(return_value=16384))
+
+    async with db_conn.transaction(force_rollback=True):
+        novel = await make_novel(db_conn, ontology=json.dumps({
+            "kinds": ["character"], "attributes": [], "relations": []}))
+        await db_conn.execute('''INSERT INTO chapter
+            (novel_id,chapter_index,raw_hash,raw_uri,translated_uri,source_meta,status,translation_ready)
+            VALUES(%s,1,'raw-1','raw-1','raw-1','{}','done',true)''', (novel,))
+        rid = await graph_rebuild.prepare(db_conn, cfg, novel, "test")
+
+        async def terminal(self, novel_id, chapter, source, display, target_lang):
+            await self._ensure_run(novel_id, chapter, source, display)
+            raise AdmissionRejected("quota", category="quota_exhausted")
+
+        monkeypatch.setattr(graph_rebuild.KnowledgeEngine, "extract", terminal)
+        with pytest.raises(AdmissionRejected):
+            await graph_rebuild.resume(db_conn, cfg, rid, limit=1)
+
+        row = await (await db_conn.execute(
+            "SELECT state,blocked_category,blocked_at,error FROM chapter_knowledge_run "
+            "WHERE revision_id=%s AND chapter_index=1", (rid,))).fetchone()
+        assert row[0] == "failed"
+        assert row[1] == "quota_exhausted"
+        assert row[2] is not None
+        assert row[3] == "quota_exhausted"
+
+
 async def test_runtime_preflight_never_generates_or_loads_models(monkeypatch):
     import httpx
     from pipeline.config import Config

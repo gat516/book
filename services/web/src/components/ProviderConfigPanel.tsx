@@ -9,6 +9,7 @@ import {
   PROVIDER_LABELS,
 } from "../providers";
 import type { ProviderConfigView, ProviderName } from "../types";
+import { ProviderHealth } from "./ProviderHealth";
 
 interface Props {
   novelId: string;
@@ -30,15 +31,14 @@ export function ProviderConfigPanel({ novelId }: Props) {
   const [custom, setCustom] = useState(false);
   const [extractionCustom, setExtractionCustom] = useState(false);
   const [baseURL, setBaseURL] = useState("");
-  const [apiKey, setApiKey] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
-  // Providers with an account-level key saved in Settings (migration 0035). A book with
-  // no key of its own falls back to that one, so requiring a key here would be asking for
-  // a secret the server already has.
-  const [sharedKeyProviders, setSharedKeyProviders] = useState<Set<string>>(new Set());
+  // Providers with a key saved in Settings (migration 0035). Since 0068 that is the only
+  // place a key can live, so this set is the whole answer to "can this book actually call
+  // the provider it names" -- not a fallback behind a per-book key, as it once was.
+  const [accountKeyProviders, setAccountKeyProviders] = useState<Set<string>>(new Set());
 	const [ollamaStatus, setOllamaStatus] = useState<"checking" | "connected" | "unreachable" | null>(null);
 
   const load = useCallback(async () => {
@@ -83,11 +83,12 @@ export function ProviderConfigPanel({ novelId }: Props) {
   }, [load]);
 
   useEffect(() => {
-    // Advisory only: a failure here just means the panel falls back to demanding a
-    // per-novel key, which still works.
+    // A failure here leaves the set empty, which reads as "no account key" and blocks the
+    // save. That is the safe direction: saving a provider this install cannot authenticate
+    // produces a book whose chapters fail one stage later, far from this panel.
     listProviderCredentials()
       .then((res) =>
-        setSharedKeyProviders(
+        setAccountKeyProviders(
           new Set(res.credentials.filter((c) => c.api_key_set).map((c) => c.provider)),
         ),
       )
@@ -135,16 +136,12 @@ export function ProviderConfigPanel({ novelId }: Props) {
         translate_model: translationModel.trim() || undefined,
         extract_model: extractionModel.trim() || undefined,
         base_url: baseURL.trim() || undefined,
-        // Omitted rather than sent empty: the server preserves the stored key when this is
-        // absent, so an edit that only changes the model keeps working.
-        api_key: apiKey.trim() || undefined,
       });
       setCurrent(view);
       setProvider(view.provider);
       setTranslationModel(view.translate_model ?? view.model ?? "");
       setExtractionModel(view.extract_model ?? view.model ?? "");
       setBaseURL(view.base_url ?? "");
-      setApiKey("");
       setSaved(true);
       if (view.provider === "ollama") {
         // Model discovery is based on the persisted per-novel URL, not the draft input.
@@ -187,8 +184,12 @@ export function ProviderConfigPanel({ novelId }: Props) {
 
   const needsKey = NEEDS_API_KEY[provider];
   const selectedNote = MODEL_OPTIONS[provider].find((m) => m.id === translationModel)?.note;
-  const sharedKey = sharedKeyProviders.has(provider);
-  const missingKey = needsKey && !current?.api_key_set && !sharedKey && !apiKey.trim();
+  // Both derive from the provider SELECTED right now, not from the saved row. The old
+  // panel keyed its key messaging off the saved row's api_key_set, so switching the
+  // dropdown to another provider still reported the previous provider's key as this
+  // book's -- while hiding the account key that would actually be used.
+  const accountKey = accountKeyProviders.has(provider);
+  const missingKey = needsKey && !accountKey;
   const ollamaURLDirty =
     provider === "ollama" &&
     baseURL.trim() !== (current?.provider === "ollama" ? current.base_url ?? "" : "");
@@ -205,6 +206,10 @@ export function ProviderConfigPanel({ novelId }: Props) {
               ? `This novel uses ${PROVIDER_LABELS[current.provider]}. Translation: ${current.translate_model ?? current.model ?? "server default"}; extraction: ${current.extract_model ?? current.model ?? "server default"}.${current.provider === "ollama" ? ` Endpoint: ${current.base_url || "Book server default"}.` : ""}`
               : "This novel has no provider of its own and uses the server default."}
           </p>
+          <div className="provider-health-stack" aria-label="Provider health">
+            <ProviderHealth novelId={novelId} track="translate" compact />
+            <ProviderHealth novelId={novelId} track="extract" compact />
+          </div>
 
           <label>
             Provider{" "}
@@ -312,36 +317,11 @@ export function ProviderConfigPanel({ novelId }: Props) {
             </>
           )}
 
-          {needsKey && (
-            <label>
-              API key{" "}
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                autoComplete="off"
-                placeholder={
-                  current?.api_key_set
-                    ? "leave blank to keep the saved key"
-                    : sharedKey
-                      ? "optional — the account key is used"
-                      : "required"
-                }
-              />
-            </label>
-          )}
-
-          {needsKey && !current?.api_key_set && sharedKey && (
+          {/* One line about the key, always naming the SELECTED provider. There is no key
+              box here: a book chooses a provider, Settings holds that provider's key. */}
+          {needsKey && accountKey && (
             <p className="novel-create-form-hint">
-              The {PROVIDER_LABELS[provider]} key saved in Settings is used for this novel.
-              Enter one here only to bill this book to a different account.
-            </p>
-          )}
-
-          {needsKey && current?.api_key_set && (
-            <p className="novel-create-form-hint">
-              A key is saved for this novel. It is encrypted at rest and never shown again —
-              leave the box blank to keep it, or type a new one to replace it.
+              This book will use the {PROVIDER_LABELS[provider]} key from Account settings.
             </p>
           )}
 
@@ -350,7 +330,8 @@ export function ProviderConfigPanel({ novelId }: Props) {
           </button>
           {missingKey && (
             <p className="novel-create-form-hint">
-              {PROVIDER_LABELS[provider]} needs an API key before it can be saved.
+              No {PROVIDER_LABELS[provider]} key is saved. Add one under Account settings →
+              Provider keys, then choose {PROVIDER_LABELS[provider]} here.
             </p>
           )}
           {saved && <p role="status">Saved. New chapters will use it; work already in flight finishes on the old one.</p>}

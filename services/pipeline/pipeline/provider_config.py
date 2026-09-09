@@ -37,7 +37,7 @@ def _decryption_key() -> bytes:
     raw = os.environ.get("PROVIDER_CONFIG_ENCRYPTION_KEY", "")
     if not raw:
         raise RuntimeError(
-            "a novel has a provider_config with an encrypted api_key, but "
+            "an account provider_credential holds an encrypted api_key, but "
             "PROVIDER_CONFIG_ENCRYPTION_KEY is not set"
         )
     key = base64.b64decode(raw)
@@ -49,26 +49,25 @@ def _decryption_key() -> bytes:
 
 
 async def load_provider_config(db, novel_id: str) -> ProviderConfigRow | None:
-    """Fetch and decrypt novel_id's provider config, or None if it has none."""
+    """Fetch novel_id's own provider choices, or None if it has none.
+
+    No secret is read here: since migration 0068 a novel row holds only the choices a
+    reader makes in the book's own panel (provider, models, base_url). ``api_key`` is
+    always None on the way out and is filled in by resolve_provider_config from the
+    account credential for whichever provider the novel names.
+    """
     row = await (
         await db.execute(
-            "SELECT provider, model, translate_model, extract_model, base_url, api_key_cipher, api_key_nonce "
+            "SELECT provider, model, translate_model, extract_model, base_url "
             "FROM novel_provider_config WHERE novel_id = %s",
             (novel_id,),
         )
     ).fetchone()
     if row is None:
         return None
-    provider, model, translate_model, extract_model, base_url, cipher, nonce = row
-    api_key = None
-    if cipher is not None:
-        # AESGCM.decrypt raises on truncated/tampered ciphertext — deliberately not
-        # caught here, since a novel with a corrupt provider_config should fail loudly
-        # (raising out of _handle, chapter marked "error") rather than silently falling
-        # back to the process default and translating under the wrong credentials.
-        api_key = AESGCM(_decryption_key()).decrypt(bytes(nonce), bytes(cipher), None).decode("utf-8")
+    provider, model, translate_model, extract_model, base_url = row
     return ProviderConfigRow(provider=provider, model=model, translate_model=translate_model,
-                             extract_model=extract_model, base_url=base_url, api_key=api_key)
+                             extract_model=extract_model, base_url=base_url, api_key=None)
 
 
 async def load_provider_credential(db, provider: str) -> tuple[str | None, str | None]:
@@ -95,10 +94,13 @@ async def load_provider_credential(db, provider: str) -> tuple[str | None, str |
 async def resolve_provider_config(db, novel_id: str, default_provider: str) -> ProviderConfigRow | None:
     """The novel's effective provider config, merging its own row over the global credential.
 
-    Resolution, per field: the novel's value wins if it has one, else the account-wide
-    credential for whichever provider is in play. That makes the common case -- one key in
-    Settings, each book choosing only a model -- work without re-pasting the secret, while
-    a book billed to a different account can still override with its own key.
+    Resolution: the novel picks the provider, models and base_url; the key always comes
+    from the account credential for whichever provider that is (migration 0068). A book
+    cannot carry its own key, so a key can never outlive the provider it was entered for
+    and can never shadow the account key invisibly.
+
+    base_url still falls back per field -- a novel may point at its own Ollama host while
+    the account row supplies the default for every other book.
 
     The provider itself comes from the novel's row when it has one, else the process-wide
     default, so a novel that has never been configured still picks up a global key.
@@ -117,7 +119,7 @@ async def resolve_provider_config(db, novel_id: str, default_provider: str) -> P
         translate_model=row.translate_model if row is not None else None,
         extract_model=row.extract_model if row is not None else None,
         base_url=(row.base_url if row is not None else None) or global_base_url,
-        api_key=(row.api_key if row is not None else None) or global_api_key,
+        api_key=global_api_key,
     )
 
 

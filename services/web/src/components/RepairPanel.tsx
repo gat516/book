@@ -17,6 +17,7 @@ import type {
   RepairTrackName,
 } from "../types";
 import { RepairReview } from "./RepairReview";
+import { ProviderHealth } from "./ProviderHealth";
 
 interface Props {
   novelId: string;
@@ -73,12 +74,8 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   const [model, setModel] = useState<Record<RepairTrackName, string>>({ graph: "", events: "" });
   const [provider, setProvider] = useState("ollama");
   const [graphProvider, setGraphProvider] = useState<ProviderName>("ollama");
-  // KnowledgeEngine refuses anything but a loopback Ollama model, independent of the
-  // book's own translate/extract provider (which can be Gemini, DeepSeek or Anthropic).
-  // Deriving the graph model from provider config used to leave it permanently blank --
-  // and the rebuild button permanently disabled -- for every book not itself configured
-  // for Ollama. List what is actually installed locally instead, same as the chapter
-  // workspace's one-time build does.
+  // Ollama choices come from its live catalog. Hosted graph extraction uses the selected
+  // provider's known model choices and pins that provider on the revision.
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   // The book's configured extractor is only ever a *guess* for the graph track, so it is
   // held apart from `model` until the installed catalog can confirm it. Seeding `model`
@@ -133,12 +130,8 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
   }, [novelId]);
 
   useEffect(() => {
-    // The events track's model is the book's own configured extraction model, full stop
-    // -- there is no separate choice here to seed and then forget to write back to. The
-    // graph track cannot use that provider at all (KnowledgeEngine refuses anything but a
-    // loopback Ollama), so its model is picked from what is actually installed locally
-    // (the ollamaModels effect above), not from provider config. A book's provider only
-    // supplies a starting guess when it happens to already be Ollama.
+    // Events follows the book's extraction provider. Graph starts from the same provider
+    // but remains independently selectable because a rebuild pins its own provider/model.
     void getProviderConfig(novelId)
       .then((config) => {
         if (config) {
@@ -228,6 +221,21 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
           {heading} <span className={pillClass(track.state)}>{stateLabel(track.state)}</span>
         </h4>
         <p className="repair-reason">{track.reason}</p>
+        <ProviderHealth
+          novelId={novelId}
+          track={name}
+          enabled={track.state !== "ready" || !!track.blocked}
+          compact
+        />
+
+        {track.waiting_on_provider && (
+          <p className="repair-live" role="status">
+            Waiting on provider {track.waiting_on_provider.category.replaceAll("_", " ")}
+            {track.waiting_on_provider.retry_after_s > 0
+              ? ` — retrying in ${Math.ceil(track.waiting_on_provider.retry_after_s)}s.`
+              : " — retry is due now."}
+          </p>
+        )}
 
         {track.blocked && (
           <p className="chapter-list-error" role="alert">

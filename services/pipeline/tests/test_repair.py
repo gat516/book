@@ -28,14 +28,19 @@ from tests.fixtures import delete_novel, make_config, make_novel
 REPAIR_GO = Path(__file__).resolve().parents[3] / "services/reader-api/repair.go"
 
 
-def _status_error(code: int) -> httpx.HTTPStatusError:
+def _status_error(code: int, *, body: str = "", path: str = "/api/generate",
+                  headers: dict[str, str] | None = None) -> httpx.HTTPStatusError:
     """The exception httpx itself raises for `code`, not a hand-written imitation.
 
-    The message text matters to classification (a 404 still has to reach the "not found"
-    phrase match), and it is httpx's to word, not this test's to assume.
+    The response is constructed the same way httpx constructs provider failures, so tests
+    exercise status and response metadata rather than hand-written exception messages.
     """
     response = httpx.Response(
-        code, request=httpx.Request("POST", "http://127.0.0.1:11435/api/generate"))
+        code,
+        headers=headers,
+        content=body.encode(),
+        request=httpx.Request("POST", "http://127.0.0.1:11435" + path),
+    )
     with pytest.raises(httpx.HTTPStatusError) as caught:
         response.raise_for_status()
     return caught.value
@@ -67,13 +72,98 @@ def test_failure_category_classifies_repair_action_errors():
         # unreachable (nothing answered) and from timeout (a budget of ours expired).
         (_status_error(500), "model_server_error"),
         (_status_error(503), "model_server_error"),
-        # A 4xx is the endpoint rejecting the request, not failing to serve it, and must
-        # keep classifying on its message rather than falling into the 5xx class.
-        (_status_error(404), "not_found"),
+        # A provider model endpoint rejecting the requested model is distinct from a
+        # missing book/revision, which remains the controlled "not found" phrase case.
+        (_status_error(404), "model_not_available"),
         (KeyError("chapters"), "unknown"),
     ]
     for exc, expected in cases:
         assert failure_category(exc) == expected, exc
+
+
+def test_failure_category_classifies_hosted_http_statuses_without_persisting_body():
+    cases = [
+        (_status_error(401, body="secret-key=must-never-be-stored"), "credential_rejected"),
+        (_status_error(403, body="account credential revoked"), "credential_rejected"),
+        (_status_error(404, path="/v1beta/models/gemini-2.5-flash:generateContent"),
+         "model_not_available"),
+        (_status_error(404, path="/health"), "not_found"),
+        (_status_error(429, body='{"error":{"details":[{"retryDelay":"55s"}]}}'),
+         "rate_limited"),
+        (_status_error(429, body="quota exceeded for the day; resets tomorrow"),
+         "quota_exhausted"),
+        (_status_error(429, headers={"retry-after": "7200"}), "quota_exhausted"),
+        (_status_error(500, body="provider internals must never be rendered"),
+         "model_server_error"),
+    ]
+    for exc, expected in cases:
+        assert failure_category(exc) == expected, exc
+
+
+class _ProviderWaitCursor:
+    def __init__(self, row):
+        self.row = row
+
+    async def fetchone(self):
+        return self.row
+
+
+class _ProviderWaitDB:
+    def __init__(self, row):
+        self.row = row
+        self.sql = []
+
+    async def execute(self, sql, params=None):
+        self.sql.append(sql)
+        return _ProviderWaitCursor(self.row)
+
+
+async def test_provider_wait_budget_only_turns_rate_limits_into_quota_blocks():
+    from pipeline import event_rebuild, graph_rebuild
+
+    old_wait = graph_rebuild.PROVIDER_WAIT_BUDGET_SECONDS
+    graph_rebuild.PROVIDER_WAIT_BUDGET_SECONDS = 10
+    try:
+        db = _ProviderWaitDB((None, 11))
+        rejected = AdmissionRejected("rate_limited", retry_after_s=30, category="rate_limited")
+        assert await graph_rebuild._record_provider_wait(db, "revision", rejected)
+        assert any("blocked_category" in sql for sql in db.sql)
+
+        db = _ProviderWaitDB((None, 1000))
+        unavailable = AdmissionRejected("unreachable", retry_after_s=30, category="unreachable")
+        assert not await event_rebuild._record_provider_wait(db, "revision", unavailable)
+        assert not any("blocked_category" in sql for sql in db.sql)
+    finally:
+        graph_rebuild.PROVIDER_WAIT_BUDGET_SECONDS = old_wait
+
+
+async def test_quota_exhaustion_blocks_immediately_without_wait_budget():
+    from pipeline import graph_rebuild
+
+    db = _ProviderWaitDB((None, 0))
+    rejected = AdmissionRejected("quota_exhausted", retry_after_s=86400,
+                                 category="quota_exhausted")
+    assert await graph_rebuild._record_provider_wait(db, "revision", rejected)
+    assert any("blocked_category" in sql for sql in db.sql)
+
+
+async def test_hosted_graph_identity_does_not_probe_local_ollama(monkeypatch):
+    """Hosted re-extraction uses its pinned provider metadata, never local Ollama."""
+    from pipeline import graph_rebuild
+
+    local = AsyncMock(side_effect=AssertionError("hosted re-extraction probed Ollama"))
+    monkeypatch.setattr(graph_rebuild, "local_model", local)
+    monkeypatch.setattr(graph_rebuild, "graph_provider_config", AsyncMock(return_value=object()))
+
+    class Candidate:
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(graph_rebuild, "build_provider", lambda *_args: Candidate())
+    identity = await graph_rebuild.graph_model_identity(
+        object(), object(), "novel", "gemini", "gemini-test")
+    assert identity == {"provider": "gemini", "name": "gemini-test", "strategy": "api_two_pass"}
+    local.assert_not_awaited()
 
 
 def test_category_vocabulary_matches_reader_api():
@@ -110,6 +200,8 @@ def test_category_vocabulary_matches_reader_api():
             _status_error(500),
             # Raised by graph_rebuild/event_rebuild resume(), never by a repair action.
             RuntimeError("Ollama exhausted num_predict; refusing incomplete output"),
+            _status_error(401), _status_error(403), _status_error(404),
+            _status_error(429), _status_error(429, body="daily quota exceeded"),
         )
     }
     # These two are written directly rather than derived from an exception: 'cancelled' by
@@ -573,8 +665,10 @@ async def test_one_fact_exhaustive_review_is_eligible(db_conn, monkeypatch):
             facts=[dict(id=fact,correct=True)]))
 
         assert reviewed["activation_eligible"] is True
-        monkeypatch.setattr(graph_rebuild,"local_model",AsyncMock(return_value=model))
+        identity = AsyncMock(return_value=model)
+        monkeypatch.setattr(graph_rebuild,"graph_model_identity",identity)
         await graph_rebuild.switch(db_conn,object(),rid,reviewed["review_hash"])
+        identity.assert_awaited_once_with(db_conn, ANY, novel, "ollama", "test")
         after_activation=(await(await db_conn.execute(
             "SELECT snapshot FROM graph_revision WHERE id=%s",(rid,))).fetchone())[0]
         assert [c["chapter"] for c in after_activation["chapters"]] == [1]
