@@ -228,7 +228,12 @@ class Worker:
         )
         log.info("worker connected; draining %s", PENDING_QUEUE)
         try:
-            await asyncio.gather(self._loop(), self._reap_forever())
+            # Process liveness must not depend on the work loop reaching its next
+            # iteration. Hosted calls and provider-directed backoff can both outlive the
+            # heartbeat TTL while the worker is healthy.
+            await asyncio.gather(
+                self._loop(), self._reap_forever(), self._heartbeat_forever()
+            )
         finally:
             await self.textproc.aclose()
             await self.db.close()
@@ -239,12 +244,6 @@ class Worker:
             claimed_at = str(time.time())
             raw = await self.redis.eval(queue.CLAIM, len(queue.KEYS), *queue.KEYS, claimed_at)
             if raw is None:
-                # A graph rebuild's own inference calls can run well past the TTL set
-                # above, with no chapter claim around to renew it (_renew_claim only
-                # runs for jobs:pending work). Without a renewer here, the UI reports
-                # "offline" for the entire length of any rebuild, which is wrong: the
-                # worker is doing exactly the work the UI can't see progress on.
-                heartbeat = asyncio.create_task(self._renew_heartbeat())
                 try:
                     await self._run_until_stopping(self._drain_background())
                 except asyncio.CancelledError:
@@ -258,10 +257,6 @@ class Worker:
                     await self._idle(max(exc.retry_after_s, 0.25))
                 except Exception:
                     log.exception("revision enrichment failed; retained for explicit resume")
-                finally:
-                    heartbeat.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await heartbeat
                 await self._idle(min(max(self.cfg.queue_timeout, 0.1), 1))
                 continue
             heartbeat = asyncio.create_task(self._renew_claim(raw, claimed_at))
@@ -430,14 +425,29 @@ class Worker:
         with suppress(asyncio.TimeoutError):
             await asyncio.wait_for(self.stopping.wait(), timeout=seconds)
 
-    async def _renew_heartbeat(self) -> None:
-        interval = max(0.1, min(30, WORKER_HEARTBEAT_TTL_SECONDS / 3))
-        while True:
-            await asyncio.sleep(interval)
+    async def _heartbeat_forever(self) -> None:
+        """Renew process liveness independently of claims and model calls.
+
+        Process-wide on purpose. A graph rebuild's inference calls can run well past
+        WORKER_HEARTBEAT_TTL_SECONDS with no chapter claim around to renew it
+        (_renew_claim only runs for jobs:pending work), and provider-directed backoff
+        can outlast it again while the worker is perfectly healthy. Renewing here covers
+        both, and the idle gaps between them, without any path having to remember to
+        start a renewer of its own.
+        """
+        interval = max(1.0, WORKER_HEARTBEAT_TTL_SECONDS / 3)
+        while not self.stopping.is_set():
             try:
-                await self.redis.set(WORKER_HEARTBEAT, str(time.time()), ex=WORKER_HEARTBEAT_TTL_SECONDS)
-            except Exception:
-                log.warning("heartbeat renewal failed", exc_info=True)
+                await self.redis.set(
+                    WORKER_HEARTBEAT,
+                    str(time.time()),
+                    ex=WORKER_HEARTBEAT_TTL_SECONDS,
+                )
+            except Exception:  # Redis recovery belongs to the owning work loops.
+                log.exception("could not renew worker heartbeat")
+            if self.stopping.is_set():
+                break
+            await self._idle(interval)
 
     async def _renew_claim(self, raw: str, claimed_at: str) -> None:
         # Total chapter duration is not evidence of a dead worker. Keep the original

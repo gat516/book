@@ -291,6 +291,31 @@ async def test_worker_loop_heartbeats_and_drains_background_when_embeddings_are_
     await client.delete(heartbeat)
 
 
+async def test_process_heartbeat_is_independent_of_long_provider_work(monkeypatch):
+    """A long API call/backoff must not make a live process look crashed."""
+    import pipeline.worker as module
+
+    worker = Worker.__new__(Worker)
+    worker.stopping = asyncio.Event()
+    writes = []
+
+    async def set_heartbeat(key, value, *, ex):
+        writes.append((key, value, ex))
+        if len(writes) == 2:
+            worker.stopping.set()
+
+    worker.redis = SimpleNamespace(set=set_heartbeat)
+    worker._idle = AsyncMock()
+    monkeypatch.setattr(module, "WORKER_HEARTBEAT", "test:worker:heartbeat")
+    monkeypatch.setattr(module, "WORKER_HEARTBEAT_TTL_SECONDS", 45)
+
+    await worker._heartbeat_forever()
+
+    assert len(writes) == 2
+    assert all(key == "test:worker:heartbeat" and ttl == 45 for key, _, ttl in writes)
+    worker._idle.assert_awaited_once_with(15)
+
+
 async def test_heartbeat_protects_slow_job_then_crash_recovers_once(scheduled):
     client, keys = scheduled
     raw = message(7)
