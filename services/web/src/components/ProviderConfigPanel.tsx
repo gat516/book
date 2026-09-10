@@ -35,7 +35,7 @@ export function ProviderConfigPanel({ novelId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
-  // Providers with a key saved in Settings (migration 0035). Since 0068 that is the only
+  // Providers with a key saved in Settings (migration 0035). Since 0080 that is the only
   // place a key can live, so this set is the whole answer to "can this book actually call
   // the provider it names" -- not a fallback behind a per-book key, as it once was.
   const [accountKeyProviders, setAccountKeyProviders] = useState<Set<string>>(new Set());

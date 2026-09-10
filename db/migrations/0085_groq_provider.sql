@@ -1,4 +1,4 @@
--- 0073_groq_provider.sql — add Groq at the existing LLMProvider seam (§5.4).
+-- 0085_groq_provider.sql — add Groq at the existing LLMProvider seam (§5.4).
 BEGIN;
 
 ALTER TABLE novel_provider_config DROP CONSTRAINT novel_provider_config_provider_check;

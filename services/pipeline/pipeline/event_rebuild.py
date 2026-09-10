@@ -67,7 +67,7 @@ async def provider_connection(db, cfg, novel: str, provider: str) -> dict:
 
     Revisions pin provider+model but never credentials. Credentials remain rotatable and
     resolve the same way as the ordinary pipeline (§5.4): the key always comes from the
-    account credential for the pinned provider, since migration 0068 left no per-book key
+    account credential for the pinned provider, since migration 0080 left no per-book key
     that could silently belong to a different provider than the one being called.
 
     base_url is still per-book-over-account, but only when the book still names the pinned

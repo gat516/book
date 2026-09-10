@@ -160,7 +160,7 @@ func (a *API) createNovel(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildProviderConfigInput validates req. It handles no secret: a novel names a provider,
-// and the key for that provider comes from provider_credential (migration 0068).
+// and the key for that provider comes from provider_credential (migration 0080).
 func (a *API) buildProviderConfigInput(req providerConfigReq) (ProviderConfigInput, error) {
 	switch req.Provider {
 	case "anthropic", "deepseek", "gemini", "groq", "ollama":

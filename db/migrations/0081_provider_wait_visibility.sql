@@ -1,4 +1,4 @@
--- 0069_provider_wait_visibility.sql — durable provider backpressure state (§0, §5.4).
+-- 0081_provider_wait_visibility.sql — durable provider backpressure state (§0, §5.4).
 --
 -- A provider-directed wait is different from a failed chapter: it must not consume a
 -- chapter attempt, and it must be visible while the worker waits. The timestamps and

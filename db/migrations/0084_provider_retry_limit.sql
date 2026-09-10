@@ -1,4 +1,4 @@
--- 0072_provider_retry_limit.sql — bound automatic hosted-provider retries (§0, §5.4).
+-- 0084_provider_retry_limit.sql — bound automatic hosted-provider retries (§0, §5.4).
 -- Provider backpressure belongs to the revision, not a chapter failure attempt.
 BEGIN;
 

@@ -22,7 +22,7 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
   const [translateLookahead, setTranslateLookahead] = useState("5");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Providers with a key saved in Settings (migration 0035). Since 0068 that is the only
+  // Providers with a key saved in Settings (migration 0035). Since 0080 that is the only
   // place a key lives, so this decides whether the chosen provider can be used at all.
   const [accountKeyProviders, setAccountKeyProviders] = useState<Set<string>>(new Set());
 

@@ -51,7 +51,7 @@ def _decryption_key() -> bytes:
 async def load_provider_config(db, novel_id: str) -> ProviderConfigRow | None:
     """Fetch novel_id's own provider choices, or None if it has none.
 
-    No secret is read here: since migration 0068 a novel row holds only the choices a
+    No secret is read here: since migration 0080 a novel row holds only the choices a
     reader makes in the book's own panel (provider, models, base_url). ``api_key`` is
     always None on the way out and is filled in by resolve_provider_config from the
     account credential for whichever provider the novel names.
@@ -95,7 +95,7 @@ async def resolve_provider_config(db, novel_id: str, default_provider: str) -> P
     """The novel's effective provider config, merging its own row over the global credential.
 
     Resolution: the novel picks the provider, models and base_url; the key always comes
-    from the account credential for whichever provider that is (migration 0068). A book
+    from the account credential for whichever provider that is (migration 0080). A book
     cannot carry its own key, so a key can never outlive the provider it was entered for
     and can never shadow the account key invisibly.
 

@@ -15,7 +15,7 @@ var ErrProviderConfigNotFound = errors.New("no provider config for this novel")
 
 // ProviderConfigInput is what a caller supplies to create/replace a novel's provider
 // config. It carries no key: secrets live in provider_credential, keyed by provider, and
-// a novel names a provider rather than holding its own copy (migration 0068).
+// a novel names a provider rather than holding its own copy (migration 0080).
 type ProviderConfigInput struct {
 	Provider       string
 	Model          string
@@ -89,7 +89,7 @@ func (s *Store) GetProviderConfig(ctx context.Context, novelID string) (Provider
 // Every column takes EXCLUDED: each one is a value the client can read back and send
 // again, so clearing any of them is a legitimate thing to express. That symmetry is only
 // possible because the key is gone -- it was the single field a masked read could not
-// round-trip, which is what forced the one-way COALESCE this used to carry (0068).
+// round-trip, which is what forced the one-way COALESCE this used to carry (0080).
 func (s *Store) UpsertProviderConfig(ctx context.Context, novelID string, cfg ProviderConfigInput) error {
 	var modelArg, baseURLArg any
 	if cfg.Model != "" {

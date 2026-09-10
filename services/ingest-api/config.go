@@ -29,7 +29,7 @@ type Config struct {
 	IngestInternalToken string
 
 	// ProviderConfigKey encrypts/decrypts provider_credential.api_key_cipher (migrations
-	// 0035, 0068). Zero value (unset) is valid at startup — an all-Ollama install stores
+	// 0035, 0080). Zero value (unset) is valid at startup — an all-Ollama install stores
 	// no key at all — but any request that saves or uses one requires this to be set;
 	// see ErrProviderConfigKeyNotSet.
 	ProviderConfigKey    [32]byte

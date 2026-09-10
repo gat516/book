@@ -1,4 +1,4 @@
--- 0070_chapter_knowledge_blocked_category.sql — safe provider state for chapter-scoped
+-- 0082_chapter_knowledge_blocked_category.sql — safe provider state for chapter-scoped
 -- extraction (§0, §5.4). The raw `error` column remains write-side diagnostics only and
 -- is deliberately never selected by reader-api.
 BEGIN;

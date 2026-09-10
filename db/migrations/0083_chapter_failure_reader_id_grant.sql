@@ -1,7 +1,7 @@
--- 0071_chapter_failure_reader_id_grant.sql — forward correction for 0070 (§0).
+-- 0083_chapter_failure_reader_id_grant.sql — forward correction for 0082 (§0).
 --
 -- The chapter failure lateral query orders equal timestamps by id. Some databases
--- applied 0070 before id was included in its column grant, so repeat the complete safe
+-- applied 0082 before id was included in its column grant, so repeat the complete safe
 -- metadata grant in a new migration instead of editing applied history.
 BEGIN;
 

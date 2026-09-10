@@ -45,7 +45,7 @@ def _decryption_key() -> bytes:
 
 
 async def load_provider_config(conn, novel_id: str) -> ProviderConfigRow | None:
-    """The novel's own choices. Holds no secret since migration 0068 — ``api_key`` is
+    """The novel's own choices. Holds no secret since migration 0080 — ``api_key`` is
     always None here and is filled in by resolve_provider_config from the account
     credential for whichever provider the novel names."""
     row = await (
@@ -86,7 +86,7 @@ async def resolve_provider_config(conn, novel_id: str, default_provider: str) ->
     prose, with no indication anywhere that they had.
 
     The key always comes from the account credential for the provider the novel names: a
-    book carries no key of its own (migration 0068).
+    book carries no key of its own (migration 0080).
     """
     row = await load_provider_config(conn, novel_id)
     provider = row.provider if row is not None else default_provider

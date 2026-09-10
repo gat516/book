@@ -271,7 +271,7 @@ def test_hosted_event_engine_uses_resolved_credentials(monkeypatch):
 async def test_event_connection_takes_the_key_from_the_account_and_base_url_from_the_book(monkeypatch):
     """A book chooses where to call; only the account decides what to authenticate with.
 
-    Before migration 0068 a book could carry its own key and it won here. That key was
+    Before migration 0080 a book could carry its own key and it won here. That key was
     write-only (masked reads could not round-trip it, so the upsert COALESCEd it forward),
     which meant it outlived the provider it was entered for -- a book switched to another
     provider kept authenticating with the previous provider's secret. Dropping the column

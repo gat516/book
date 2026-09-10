@@ -533,7 +533,7 @@ export interface Progress {
 export type ProviderName = "anthropic" | "deepseek" | "gemini" | "groq" | "ollama";
 
 // Write shape. Carries no secret: a book names a provider, and the key for that provider
-// is entered once in Settings (ProviderCredentialView) rather than per book (0068).
+// is entered once in Settings (ProviderCredentialView) rather than per book (0080).
 export interface SaveProviderConfigRequest {
   provider: ProviderName;
   model?: string;
@@ -553,7 +553,7 @@ export interface ProviderConfigView {
 }
 
 
-// One credential per provider (migrations 0035, 0068): entered once in Settings and used
+// One credential per provider (migrations 0035, 0080): entered once in Settings and used
 // by every book that names that provider. This is now the only shape that carries a key,
 // and the only masked read left -- api_key_set, never the key itself.
 export interface ProviderCredentialView {
