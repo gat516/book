@@ -534,7 +534,10 @@ async def test_events_and_graph_tracks_do_not_block_each_other(db_conn):
 async def test_activate_requires_the_recorded_review_hash(db_conn):
     async with db_conn.transaction(force_rollback=True):
         novel = await make_novel(db_conn)
-        await _request(db_conn, novel, action="activate", revision=str(uuid.uuid4()), params={})
+        # Activation remains the event-track cutover. Entity-graph staging uses the
+        # separate adopt action and no longer has a whole-revision review hash.
+        await _request(db_conn, novel, track="events", action="activate",
+                        revision=str(uuid.uuid4()), params={})
         row = await repair._claim(db_conn, novel)
         with pytest.raises(ValueError, match="review hash"):
             await repair._run(db_conn, object(), row)
@@ -698,16 +701,10 @@ async def test_one_fact_exhaustive_review_is_eligible(db_conn, monkeypatch):
                                            target_context="display-1",entity_source="Hero",surface_target="Hero")]
         assert report["claims"][0]["target_context"] == "display-1"
         assert report["claims"][0]["value"] == "awake"
-        reviewed=await graph_rebuild.record_review(db_conn,object(),rid,dict(
-            review_hash=report["review_hash"],reviewer="operator",approved=True,
-            known_merge_regressions=0,
-            mentions=[dict(id=mention,correct=True,unambiguous=True)],
-            facts=[dict(id=fact,correct=True)]))
-
-        assert reviewed["activation_eligible"] is True
         identity = AsyncMock(return_value=model)
         monkeypatch.setattr(graph_rebuild,"graph_model_identity",identity)
-        await graph_rebuild.switch(db_conn,object(),rid,reviewed["review_hash"])
+        adopted = await graph_rebuild.adopt(db_conn,object(),rid)
+        assert adopted == {"revision": rid, "status": "adopted"}
         identity.assert_awaited_once_with(db_conn, ANY, novel, "ollama", "test")
         after_activation=(await(await db_conn.execute(
             "SELECT snapshot FROM graph_revision WHERE id=%s",(rid,))).fetchone())[0]
