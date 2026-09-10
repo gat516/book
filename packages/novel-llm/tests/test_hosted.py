@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -122,6 +126,22 @@ async def test_gemini_uses_shared_json_object_and_counts_thinking_tokens(monkeyp
     assert calls[0]["response_format"] == {"type": "json_object"}
     assert result.served_provider == "gemini"
     assert result.output_tokens == 458
+
+
+def test_litellm_import_is_forced_to_use_local_cost_map():
+    """Importing the hosted adapter must never trigger LiteLLM's cost-map fetch."""
+    source_root = Path(__file__).parents[1] / "src"
+    env = os.environ.copy()
+    env.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+    env["PYTHONPATH"] = str(source_root)
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import os; import novel_llm.hosted; print(os.environ['LITELLM_LOCAL_MODEL_COST_MAP'])"],
+        env=env, capture_output=True, text=True, check=True,
+    )
+    assert result.stdout.strip() == "True"
+    assert "Failed to fetch remote model cost map" not in result.stdout
+    assert "Failed to fetch remote model cost map" not in result.stderr
 
 
 @pytest.mark.asyncio

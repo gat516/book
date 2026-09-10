@@ -30,6 +30,9 @@ from novel_llm.provider import (
 
 _RETRY_HINT = re.compile(r'(?:retry in|"?retryDelay"?\s*:\s*")\s*([0-9]+(?:\.[0-9]+)?)\s*s', re.I)
 
+# LiteLLM otherwise refreshes its model-cost map at import time. Provider startup must
+# remain offline and deterministic; the adapter only needs the SDK transport here.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 try:  # Keep import-time errors useful in environments installing dependencies lazily.
     import litellm  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover - exercised by minimal source checkouts
@@ -130,6 +133,7 @@ class HostedProvider(SequentialBatchMixin):
         self._timeout = timeout
         self._max_output_tokens = max_output_tokens
         self._native_json_schema = native_json_schema
+
     def _sdk_model(self, model: str) -> str:
         return model if model.startswith(self.model_prefix + "/") else f"{self.model_prefix}/{model}"
 
