@@ -73,14 +73,16 @@ class OllamaProvider(SequentialBatchMixin):
 
     async def complete(self, prompt: str, *, system: str = "", json_mode: bool = False,
                        cls: Class = Class.BATCH, pin_model: bool = False,
-                       model: str | None = None, json_schema: dict | None = None) -> Completion:
+                       model: str | None = None, json_schema: dict | None = None,
+                       max_output_tokens: int | None = None) -> Completion:
         async with ollama_session(self._host, timeout=0 if cls == Class.INTERACTIVE else 30) as waited:
             started = time.monotonic()
             deadline = asyncio.timeout(self._total_timeout)
             try:
                 async with deadline:
                     result = await self._complete(prompt, system=system, json_mode=json_mode,
-                                                  model=model, json_schema=json_schema)
+                                                  model=model, json_schema=json_schema,
+                                                  max_output_tokens=max_output_tokens)
             except TimeoutError as exc:
                 # Do not relabel an explicit prefill/idle timeout as the total deadline.
                 # asyncio.timeout(None) is deliberately a no-op deadline, but exceptions
@@ -93,7 +95,8 @@ class OllamaProvider(SequentialBatchMixin):
             return result
 
     async def _complete(self, prompt: str, *, system: str, json_mode: bool,
-                        model: str | None, json_schema: dict | None) -> Completion:
+                        model: str | None, json_schema: dict | None,
+                        max_output_tokens: int | None = None) -> Completion:
         use_model = model or self._model
         messages = ([{"role": "system", "content": system}] if system else [])
         messages.append({"role": "user", "content": prompt})
@@ -106,6 +109,8 @@ class OllamaProvider(SequentialBatchMixin):
             payload["format"] = "json"
         if self._options and "options" not in payload:
             payload["options"] = dict(self._options)
+        if max_output_tokens is not None:
+            payload.setdefault("options", {})["num_predict"] = max_output_tokens
         if self._think is not None:
             payload["think"] = self._think
         if not payload["stream"]:

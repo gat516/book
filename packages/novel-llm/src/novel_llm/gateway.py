@@ -36,13 +36,14 @@ class GatewayProvider(SequentialBatchMixin):
 
     async def complete(self, prompt: str, *, system: str = "", json_mode: bool = False,
                        cls: Class = Class.BATCH, pin_model: bool = False,
-                       model: str | None = None, json_schema: dict | None = None) -> Completion:
+                       model: str | None = None, json_schema: dict | None = None,
+                       max_output_tokens: int | None = None) -> Completion:
         system = system_with_schema(system, json_schema)
         request = gateway_pb2.CompletionRequest(
             tenant=self._tenant, provider=self._provider, model=model or self._model,
             backend=self._backend, priority=self._priority(cls), system=system,
             messages=[gateway_pb2.CompletionMessage(role=gateway_pb2.USER, content=prompt)],
-            max_output_tokens=self._max_output_tokens, no_fallback=pin_model,
+            max_output_tokens=max_output_tokens or self._max_output_tokens, no_fallback=pin_model,
             json_mode=json_mode or json_schema is not None,
         )
         text: list[str] = []

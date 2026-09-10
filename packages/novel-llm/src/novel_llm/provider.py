@@ -37,6 +37,9 @@ class Completion:
     cache_write_tokens: int = 0
     # Optional backend runtime diagnostics; never contain prompt/source text.
     timings: dict[str, float] = field(default_factory=dict)
+    # A small allow-list of provider rate-limit headers from successful responses.
+    # Arbitrary response headers can contain credentials or request material.
+    rate_limits: dict[str, str] = field(default_factory=dict)
 
 
 class BatchRequest(TypedDict):
@@ -47,6 +50,7 @@ class BatchRequest(TypedDict):
     pin_model: NotRequired[bool]
     model: NotRequired[str | None]
     json_schema: NotRequired[dict | None]
+    max_output_tokens: NotRequired[int | None]
 
 
 class BatchResult(TypedDict):
@@ -61,18 +65,63 @@ class AdmissionRejected(Exception):
     """Capacity backpressure that callers must retry without counting as failure."""
 
     def __init__(self, message: str = "admission rejected", *, retry_after_s: float = 0.0,
-                 exact_hint: bool = False, category: str | None = None) -> None:
+                 exact_hint: bool = False, category: str | None = None,
+                 rate_limits: dict[str, str] | None = None) -> None:
         super().__init__(message)
         self.retry_after_s = retry_after_s
         # True when retry_after_s came from the provider itself rather than a local
         # default, so callers know it is an instruction to obey rather than a guess to
         # escalate from.
         self.exact_hint = exact_hint
+        self.rate_limits = dict(rate_limits or {})
         # This is a bounded vocabulary safe to persist and expose to readers. Infer only
         # the one legacy transport phrase whose callers predate the category field; all
         # other legacy admission errors are ordinary rate limiting/backpressure.
         inferred = "unreachable" if "unreachable" in message.lower() else "rate_limited"
         self.category = category if category in ADMISSION_CATEGORIES else inferred
+
+
+class ProviderError(Exception):
+    """A normalized, non-retryable provider failure.
+
+    Providers must raise one of the specific subclasses below instead of exposing SDK
+    exception types to pipeline code (§5.4).
+    """
+
+    category = "provider_error"
+
+
+class RequestBudgetExceeded(ProviderError):
+    """The request cannot fit the provider's context/request budget."""
+
+    category = "request_budget"
+
+
+class UnsupportedSchema(ProviderError):
+    """The selected provider/model cannot transport the requested schema."""
+
+    category = "unsupported_schema"
+
+
+class TruncatedOutput(ProviderError):
+    """The provider stopped at its output limit before a complete answer."""
+
+    category = "truncated_output"
+
+
+class PinnedModelChanged(ProviderError):
+    """A pinned request was served by a different provider/model."""
+
+    category = "model_changed"
+
+
+# Descriptive aliases kept for callers that use the shorter error names.
+RequestBudgetError = RequestBudgetExceeded
+RequestTooLarge = RequestBudgetExceeded
+SchemaNotSupported = UnsupportedSchema
+UnsupportedSchemaError = UnsupportedSchema
+OutputTruncated = TruncatedOutput
+TruncatedOutputError = TruncatedOutput
 
 
 @runtime_checkable
@@ -87,6 +136,7 @@ class LLMProvider(Protocol):
         pin_model: bool = False,
         model: str | None = None,
         json_schema: dict | None = None,
+        max_output_tokens: int | None = None,
     ) -> Completion: ...
 
     async def embed(self, texts: list[str], *, cls: Class = Class.BATCH) -> list[list[float]]: ...
@@ -110,11 +160,12 @@ class SequentialBatchMixin:
                     {"json_schema": req["json_schema"]}
                     if req.get("json_schema") is not None else {}
                 )
-                completion = await self.complete(  # type: ignore[attr-defined]
-                    req["prompt"], system=req["system"], json_mode=req.get("json_mode", False),
-                    cls=Class.BATCH, pin_model=req.get("pin_model", False), model=req.get("model"),
-                    **schema_options,
-                )
+                call_options = dict(system=req["system"], json_mode=req.get("json_mode", False),
+                                    cls=Class.BATCH, pin_model=req.get("pin_model", False),
+                                    model=req.get("model"), **schema_options)
+                if req.get("max_output_tokens") is not None:
+                    call_options["max_output_tokens"] = req["max_output_tokens"]
+                completion = await self.complete(req["prompt"], **call_options)  # type: ignore[attr-defined]
                 results.append({"id": req["id"], "output": completion.text, "error": None,
                                 "served_provider": completion.served_provider, "served_model": completion.served_model})
             except AdmissionRejected:

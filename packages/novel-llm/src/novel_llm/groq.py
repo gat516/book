@@ -6,19 +6,82 @@ import json
 import os
 from copy import deepcopy
 
-import httpx
-
 from novel_llm.provider import (
-    Class, Completion, SequentialBatchMixin, system_with_schema, transient_as_backpressure,
+    Class, Completion, system_with_schema,
 )
+from novel_llm.hosted import HostedProvider
 
 
 STRICT_SCHEMA_MODELS = frozenset({
-    "openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b",
+    "openai/gpt-oss-20b", "openai/gpt-oss-120b",
 })
 
 
-def strict_schema(schema: dict) -> dict:
+def _collapse_ambiguous_union(node: dict, widened: list[list] | None) -> None:
+    """Merge union branches that share one primitive type, in place.
+
+    Groq compiles the schema into a decoding constraint, so every branch must be
+    distinguishable at the moment a value starts. Two branches that are both `string`
+    are not: it rejects the whole request with `duplicate_primitive_types` before the
+    model runs. The contract legitimately produces one -- a vocabulary term is
+    "a known term (enum) OR a new snake_case term (pattern)" (passages.py) -- so the
+    adaptation belongs here, at the provider seam, rather than in the shared contract
+    that other providers accept as-is (§5.4).
+
+    Merging never narrows: branches sharing a type collapse to the union of what they
+    accepted, which for enum-plus-pattern is the pattern branch alone. Branches of
+    DIFFERENT types (the nullable `{string} | {null}` references) are unambiguous and
+    are left exactly as they are.
+
+    Any enum dropped this way is reported through ``widened`` so the caller can keep
+    its steering value by naming the terms in the prompt; a strict request never
+    carries the schema itself.
+    """
+    for key in ("anyOf", "oneOf"):
+        branches = node.get(key)
+        if not isinstance(branches, list) or len(branches) < 2:
+            continue
+        groups: dict = {}
+        order: list = []
+        for index, branch in enumerate(branches):
+            kind = branch.get("type") if isinstance(branch, dict) else None
+            # Only a named primitive type can collide. Anything else keeps its own slot.
+            marker = kind if isinstance(kind, str) else f"#{index}"
+            if marker not in groups:
+                groups[marker] = []
+                order.append(marker)
+            groups[marker].append(branch)
+        if all(len(groups[m]) == 1 for m in order):
+            continue
+        merged = []
+        for marker in order:
+            group = groups[marker]
+            if len(group) == 1:
+                merged.append(group[0])
+                continue
+            if all(isinstance(b, dict) and "enum" in b for b in group):
+                values: list = []
+                for branch in group:
+                    for value in branch["enum"]:
+                        if value not in values:
+                            values.append(value)
+                merged.append({"type": group[0]["type"], "enum": values})
+                continue
+            # One branch was open (a pattern, or unconstrained), so it already admits
+            # everything the enum branches did. Keep the type and drop the constraints.
+            if widened is not None:
+                for branch in group:
+                    if isinstance(branch, dict) and branch.get("enum"):
+                        widened.append(list(branch["enum"]))
+            merged.append({"type": group[0]["type"]})
+        if len(merged) == 1:
+            node.pop(key)
+            node.update(merged[0])
+        else:
+            node[key] = merged
+
+
+def strict_schema(schema: dict, widened: list[list] | None = None) -> dict:
     """Adapt a copy of the wire schema; application validation remains authoritative."""
     result = deepcopy(schema)
 
@@ -40,45 +103,58 @@ def strict_schema(schema: dict) -> dict:
         for key in ("anyOf", "oneOf", "allOf", "prefixItems"):
             for child in node.get(key, []):
                 visit(child)
+        # After the children are normalized, so a merged branch is already adapted.
+        _collapse_ambiguous_union(node, widened)
 
     visit(result)
     return result
 
 
-class GroqRequestError(httpx.HTTPStatusError):
-    """Content-free diagnostics: never retain provider prose in exception strings."""
-
-    def __init__(self, response: httpx.Response) -> None:
-        try:
-            error = response.json().get("error", {})
-            code = error.get("code") if isinstance(error, dict) else None
-        except (ValueError, AttributeError):
-            code = None
-        self.provider_code = code if isinstance(code, str) and code in {
-            "json_validate_failed", "tool_use_failed", "context_length_exceeded",
-            "model_not_found", "model_decommissioned", "invalid_api_key",
-            "invalid_request_error", "invalid_value", "unsupported_parameter",
-        } else "unclassified"
-        super().__init__(f"Groq HTTP {response.status_code}; code={self.provider_code}",
-                         request=response.request, response=response)
+# A vocabulary can grow without bound, while the steering sentence it feeds cannot: the
+# prompt is charged per token on every call. Cap it and let the schema-free reminder do
+# the rest -- the application still canonicalizes and validates whatever comes back.
+PREFERRED_TERM_LIMIT = 120
 
 
-class GroqProvider(SequentialBatchMixin):
+def _preferred_terms(widened: list[list]) -> str:
+    values: list[str] = []
+    for group in widened:
+        for value in group:
+            if isinstance(value, str) and value not in values:
+                values.append(value)
+    if not values:
+        return ""
+    shown = values[:PREFERRED_TERM_LIMIT]
+    text = ", ".join(shown)
+    return text + (", ..." if len(values) > len(shown) else "")
+
+
+class GroqProvider(HostedProvider):
     def __init__(self, *, model: str, base_url: str = "https://api.groq.com/openai/v1",
-                 api_key: str | None = None, timeout: float = 120.0) -> None:
-        super().__init__()
-        self._model = model
-        key = api_key or os.environ.get("GROQ_API_KEY")
-        if not key:
+                 api_key: str | None = None, timeout: float = 120.0,
+                 max_output_tokens: int = 8192) -> None:
+        if not (api_key or os.environ.get("GROQ_API_KEY")):
             raise RuntimeError("GroqProvider needs an api_key or GROQ_API_KEY")
-        self._client = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout,
-                                         headers={"Authorization": f"Bearer {key}"})
+        super().__init__(model=model, provider_name="groq", model_prefix="groq",
+                         api_key=api_key, api_key_env="GROQ_API_KEY", base_url=base_url,
+                         timeout=timeout, max_output_tokens=max_output_tokens,
+                         native_json_schema=model in STRICT_SCHEMA_MODELS)
 
     async def complete(self, prompt: str, *, system: str = "", json_mode: bool = False,
                        cls: Class = Class.BATCH, pin_model: bool = False,
-                       model: str | None = None, json_schema: dict | None = None) -> Completion:
+                       model: str | None = None, json_schema: dict | None = None,
+                       max_output_tokens: int | None = None) -> Completion:
         use_model = model or self._model
         strict = json_schema is not None and use_model in STRICT_SCHEMA_MODELS
+        if not strict:
+            return await super().complete(prompt, system=system, json_mode=json_mode, cls=cls,
+                                          pin_model=pin_model, model=model,
+                                          json_schema=json_schema,
+                                          max_output_tokens=max_output_tokens)
+        # Adapt first: collapsing an ambiguous union can drop an enum whose only other
+        # route to the model is this prompt, since a strict request omits the schema.
+        widened: list[list] = []
+        wire_schema = strict_schema(json_schema, widened) if strict else None
         system = system_with_schema(system, None if strict else json_schema)
         if json_mode or json_schema is not None:
             system += "\nReturn only a JSON object matching the requested structure."
@@ -86,41 +162,21 @@ class GroqProvider(SequentialBatchMixin):
             system += (" Include every required top-level field: "
                        + json.dumps(list(json_schema.get("properties", {})))
                        + ". Complete all fields before ending the response; use empty arrays when there are no supported items.")
-        messages = ([{"role": "system", "content": system}] if system else [])
-        messages.append({"role": "user", "content": prompt})
-        payload: dict = {"model": use_model, "messages": messages,
-                         "max_completion_tokens": 8192}
-        # Reasoning and final JSON share this allowance. An implicit small provider
-        # default can leave no budget for the JSON and return json_validate_failed.
-        if use_model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}:
-            payload["include_reasoning"] = False
-            payload["reasoning_effort"] = "low"
-        if strict:
-            # §5.4: provider wire adaptation stays behind the provider protocol.
-            # JSON-object mode can fail with HTTP 400 json_validate_failed.
-            payload["response_format"] = {"type": "json_schema", "json_schema": {
-                "name": "completion", "strict": True, "schema": strict_schema(json_schema),
-            }}
-        elif json_mode or json_schema is not None:
-            payload["response_format"] = {"type": "json_object"}
-        async with transient_as_backpressure():
-            response = await self._client.post("/chat/completions", json=payload)
-            if response.is_error:
-                raise GroqRequestError(response)
-        body = response.json()
-        if body["choices"][0].get("finish_reason") == "length":
-            raise RuntimeError("provider output limit reached before a complete response")
-        usage = body.get("usage", {}) or {}
-        return Completion(
-            text=body["choices"][0]["message"]["content"],
-            served_provider="groq", served_model=body.get("model", use_model),
-            input_tokens=usage.get("prompt_tokens", 0) or 0,
-            output_tokens=usage.get("completion_tokens", 0) or 0,
-            cache_read_tokens=(usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0,
-        )
+            preferred = _preferred_terms(widened)
+            if preferred:
+                # Steering only. The schema can no longer restrict these to a list, so
+                # say so in words: reusing an established term is what keeps a book's
+                # vocabulary from fragmenting into synonyms nobody merged.
+                system += (" Reuse one of these existing terms whenever one fits, and"
+                           " only invent a new lower_snake_case term when none does: "
+                           + preferred + ".")
+        # Keep the Groq model-specific strict adaptation local to this provider. The
+        # capability is passed as a local argument so concurrent calls cannot race.
+        return await self._complete_hosted(prompt, system=system, json_mode=json_mode,
+                                           cls=cls, pin_model=pin_model, model=model,
+                                           json_schema=wire_schema,
+                                           max_output_tokens=max_output_tokens,
+                                           native_json_schema=True)
 
     async def embed(self, texts: list[str], *, cls: Class = Class.BATCH) -> list[list[float]]:
         raise NotImplementedError("Groq embeddings unused; configure Ollama embeddings")
-
-    async def aclose(self) -> None:
-        await self._client.aclose()

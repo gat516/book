@@ -5,29 +5,24 @@ PLAN.md Phase N3's own "done when" criterion for this provider.
 
 from __future__ import annotations
 
-import httpx
 import json
 import pytest
+from types import SimpleNamespace
 
+import novel_llm.hosted as hosted
 from novel_llm.deepseek import DeepSeekProvider
 
 
-def _mock_transport(response_json: dict) -> httpx.MockTransport:
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.headers["authorization"] == "Bearer test-key"
-        assert request.url.path == "/chat/completions"
-        return httpx.Response(200, json=response_json)
-
-    return httpx.MockTransport(handler)
-
-
-async def test_complete_returns_served_identity_and_usage():
+async def test_complete_returns_served_identity_and_usage(monkeypatch):
     provider = DeepSeekProvider(model="deepseek-chat", api_key="test-key")
-    provider._client._transport = _mock_transport({
-        "choices": [{"message": {"content": "hello"}}],
-        "model": "deepseek-chat",
-        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "prompt_cache_hit_tokens": 3},
-    })
+    async def complete(**kwargs):
+        assert kwargs["api_key"] == "test-key"
+        return SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop",
+            message=SimpleNamespace(content="hello"))], model="deepseek-chat",
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5,
+                                   prompt_cache_hit_tokens=3),
+            _hidden_params={"custom_llm_provider": "deepseek"})
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=complete))
 
     completion = await provider.complete("hi")
 
@@ -51,20 +46,15 @@ def test_requires_an_api_key(monkeypatch):
         DeepSeekProvider(model="deepseek-chat", api_key=None)
 
 
-async def test_schema_request_uses_explicit_prompt_fallback_and_json_mode():
+async def test_schema_request_uses_explicit_prompt_fallback_and_json_mode(monkeypatch):
     provider = DeepSeekProvider(model="model", api_key="test-key")
-    await provider._client.aclose()
     schema = {"type": "object", "required": ["facts"]}
 
-    def handle(request):
-        payload = json.loads(request.content)
+    async def complete(**payload):
         assert payload["response_format"] == {"type": "json_object"}
-        assert json.dumps(schema) in payload["messages"][0]["content"]
+        assert json.dumps(schema, ensure_ascii=False) in payload["messages"][0]["content"]
         assert payload["messages"][1]["content"] == "source"
-        return httpx.Response(200, json={"choices": [{"message": {"content": '{"facts":[]}'}}]})
-
-    provider._client = httpx.AsyncClient(base_url="http://test", transport=httpx.MockTransport(handle))
-    try:
-        assert (await provider.complete("source", system="stable", json_schema=schema)).text == '{"facts":[]}'
-    finally:
-        await provider.aclose()
+        return SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop",
+            message=SimpleNamespace(content='{"facts":[]}'))], model="model", usage={})
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=complete))
+    assert (await provider.complete("source", system="stable", json_schema=schema)).text == '{"facts":[]}'
