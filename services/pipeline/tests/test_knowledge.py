@@ -7,11 +7,11 @@ from psycopg.types.json import Jsonb
 
 from pipeline.context import PipelineState
 from pipeline.envelope import ChapterEnvelope
-from pipeline.evidence import (Names, Proposals, IdentityDecisions, ClaimProposals, Decision,
+from pipeline.evidence import (Names, Proposals, IdentityDecisions, ExtractProposals, Decision,
     Verification, Alignments, source_mentions,
     validate_proposals, aligned_mentions, approved, digest, stable_id, passage, PROMPT_VERSION)
 from pipeline.passages import PassageContract, source_passages
-from pipeline.graph_rebuild import qualified,next_retryable_active_revision,graph_retry_delay_minutes
+from pipeline.graph_rebuild import next_retryable_active_revision,graph_retry_delay_minutes
 from pipeline.graph_rebuild import promote_verified_glossary
 from pipeline.knowledge import KnowledgeEngine
 from tests.fixtures import make_novel
@@ -29,9 +29,10 @@ def _cache_test_revision(novel, *, served_model='claude-concrete'):
 
 def _cache_test_response(surface='凌峰', served_model='claude-concrete', source=None):
     source = source or f'{surface}来了。'
-    return Completion(text=json.dumps(dict(reviewed={k: True for k in ONTOLOGY['kinds']},
+    return Completion(text=json.dumps(dict(
         names=[dict(surface=surface, kind='character',
-                    passage_id=source_passages(source)[0]['id'])])),
+                    passage_id=source_passages(source)[0]['id'])],
+        attributes=[],relations=[],occurrences=[])),
         served_provider='anthropic', served_model=served_model)
 
 
@@ -44,7 +45,8 @@ async def _cache_test_call(db, cfg, revision, provider, source='凌峰来了。'
     provider = SimpleNamespace(complete=provider, aclose=AsyncMock())
     engine = KnowledgeEngine(db, cfg, revision, provider=provider)
     try:
-        return await engine.call('names', Names, dict(source=source))
+        return await engine.call('extract', ExtractProposals, dict(
+            source=source, ontology=ONTOLOGY, _passage_ids=[source_passages(source)[0]['id']]))
     finally:
         await engine.close()
 
@@ -62,7 +64,7 @@ async def test_completion_cache_reuses_identical_request_across_revisions(db_con
         await _cache_test_call(db_conn, cfg, _cache_test_revision(novel), first)
         second = AsyncMock(return_value=_cache_test_response())
         result = await _cache_test_call(db_conn, cfg, _cache_test_revision(novel), second)
-        assert result.names[0].surface == '凌峰'
+        assert result['names'][0]['surface'] == '凌峰'
         second.assert_not_awaited()
 
         changed = AsyncMock(return_value=_cache_test_response(source='凌峰离开了。'))
@@ -128,7 +130,7 @@ async def test_completion_cache_refreshes_legacy_empty_provenance_row(db_conn, m
             FROM completion_cache WHERE novel_id=%s AND cache_key=%s''',
             (novel, row[0]))).fetchone()
         assert refreshed[0:3] == ('anthropic', 'claude-alias',
-                                  'evidence-v20-compact-identity-wire')
+                                  'evidence-v21-merged-extract')
         assert refreshed[3] and refreshed[4]
         assert refreshed[5] == row[1]
         hit = AsyncMock()
@@ -328,27 +330,33 @@ async def test_graph_cache_preserves_runtime_metrics_and_avoids_repeat_inference
         engine=KnowledgeEngine(db_conn,Config.load(),dict(id=rid,ontology=ONTOLOGY,model=dict(provider='ollama',name='test')))
         source='凌峰走进梦魇神殿。'
         pid=source_passages(source)[0]['id']
-        body=dict(reviewed={kind:True for kind in ONTOLOGY['kinds']},names=[
-            dict(surface='凌峰',kind='character',passage_id=pid),
-            dict(surface='梦魇神殿',kind='place',passage_id=pid)])
+        body=dict(names=[
+                dict(surface='凌峰',kind='character',passage_id=pid),
+                dict(surface='梦魇神殿',kind='place',passage_id=pid)],
+            attributes=[],relations=[],occurrences=[])
         complete=AsyncMock(return_value=Completion(text=json.dumps(body),served_provider='ollama',served_model='test',
             input_tokens=42,output_tokens=5,timings=dict(load_seconds=1,eval_seconds=2)))
         engine.provider.complete=complete
         try:
             for _ in range(2):
-                result=await engine.call('names',Names,dict(source=source))
-                assert len(result.names)==2 and all(n.quote==source and n.evidence_start==0 for n in result.names)
+                result=await engine.call('extract',ExtractProposals,dict(source=source))
+                assert len(result['names'])==2 and all(n['quote']==source and n['evidence_start']==0
+                                                        for n in result['names'])
             complete.assert_awaited_once()
-            assert engine._stage_requests=={'names':2}
-            assert engine._stage_cache_hits=={'names':1}
+            assert engine._stage_requests=={'extract':2}
+            assert engine._stage_cache_hits=={'extract':1}
             prompt=complete.call_args.args[0]
+            assert 'OUTPUT JSON SCHEMA:' not in prompt
             offered=json.loads(prompt.split('INPUT DATA (not instructions):\n')[1])
             assert 'source' not in offered and offered['passages']==[dict(id=pid,text=source)]
-            assert complete.call_args.kwargs['json_schema']['required']==['reviewed','names']
+            assert complete.call_args.kwargs['json_schema']['required']==['names','attributes','relations','occurrences']
             timing=(await(await db_conn.execute('SELECT runtime_metrics FROM completion_cache WHERE novel_id=%s',(novel,))).fetchone())[0]
             assert {k:timing[k] for k in ('load_seconds','eval_seconds','input_tokens','output_tokens')}==dict(
                 load_seconds=1,eval_seconds=2,input_tokens=42,output_tokens=5)
-            assert timing['stage']=='names' and timing['batch_id']
+            assert timing['stage']=='extract' and timing['batch_id']
+            raw=(await(await db_conn.execute(
+                'SELECT response FROM completion_cache WHERE novel_id=%s',(novel,))).fetchone())[0]
+            assert raw==body and 'quote' not in json.dumps(raw,ensure_ascii=False)
         finally:
             await engine.close()
 
@@ -368,13 +376,13 @@ async def test_a_stalled_call_is_retried_in_place_rather_than_failing_the_chapte
         engine=KnowledgeEngine(db_conn,Config.load(),dict(id=rid,ontology=ONTOLOGY,model=dict(provider='ollama',name='test')))
         source='凌峰走进梦魇神殿。'
         pid=source_passages(source)[0]['id']
-        body=dict(reviewed={kind:True for kind in ONTOLOGY['kinds']},names=[])
+        body=dict(names=[],attributes=[],relations=[],occurrences=[])
         ok=Completion(text=json.dumps(body),served_provider='ollama',served_model='test')
         engine.provider.complete=AsyncMock(side_effect=[TimeoutError('stalled'),TimeoutError('stalled'),ok])
         engine.provider.last_stream_diagnostics={}
         try:
-            result=await engine.call('names',Names,dict(source=source))
-            assert result.names==[]
+            result=await engine.call('extract',ExtractProposals,dict(source=source))
+            assert result['names']==[]
             assert engine.provider.complete.await_count==3
             assert knowledge_module.asyncio.sleep.await_count==2
         finally:
@@ -396,7 +404,7 @@ async def test_a_stalled_call_still_fails_the_chapter_once_retries_are_exhausted
         engine.provider.last_stream_diagnostics={}
         try:
             with pytest.raises(TimeoutError):
-                await engine.call('names',Names,dict(source=source))
+                await engine.call('extract',ExtractProposals,dict(source=source))
             assert engine.provider.complete.await_count==knowledge_module.STALL_RETRY_ATTEMPTS+1
         finally:
             await engine.close()
@@ -444,40 +452,40 @@ def test_passage_ids_preserve_source_bytes_offsets_and_repeated_context():
 def test_name_contract_requires_all_kinds_and_exact_containing_passage():
     c=PassageContract('凌峰走进梦魇神殿。\n啸牙冒险团到来。')
     first,second=c.passages
-    schema=c.schema('names',Names,ONTOLOGY)
-    assert schema['properties']['reviewed']['required']==ONTOLOGY['kinds']
+    schema=c.schema('extract',ExtractProposals,ONTOLOGY)
+    assert schema['properties']['names']['items']['properties']['kind']['enum']==ONTOLOGY['kinds']
     assert 'quote' not in json.dumps(schema)
-    body=dict(reviewed={kind:True for kind in ONTOLOGY['kinds']},names=[
+    body=dict(names=[
         dict(surface='凌峰',kind='character',passage_id=first['id']),
         dict(surface='梦魇神殿',kind='place',passage_id=first['id']),
-        dict(surface='啸牙冒险团',kind='group',passage_id=second['id'])])
-    names=c.materialize('names',Names,body,ONTOLOGY)
-    assert {m['kind'] for m in source_mentions('book',1,c.source,names,ONTOLOGY)}==set(ONTOLOGY['kinds'])
-    assert names.names[0].quote==first['text']
-    body['names']=[dict(surface='啸牙冒险团',kind='group',passage_id=first['id']),
-                   dict(surface='虚构组织',kind='group',passage_id='invented')]
-    names=c.materialize('names',Names,body,ONTOLOGY)
-    assert len(names.rejected)==2 and all(n.kind!='group' for n in names.names)
-    del body['reviewed']['place']
-    with pytest.raises(ValueError,match='every ontology kind'):
-        c.materialize('names',Names,body,ONTOLOGY)
+        dict(surface='啸牙冒险团',kind='group',passage_id=second['id'])],
+        attributes=[],relations=[],occurrences=[])
+    result=c.materialize('extract',ExtractProposals,body,ONTOLOGY)
+    assert {n['kind'] for n in result['names']}==set(ONTOLOGY['kinds'])
+    assert result['names'][0]['quote']==first['text']
+    with pytest.raises(ValueError,match='surface absent'):
+        c.materialize('extract',ExtractProposals,dict(body,names=[
+            dict(surface='虚构组织',kind='group',passage_id=first['id'])]),ONTOLOGY)
 
 
-def test_claim_wire_schema_is_bounded_and_never_carries_quotes():
+def test_extract_wire_schema_is_bounded_and_never_carries_quotes():
     source='凌峰来了。\n他成为首领。';c=PassageContract(source)
-    claims=c.schema('claims',ClaimProposals,ONTOLOGY)
-    cdef=claims['$defs']['ClaimProposal']
-    assert set(claims['properties'])=={'claims'}
-    assert claims['properties']['claims']['maxItems']==12
-    assert cdef['properties']['value']['maxLength']==400
-    assert cdef['properties']['passage_ids']['maxItems']==2
-    assert 'quote' not in json.dumps(claims)
+    extract=c.schema('extract',ExtractProposals,ONTOLOGY)
+    assert set(extract['properties'])=={'names','attributes','relations','occurrences'}
+    item=extract['properties']['attributes']['items']
+    assert item['properties']['value']['maxLength']==400
+    assert item['properties']['passage_ids']['maxItems']==2
+    assert 'quote' not in json.dumps(extract)
 
 
 def _homonym_engine(decide):
     """A KnowledgeEngine stub whose identity selector is `decide` and whose verifier passes."""
     from pipeline.evidence import IdentityDecisions as _ID, Verification as _V
     engine=object.__new__(KnowledgeEngine)
+    engine.alignment_limit=32
+    engine.identity_batch_size=24
+    engine.identity_soft_bytes=24*1024
+    engine.identity_hard_bytes=32*1024
     async def call(stage,_schema,payload):
         if stage=='identity_slots':
             return _ID(decisions=decide(payload['identity_occurrences']))
@@ -552,66 +560,77 @@ def test_identity_rejects_incompatible_existing_candidate_kind():
     assert not yes and no[0]['rejection']=='invented candidate ID or incompatible kind'
 
 
-def test_oversized_explanations_and_fact_values_fail_model_validation():
+def test_oversized_explanations_fail_model_validation():
     with pytest.raises(ValueError):
         IdentityDecisions(decisions=[dict(occurrence_ref='o1',outcome='unresolved',target_ref=None,
             reason_code='ambiguous',explanation='x'*201,quote='甲',evidence_start=0)])
     with pytest.raises(ValueError):
-        ClaimProposals(claims=[dict(type='fact',occurrence_refs=['o1'],attribute='description',
-            value='x'*401,quote='甲',evidence_start=0)])
+        ExtractProposals.model_validate(dict(names=[],attributes=[dict(
+            subject_ref=dict(name_index=0,passage_id='p0',occurrence_index=0),
+            attribute='description',value='x'*401,value_en='',passage_ids=['p0'])],
+            relations=[],occurrences=[]))
 
 
-def test_claim_materialization_supports_pronoun_continuation_and_cross_paragraph_evidence():
-    source='凌峰打开地图。\n他指出西南方向。';c=PassageContract(source,max_chars=400,overlap=0)
-    first,second=c.passages
-    result=c.materialize('claims',ClaimProposals,dict(claims=[dict(type='fact',
-        occurrence_refs=['o1'],attribute='description',value='指出西南方向',
-        passage_ids=[first['id'],second['id']])]),ONTOLOGY)
-    assert result.claims[0].quote==source and result.claims[0].evidence_start==0
+def test_extract_rejects_an_occurrence_anchor_from_an_unoffered_passage():
+    source='凌峰打开地图。\n他指出西南方向。'
+    contract=PassageContract(source,max_chars=400,overlap=0)
+    first,second=contract.passages
+    body=dict(names=[dict(surface='凌峰',kind='character',passage_id=first['id'])],
+              attributes=[dict(subject_ref=dict(name_index=0,passage_id=second['id'],
+                  occurrence_index=0),attribute='description',value='打开地图',value_en='',
+                  passage_ids=[second['id']])],relations=[],occurrences=[])
+    with pytest.raises(ValueError,match='occurrence ordinal is out of range'):
+        contract.materialize('extract',ExtractProposals,body,ONTOLOGY)
 
 
-def test_claim_materialization_rejects_invalid_reference_counts_and_overlapping_ranges():
-    source='甲'*6
-    c=PassageContract(source,max_chars=4,overlap=2)
-    first,second=c.passages
-    proposal=dict(type='fact',occurrence_refs=['o1'],attribute='description',value='甲')
-    for refs, pattern in (([], 'one or two'), ([first['id'],second['id'],first['id']], 'one or two'),
-                          ([first['id'],first['id']], 'one or two')):
-        with pytest.raises(ValueError,match=pattern):
-            c.materialize('claims',ClaimProposals,dict(claims=[dict(proposal,passage_ids=refs)]),ONTOLOGY)
-    with pytest.raises(ValueError,match='non-overlapping'):
-        c.materialize('claims',ClaimProposals,
-                      dict(claims=[dict(proposal,passage_ids=[first['id'],second['id']])]),ONTOLOGY)
+def test_extract_drops_non_adjacent_evidence_without_losing_other_items():
+    source='凌峰打开地图。\n中间没有相关证据。\n她离开房间。'
+    contract=PassageContract(source,max_chars=400,overlap=0)
+    first,_,last=contract.passages
+    body=dict(names=[dict(surface='凌峰',kind='character',passage_id=first['id'])],
+              attributes=[dict(subject_ref=dict(name_index=0,passage_id=first['id'],
+                  occurrence_index=0),attribute='description',value='打开地图',value_en='',
+                  passage_ids=[first['id'],last['id']])],relations=[],occurrences=[])
+    result=contract.materialize('extract',ExtractProposals,body,ONTOLOGY)
+    assert result['attributes']==[]
+    assert result['rejected'][0]['rejection']=='extract citations must be adjacent'
 
 
-def test_claim_materialization_union_span_stays_within_adjacent_citations():
+def test_extract_accepts_adjacent_cross_paragraph_evidence_and_keeps_union_span():
     source='凌峰打开地图。\n他指出西南方向。\n她离开房间。'
-    c=PassageContract(source,max_chars=400,overlap=0)
-    first,second,unrelated=c.passages
-    result=c.materialize('claims',ClaimProposals,dict(claims=[dict(
-        type='fact',occurrence_refs=['o1'],attribute='description',value='指出西南方向',
-        passage_ids=[second['id'],first['id']])]),ONTOLOGY)
-    assert result.claims[0].quote==source[:second['char_end']]
-    assert unrelated['text'] not in result.claims[0].quote
+    contract=PassageContract(source,max_chars=400,overlap=0)
+    first,second,unrelated=contract.passages
+    body=dict(names=[dict(surface='凌峰',kind='character',passage_id=first['id'])],
+              attributes=[dict(subject_ref=dict(name_index=0,passage_id=first['id'],
+                  occurrence_index=0),attribute='description',value='指出西南方向',value_en='',
+                  passage_ids=[first['id'],second['id']])],relations=[],occurrences=[])
+    result=contract.materialize('extract',ExtractProposals,body,ONTOLOGY)
+    assert len(result['attributes'])==1 and not result['rejected']
+    evidence=KnowledgeEngine._evidence_for_citation(source,[first['id'],second['id']])
+    assert evidence['quote']==source[:second['char_end']]
+    assert unrelated['text'] not in evidence['quote']
 
 
-async def test_saturated_claim_windows_subdivide_and_smallest_window_records_failure():
-    from unittest.mock import AsyncMock
-    source='甲做了一件事。'*80
-    mention=dict(id='m1',surface='甲',kind='character',char_start=0,char_end=1,quote='甲做了一件事。')
-    engine=object.__new__(KnowledgeEngine)
-    def saturated(*_args,**_kwargs):
-        payload=_args[2]
-        passage_id=payload['focus_passage_ids'][0]
-        return ClaimProposals(claims=[dict(type='fact',occurrence_refs=['o1'],attribute='description',
-            value=f'事实{i}',quote='甲做了一件事。',evidence_start=0) for i in range(12)])
-    engine.call=AsyncMock(side_effect=saturated)
-    focus=source_passages(source,max_chars=400,overlap=0)[0]
-    claims,rejected,count=await engine._claims_for_focus(
-        source,[mention],ONTOLOGY,focus,passage_chars=400)
-    assert not claims and count>=12
-    assert any('smallest source window' in row['rejection'] for row in rejected)
-    assert engine.call.await_count>1
+def test_extract_rejects_empty_duplicate_and_unoffered_citation_lists():
+    source='凌峰打开地图。';contract=PassageContract(source,max_chars=400,overlap=0)
+    pid=contract.passages[0]['id']
+    base=dict(subject_ref=dict(name_index=0,passage_id=pid,occurrence_index=0),
+              attribute='description',value='打开地图',value_en='')
+    body=dict(names=[dict(surface='凌峰',kind='character',passage_id=pid)],relations=[],occurrences=[])
+    for refs in ([],[pid,pid],[pid,'missing','also-missing']):
+        candidate=dict(body,attributes=[dict(base,passage_ids=refs)])
+        with pytest.raises(ValueError,match='extract items must cite one or two distinct passages|extract citation is not offered'):
+            contract.materialize('extract',ExtractProposals,candidate,ONTOLOGY)
+
+
+def test_extract_schema_bounds_each_request_while_model_accepts_aggregate_name_inventory():
+    source=''.join(f'名{i}。' for i in range(64))
+    contract=PassageContract(source,max_chars=400,overlap=0)
+    pid=contract.passages[0]['id']
+    names=[dict(surface=f'名{i}',kind='character',passage_id=pid) for i in range(64)]
+    model=ExtractProposals.model_validate(dict(names=names,attributes=[],relations=[],occurrences=[]))
+    assert len(model.names)==64
+    assert contract.schema('extract',ExtractProposals,ONTOLOGY)['properties']['names']['maxItems']==14
 
 
 async def test_saturated_alignment_windows_subdivide_and_smallest_window_records_failure():
@@ -627,6 +646,7 @@ async def test_saturated_alignment_windows_subdivide_and_smallest_window_records
     mentions=[dict(id=f'm{i}',surface='凌峰',kind='character',
                    char_start=i*8,char_end=i*8+2,quote='凌峰做了一件事。') for i in range(40)]
     engine=object.__new__(KnowledgeEngine)
+    engine.alignment_limit=ALIGNMENT_LIMIT
     engine.call=AsyncMock(return_value=Alignments(alignments=[
         dict(phrase='Ling Feng',occurrence=0,mention_id=None,quote='') for _ in range(ALIGNMENT_LIMIT)]))
     spans=await engine._align_window('book',1,source,display,mentions,0,len(display),'digest')
@@ -639,119 +659,57 @@ async def test_saturated_alignment_windows_subdivide_and_smallest_window_records
     assert isinstance(spans,list)
 
 
-async def test_application_can_aggregate_more_than_64_names_across_bounded_requests(monkeypatch):
-    from unittest.mock import AsyncMock
-    from pipeline.config import Config
-    source='\n'.join(f'Name{i} arrived.' for i in range(65))
-    engine=KnowledgeEngine(None,Config.load(),dict(id='test',ontology=ONTOLOGY,model=dict(provider='ollama',name='test')))
-    async def discover(_stage,_schema,payload):
-        if _stage=='name_verify':
-            return Verification(verdicts=[dict(id=item['item_ref'],supported=True,reason='named')
-                                          for item in payload['items']])
-        contract=PassageContract(source,set(payload['_passage_ids']))
-        rows=[]
-        for p in contract.passages:
-            surface=p['text'].split()[0]
-            rows.append(dict(surface=surface,kind='character',quote=p['text'],evidence_start=p['char_start'],named=True))
-        return Names(names=rows,reviewed_kinds=ONTOLOGY['kinds'])
-    monkeypatch.setattr(engine,'call',AsyncMock(side_effect=discover))
-    try:
-        names,mentions,_=await engine.discover_names('book',1,source)
-        assert len(names.names)==65 and len(mentions)==65
-        assert engine.call.await_count>=2
-    finally:
-        await engine.close()
-
-
-async def test_saturated_batched_name_inventory_retries_each_passage():
-    from pipeline.knowledge_contract import NAME_SLOT_COUNT
-    source='\n'.join(f'Name{i} arrived.' for i in range(4))
-    engine=object.__new__(KnowledgeEngine)
-    calls=[]
-    async def discover(_stage,_schema,payload):
-        if _stage=='name_verify':
-            return Verification(verdicts=[dict(id=item['item_ref'],supported=True,reason='named')
-                                          for item in payload['items']])
-        calls.append(list(payload['_passage_ids']))
-        if len(payload['_passage_ids'])>1:
-            payload['_proposed_count']=NAME_SLOT_COUNT
-            return Names(names=[],reviewed_kinds=ONTOLOGY['kinds'])
-        p=PassageContract(source,set(payload['_passage_ids'])).passages[0]
-        surface=p['text'].split()[0]
-        return Names(names=[dict(surface=surface,kind='character',quote=p['text'],
-            evidence_start=p['char_start'],named=True)],reviewed_kinds=ONTOLOGY['kinds'])
-    engine.call=discover
-    engine.revision=dict(ontology=ONTOLOGY)
-    names,mentions,_=await engine.discover_names('book',1,source)
-    assert [len(batch) for batch in calls]==[4,2,1,1,2,1,1]
-    assert len(names.names)==len(mentions)==4
-    assert engine._name_metrics==dict(passages=4,top_level_batches=1,
-                                      saturation_splits=3,incomplete_windows=0)
-
-
-async def test_name_eligibility_rejects_generic_fragments_before_occurrence_expansion():
-    source='凌峰看见淡银色。'
-    engine=object.__new__(KnowledgeEngine)
-    engine.revision=dict(ontology=ONTOLOGY)
-    async def call(stage,_schema,payload):
-        if stage=='name_slots':
-            return Names(names=[
-                dict(surface='凌峰',kind='character',quote=source,evidence_start=0,named=True),
-                dict(surface='淡银色',kind='place',quote=source,evidence_start=0,named=True),
-            ],reviewed_kinds=ONTOLOGY['kinds'])
-        return Verification(verdicts=[dict(id=item['item_ref'],
-            supported=item['surface']=='凌峰',reason='proper name' if item['surface']=='凌峰' else 'color')
-            for item in payload['items']])
-    engine.call=call
-    names,mentions,_=await engine.discover_names('book',1,source)
-    assert [name.surface for name in names.names]==['凌峰']
-    assert [mention['surface'] for mention in mentions]==['凌峰']
-    assert any(row.get('surface')=='淡银色' for row in names.rejected)
-
-
 def test_runtime_diagnostics_record_input_size_policy_and_request_counts():
     engine=object.__new__(KnowledgeEngine)
-    engine._stage_requests={'name_slots':3,'claims':2}
-    engine._stage_cache_hits={'name_slots':1}
-    engine._name_metrics=dict(passages=12,top_level_batches=3,
-                              saturation_splits=1,incomplete_windows=0)
-    engine._claim_subdivisions=2
+    engine.extract_window_chars=1800
+    engine.extract_limits={'names':14,'attributes':8,'relations':6,'occurrences':5}
+    engine.identity_batch_size=24
+    engine.identity_soft_bytes=24*1024
+    engine.identity_hard_bytes=32*1024
+    engine.align_window_chars=6000
+    engine.alignment_limit=32
+    engine._stage_requests={'extract':3,'identity_slots':2}
+    engine._stage_cache_hits={'extract':1}
+    engine._extract_subdivisions=2
+    engine._identity_batch_sizes=[12,8]
+    engine.extract_context_tokens=8192
+    engine.extract_output_tokens=1024
     metrics=engine._runtime_diagnostics('甲乙','Alpha')
     assert metrics['input_size']==dict(source_chars=2,source_bytes=6,
                                        display_chars=5,display_bytes=5)
-    assert metrics['chunk_policy']['claim_focus_chars']==1200
-    assert metrics['chunk_policy']['identity_occurrences_per_batch']==12
-    assert metrics['name_chunking']['saturation_splits']==1
-    assert metrics['claim_subdivisions']==2
-    assert metrics['stage_requests']['claims']==2
-    assert metrics['stage_cache_hits']=={'name_slots':1}
-    assert metrics['stage_fresh_calls']=={'claims':2,'name_slots':2}
+    assert metrics['chunk_policy']['extract_window_chars']==1800
+    assert metrics['chunk_policy']['identity_occurrences_per_batch']==24
+    assert metrics['extract_chunking']['subdivisions']==2
+    assert metrics['stage_requests']['extract']==3
+    assert metrics['stage_cache_hits']=={'extract':1}
+    assert metrics['stage_fresh_calls']=={'extract':2,'identity_slots':2}
 
 
 def test_long_chapters_are_split_below_the_prompt_target_budget():
     source='\n'.join(('段落'+str(i)+'。')*100 for i in range(200))
-    batches=KnowledgeEngine._passage_batches(source)
+    passages=PassageContract(source).passages
+    batches=[]; current=[]; size=0
+    for row in passages:
+        row_size=len(json.dumps(dict(id=row['id'],text=row['text']),ensure_ascii=False).encode())+2
+        if current and size+row_size>8192:
+            batches.append(current); current=[]; size=0
+        current.append(row['id']); size+=row_size
+    if current: batches.append(current)
     passages={p['id']:p for p in PassageContract(source).passages}
     assert all(len(batch)<=64 for batch in batches)
     assert all(sum(len(json.dumps(dict(id=pid,text=passages[pid]['text']),ensure_ascii=False).encode())+2
                    for pid in batch)<=8192 for batch in batches)
     assert len(source.encode())>42000 and len(batches)>1
-    passages={p['id']:p for p in source_passages(source)}
-    assert all(sum(len(json.dumps(dict(id=pid,text=passages[pid]['text']),ensure_ascii=False).encode())+2 for pid in batch)<=24000
+    assert all(sum(len(json.dumps(dict(id=pid,text=passages[pid]['text']),ensure_ascii=False).encode())+2 for pid in batch)<=8192
                for batch in batches)
 
 
 def test_short_paragraphs_are_packed_by_content_budget_not_line_count():
     source='\n'.join('安若素描述了星莲的位置。' for _ in range(20))
-    name_batches=KnowledgeEngine._passage_batches(source)
-    claim_batches=KnowledgeEngine._claim_focus_batches(source)
-    assert len(name_batches)==1
-    assert len(claim_batches)==1
-    assert sum(len(row['text']) for row in claim_batches[0])<=1200
-    assert [pid for batch in name_batches for pid in batch]==[
-        row['id'] for row in PassageContract(source).passages]
-    assert [row['id'] for batch in claim_batches for row in batch]==[
-        row['id'] for row in source_passages(source,max_chars=1200,overlap=0)]
+    passages=PassageContract(source).passages
+    assert len(passages)==20
+    assert all(len(row['text'])<=400 for row in passages)
+    assert ''.join(row['text'] for row in passages).replace('\n','')==source.replace('\n','')
 
 
 def test_passage_references_still_require_identity_and_claim_verification():
@@ -802,7 +760,9 @@ async def test_names_probe_cannot_publish_or_qualify_graph(db_conn,monkeypatch,t
     async with db_conn.transaction(force_rollback=True):
         novel=await make_novel(db_conn,ontology=json.dumps(ONTOLOGY))
         ms=source_mentions(novel,1,source,names,ONTOLOGY)
-        discover=AsyncMock(return_value=(names,ms,{}))
+        discover=AsyncMock(return_value=(ms,{'character':dict(proposed_surfaces=1,source_occurrences=1),
+                       'place':dict(proposed_surfaces=0,source_occurrences=0),
+                       'group':dict(proposed_surfaces=0,source_occurrences=0)},[]))
         monkeypatch.setattr(KnowledgeEngine,'discover_names',discover)
         snapshot=dict(chapters=[dict(chapter=1,raw_uri='saved',source_hash=digest(source))])
         cursor=await db_conn.execute('INSERT INTO graph_revision(novel_id,ontology,snapshot) VALUES(%s,%s,%s) RETURNING id',
@@ -812,8 +772,9 @@ async def test_names_probe_cannot_publish_or_qualify_graph(db_conn,monkeypatch,t
         path=tmp_path/'probe.json'
         await module.probe_names(db_conn,Config.load(),base,dataset,'test',path,1)
         result=json.loads(path.read_text())
-        assert result['discovery_recall']==1 and result['activation_eligible'] is False
-        assert not qualified(result)
+        assert result['discovery_recall']==1
+        assert 'activation_eligible' not in result
+        assert result['status']=='completed'
         rid=result['revision']
         assert (await(await db_conn.execute('SELECT count(*) FROM entity WHERE revision_id=%s',(rid,))).fetchone())[0]==0
         assert (await(await db_conn.execute('SELECT count(*) FROM graph_job WHERE revision_id=%s',(rid,))).fetchone())[0]==0
@@ -854,6 +815,7 @@ async def test_candidate_retrieval_is_kind_filtered_exact_first_and_capped_at_ei
 async def test_hosted_candidate_retrieval_never_constructs_or_calls_ollama(db_conn):
     from unittest.mock import AsyncMock
     from pipeline.config import Config
+    from pipeline.inference_runtime import runtime_identity, effective_schema_transport
     from tests.fixtures import FakeProvider,delete_novel
     novel=await make_novel(db_conn,ontology=json.dumps(ONTOLOGY))
     engine=None
@@ -872,9 +834,13 @@ async def test_hosted_candidate_retrieval_never_constructs_or_calls_ollama(db_co
             VALUES(gen_random_uuid(),%s,'character','Jiang Mengyue',2,%s)""",(novel,rid))
         provider=FakeProvider(provider='groq')
         provider.aclose=AsyncMock()
+        cfg=Config.load()
         revision=dict(id=rid,novel_id=novel,ontology=ONTOLOGY,
-            model=dict(provider='groq',name='openai/gpt-oss-120b',strategy='api_two_pass'))
-        engine=KnowledgeEngine(db_conn,Config.load(),revision,provider=provider)
+            model=dict(provider='groq',name='openai/gpt-oss-120b',strategy='api_two_pass',
+                identity=runtime_identity(output_tokens=cfg.hosted_graph_output_tokens,
+                    schema_transport=effective_schema_transport(provider,'openai/gpt-oss-120b'),
+                    context_tokens=cfg.hosted_graph_context_tokens)))
+        engine=KnowledgeEngine(db_conn,cfg,revision,provider=provider)
         assert engine.embedder is None
         mention=dict(id='m1',surface='凌峰',kind='character',quote='凌峰 arrived.')
         candidates,vectors=await engine.candidates_for(25,[mention])
@@ -928,27 +894,6 @@ def test_alignment_keeps_unlinked_phrases_and_disambiguates_occurrences():
     ]))
     assert [s['mention_id'] for s in spans]==[ling['id'],jiang['id'],None]
     assert spans[0]['id']!=spans[1]['id']
-
-
-def test_activation_requires_review_of_publications_not_only_model_scores():
-    metrics=dict(reviewed=True,reviewed_mentions=64,reviewed_facts=30,link_precision=1,
-                 unambiguous_recall=1,fact_precision=1,merge_regressions=0,evidence_valid=True)
-    assert not qualified(metrics)
-    assert qualified(dict(metrics,publication_review_complete=True,candidate_recall=1))
-    assert not qualified(dict(metrics,publication_review_complete=True,candidate_recall=1,link_precision=.979))
-    # Candidate retrieval belongs to model selection; publication review judges every
-    # row produced by this concrete revision.
-    assert qualified(dict(metrics,publication_review_complete=True,candidate_recall=.99))
-
-
-def test_small_complete_publication_review_can_qualify():
-    metrics=dict(reviewed=True,publication_review_complete=True,
-                 total_mentions=1,total_facts=1,reviewed_mentions=1,reviewed_facts=1,
-                 link_precision=1,unambiguous_recall=1,fact_precision=1,
-                 merge_regressions=0,evidence_valid=True)
-    assert qualified(metrics)
-    assert not qualified(dict(metrics,total_facts=0,reviewed_facts=0))
-    assert not qualified(dict(metrics,total_mentions=2))
 
 
 async def test_staging_rebuild_never_touches_global_glossary():
@@ -1060,7 +1005,7 @@ async def test_rollback_never_retrusts_legacy_graph(db_conn):
         new=str(uuid4())
         await db.execute("INSERT INTO graph_revision(id,novel_id,ontology,state,trusted) VALUES(%s,%s,%s,'active',true)",(new,novel,Jsonb(ONTOLOGY)))
         await db.execute('UPDATE novel SET active_graph_revision=%s WHERE id=%s',(new,novel))
-        await switch(db,None,str(old),rollback=True)
+        await switch(db,None,str(old))
         row=await(await db.execute('SELECT state,trusted,generation,version FROM graph_revision WHERE id=%s',(old,))).fetchone()
         assert row==('active',False,2,2)
         await db.execute("SELECT set_config('app.novel_id',%s,true),set_config('app.current_chapter','10',true)",(novel,))
@@ -1113,84 +1058,3 @@ async def test_optional_bool_refuses_a_value_it_cannot_read(monkeypatch):
     monkeypatch.setenv('BOOK_TEST_FLAG', 'ture')
     with pytest.raises(ValueError, match='must be a boolean'):
         _optional_bool('BOOK_TEST_FLAG')
-
-
-def test_claim_proposal_cannot_generate_unchecked_display_english():
-    from pipeline.evidence import Claim
-    with pytest.raises(ValueError,match='extra'):
-        ClaimProposals(claims=[dict(type='fact',occurrence_refs=['o1'],attribute='description',
-            value='甲',value_en='invented gloss',quote='甲',evidence_start=0)])
-    assert Claim(type='fact',mention_ids=['m1'],attribute='description',
-                 value='甲',quote='甲',evidence_start=0).value_en==''
-
-
-async def test_fact_verification_reads_evidence_before_and_separately_from_each_claim():
-    from unittest.mock import AsyncMock
-    from pipeline.evidence import EvidenceReading, FactComponentVerification
-    source='莲池在海湾深处。星源兽喷吐雾气。'
-    mentions=[
-        dict(id='pond',surface='莲池',kind='place',char_start=0,char_end=2,quote=source),
-        dict(id='beast',surface='星源兽',kind='group',char_start=8,char_end=11,quote=source),
-    ]
-    items=[
-        dict(id='claim:0',type='fact',mention_ids=['pond'],attribute='description',
-             value='喷吐雾气',quote=source,evidence_start=0),
-        dict(id='claim:1',type='fact',mention_ids=['beast'],attribute='description',
-             value='喷吐雾气',quote=source,evidence_start=0),
-    ]
-    engine=object.__new__(KnowledgeEngine);seen=[]
-    async def call(stage,_schema,payload):
-        seen.append((stage,payload))
-        if stage=='evidence':
-            # This call must be claim-independent: the proposed pond error cannot prime it.
-            assert 'items' not in payload
-            return EvidenceReading(statements=[
-                dict(subject='星源兽',assertion='喷吐雾气'),
-                dict(subject='莲池',assertion='蕴藏强大力量')])
-        assert payload['items'][0]['evidence_reading']==[
-            dict(subject='星源兽',assertion='喷吐雾气',qualifiers=[])]
-        subject=payload['items'][0]['subjects'][0]['surface']
-        return FactComponentVerification(verdicts=[dict(id='v1',
-            subject_supported=subject=='星源兽',assertion_supported=True,
-            qualifiers_supported=True,evidence_sufficient=True,reason='source assigns action to beasts')])
-    engine.call=AsyncMock(side_effect=call)
-    verdicts=await engine._verify_facts(source,items,mentions)
-    assert [v.supported for v in verdicts.verdicts]==[False,True]
-    assert [stage for stage,_ in seen]==['evidence','fact_verify','fact_verify']
-
-
-async def test_fact_verification_requires_every_component():
-    from unittest.mock import AsyncMock
-    from pipeline.evidence import EvidenceReading, FactComponentVerification
-    source='据安若素观察，深处几株星莲呈暗金色。'
-    mention=dict(id='lotus',surface='星莲',kind='group',char_start=10,char_end=12,quote=source)
-    item=dict(id='claim:0',type='fact',mention_ids=['lotus'],attribute='description',
-              value='所有星莲呈暗金色',quote=source,evidence_start=0)
-    engine=object.__new__(KnowledgeEngine)
-    async def call(stage,_schema,_payload):
-        if stage=='evidence':
-            return EvidenceReading(statements=[dict(subject='深处几株星莲',assertion='呈暗金色',
-                qualifiers=['据安若素观察','深处几株'])])
-        return FactComponentVerification(verdicts=[dict(id='v1',subject_supported=True,
-            assertion_supported=True,qualifiers_supported=False,evidence_sufficient=True,
-            reason='claim drops reporter and subset')])
-    engine.call=AsyncMock(side_effect=call)
-    verdict=(await engine._verify_facts(source,[item],[mention])).verdicts[0]
-    assert not verdict.supported and verdict.reason.startswith('qualifiers_supported:')
-
-
-async def test_unfaithful_english_is_not_attached_to_verified_source_fact():
-    from unittest.mock import AsyncMock
-    from pipeline.evidence import FactRenderings
-    source='星源兽向石莲喷吐雾气。'
-    mention=dict(id='beast',surface='星源兽',kind='group',char_start=0,char_end=3,quote=source)
-    items=[dict(id='claim:0',type='fact',mention_ids=['beast'],attribute='description',
-                value='向石莲喷吐雾气',quote=source,evidence_start=0)]
-    engine=object.__new__(KnowledgeEngine)
-    async def call(stage,_schema,_payload):
-        if stage=='render':
-            return FactRenderings(renderings=[dict(id='r1',value_en='the lotuses emit mist')])
-        return Verification(verdicts=[dict(id='r1',supported=False,reason='reverses actor')])
-    engine.call=AsyncMock(side_effect=call)
-    rendered=await engine._render_facts(source,items,[mention])
-    assert rendered[0]['value_en']=='' and rendered[0]['value']=='向石莲喷吐雾气'

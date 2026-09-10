@@ -5,7 +5,7 @@ import hashlib
 import pytest
 from psycopg.types.json import Jsonb
 
-from pipeline.evidence import Claim, Proposals, Names, validate_proposals
+from pipeline.evidence import Claim, ExtractProposals, Proposals, Names, validate_proposals
 from pipeline.knowledge import KnowledgeEngine
 from pipeline.passages import PassageContract
 from pipeline.vocabulary import normalize_name, valid_name, record_candidate, vocabulary_prompt
@@ -21,18 +21,31 @@ def test_vocabulary_normalization_is_syntactic_only():
     assert normalize_name('Looks!') == 'looks!'
 
 
-def test_claim_schema_has_admitted_enum_and_unknown_pattern_with_glosses():
-    from pipeline.evidence import ClaimProposals
+def test_extract_schema_keeps_vocabulary_attribute_as_plain_string():
     contract = PassageContract('凌峰来了。')
-    schema = contract.schema('claims', ClaimProposals,
+    schema = contract.schema('extract', ExtractProposals,
         {'kinds':['character'], 'attributes':[], 'relations':[]},
         {'attributes':[{'name':'appearance','gloss':'durable physical description'}],
          'relations':[{'name':'ally','gloss':'durable relationship'}]})
-    attr = schema['$defs']['ClaimProposal']['properties']['attribute']
-    assert set(attr['anyOf'][0]['enum']) == {'appearance','ally'}
-    assert attr['anyOf'][1]['pattern'] == r'^[a-z][a-z0-9_]{1,39}$'
+    attr = schema['properties']['attributes']['items']['properties']['attribute']
+    assert attr == {'type': 'string'}
     prompt = vocabulary_prompt([dict(term_type='attribute',name='appearance',gloss='durable')])
     assert prompt['attributes'] == [dict(name='appearance',gloss='durable')]
+
+
+def test_plain_wire_vocabulary_names_are_checked_locally():
+    """The provider sees one string type; local validation owns the naming rule."""
+    source = '凌峰来了。'
+    mention = {'id': 'm1', 'surface': '凌峰', 'kind': 'character',
+               'char_start': 0, 'char_end': 2}
+    claim = Claim(type='fact', mention_ids=['m1'], attribute='Bad Term', value='来了',
+                  quote=source, evidence_start=0)
+    accepted, rejected = validate_proposals(
+        source, [mention], {}, Proposals(decisions=[], claims=[claim]),
+        {'kinds': ['character'], 'attributes': [], 'relations': []}, vocabulary={}
+    )
+    assert accepted == []
+    assert rejected[0]['rejection'] == 'invalid attribute or entity kind'
 
 
 @pytest.mark.asyncio
@@ -265,11 +278,10 @@ async def test_description_warning_activity_uses_allowed_phase(db_conn):
 
 
 @pytest.mark.db
-async def test_knowledge_claim_call_injects_only_chapter_visible_vocabulary(db_conn, monkeypatch):
+async def test_knowledge_extract_call_injects_only_chapter_visible_vocabulary(db_conn, monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
     from pipeline.config import Config
-    from pipeline.evidence import ClaimProposals
     from pipeline.knowledge import KnowledgeEngine
     from novel_llm.provider import Completion
     monkeypatch.setenv('GRAPH_OLLAMA_FIRST_TOKEN_SECONDS','120')
@@ -286,22 +298,24 @@ async def test_knowledge_claim_call_injects_only_chapter_visible_vocabulary(db_c
             ontology={'kinds':['character'],'attributes':[],'relations':[]},
             model={'provider':'anthropic','name':'alias','served_provider':'anthropic',
                    'served_model':'concrete'})
-        response=Completion(text=json.dumps({'claims':[]}),served_provider='anthropic',served_model='concrete')
+        response=Completion(text=json.dumps({'names':[], 'attributes':[], 'relations':[], 'occurrences':[]}),
+                            served_provider='anthropic',served_model='concrete')
         complete=AsyncMock(return_value=response)
         provider=SimpleNamespace(complete=complete,aclose=AsyncMock())
         engine=KnowledgeEngine(db_conn,Config.load(),revision,provider=provider)
         engine.current_chapter=5
         source='凌峰很高。'
         try:
-            await engine.call('claims',ClaimProposals,dict(
+            await engine.call('extract',ExtractProposals,dict(
                 source=source,ontology=revision['ontology'],
-                verified_occurrences=[dict(occurrence_ref='o1',surface='凌峰',kind='character',context=source)],
-                focus_passage_ids=[],_passage_ids=[],_batch_id='vocab-visible'))
+                _passage_ids=[],_passage_max_chars=400,_passage_overlap=0,
+                _batch_id='vocab-visible'))
         finally:
             await engine.close()
         prompt=complete.await_args.args[0]
+        assert 'OUTPUT JSON SCHEMA:' not in prompt
         schema=complete.await_args.kwargs['json_schema']
         assert 'visible_term' in prompt and 'visible gloss' in prompt
         assert 'future_term' not in prompt and 'future gloss' not in prompt
-        attr=schema['$defs']['ClaimProposal']['properties']['attribute']['anyOf'][0]['enum']
-        assert 'visible_term' in attr and 'future_term' not in attr
+        attr=schema['properties']['attributes']['items']['properties']['attribute']
+        assert attr == {'type': 'string'}
