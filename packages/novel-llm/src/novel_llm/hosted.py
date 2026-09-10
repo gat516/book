@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import os
 import re
 from collections.abc import Mapping
@@ -28,7 +29,16 @@ from novel_llm.provider import (
     system_with_schema,
 )
 
-_RETRY_HINT = re.compile(r'(?:retry in|"?retryDelay"?\s*:\s*")\s*([0-9]+(?:\.[0-9]+)?)\s*s', re.I)
+_RETRY_HINT = re.compile(
+    r'(?:retry\s+in|try\s+again\s+in|"?retryDelay"?\s*[:=])\s*"?'
+    r'(?:(?P<minutes>[0-9]+(?:\.[0-9]+)?)\s*m(?:in(?:ute)?s?)?\s*)?'
+    r'(?P<seconds>[0-9]+(?:\.[0-9]+)?)\s*s(?:ec(?:ond)?s?)?"?', re.I)
+_QUOTA_FIELD = re.compile(
+    r'\b(?P<field>limit|used|requested)\s*[:=]?\s*'
+    r'(?P<value>[0-9]{1,3}(?:,[0-9]{3})*|[0-9]{1,15})\b', re.I)
+_TOKEN_QUOTA = re.compile(r'\b(?:tokens?|tpm|token\s+per\s+minute)\b', re.I)
+_MAX_QUOTA_VALUE = 1_000_000_000_000
+_MAX_ERROR_TEXT = 32_768
 _SERVER_RETRY_S = 5.0
 _RETRYABLE_SERVER_STATUS = frozenset({408, 500, 502, 503, 504})
 _NETWORK_ERROR_NAMES = frozenset({
@@ -72,6 +82,20 @@ def _headers(value: Any) -> dict[str, str]:
             if str(k).lower() in _SAFE_RATE_HEADERS}
 
 
+def _error_headers(exc: BaseException) -> dict[str, str]:
+    """Collect only allowlisted headers from SDK error shapes.
+
+    LiteLLM versions differ on whether headers live on the exception, its response, or
+    ``litellm_response_headers``. None of these sources is trusted wholesale: the
+    allowlist in ``_headers`` is applied at every boundary (§5.4).
+    """
+    safe = _headers(exc)
+    response = _response_from_error(exc)
+    safe.update(_headers(response))
+    safe.update(_headers({"headers": getattr(exc, "litellm_response_headers", {})}))
+    return safe
+
+
 def _response_from_error(exc: BaseException) -> Any:
     response = getattr(exc, "response", None)
     if response is not None:
@@ -94,23 +118,71 @@ def _retry_after(headers: Mapping[str, str]) -> float | None:
     raw = headers.get("retry-after")
     if raw is None:
         return None
+    return _duration_seconds(raw)
+
+
+def _duration_seconds(raw: Any) -> float | None:
+    """Parse provider durations such as ``2m3.5s`` without retaining the text."""
     try:
-        return max(0.0, float(raw))
+        numeric = float(raw)
     except (TypeError, ValueError):
+        match = re.fullmatch(
+            r'\s*(?:(?P<minutes>[0-9]+(?:\.[0-9]+)?)\s*m(?:in(?:ute)?s?)?\s*)?'
+            r'(?P<seconds>[0-9]+(?:\.[0-9]+)?)\s*s(?:ec(?:ond)?s?)?\s*',
+            str(raw), re.I)
+        if not match:
+            return None
+        numeric = float(match.group("seconds"))
+        if match.group("minutes"):
+            numeric += float(match.group("minutes")) * 60.0
+    return max(0.0, numeric)
+
+
+def _error_text(exc: BaseException) -> str:
+    """Read body text for in-memory classification, including LiteLLM's message body."""
+    response = _response_from_error(exc)
+    body = str(getattr(response, "text", "") or "") if response is not None else ""
+    if body:
+        return body[:_MAX_ERROR_TEXT]
+    # OpenAI-compatible LiteLLM handlers currently put the upstream JSON body in
+    # ``OpenAILikeError.message`` while replacing the response with an empty stub.
+    return str(getattr(exc, "message", "") or "")[:_MAX_ERROR_TEXT]
+
+
+def _duration_from_retry_hint(text: str) -> float | None:
+    match = _RETRY_HINT.search(text)
+    if not match:
         return None
+    seconds = float(match.group("seconds"))
+    if match.group("minutes"):
+        seconds += float(match.group("minutes")) * 60.0
+    return max(0.0, seconds)
+
+
+def _rate_limit_details(exc: BaseException) -> dict[str, int]:
+    """Extract bounded token quota counts while the provider error is in memory."""
+    text = _error_text(exc)
+    if not _TOKEN_QUOTA.search(text):
+        return {}
+    details: dict[str, int] = {}
+    names = {"limit": "limit_tokens", "used": "used_tokens", "requested": "requested_tokens"}
+    for match in _QUOTA_FIELD.finditer(text):
+        try:
+            value = int(match.group("value").replace(",", ""))
+        except ValueError:
+            continue
+        if value <= _MAX_QUOTA_VALUE:
+            details[names[match.group("field").lower()]] = value
+    return details
 
 
 def _body_retry_hint(exc: BaseException) -> float | None:
-    response = _response_from_error(exc)
-    body = str(getattr(response, "text", "") or "") if response is not None else ""
-    match = _RETRY_HINT.search(body)
-    return float(match.group(1)) if match else None
+    return _duration_from_retry_hint(_error_text(exc))
 
 
 def _quota_category(exc: BaseException, status: int) -> str:
-    response = _response_from_error(exc)
-    body = str(getattr(response, "text", "") or "").lower() if response is not None else ""
-    headers = _headers(response)
+    body = _error_text(exc).lower()
+    headers = _error_headers(exc)
     delay = _retry_after(headers)
     if delay is None:
         delay = _body_retry_hint(exc)
@@ -130,6 +202,22 @@ def _structured_error(exc: BaseException) -> tuple[str, str]:
             payload = response.json()
         except Exception:  # noqa: BLE001
             payload = None
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (TypeError, ValueError):
+            payload = None
+    if not isinstance(payload, Mapping):
+        # LiteLLM's OpenAI-compatible adapter stores the raw JSON in ``message`` but
+        # replaces the response with an empty synthetic response. Parse only a bounded
+        # JSON slice for classification; never return it or include it in an error.
+        raw = _error_text(exc)
+        start, end = raw.find("{"), raw.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                payload = json.loads(raw[start:end + 1])
+            except (TypeError, ValueError):
+                payload = None
     if not isinstance(payload, Mapping):
         payload = {}
     error = payload.get("error", payload)
@@ -141,9 +229,16 @@ def _structured_error(exc: BaseException) -> tuple[str, str]:
 
 
 def _retry_delay(exc: BaseException, *, fallback: float) -> tuple[float, bool, dict[str, str]]:
-    response = _response_from_error(exc)
-    safe = _headers(response)
+    safe = _error_headers(exc)
     delay = _retry_after(safe)
+    if delay is None:
+        # Groq supplies reset durations in these headers; prefer token reset because a
+        # request reset can describe a much longer daily quota window.
+        for key in ("x-ratelimit-reset-tokens", "ratelimit-reset", "x-ratelimit-reset",
+                    "x-ratelimit-reset-requests"):
+            delay = _duration_seconds(safe.get(key)) if safe.get(key) is not None else None
+            if delay is not None:
+                break
     if delay is None:
         delay = _body_retry_hint(exc)
     return delay if delay is not None else fallback, delay is not None, safe
@@ -254,20 +349,24 @@ class HostedProvider(SequentialBatchMixin):
         name = type(exc).__name__.lower()
         if status == 429 or "ratelimit" in name or "rate_limit" in name:
             delay, exact_hint, safe = _retry_delay(exc, fallback=30.0)
+            details = _rate_limit_details(exc)
             raise AdmissionRejected("quota_exhausted" if status and _quota_category(exc, status) == "quota_exhausted"
                                     else "rate_limited", retry_after_s=delay,
                                     exact_hint=exact_hint,
                                     category=_quota_category(exc, status or 429),
-                                    rate_limits=safe) from exc
+                                    rate_limits=safe,
+                                    rate_limit_details=details) from exc
         if status in _RETRYABLE_SERVER_STATUS:
             delay, exact_hint, safe = _retry_delay(exc, fallback=_SERVER_RETRY_S)
             raise AdmissionRejected("model_server_error", retry_after_s=delay,
                                     exact_hint=exact_hint, category="model_server_error",
                                     rate_limits=safe) from exc
+        code, message = _structured_error(exc)
+        if status in (400, 422) and code == "context_length_exceeded":
+            raise RequestBudgetExceeded("provider request exceeds context budget") from exc
         if status == 413 or any(marker in name for marker in
                                 ("contextwindow", "context_length", "requesttoolong")):
             raise RequestBudgetExceeded("provider request exceeds context budget") from exc
-        code, message = _structured_error(exc)
         schema_error = (code in _SCHEMA_ERROR_CODES or
                         ("unsupported" in message and
                          any(marker in message for marker in ("schema", "response_format", "json"))) or

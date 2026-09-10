@@ -66,7 +66,8 @@ class AdmissionRejected(Exception):
 
     def __init__(self, message: str = "admission rejected", *, retry_after_s: float = 0.0,
                  exact_hint: bool = False, category: str | None = None,
-                 rate_limits: dict[str, str] | None = None) -> None:
+                 rate_limits: dict[str, str] | None = None,
+                 rate_limit_details: dict[str, int | float] | None = None) -> None:
         super().__init__(message)
         self.retry_after_s = retry_after_s
         # True when retry_after_s came from the provider itself rather than a local
@@ -74,6 +75,15 @@ class AdmissionRejected(Exception):
         # escalate from.
         self.exact_hint = exact_hint
         self.rate_limits = dict(rate_limits or {})
+        # Hosted adapters may recover bounded numeric quota details from an SDK error
+        # message after the SDK has discarded the original response body. Keep this
+        # allowlisted and numeric so arbitrary provider prose never crosses the seam.
+        allowed_details = {"limit_tokens", "used_tokens", "requested_tokens"}
+        self.rate_limit_details = {
+            key: value for key, value in (rate_limit_details or {}).items()
+            if key in allowed_details and isinstance(value, (int, float))
+            and not isinstance(value, bool) and 0 <= value <= 1_000_000_000_000
+        }
         # This is a bounded vocabulary safe to persist and expose to readers. Infer only
         # the one legacy transport phrase whose callers predate the category field; all
         # other legacy admission errors are ordinary rate limiting/backpressure.

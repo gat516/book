@@ -193,6 +193,88 @@ async def test_sdk_http_failures_are_normalized_without_retry(monkeypatch, statu
 
 
 @pytest.mark.asyncio
+async def test_litellm_rate_limit_message_recovers_safe_counts_and_minute_retry(monkeypatch):
+    # LiteLLM's OpenAI-compatible handler currently puts the upstream JSON in
+    # ``message`` and replaces the response with an empty stub. Recover only the numeric
+    # quota fields needed for operator diagnostics; provider prose and account IDs stay
+    # out of the normalized exception (§5.4).
+    body = ('{"error":{"message":"Rate limit reached for organization `org_secret` '
+            'on tokens per minute (TPM): Limit 8000, Used 6000, Requested 25733. '
+            'Please try again in 1m2.5s.","type":"tokens"}}')
+
+    class LiteLLMRateLimitError(Exception):
+        def __init__(self):
+            self.status_code = 429
+            self.message = body
+            self.response = SimpleNamespace(status_code=429, headers={})
+
+    async def complete(**kwargs):
+        raise LiteLLMRateLimitError()
+
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=complete))
+    provider = DeepSeekProvider(model="chat", api_key="key")
+    with pytest.raises(AdmissionRejected) as caught:
+        await provider.complete("source")
+    assert caught.value.retry_after_s == pytest.approx(62.5)
+    assert caught.value.exact_hint is True
+    assert caught.value.rate_limits == {}
+    assert caught.value.rate_limit_details == {
+        "limit_tokens": 8000, "used_tokens": 6000, "requested_tokens": 25733,
+    }
+    assert "org_secret" not in str(caught.value)
+    assert body not in str(caught.value)
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_reset_header_accepts_minute_seconds(monkeypatch):
+    request = httpx.Request("POST", "https://provider.test")
+    response = httpx.Response(
+        429, request=request,
+        headers={"x-ratelimit-reset-tokens": "2m3.5s", "x-secret": "private"},
+    )
+
+    class SDKError(Exception):
+        def __init__(self):
+            self.response = response
+
+    async def complete(**kwargs):
+        raise SDKError()
+
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=complete))
+    provider = DeepSeekProvider(model="chat", api_key="key")
+    with pytest.raises(AdmissionRejected) as caught:
+        await provider.complete("source")
+    assert caught.value.retry_after_s == pytest.approx(123.5)
+    assert caught.value.exact_hint is True
+    assert caught.value.rate_limits == {"x-ratelimit-reset-tokens": "2m3.5s"}
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_structured_context_length_400_is_request_budget(monkeypatch):
+    # The LiteLLM OpenAI-compatible path may expose this as a JSON message with an
+    # empty response; classification must still use the bounded error code.
+    body = '{"error":{"code":"context_length_exceeded","message":"private source"}}'
+
+    class LiteLLMBadRequestError(Exception):
+        def __init__(self):
+            self.status_code = 400
+            self.message = body
+            self.response = SimpleNamespace(status_code=400, headers={})
+
+    async def complete(**kwargs):
+        raise LiteLLMBadRequestError()
+
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=complete))
+    provider = DeepSeekProvider(model="chat", api_key="key")
+    with pytest.raises(RequestBudgetExceeded) as caught:
+        await provider.complete("source", json_schema={"type": "object"})
+    assert "private source" not in str(caught.value)
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [408, 500, 502, 503, 504])
 async def test_server_statuses_are_backpressure_with_safe_retry_hint(monkeypatch, status):
     request = httpx.Request("POST", "https://provider.test")
