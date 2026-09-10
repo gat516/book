@@ -27,6 +27,7 @@ from pathlib import Path
 
 import httpx
 import psycopg
+import redis.asyncio as aredis
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
@@ -36,6 +37,9 @@ from pipeline.envelope import ChapterEnvelope, SourceMeta
 from pipeline.evidence import PROMPT_VERSION, digest
 from pipeline.failures import CANCELLED, clear_blocked, failure_category, record_blocked
 from pipeline.knowledge import KnowledgeEngine
+from pipeline.inference_runtime import (
+    coordinated_provider, effective_schema_transport, runtime_identity,
+)
 from pipeline.llm.provider import AdmissionRejected
 from pipeline.provider_config import (
     ProviderConfigRow, build_provider, load_provider_config, load_provider_credential,
@@ -169,8 +173,15 @@ async def graph_model_identity(db, cfg, novel: str, provider: str, model: str) -
     # Constructing validates that required credentials exist without spending a model call.
     configured=await graph_provider_config(db,cfg,novel,provider,model)
     candidate=build_provider(configured,cfg)
-    await candidate.aclose()
-    return dict(provider=provider,name=model,strategy='api_two_pass')
+    try:
+        identity = runtime_identity(
+            output_tokens=getattr(cfg, 'hosted_graph_output_tokens', 2048),
+            context_tokens=getattr(cfg, 'hosted_graph_context_tokens', 32768),
+            schema_transport=effective_schema_transport(candidate, model),
+        )
+    finally:
+        await candidate.aclose()
+    return dict(provider=provider,name=model,strategy='api_two_pass',identity=identity)
 
 
 async def graph_completion_provider(db, cfg, revision_row: dict):
@@ -179,7 +190,24 @@ async def graph_completion_provider(db, cfg, revision_row: dict):
         return None
     configured=await graph_provider_config(
         db,cfg,revision_row['novel_id'],model['provider'],model['name'])
-    return build_provider(configured,cfg)
+    provider = build_provider(configured,cfg)
+    redis = None
+    try:
+        # Operator initiated rebuilds do not run inside Worker, so provide the same
+        # credential-scoped admission coordinator at this provider construction seam.
+        # The wrapper owns and closes this short-lived Redis client with the provider.
+        redis = aredis.from_url(cfg.redis_url, decode_responses=True)
+        return coordinated_provider(provider, redis, provider_id=model['provider'],
+                                    base_url=configured.base_url or '', owns_redis=True)
+    except BaseException:
+        await provider.aclose()
+        if redis is not None:
+            close = getattr(redis, 'aclose', None) or getattr(redis, 'close', None)
+            if close is not None:
+                result = close()
+                if asyncio.iscoroutine(result):
+                    await result
+        raise
 
 
 async def discover_num_ctx(cfg, name):

@@ -6,10 +6,179 @@ quotes/offsets and the authoritative resolution map; a reference is not proof of
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 from functools import lru_cache
+import json
 import re
+from typing import Callable, Literal
 
 from pipeline.evidence import CJK_RE, digest, passage
+
+
+class PassagePackingError(ValueError):
+    """A request cannot be represented within the caller's model context budget."""
+
+
+class FixedOverheadTooLarge(PassagePackingError):
+    """Instructions/schema/vocabulary/output headroom consume the whole context."""
+
+    def __init__(self, *, context_tokens: int, output_tokens: int,
+                 overhead_tokens: int, components: dict[str, int]):
+        self.context_tokens = context_tokens
+        self.output_tokens = output_tokens
+        self.overhead_tokens = overhead_tokens
+        self.components = components
+        super().__init__(
+            "fixed request overhead exceeds model context: "
+            f"overhead={overhead_tokens} tokens, context={context_tokens}, "
+            f"output_headroom={output_tokens}"
+        )
+
+
+class PassageTooLarge(PassagePackingError):
+    """One passage cannot fit even after all fixed overhead is accounted for."""
+
+    def __init__(self, passage_id: str, *, tokens: int, available_tokens: int):
+        self.passage_id = passage_id
+        self.tokens = tokens
+        self.available_tokens = available_tokens
+        super().__init__(
+            f"passage {passage_id!r} needs {tokens} tokens but only "
+            f"{available_tokens} remain after fixed overhead"
+        )
+
+
+SchemaTransport = Literal["native", "prompt", "duplicated"]
+
+
+def conservative_token_estimate(text: str) -> int:
+    """Conservatively estimate model tokens without downloading a tokenizer.
+
+    UTF-8 bytes are used as a deliberately conservative upper bound. This may under-fill
+    a context, but it cannot silently lose source text because a provider tokenizer was
+    more expensive than expected. A production caller may pass an exact ``tokenizer``
+    to :func:`pack_passages`.
+    """
+    if not text:
+        return 0
+    return len(text.encode("utf-8"))
+
+
+def _serialized(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+@dataclass(frozen=True)
+class PassageBatch:
+    """One complete request payload and its measured budget components."""
+
+    passages: tuple[dict, ...]
+    tokens: int
+    source_tokens: int
+    overhead_tokens: int
+    output_headroom: int
+    request_tokens: int
+    request_bytes: int
+
+
+def pack_passages(
+    passages: list[dict] | tuple[dict, ...],
+    *,
+    instructions: str = "",
+    system: str = "",
+    input_fields: dict | None = None,
+    vocabulary=None,
+    schema: dict | None = None,
+    context_tokens: int,
+    output_tokens: int,
+    schema_transport: SchemaTransport = "native",
+    max_chars: int | None = None,
+    tokenizer: Callable[[str], int] | None = None,
+) -> list[PassageBatch]:
+    """Pack complete existing passages under a context/output token budget.
+
+    ``system``/``instructions``, vocabulary, schema and source are measured separately.
+    ``input_fields`` lets callers account for stable non-passage input fields (for
+    example a case id or ontology) in the exact serialized request. Native
+    schema transport counts the schema once as wire overhead; prompt transport counts
+    it in the prompt; ``duplicated`` counts it in both places. ``max_chars`` remains a
+    hard per-passage guard, but this function never truncates a passage. If fixed
+    overhead leaves no room, it raises :class:`FixedOverheadTooLarge`; if one complete
+    passage is too large it raises :class:`PassageTooLarge`. Splitting must happen at a
+    higher layer only after a provider explicitly reports a normalized request-size
+    failure.
+    """
+    if context_tokens <= 0 or output_tokens < 0:
+        raise ValueError("context_tokens must be positive and output_tokens non-negative")
+    if schema_transport not in {"native", "prompt", "duplicated"}:
+        raise ValueError(f"unknown schema transport {schema_transport!r}")
+    measure = tokenizer or conservative_token_estimate
+    rows = tuple(passages)
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str) or not isinstance(row.get("text"), str):
+            raise ValueError("passages must contain dict rows with string id and text")
+        if max_chars is not None and len(row["text"]) > max_chars:
+            raise PassagePackingError(
+                f"passage {row['id']!r} exceeds retained char cap {max_chars}; split the source passage first"
+            )
+
+    # Match the stable wire shape used by PassageContract, including JSON delimiters.
+    instruction_text = system + instructions
+    vocabulary_text = _serialized(vocabulary)
+    schema_text = _serialized(schema)
+    if schema_transport in {"prompt", "duplicated"} and schema_text:
+        instruction_text += "\nOUTPUT JSON SCHEMA:\n" + schema_text
+    components = {
+        "instructions": measure(instruction_text),
+        "vocabulary": measure(vocabulary_text),
+        "schema": measure(schema_text),
+    }
+    wire_schema = components["schema"] if schema_transport in {"native", "duplicated"} else 0
+    overhead = components["instructions"] + components["vocabulary"] + wire_schema
+    available = context_tokens - output_tokens - overhead
+    if available <= 0:
+        raise FixedOverheadTooLarge(context_tokens=context_tokens, output_tokens=output_tokens,
+                                    overhead_tokens=overhead, components=components)
+
+    batches: list[PassageBatch] = []
+    current: list[dict] = []
+    current_source_tokens = 0
+
+    def finish(rows_for_batch: list[dict], source_tokens: int) -> PassageBatch:
+        payload = dict(input_fields or {})
+        payload["passages"] = [dict(id=row["id"], text=row["text"]) for row in rows_for_batch]
+        source_text = _serialized(payload)
+        prompt_tokens = measure(source_text)
+        request_tokens = overhead + prompt_tokens
+        return PassageBatch(tuple(rows_for_batch), request_tokens, source_tokens, overhead,
+                            output_tokens, request_tokens + output_tokens,
+                            len((instruction_text + vocabulary_text + source_text +
+                                 (schema_text if wire_schema else "")).encode()))
+
+    for row in rows:
+        # Measure the actual serialized payload with this candidate appended. This
+        # catches escaping, IDs and delimiters instead of treating source chars as tokens.
+        candidate = current + [row]
+        candidate_source = finish(candidate, 0).tokens - overhead
+        if candidate_source > available:
+            if not current:
+                raise PassageTooLarge(row["id"], tokens=measure(_serialized({"passages": [dict(id=row["id"], text=row["text"])]})),
+                                      available_tokens=available)
+            batches.append(finish(current, current_source_tokens))
+            current = [row]
+            current_source_tokens = candidate_source
+            if candidate_source > available:
+                raise PassageTooLarge(row["id"], tokens=candidate_source, available_tokens=available)
+        else:
+            current = candidate
+            current_source_tokens = candidate_source
+    if current:
+        batches.append(finish(current, current_source_tokens))
+    return batches
 
 
 @lru_cache(maxsize=32)
@@ -136,11 +305,13 @@ class PassageContract:
                          'passage_id':dict(type='string',enum=ids),
                          'occurrence_index':dict(type='integer',minimum=0)})
             citations=dict(type='array',minItems=1,maxItems=2,items=dict(type='string',enum=ids))
-            admitted=[]
-            if vocabulary:
-                admitted=sorted({x['name'] if isinstance(x,dict) else x for x in vocabulary.get('attributes',[])} |
-                                {x['name'] if isinstance(x,dict) else x for x in vocabulary.get('relations',[])})
-            term=dict(anyOf=[dict(type='string',enum=admitted),dict(type='string',pattern=r'^[a-z][a-z0-9_]{1,39}$')]) if admitted else dict(type='string',pattern=r'^[a-z][a-z0-9_]{1,39}$')
+            # Keep vocabulary terms open on the wire.  An admitted term and a new
+            # candidate share the same primitive type; combining a closed enum with a
+            # regex in ``anyOf`` creates an overlapping union that strict hosted schema
+            # adapters must widen (and can silently lose).  ``knowledge.py`` supplies
+            # the admitted names and durability glosses as prompt guidance, while
+            # vocabulary.valid_name()/validate_proposals enforce the naming rule locally.
+            term=dict(type='string')
             name=dict(type='object',additionalProperties=False,required=['surface','kind','passage_id'],properties={
                 'surface':dict(type='string',minLength=1,maxLength=80),'kind':dict(type='string',enum=ontology['kinds']),
                 'passage_id':dict(type='string',enum=ids)})

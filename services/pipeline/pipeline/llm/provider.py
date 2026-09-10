@@ -7,10 +7,12 @@ from novel_llm.provider import (
     Class,
     Completion,
     LLMProvider,
+    RequestBudgetExceeded,
     SequentialBatchMixin,
 )
 
 __all__ = [
     "AdmissionRejected", "BatchRequest", "BatchResult", "Class", "Completion",
+    "RequestBudgetExceeded",
     "LLMProvider", "SequentialBatchMixin",
 ]

@@ -176,8 +176,31 @@ async def test_hosted_graph_identity_does_not_probe_local_ollama(monkeypatch):
     monkeypatch.setattr(graph_rebuild, "build_provider", lambda *_args: Candidate())
     identity = await graph_rebuild.graph_model_identity(
         object(), object(), "novel", "gemini", "gemini-test")
-    assert identity == {"provider": "gemini", "name": "gemini-test", "strategy": "api_two_pass"}
+    assert identity == {"provider": "gemini", "name": "gemini-test", "strategy": "api_two_pass",
+                        "identity": {"output_tokens": 2048, "context_tokens": 32768,
+                                     "schema_transport": "prompt"}}
     local.assert_not_awaited()
+
+
+async def test_hosted_graph_identity_closes_candidate_when_capability_fails(monkeypatch):
+    from pipeline import graph_rebuild
+
+    monkeypatch.setattr(graph_rebuild, "graph_provider_config", AsyncMock(return_value=object()))
+
+    class Candidate:
+        closed = False
+
+        def schema_transport(self, model):
+            raise RuntimeError("capability probe failed")
+
+        async def aclose(self):
+            self.closed = True
+
+    candidate = Candidate()
+    monkeypatch.setattr(graph_rebuild, "build_provider", lambda *_args: candidate)
+    with pytest.raises(RuntimeError, match="capability probe failed"):
+        await graph_rebuild.graph_model_identity(object(), object(), "novel", "gemini", "gemini-test")
+    assert candidate.closed
 
 
 def test_category_vocabulary_matches_reader_api():

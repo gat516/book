@@ -37,6 +37,7 @@ from pipeline.failures import record_failure
 from pipeline.stages import DEFAULT_STAGES
 from pipeline.stages.translate import TranslateStage
 from pipeline.textproc import textproc_from_config
+from pipeline.inference_runtime import coordinated_provider
 
 log = logging.getLogger(__name__)
 
@@ -125,7 +126,10 @@ class Worker:
         # novel_provider_config row of its own (PLAN.md Phase N4's zero-config backward
         # compat) — renamed from the old self.provider/self.batch_manager, which every
         # chapter used unconditionally regardless of novel.
-        self._default_provider = provider_from_env(cfg)
+        self._default_provider = coordinated_provider(
+            provider_from_env(cfg), self.redis, provider_id=cfg.llm_provider,
+            base_url=(cfg.groq_base_url if cfg.llm_provider == 'groq' else
+                      cfg.deepseek_base_url if cfg.llm_provider == 'deepseek' else ''))
         self._default_batch_manager = BatchManager(self._default_provider)
         self.embed_provider = embed_provider_from_env(cfg)
         # Per-novel (provider, batch manager, identity, stage-specific Ollama clients,
@@ -778,7 +782,9 @@ class Worker:
                 None,
             )
         else:
-            provider = build_provider(row, self.cfg)
+            provider = coordinated_provider(
+                build_provider(row, self.cfg), self.redis, provider_id=row.provider,
+                base_url=row.base_url or '')
             result = (
                 provider,
                 BatchManager(provider),
