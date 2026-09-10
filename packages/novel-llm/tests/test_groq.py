@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import novel_llm.hosted as hosted
 from novel_llm.groq import GroqProvider, strict_schema
-from novel_llm.provider import TruncatedOutput
+from novel_llm.provider import TruncatedOutput, UnsupportedSchema
 
 
 async def test_complete_records_groq_identity_usage_and_json_contract(monkeypatch):
@@ -87,22 +87,16 @@ async def test_output_token_exhaustion_is_not_returned_as_a_completion(monkeypat
         await provider.complete("source", json_mode=True)
 
 
-def test_strict_schema_merges_same_type_union_branches_and_reports_dropped_enums():
-    # The shape passages.py builds for a vocabulary term: a known term, or a new one.
-    # Groq rejects it outright (duplicate_primitive_types) because both branches are
-    # strings and nothing distinguishes them token by token.
+def test_strict_schema_rejects_same_type_union_without_widening():
+    # The shape of a known term OR a new term is overlapping string branches. Groq
+    # rejects it before generation; silently dropping enum/pattern constraints would
+    # weaken the application contract.
     schema = {"type": "object", "properties": {"attribute": {"anyOf": [
         {"type": "string", "enum": ["appearance", "ability"]},
         {"type": "string", "pattern": r"^[a-z][a-z0-9_]{1,39}$"},
     ]}}}
-    widened: list[list] = []
-    result = strict_schema(schema, widened)
-    attribute = result["properties"]["attribute"]
-    assert "anyOf" not in attribute, "same-type branches must collapse into one"
-    assert attribute["type"] == "string"
-    # Merging widens, never narrows: the pattern branch already admitted every enum value.
-    assert "enum" not in attribute and "pattern" not in attribute
-    assert widened == [["appearance", "ability"]], "the dropped enum must reach the prompt"
+    with pytest.raises(UnsupportedSchema, match="overlapping anyOf primitive types"):
+        strict_schema(schema)
 
 
 def test_strict_schema_keeps_nullable_unions_untouched():
@@ -111,40 +105,56 @@ def test_strict_schema_keeps_nullable_unions_untouched():
     schema = {"type": "object", "properties": {
         "passage_id": {"anyOf": [{"type": "string", "enum": ["p1"]}, {"type": "null"}]},
         "sentiment": {"anyOf": [{"type": "integer", "minimum": -1}, {"type": "null"}]}}}
-    widened: list[list] = []
-    result = strict_schema(schema, widened)
+    result = strict_schema(schema)
     assert result["properties"]["passage_id"]["anyOf"] == [
         {"type": "string", "enum": ["p1"]}, {"type": "null"}]
     assert result["properties"]["sentiment"]["anyOf"][1] == {"type": "null"}
-    assert widened == []
+    assert result["properties"]["sentiment"]["anyOf"][0]["type"] == "integer"
 
 
-def test_strict_schema_unions_enums_when_every_branch_is_closed():
+def test_strict_schema_rejects_same_type_enum_union():
     schema = {"type": "object", "properties": {"kind": {"anyOf": [
         {"type": "string", "enum": ["character", "place"]},
         {"type": "string", "enum": ["place", "sect"]}]}}}
-    widened: list[list] = []
-    result = strict_schema(schema, widened)
-    # Both branches were closed, so the union stays closed and nothing is lost.
-    assert result["properties"]["kind"] == {"type": "string",
-                                            "enum": ["character", "place", "sect"]}
-    assert widened == []
+    with pytest.raises(UnsupportedSchema, match="overlapping anyOf primitive types"):
+        strict_schema(schema)
 
 
-async def test_widened_enum_values_are_named_in_the_system_prompt(monkeypatch):
-    provider = GroqProvider(model="openai/gpt-oss-120b", api_key="test-key")
-    schema = {"type": "object", "properties": {"attribute": {"anyOf": [
-        {"type": "string", "enum": ["appearance"]},
-        {"type": "string", "pattern": r"^[a-z][a-z0-9_]{1,39}$"}]}},
-        "required": ["attribute"]}
+def test_strict_schema_accepts_extraction_plain_strings_without_weakening():
+    schema = {"type": "object", "additionalProperties": False,
+              "required": ["names", "attributes"],
+              "properties": {
+                  "names": {"type": "array", "items": {"type": "string"}},
+                  "attributes": {"type": "array", "items": {"type": "object",
+                      "additionalProperties": False,
+                      "required": ["subject", "attribute", "value"],
+                      "properties": {"subject": {"type": "string"},
+                                     "attribute": {"type": "string"},
+                                     "value": {"type": "string"}}}},
+              }}
+    result = strict_schema(schema)
+    assert result["properties"]["names"]["items"] == {"type": "string"}
+    assert result["properties"]["attributes"]["items"]["required"] == [
+        "subject", "attribute", "value"]
 
-    async def complete(**payload):
-        system = payload["messages"][0]["content"]
-        assert "appearance" in system, "steering must survive the schema widening"
-        sent = payload["response_format"]["json_schema"]["schema"]
-        assert "anyOf" not in sent["properties"]["attribute"]
-        return SimpleNamespace(model="openai/gpt-oss-120b", choices=[SimpleNamespace(
-            finish_reason="stop", message=SimpleNamespace(content='{"attribute":"appearance"}'))], usage={})
+
+def test_strict_schema_rejects_open_ended_map():
+    with pytest.raises(UnsupportedSchema, match="closed object properties"):
+        strict_schema({"type": "object", "additionalProperties": {"type": "string"}})
+
+
+@pytest.mark.asyncio
+async def test_unsupported_strict_schema_is_rejected_before_transport(monkeypatch):
+    calls = []
+
+    async def complete(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace()
+
     monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=complete))
-    completion = await provider.complete("source", system="stable", json_schema=schema)
-    assert completion.served_model == "openai/gpt-oss-120b"
+    provider = GroqProvider(model="openai/gpt-oss-120b", api_key="test-key")
+    schema = {"type": "object", "properties": {"value": {"anyOf": [
+        {"type": "string"}, {"type": "string", "pattern": "x"}]}}}
+    with pytest.raises(UnsupportedSchema):
+        await provider.complete("source", json_schema=schema)
+    assert calls == []
