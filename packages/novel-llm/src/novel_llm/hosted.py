@@ -29,6 +29,17 @@ from novel_llm.provider import (
 )
 
 _RETRY_HINT = re.compile(r'(?:retry in|"?retryDelay"?\s*:\s*")\s*([0-9]+(?:\.[0-9]+)?)\s*s', re.I)
+_SERVER_RETRY_S = 5.0
+_RETRYABLE_SERVER_STATUS = frozenset({408, 500, 502, 503, 504})
+_NETWORK_ERROR_NAMES = frozenset({
+    "apiconnectionerror", "connectionerror", "connecterror", "connecttimeout",
+    "readtimeout", "writetimeout", "timeout", "timeouterror", "networkerror",
+    "serviceunavailableerror", "unavailableerror",
+})
+_SCHEMA_ERROR_CODES = frozenset({
+    "invalid_response_format", "response_format_not_supported", "unsupported_schema",
+    "json_schema_not_supported", "schema_not_supported", "unsupported_parameter",
+})
 
 # LiteLLM otherwise refreshes its model-cost map at import time. Provider startup must
 # remain offline and deterministic; the adapter only needs the SDK transport here.
@@ -108,6 +119,34 @@ def _quota_category(exc: BaseException, status: int) -> str:
     if any(marker in body for marker in ("per-day", "per day", "daily", "24 hours", "day quota")):
         return "quota_exhausted"
     return "rate_limited" if status == 429 else "model_server_error"
+
+
+def _structured_error(exc: BaseException) -> tuple[str, str]:
+    """Return bounded code/message fields used only for classification."""
+    response = _response_from_error(exc)
+    payload = getattr(exc, "body", None)
+    if payload is None and response is not None:
+        try:
+            payload = response.json()
+        except Exception:  # noqa: BLE001
+            payload = None
+    if not isinstance(payload, Mapping):
+        payload = {}
+    error = payload.get("error", payload)
+    if not isinstance(error, Mapping):
+        error = {}
+    code = str(error.get("code") or error.get("type") or "").lower()
+    message = str(error.get("message") or getattr(exc, "message", "") or "").lower()
+    return code, message
+
+
+def _retry_delay(exc: BaseException, *, fallback: float) -> tuple[float, bool, dict[str, str]]:
+    response = _response_from_error(exc)
+    safe = _headers(response)
+    delay = _retry_after(safe)
+    if delay is None:
+        delay = _body_retry_hint(exc)
+    return delay if delay is not None else fallback, delay is not None, safe
 
 
 class HostedProvider(SequentialBatchMixin):
@@ -214,22 +253,32 @@ class HostedProvider(SequentialBatchMixin):
         status = _status_from_error(exc)
         name = type(exc).__name__.lower()
         if status == 429 or "ratelimit" in name or "rate_limit" in name:
-            response = _response_from_error(exc)
-            safe = _headers(response)
-            delay = _retry_after(safe)
-            if delay is None:
-                delay = _body_retry_hint(exc)
+            delay, exact_hint, safe = _retry_delay(exc, fallback=30.0)
             raise AdmissionRejected("quota_exhausted" if status and _quota_category(exc, status) == "quota_exhausted"
-                                    else "rate_limited", retry_after_s=delay or 30.0,
-                                    exact_hint=delay is not None,
+                                    else "rate_limited", retry_after_s=delay,
+                                    exact_hint=exact_hint,
                                     category=_quota_category(exc, status or 429),
+                                    rate_limits=safe) from exc
+        if status in _RETRYABLE_SERVER_STATUS:
+            delay, exact_hint, safe = _retry_delay(exc, fallback=_SERVER_RETRY_S)
+            raise AdmissionRejected("model_server_error", retry_after_s=delay,
+                                    exact_hint=exact_hint, category="model_server_error",
                                     rate_limits=safe) from exc
         if status == 413 or any(marker in name for marker in
                                 ("contextwindow", "context_length", "requesttoolong")):
             raise RequestBudgetExceeded("provider request exceeds context budget") from exc
-        if schema and any(marker in name for marker in
-                          ("unsupported", "notimplemented", "unsupportedparam", "schemanotsupported")):
+        code, message = _structured_error(exc)
+        schema_error = (code in _SCHEMA_ERROR_CODES or
+                        ("unsupported" in message and
+                         any(marker in message for marker in ("schema", "response_format", "json"))) or
+                        ("schema" in message and "not supported" in message))
+        if schema and (schema_error or any(marker in name for marker in
+                                           ("unsupportedparam", "schemanotsupported"))):
             raise UnsupportedSchema("provider does not support the requested JSON schema") from exc
+        if status is None and (name in _NETWORK_ERROR_NAMES or
+                               any(name.endswith(marker) for marker in _NETWORK_ERROR_NAMES)):
+            raise AdmissionRejected("unreachable", retry_after_s=_SERVER_RETRY_S,
+                                    category="unreachable") from exc
         raise exc
 
     def _completion(self, response: Any, *, requested_model: str,

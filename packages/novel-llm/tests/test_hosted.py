@@ -193,6 +193,107 @@ async def test_sdk_http_failures_are_normalized_without_retry(monkeypatch, statu
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", [408, 500, 502, 503, 504])
+async def test_server_statuses_are_backpressure_with_safe_retry_hint(monkeypatch, status):
+    request = httpx.Request("POST", "https://provider.test")
+    http_response = httpx.Response(status, request=request,
+                                   headers={"retry-after": "9", "x-secret": "source"},
+                                   text="private source")
+
+    class SDKError(Exception):
+        def __init__(self):
+            self.response = http_response
+
+    calls = []
+    async def complete(**kwargs):
+        calls.append(kwargs)
+        raise SDKError()
+
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=complete))
+    provider = DeepSeekProvider(model="chat", api_key="key")
+    with pytest.raises(AdmissionRejected) as caught:
+        await provider.complete("source")
+    assert caught.value.category == "model_server_error"
+    assert caught.value.retry_after_s == 9
+    assert caught.value.exact_hint is True
+    assert caught.value.rate_limits == {"retry-after": "9"}
+    assert calls[0]["num_retries"] == 0
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_connection_failure_is_unreachable_and_cancellation_passes_through(monkeypatch):
+    calls = []
+
+    class APIConnectionError(Exception):
+        pass
+
+    async def disconnected(**kwargs):
+        calls.append(kwargs)
+        raise APIConnectionError("private endpoint")
+
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=disconnected))
+    provider = DeepSeekProvider(model="chat", api_key="key")
+    with pytest.raises(AdmissionRejected) as caught:
+        await provider.complete("source")
+    assert caught.value.category == "unreachable"
+    assert caught.value.retry_after_s == 5.0
+    assert calls[0]["num_retries"] == 0
+
+    async def cancelled(**kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=cancelled))
+    with pytest.raises(asyncio.CancelledError):
+        await provider.complete("source")
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [
+    {"error": {"code": "unsupported_parameter", "message": "response_format is unsupported"}},
+    {"error": {"type": "invalid_response_format", "message": "JSON schema is not supported"}},
+])
+async def test_structured_schema_400_is_unsupported_only_for_schema_errors(monkeypatch, payload):
+    request = httpx.Request("POST", "https://provider.test")
+    response = httpx.Response(400, request=request, json=payload)
+
+    class BadRequestError(Exception):
+        def __init__(self):
+            self.response = response
+
+    async def rejected(**kwargs):
+        raise BadRequestError()
+
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=rejected))
+    provider = AnthropicProvider(model="claude", api_key="key")
+    with pytest.raises(UnsupportedSchema):
+        await provider.complete("source", json_schema={"type": "object"})
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_json_validation_400_is_not_misclassified_as_unsupported_schema(monkeypatch):
+    request = httpx.Request("POST", "https://provider.test")
+    response = httpx.Response(400, request=request,
+                              json={"error": {"code": "json_validate_failed",
+                                               "message": "generated JSON failed validation"}})
+
+    class BadRequestError(Exception):
+        def __init__(self):
+            self.response = response
+
+    async def rejected(**kwargs):
+        raise BadRequestError()
+
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=rejected))
+    provider = AnthropicProvider(model="claude", api_key="key")
+    with pytest.raises(BadRequestError):
+        await provider.complete("source", json_schema={"type": "object"})
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
 async def test_schema_truncation_unsupported_schema_pin_and_cancellation(monkeypatch):
     class UnsupportedParamsError(Exception):
         pass
