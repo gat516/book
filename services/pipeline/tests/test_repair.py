@@ -48,6 +48,12 @@ def _status_error(code: int, *, body: str = "", path: str = "/api/generate",
 
 def test_failure_category_classifies_repair_action_errors():
     cases = [
+        (_status_error(400, body='{"error":{"code":"json_validate_failed","message":"private"}}'), "provider_invalid_json"),
+        (_status_error(400, body='{"error":{"code":"context_length_exceeded"}}'), "prompt_too_large"),
+        (_status_error(400, body='{"error":{"code":"unsupported_parameter"}}'), "provider_bad_request"),
+        (_status_error(422, body='not json'), "provider_bad_request"),
+        (_status_error(413), "prompt_too_large"),
+        (RuntimeError("provider output limit reached before a complete response"), "output_truncated"),
         (ValueError("review must approve the current report hash and name its reviewer"),
          "review_rejected"),
         (ValueError("novel not found"), "not_found"),
@@ -109,41 +115,49 @@ class _ProviderWaitCursor:
 
 
 class _ProviderWaitDB:
-    def __init__(self, row):
-        self.row = row
+    def __init__(self, attempts):
+        self.attempts = attempts
         self.sql = []
+        self.calls = []
 
     async def execute(self, sql, params=None):
         self.sql.append(sql)
-        return _ProviderWaitCursor(self.row)
+        self.calls.append((sql, params))
+        row = (self.attempts,) if "SELECT provider_wait_attempts" in sql else None
+        return _ProviderWaitCursor(row)
 
 
-async def test_provider_wait_budget_only_turns_rate_limits_into_quota_blocks():
+async def test_provider_wait_uses_bounded_exponential_backoff():
     from pipeline import event_rebuild, graph_rebuild
 
-    old_wait = graph_rebuild.PROVIDER_WAIT_BUDGET_SECONDS
-    graph_rebuild.PROVIDER_WAIT_BUDGET_SECONDS = 10
-    try:
-        db = _ProviderWaitDB((None, 11))
-        rejected = AdmissionRejected("rate_limited", retry_after_s=30, category="rate_limited")
-        assert await graph_rebuild._record_provider_wait(db, "revision", rejected)
-        assert any("blocked_category" in sql for sql in db.sql)
+    rejected = AdmissionRejected("rate_limited", retry_after_s=30, category="rate_limited")
+    db = _ProviderWaitDB(0)
+    assert await graph_rebuild._record_provider_wait(db, "revision", rejected) is None
+    update = next(params for sql,params in db.calls if "UPDATE graph_revision" in sql)
+    assert update == (60, "rate_limited", 1, "revision")
 
-        db = _ProviderWaitDB((None, 1000))
-        unavailable = AdmissionRejected("unreachable", retry_after_s=30, category="unreachable")
-        assert not await event_rebuild._record_provider_wait(db, "revision", unavailable)
-        assert not any("blocked_category" in sql for sql in db.sql)
-    finally:
-        graph_rebuild.PROVIDER_WAIT_BUDGET_SECONDS = old_wait
+    db = _ProviderWaitDB(2)
+    assert await event_rebuild._record_provider_wait(db, "revision", rejected) is None
+    update = next(params for sql,params in db.calls if "UPDATE event_revision" in sql)
+    assert update == (240, "rate_limited", 3, "revision")
+
+
+async def test_fifth_provider_rejection_stops_automatic_retries():
+    from pipeline import graph_rebuild
+
+    db = _ProviderWaitDB(4)
+    rejected = AdmissionRejected("rate_limited", retry_after_s=30, category="rate_limited")
+    assert await graph_rebuild._record_provider_wait(db, "revision", rejected) == "provider_retry_exhausted"
+    assert any("blocked_category" in sql for sql in db.sql)
 
 
 async def test_quota_exhaustion_blocks_immediately_without_wait_budget():
     from pipeline import graph_rebuild
 
-    db = _ProviderWaitDB((None, 0))
+    db = _ProviderWaitDB(0)
     rejected = AdmissionRejected("quota_exhausted", retry_after_s=86400,
                                  category="quota_exhausted")
-    assert await graph_rebuild._record_provider_wait(db, "revision", rejected)
+    assert await graph_rebuild._record_provider_wait(db, "revision", rejected) == "quota_exhausted"
     assert any("blocked_category" in sql for sql in db.sql)
 
 
@@ -198,10 +212,13 @@ def test_category_vocabulary_matches_reader_api():
             RuntimeError("worker fenced"), RuntimeError("num_predict"),
             TimeoutError("timed out"), OSError("connection refused"), KeyError("x"),
             _status_error(500),
+            _status_error(400),
+            _status_error(400, body='{"error":{"code":"json_validate_failed"}}'),
             # Raised by graph_rebuild/event_rebuild resume(), never by a repair action.
             RuntimeError("Ollama exhausted num_predict; refusing incomplete output"),
             _status_error(401), _status_error(403), _status_error(404),
             _status_error(429), _status_error(429, body="daily quota exceeded"),
+            AdmissionRejected("provider_retry_exhausted", category="provider_retry_exhausted"),
         )
     }
     # These two are written directly rather than derived from an exception: 'cancelled' by
@@ -931,6 +948,22 @@ async def test_graph_failure_records_a_class_and_schedules_a_retry(db_conn):
 
 
 @pytest.mark.db
+async def test_graph_request_rejection_is_not_automatically_retried(db_conn):
+    from pipeline import graph_rebuild
+
+    async with db_conn.transaction(force_rollback=True):
+        _, revision = await _graph_job(db_conn, attempts=1)
+        delay = await graph_rebuild.record_job_failure(
+            db_conn, revision, 1,
+            _status_error(400, body='{"error":{"code":"json_validate_failed"}}'))
+        assert delay is None
+        row = await (await db_conn.execute(
+            "SELECT state, category, retry_at FROM graph_job WHERE revision_id=%s",
+            (revision,))).fetchone()
+        assert row == ("failed", "provider_invalid_json", None)
+
+
+@pytest.mark.db
 async def test_graph_failure_past_the_retry_bound_schedules_nothing(db_conn):
     """graph_retry_delay_minutes returns None past attempt 3, and retry_at must follow."""
     from pipeline import graph_rebuild
@@ -1138,7 +1171,7 @@ async def test_retry_action_clears_a_non_transient_block_immediately(db_conn):
         novel, revision = await _staging_revision(db_conn)
         await db_conn.execute(
             "UPDATE graph_revision SET blocked_category='model_not_installed',"
-            "blocked_at=now() WHERE id=%s", (revision,))
+            "blocked_at=now(),provider_wait_attempts=5 WHERE id=%s", (revision,))
 
         result = await repair._run(db_conn, None, dict(
             track="graph", action="retry", revision_id=revision, params={}))
@@ -1146,9 +1179,9 @@ async def test_retry_action_clears_a_non_transient_block_immediately(db_conn):
                            "was_blocked": True}
 
         row = await (await db_conn.execute(
-            "SELECT blocked_category, blocked_at FROM graph_revision WHERE id=%s",
+            "SELECT blocked_category, blocked_at, provider_wait_attempts FROM graph_revision WHERE id=%s",
             (revision,))).fetchone()
-        assert row == (None, None)
+        assert row == (None, None, 0)
         assert await repair._next_staging_revision(
             db_conn, "graph_revision", "graph_job", novel) == revision
 

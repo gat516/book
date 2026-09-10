@@ -75,6 +75,7 @@ func loadConfig() Config {
 		ProviderHealthAllowedHosts: map[string]bool{
 			"api.anthropic.com":                 true,
 			"api.deepseek.com":                  true,
+			"api.groq.com":                      true,
 			"generativelanguage.googleapis.com": true,
 		},
 	}

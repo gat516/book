@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from novel_llm import AnthropicProvider, DeepSeekProvider, GeminiProvider, LLMProvider, OllamaProvider
+from novel_llm import AnthropicProvider, DeepSeekProvider, GeminiProvider, GroqProvider, LLMProvider, OllamaProvider
 from novel_llm.gemini import DEFAULT_BASE_URL as GEMINI_BASE_URL
 
 
@@ -101,7 +101,8 @@ async def resolve_provider_config(conn, novel_id: str, default_provider: str) ->
     )
 
 
-def build_provider(row: ProviderConfigRow, *, default_model: str, ollama_host: str, deepseek_base_url: str) -> LLMProvider:
+def build_provider(row: ProviderConfigRow, *, default_model: str, ollama_host: str,
+                   deepseek_base_url: str, groq_base_url: str = "https://api.groq.com/openai/v1") -> LLMProvider:
     match row.provider:
         case "ollama":
             return OllamaProvider(host=row.base_url or ollama_host, model=row.model or default_model)
@@ -121,5 +122,8 @@ def build_provider(row: ProviderConfigRow, *, default_model: str, ollama_host: s
                 base_url=row.base_url or deepseek_base_url,
                 api_key=row.api_key,
             )
+        case "groq":
+            return GroqProvider(model=row.model or default_model,
+                                base_url=row.base_url or groq_base_url, api_key=row.api_key)
         case other:
             raise ValueError(f"unknown provider in novel_provider_config: {other!r}")

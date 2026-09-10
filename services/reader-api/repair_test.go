@@ -31,7 +31,7 @@ func TestEveryFailureCategoryHasDetail(t *testing.T) {
 		repairTruncated, repairReviewRejected, repairNotFound, repairCancelled,
 		repairAbandoned, repairModelMissing, repairCredentialErr,
 		repairCredentialRej, repairRateLimited, repairQuotaExhausted,
-		repairModelUnavailable,
+		repairRetryExhausted, repairModelUnavailable,
 	}
 	for _, category := range categories {
 		if strings.TrimSpace(repairFailureDetail[category]) == "" {
@@ -42,7 +42,8 @@ func TestEveryFailureCategoryHasDetail(t *testing.T) {
 
 func TestHostedFailureDetailsAreProviderNeutral(t *testing.T) {
 	for _, category := range []string{
-		repairCredentialRej, repairRateLimited, repairQuotaExhausted, repairModelUnavailable,
+		repairCredentialRej, repairRateLimited, repairQuotaExhausted, repairRetryExhausted,
+		repairModelUnavailable,
 	} {
 		detail := repairFailureDetail[category]
 		if strings.Contains(strings.ToLower(detail), "local ollama") ||
@@ -151,16 +152,20 @@ func TestBuildTrackStates(t *testing.T) {
 
 func TestBuildTrackExposesLiveProviderWait(t *testing.T) {
 	active := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	staging := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 	since := time.Now().Add(-2 * time.Minute)
 	retryAt := time.Now().Add(20 * time.Second)
 	category := "rate_limited"
 
 	track := buildTrack(repairRow{
-		activeRevision: &active,
-		waitingSince:   &since, waitingRetryAt: &retryAt, waitingCategory: &category,
+		activeRevision: &active, replacementID: &staging, total: 1,
+		waitingSince: &since, waitingRetryAt: &retryAt, waitingCategory: &category,
 	}, nil, nil, "facts")
 	if track.WaitingOnProvider == nil {
 		t.Fatal("expected provider wait")
+	}
+	if !strings.Contains(track.Reason, "Waiting on provider:") || !strings.Contains(track.Reason, "rate limiting") {
+		t.Fatalf("wait must be visible in the shared status sentence: %q", track.Reason)
 	}
 	if track.WaitingOnProvider.Category != category {
 		t.Fatalf("category = %q, want %q", track.WaitingOnProvider.Category, category)

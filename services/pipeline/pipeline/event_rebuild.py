@@ -86,6 +86,11 @@ async def provider_connection(db, cfg, novel: str, provider: str) -> dict:
         base_url = base_url or cfg.gemini_base_url
         if not api_key:
             raise RuntimeError("Gemini event extraction has no configured API key")
+    elif provider == "groq":
+        api_key = api_key or cfg.groq_api_key or None
+        base_url = base_url or cfg.groq_base_url
+        if not api_key:
+            raise RuntimeError("Groq event extraction has no configured API key")
     return {"base_url": base_url, "api_key": api_key}
 
 
@@ -180,45 +185,48 @@ def retry_delay_minutes(attempt: int) -> int | None:
     return {1: 5, 2: 15, 3: 45}.get(attempt)
 
 
-PROVIDER_WAIT_BUDGET_SECONDS = 15 * 60
+PROVIDER_AUTO_RETRY_LIMIT = 5
+PROVIDER_RETRY_BASE_SECONDS = 60
 TERMINAL_PROVIDER_CATEGORIES = frozenset({
     "credential_rejected", "model_not_available", "quota_exhausted",
+    "provider_bad_request", "provider_invalid_json",
+    "prompt_too_large",
 })
 
 
-async def _record_provider_wait(db, rid: str, exc: AdmissionRejected) -> bool:
-    """Record safe provider wait state; return whether its wall-clock budget expired."""
+async def _record_provider_wait(db, rid: str, exc: AdmissionRejected) -> str | None:
+    """Record bounded exponential backoff; return a category when retries are spent."""
     category = getattr(exc, "category", "rate_limited")
-    retry_after = max(float(exc.retry_after_s), 0.0)
     row = await (await db.execute(
+        "SELECT provider_wait_attempts FROM event_revision WHERE id=%s", (rid,)
+    )).fetchone()
+    attempt = (row[0] if row else 0) + 1
+    blocked = (category if category == "quota_exhausted" else
+               "provider_retry_exhausted" if attempt >= PROVIDER_AUTO_RETRY_LIMIT else None)
+    if blocked:
+        await record_blocked(db, "event_revision", rid,
+                             AdmissionRejected(blocked, category=blocked))
+        await db.execute(
+            """UPDATE event_revision SET provider_wait_since=NULL,
+                      provider_wait_retry_at=NULL, provider_wait_category=NULL,
+                      provider_wait_attempts=%s WHERE id=%s""", (attempt, rid))
+        return blocked
+    retry_after = max(float(exc.retry_after_s),
+                      PROVIDER_RETRY_BASE_SECONDS * (2 ** (attempt - 1)))
+    await db.execute(
         """UPDATE event_revision
               SET provider_wait_since=COALESCE(provider_wait_since,now()),
                   provider_wait_retry_at=now()+(%s * interval '1 second'),
-                  provider_wait_category=%s
-            WHERE id=%s
-        RETURNING provider_wait_since,
-                  EXTRACT(EPOCH FROM now()-provider_wait_since)""",
-        (retry_after, category, rid),
-    )).fetchone()
-    if category == "quota_exhausted" or (
-        category == "rate_limited" and row and row[1] >= PROVIDER_WAIT_BUDGET_SECONDS
-    ):
-        exhausted = AdmissionRejected("quota_exhausted", category="quota_exhausted")
-        await record_blocked(db, "event_revision", rid, exhausted)
-        await db.execute(
-            """UPDATE event_revision SET provider_wait_since=NULL,
-                      provider_wait_retry_at=NULL, provider_wait_category=NULL
-                WHERE id=%s""",
-            (rid,),
-        )
-        return True
-    return False
+                  provider_wait_category=%s, provider_wait_attempts=%s
+            WHERE id=%s""", (retry_after, category, attempt, rid))
+    return None
 
 
 async def _clear_provider_wait(db, rid: str) -> None:
     await db.execute(
         """UPDATE event_revision SET provider_wait_since=NULL,
-                  provider_wait_retry_at=NULL, provider_wait_category=NULL
+                  provider_wait_retry_at=NULL, provider_wait_category=NULL,
+                  provider_wait_attempts=0
             WHERE id=%s""",
         (rid,),
     )
@@ -320,8 +328,9 @@ async def resume(db, cfg, rid: str, *, limit: int | None = None, chapter: int | 
                     "UPDATE event_job SET state='pending',error=NULL,category=NULL,retry_at=NULL,updated_at=now() "
                     "WHERE revision_id=%s AND chapter_index=%s", (rid, index),
                 )
-                if await _record_provider_wait(db, rid, exc):
-                    raise AdmissionRejected("quota_exhausted", category="quota_exhausted") from exc
+                blocked_category = await _record_provider_wait(db, rid, exc)
+                if blocked_category:
+                    raise AdmissionRejected(blocked_category, category=blocked_category) from exc
                 raise
             except Exception as exc:
                 category = failure_category(exc)

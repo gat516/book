@@ -54,7 +54,7 @@ type novelSettingsReq struct {
 }
 
 type providerConfigReq struct {
-	Provider       string `json:"provider"` // anthropic|deepseek|gemini|ollama
+	Provider       string `json:"provider"` // anthropic|deepseek|gemini|groq|ollama
 	Model          string `json:"model,omitempty"`
 	TranslateModel string `json:"translate_model,omitempty"`
 	ExtractModel   string `json:"extract_model,omitempty"`
@@ -163,9 +163,9 @@ func (a *API) createNovel(w http.ResponseWriter, r *http.Request) {
 // and the key for that provider comes from provider_credential (migration 0068).
 func (a *API) buildProviderConfigInput(req providerConfigReq) (ProviderConfigInput, error) {
 	switch req.Provider {
-	case "anthropic", "deepseek", "gemini", "ollama":
+	case "anthropic", "deepseek", "gemini", "groq", "ollama":
 	default:
-		return ProviderConfigInput{}, fmt.Errorf("provider must be one of anthropic, deepseek, gemini, ollama")
+		return ProviderConfigInput{}, fmt.Errorf("provider must be one of anthropic, deepseek, gemini, groq, ollama")
 	}
 	if req.Provider == "ollama" && req.BaseURL != "" {
 		if err := validateOllamaBaseURL(req.BaseURL, a.cfg.OllamaAllowedHosts); err != nil {

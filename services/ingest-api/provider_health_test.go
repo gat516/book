@@ -31,6 +31,7 @@ func TestHostedProviderHealthUsesProviderModelEndpointsAndHeaders(t *testing.T) 
 		{provider: "gemini", path: "/v1beta/models", header: "x-goog-api-key", want: "ok"},
 		{provider: "anthropic", path: "/v1/models", header: "x-api-key", want: "ok"},
 		{provider: "deepseek", path: "/models", header: "Authorization", want: "ok"},
+		{provider: "groq", path: "/openai/v1/models", header: "Authorization", want: "ok"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.provider, func(t *testing.T) {
@@ -41,7 +42,7 @@ func TestHostedProviderHealthUsesProviderModelEndpointsAndHeaders(t *testing.T) 
 				if got := r.Header.Get(tt.header); got == "" {
 					t.Fatalf("missing %s header", tt.header)
 				}
-				if tt.provider == "deepseek" && r.Header.Get("Authorization") != "Bearer secret" {
+			if (tt.provider == "deepseek" || tt.provider == "groq") && r.Header.Get("Authorization") != "Bearer secret" {
 					t.Fatalf("authorization header was not bearer encoded")
 				}
 				w.WriteHeader(http.StatusOK)
@@ -125,6 +126,7 @@ func TestProviderHealthModelCatalogAcceptsPresentAndRejectsMissingModels(t *test
 		{provider: "gemini", body: `{"models":[{"name":"models/gemini-2.5-flash"}]}`, present: "gemini-2.5-flash"},
 		{provider: "anthropic", body: `{"data":[{"id":"claude-haiku-4-5"}]}`, present: "claude-haiku-4-5"},
 		{provider: "deepseek", body: `{"data":[{"id":"deepseek-v4-flash"}]}`, present: "deepseek-v4-flash"},
+		{provider: "groq", body: `{"data":[{"id":"openai/gpt-oss-120b"}]}`, present: "openai/gpt-oss-120b"},
 	} {
 		t.Run(test.provider, func(t *testing.T) {
 			server := providerHealthTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

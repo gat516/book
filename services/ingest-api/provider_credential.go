@@ -145,9 +145,9 @@ func (a *API) listProviderCredentials(w http.ResponseWriter, r *http.Request) {
 func (a *API) putProviderCredential(w http.ResponseWriter, r *http.Request) {
 	provider := r.PathValue("provider")
 	switch provider {
-	case "anthropic", "deepseek", "gemini", "ollama":
+	case "anthropic", "deepseek", "gemini", "groq", "ollama":
 	default:
-		writeErr(w, http.StatusBadRequest, "provider must be one of anthropic, deepseek, gemini, ollama")
+		writeErr(w, http.StatusBadRequest, "provider must be one of anthropic, deepseek, gemini, groq, ollama")
 		return
 	}
 	var req providerCredentialReq

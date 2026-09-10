@@ -200,6 +200,8 @@ func processProviderKey(provider string) string {
 		return os.Getenv("DEEPSEEK_API_KEY")
 	case "gemini":
 		return os.Getenv("GEMINI_API_KEY")
+	case "groq":
+		return os.Getenv("GROQ_API_KEY")
 	default:
 		return ""
 	}
@@ -213,6 +215,8 @@ func processProviderBase(provider string) string {
 		return getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 	case "gemini":
 		return getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
+	case "groq":
+		return getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 	default:
 		return ""
 	}
@@ -392,7 +396,7 @@ func probeLocalProvider(ctx context.Context, base string, requested ...string) s
 }
 
 func validateHostedProviderBaseURL(provider, raw string, allowed map[string]bool) error {
-	if provider != "gemini" && provider != "anthropic" && provider != "deepseek" {
+	if provider != "gemini" && provider != "anthropic" && provider != "deepseek" && provider != "groq" {
 		return fmt.Errorf("unsupported hosted provider")
 	}
 	u, err := url.Parse(raw)
@@ -424,6 +428,8 @@ func hostedModelsURL(provider, base string) (string, bool) {
 		u.Path = "/v1/models"
 	case "deepseek":
 		u.Path = "/models"
+	case "groq":
+		u.Path = "/openai/v1/models"
 	default:
 		return "", false
 	}
@@ -449,7 +455,7 @@ func probeHostedProvider(ctx context.Context, provider, base, apiKey string, req
 	case "anthropic":
 		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
-	case "deepseek":
+	case "deepseek", "groq":
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	resp, err := providerHealthClient().Do(req)
@@ -500,7 +506,7 @@ func hostedCatalogContains(provider string, body []byte, requested string) (foun
 			}
 		}
 		return false, true
-	case "anthropic", "deepseek":
+	case "anthropic", "deepseek", "groq":
 		var payload struct {
 			Data []struct {
 				ID string `json:"id"`

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fixtures import make_config
-from novel_llm import DeepSeekProvider, OllamaProvider
+from novel_llm import DeepSeekProvider, GroqProvider, OllamaProvider
 import pytest
 
 from pipeline.config import names_runtime, resolve_runtime
@@ -26,6 +26,12 @@ def test_ollama_case_unchanged():
     assert isinstance(provider_from_env(cfg), OllamaProvider)
 
 
+def test_groq_case_constructs_a_groq_provider():
+    cfg = make_config(llm_provider="groq", groq_api_key="k",
+                      llm_model_extract="openai/gpt-oss-120b")
+    assert isinstance(provider_from_env(cfg), GroqProvider)
+
+
 def test_names_provider_is_none_for_hosted_providers():
     """A novel pinned to a hosted provider must keep that routing (Phase N4).
 
@@ -33,7 +39,7 @@ def test_names_provider_is_none_for_hosted_providers():
     honouring it means a second local client — which for an Anthropic/DeepSeek novel would
     silently send that novel's work somewhere it never asked for.
     """
-    for provider_id in ("anthropic", "deepseek", "gateway"):
+    for provider_id in ("anthropic", "deepseek", "groq", "gateway"):
         assert build_names_provider(make_config(), provider_id=provider_id) is None
 
 
@@ -81,7 +87,7 @@ def test_resolve_provider_carries_phase_budgets_and_streams():
 
 
 def test_resolve_provider_does_not_replace_hosted_routing():
-    for provider_id in ("anthropic", "deepseek", "gateway"):
+    for provider_id in ("anthropic", "deepseek", "groq", "gateway"):
         assert build_resolve_provider(make_config(), provider_id=provider_id) is None
 
 

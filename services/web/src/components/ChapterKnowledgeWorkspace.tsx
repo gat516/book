@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   applyChapterReextract, cancelRepair, correctFact, correctGlossaryTerm, deleteGlossaryTerm,
-  editFactDisplay, getChapterKnowledge, getChapterKnowledgeActivity, getHeldKnowledge, getProviderConfig,
-  getPipelineStatus, getRepairStatus, listOllamaModels, removeFact, requestRepair, retryRepairNow,
-  reviewChapterKnowledge, startChapterReextract,
+  editFactDisplay, getChapterKnowledge, getChapterKnowledgeActivity, getHeldKnowledge,
+  getProviderConfig, getPipelineStatus, getRepairStatus, listOllamaModels, removeFact,
+  requestRepair, retryRepairNow, reviewChapterKnowledge, startChapterReextract,
+  getRepairProgress,
 } from "../api";
 import { DEFAULT_MODEL, MODEL_OPTIONS, PROVIDER_LABELS } from "../providers";
+import { graphStageState } from "../graphBuildStatus";
 import type {
   ChapterKnowledgeActivity, ChapterKnowledgeResponse, HeldKnowledgeItem, HeldKnowledgeResponse,
   KnowledgeReviewItem, ProviderName, RepairRequestView, RepairStatus, RepairTrack,
+  RepairProgressFact,
 } from "../types";
 import { RepairReview } from "./RepairReview";
 import { ProviderHealth, providerFailureDetail } from "./ProviderHealth";
@@ -99,12 +102,18 @@ function GraphBuildStatus({track,workerOnline}:{track:RepairTrack;workerOnline:b
   const [now,setNow]=useState(Date.now());
   useEffect(()=>{const timer=window.setInterval(()=>setNow(Date.now()),1000);return()=>window.clearInterval(timer)},[]);
   const worker=track.worker;
+  const {failed,stageEnd}=graphStageState(track,now);
+  const waiting=track.state==="rebuilding"&&!track.blocked?track.waiting_on_provider:undefined;
+  const [waitReceivedAt,setWaitReceivedAt]=useState(Date.now());
+  useEffect(()=>{setWaitReceivedAt(Date.now())},[waiting]);
+  const retrySeconds=waiting?Math.max(0,Math.ceil(waiting.retry_after_s-(now-waitReceivedAt)/1000)):0;
   const silence=worker?.last_progress_at?Math.max(0,now-new Date(worker.last_progress_at).getTime()):0;
-  const possiblyStuck=track.state==="rebuilding"&&workerOnline!==false&&worker?.job_state==="processing"&&silence>5*60_000;
-  const health=track.state==="failed"?"Failed"
+  const possiblyStuck=!waiting&&track.state==="rebuilding"&&workerOnline!==false&&worker?.job_state==="processing"&&silence>5*60_000;
+  const health=failed?"Failed"
     :track.blocked?"Blocked"
     :track.state==="awaiting_review"?"Ready for review"
     :workerOnline===false?"Worker offline"
+    :waiting?"Waiting on provider"
     :possiblyStuck?"No recent progress"
     :track.state==="rebuilding"?"Working":"Waiting";
   const progressMax=Math.max(1,track.chapters.total);
@@ -112,14 +121,17 @@ function GraphBuildStatus({track,workerOnline}:{track:RepairTrack;workerOnline:b
     <div className="graph-build-heading"><strong>{health}</strong><span>{track.chapters.done}/{track.chapters.total} chapters</span></div>
     <progress aria-label="Book graph rebuild progress" max={progressMax} value={track.chapters.done} />
     <dl className="graph-build-reports">
-      {worker?.stage&&<div><dt>Stage</dt><dd>{GRAPH_STAGE_LABELS[worker.stage]??worker.stage}</dd></div>}
+      {worker?.stage&&<div><dt>Stage</dt><dd>{failed?"Failed — ":waiting?"Paused — ":""}{GRAPH_STAGE_LABELS[worker.stage]??worker.stage}</dd></div>}
       {track.current&&<div><dt>Chapter</dt><dd>{track.current.chapter}</dd></div>}
       <div><dt>Model calls</dt><dd>{track.published.calls} completed</dd></div>
-      {worker?.stage_started_at&&<div><dt>Stage time</dt><dd>{durationSince(worker.stage_started_at,now)}</dd></div>}
+      {waiting&&<div><dt>Provider wait</dt><dd>{durationSince(waiting.since,now)}</dd></div>}
+      {waiting&&<div><dt>Retry</dt><dd>{workerOnline===false?"When worker returns":retrySeconds>0?`In ${retrySeconds}s`:"Awaiting provider response"}</dd></div>}
+      {worker?.stage_started_at&&<div><dt>Stage elapsed (includes retries)</dt><dd>{durationSince(worker.stage_started_at,stageEnd)}</dd></div>}
       {worker?.last_progress_at&&<div><dt>Last signal</dt><dd>{durationSince(worker.last_progress_at,now)} ago</dd></div>}
       <div><dt>Worker</dt><dd>{workerOnline===null?"Checking…":workerOnline?"Online":"Offline or crashed"}</dd></div>
       {track.chapters.failed>0&&<div><dt>Failures</dt><dd>{track.chapters.failed} chapter · {worker?.attempts??0} attempts</dd></div>}
     </dl>
+    {waiting&&<p role="status">{providerFailureDetail(waiting.category)}</p>}
     {possiblyStuck&&<p role="alert" className="reader-pane-error">The worker is online, but this model call has sent no progress signal for {durationSince(worker?.last_progress_at,now)}. It may be stuck.</p>}
     {workerOnline===false&&track.state==="rebuilding"&&<p role="alert" className="reader-pane-error">The rebuild is unfinished but the worker heartbeat is gone. The worker stopped or crashed and must come back before work can continue.</p>}
     {(worker?.detail||track.blocked?.detail)&&<p role="alert" className="reader-pane-error">{worker?.detail??track.blocked?.detail}</p>}
@@ -186,7 +198,7 @@ function BuildGraph({ novelId, chapter, label, onDone }: { novelId: string; chap
         </datalist>
       </label>
       {provider !== "ollama" && <p className="novel-create-form-hint">
-        Uses the saved {PROVIDER_LABELS[provider]} API key and the two-pass fact strategy.
+        Uses the saved {PROVIDER_LABELS[provider]} API key and the configured extraction strategy.
       </p>}
       <label>Through chapter{" "}
         <input type="number" min={0} step={1} value={upto}
@@ -297,7 +309,7 @@ function QuarantineGate({ novelId, chapter, onDone }: { novelId: string; chapter
         </p>
       )}
       <div className="knowledge-actions">
-        {track.blocked && (
+        {(track.blocked || track.waiting_on_provider) && (
           <button disabled={busy} onClick={() => void act("retry")}>Retry now</button>
         )}
         {replacement.review_hash && <button disabled={busy} onClick={() => setReviewing(true)}>Review</button>}
@@ -530,16 +542,24 @@ export function ChapterKnowledgeWorkspace({novelId,chapter,at}:{novelId:string;c
   const [data,setData]=useState<ChapterKnowledgeResponse|null>(null);
   const [activity,setActivity]=useState<ChapterKnowledgeActivity[]>([]);
   const [repairStatus,setRepairStatus]=useState<RepairStatus|null>(null);
+  const [stagedFacts,setStagedFacts]=useState<RepairProgressFact[]>([]);
   const [workerOnline,setWorkerOnline]=useState<boolean|null>(null);
   const [error,setError]=useState(""); const [busy,setBusy]=useState(false);
   const [editing,setEditing]=useState<number|null>(null); const [draft,setDraft]=useState("");
   const [editingTerm,setEditingTerm]=useState<string|null>(null); const [termDraft,setTermDraft]=useState("");
   const [decisions,setDecisions]=useState<Record<string,string>>({});
   const load=useCallback(async()=>{const next=await getChapterKnowledge(novelId,chapter);setData(next);return next},[novelId,chapter]);
-  const loadRepair=useCallback(async()=>{const next=await getRepairStatus(novelId);setRepairStatus(next);return next},[novelId]);
+  const loadRepair=useCallback(async()=>{
+    const next=await getRepairStatus(novelId);setRepairStatus(next);
+    if(next.graph.replacement){
+      try{const progress=await getRepairProgress(novelId);setStagedFacts(progress.facts.filter(f=>f.chapter_index===chapter))}
+      catch{setStagedFacts([])}
+    }else setStagedFacts([]);
+    return next
+  },[novelId,chapter]);
   const refresh=useCallback(async()=>{const [next]=await Promise.all([load(),loadRepair()]);return next},[load,loadRepair]);
 
-  useEffect(()=>{setData(null);setActivity([]);setRepairStatus(null);setError("");void refresh().catch(e=>setError(errorMessage(e)))},[refresh]);
+  useEffect(()=>{setData(null);setActivity([]);setRepairStatus(null);setStagedFacts([]);setError("");void refresh().catch(e=>setError(errorMessage(e)))},[refresh]);
   useEffect(()=>{
     const run=data?.run;if(!run)return;let cancelled=false;let timer:number|undefined;
     async function poll(){try{const after=activity.at(-1)?.sequence??0;const response=await getChapterKnowledgeActivity(novelId,chapter,run!.id,after);if(cancelled)return;if(response.activity.length)setActivity(old=>[...old,...response.activity]);const fresh=await load();if(!terminal.has(fresh.run?.state??""))timer=window.setTimeout(poll,2000)}catch{if(!cancelled)timer=window.setTimeout(poll,5000)}}
@@ -600,16 +620,20 @@ export function ChapterKnowledgeWorkspace({novelId,chapter,at}:{novelId:string;c
         {preview.map(item=><label key={item.item_key}><span>{item.item_kind}: {item.classification.replace("_"," ")}</span>{item.item_kind==="term"?<small>Verified terms will be published; the term itself remains editable below.</small>:<select value={decisions[item.item_key]??"retain"} onChange={e=>setDecisions(old=>({...old,[item.item_key]:e.target.value}))}><option value="retain">Retain current knowledge</option>{item.classification==="new"&&<option value="approve">Publish new item</option>}{item.classification==="display_update"&&<option value="update_display">Update English display</option>}{item.classification==="possible_replacement"&&<option value="replace">Publish correction</option>}{item.classification==="missing"&&<option value="remove">Publish retraction</option>}</select>}</label>)}
         <button disabled={busy} onClick={()=>void mutate(current=>applyChapterReextract(novelId,chapter,current.run?.id||data.run!.id,{revision_id:current.revision_id,version:current.version,decisions}))}>{data.run.scope==="terms"?"Publish verified terms":Object.values(decisions).some(v=>v!=="retain")?"Apply selected changes":"Finish review — retain everything"}</button></div>}
     </details>
-    <details open><summary>Facts ({data.facts.length} published)</summary>
-      {data.facts.length===0?<p>{data.graph_extraction?.state==="done"
-        ? `${data.graph_extraction.published_fact_rows} fact rows (${data.graph_extraction.verified_claims} verified claims total) are in the rebuild awaiting review and activation.`
-        : "No published facts originated here."}</p>:<ul className="chapter-knowledge-list">{data.facts.map(f=><li key={f.id} className={f.status!=="active"?"knowledge-history":""}>
+    <details open><summary>Facts ({data.facts.length} active{stagedFacts.length>0?`, ${stagedFacts.length} awaiting review`:""})</summary>
+      {stagedFacts.length>0&&<><h3>Awaiting book review</h3><p>These facts are published only inside the staged rebuild. They remain hidden from readers and Ask AI until you review and activate it.</p><ul className="chapter-knowledge-list">{stagedFacts.map(f=><li key={`staged-${f.id}`} className="knowledge-history">
+        <div><strong>{f.entity}</strong> — {f.attribute}: {f.value} <span className="knowledge-badge">staged</span></div>
+        <small>Chapter {f.chapter_index}{f.quote&&<> · Evidence: “{f.quote}”</>}</small>
+      </li>)}</ul></>}
+      {data.facts.length===0&&stagedFacts.length===0?<p>{data.graph_extraction?.state==="done"
+        ? `${data.graph_extraction.published_fact_rows} fact rows (${data.graph_extraction.verified_claims} verified claims total) are in the rebuild awaiting review and activation, but their review details could not be loaded.`
+        : "No active facts originated here."}</p>:data.facts.length>0&&<><h3>Active graph</h3><ul className="chapter-knowledge-list">{data.facts.map(f=><li key={f.id} className={f.status!=="active"?"knowledge-history":""}>
         <div><strong>{f.entity_canonical}</strong> — {f.attribute}: {f.value} {f.kind!=="assertion"&&<span className="knowledge-badge">{f.kind}</span>} {f.status!=="active"&&<span className="knowledge-badge">{f.status}</span>}</div>
         <small>Source: {f.value_source}{f.evidence?.quote&&<> · Evidence: “{f.evidence.quote}”</>}</small>
         {f.status==="active"&&<div className="knowledge-actions">{editing===f.id?<><input aria-label="English display value" value={draft} onChange={e=>setDraft(e.target.value)}/><button disabled={!writable||busy||!draft.trim()} onClick={()=>void mutate(async current=>{await editFactDisplay(novelId,f.id,{revision_id:current.revision_id,version:current.version,value_en:draft.trim()});setEditing(null)})}>Save display</button><button onClick={()=>setEditing(null)}>Cancel</button></>:<button disabled={!writable} onClick={()=>{setEditing(f.id);setDraft(f.value)}}>Edit English</button>}
           <button disabled={!writable||busy} onClick={()=>{const value=window.prompt("Correct English value",f.value);if(value)void mutate(current=>correctFact(novelId,f.id,{revision_id:current.revision_id,version:current.version,attribute:f.attribute,value_en:value}))}}>Correct fact…</button>
           <button disabled={!writable||busy} onClick={()=>{if(window.confirm("Remove this fact? Its source row and evidence will remain in history."))void mutate(current=>removeFact(novelId,f.id,{revision_id:current.revision_id,version:current.version}))}}>Remove</button></div>}
-      </li>)}</ul>}
+      </li>)}</ul></>}
     </details>
     <details open><summary>Held knowledge — review queue</summary>
       <HeldKnowledgeReview novelId={novelId} chapter={chapter} onDone={refresh} />

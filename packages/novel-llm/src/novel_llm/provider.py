@@ -16,7 +16,7 @@ import httpx
 # 5xx and 408 are the backend failing to serve a request that is itself valid.
 TRANSIENT_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 ADMISSION_CATEGORIES = frozenset({
-    "rate_limited", "quota_exhausted", "unreachable", "embed_unavailable",
+    "rate_limited", "quota_exhausted", "provider_retry_exhausted", "unreachable", "embed_unavailable",
     "model_server_error",
 })
 

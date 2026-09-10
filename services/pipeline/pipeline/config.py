@@ -106,6 +106,8 @@ class Config:
     # so it needs only a key and a base -- no SDK, same shape as deepseek above.
     gemini_api_key: str = ""
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    groq_api_key: str = ""
+    groq_base_url: str = "https://api.groq.com/openai/v1"
     # Two distinct budgets, not one. graph_ollama_first_token_seconds bounds PREFILL —
     # Ollama's stream emits nothing at all while it processes the prompt, so this must
     # cover the whole prompt_eval phase. graph_ollama_timeout_seconds bounds the gap
@@ -225,6 +227,8 @@ class Config:
             resolve_ollama_num_ctx=int(_getenv("RESOLVE_OLLAMA_NUM_CTX", "16384")),
             deepseek_api_key=_getenv("DEEPSEEK_API_KEY", ""),
             deepseek_base_url=_getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+            groq_api_key=_getenv("GROQ_API_KEY", ""),
+            groq_base_url=_getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
             gateway_addr=_getenv("LLM_GATEWAY_ADDR", "localhost:8081"),
             gateway_backend=_getenv("LLM_GATEWAY_BACKEND", "local_gpu"),
             gateway_provider=_getenv("LLM_GATEWAY_PROVIDER", "ollama"),

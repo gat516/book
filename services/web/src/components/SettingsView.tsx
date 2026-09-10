@@ -9,7 +9,7 @@ interface Props {
   onClose: () => void;
 }
 
-const PROVIDERS: ProviderName[] = ["gemini", "deepseek", "anthropic", "ollama"];
+const PROVIDERS: ProviderName[] = ["gemini", "groq", "deepseek", "anthropic", "ollama"];
 
 // Account-wide settings: the provider keys every book draws on, plus reading preferences.
 // Keys live here rather than per book (migration 0035) because the common case is several

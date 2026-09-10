@@ -224,6 +224,8 @@ TRANSIENT_CATEGORIES = {"model_unreachable", "timeout", "model_server_error"}
 # class on the chapter run so reader progress can explain the stop without provider text.
 CHAPTER_TERMINAL_CATEGORIES = {
     "credential_missing", "credential_rejected", "model_not_available", "quota_exhausted",
+    "provider_bad_request", "provider_invalid_json",
+    "prompt_too_large",
 }
 
 # No per-revision attempt counter exists to back off against (unlike graph_job's
@@ -430,7 +432,8 @@ async def _run(db, cfg, row: dict) -> dict:
                        SET blocked_category=NULL, blocked_at=NULL,
                            provider_wait_since=NULL,
                            provider_wait_retry_at=NULL,
-                           provider_wait_category=NULL
+                           provider_wait_category=NULL,
+                           provider_wait_attempts=0
                      WHERE id=%s""",
             (row["revision_id"],))
         return {"status": "retry requested", "revision": row["revision_id"],

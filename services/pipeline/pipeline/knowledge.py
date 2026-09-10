@@ -173,7 +173,12 @@ class KnowledgeEngine:
         self.identity_hard_bytes = IDENTITY_PROMPT_HARD_BYTES_HOSTED if self.hosted else IDENTITY_PROMPT_HARD_BYTES
         self.align_window_chars = ALIGN_WINDOW_CHARS_HOSTED if self.hosted else ALIGN_WINDOW_CHARS
         self.alignment_limit = ALIGNMENT_LIMIT_HOSTED if self.hosted else ALIGNMENT_LIMIT
-        self.embedder = OllamaProvider(host=cfg.ollama_host,model=cfg.embed_model,
+        # Hosted graph work is a separate execution path: candidate retrieval stays in
+        # Postgres and every semantic decision goes through the pinned API provider.
+        # Constructing an Ollama embedder here made a successful hosted extraction depend
+        # on an unrelated local endpoint (§5.4 provider seam).
+        self.embedder = None if self.hosted else OllamaProvider(
+            host=cfg.ollama_host,model=cfg.embed_model,
             timeout=limits['idle_timeout_seconds'],
             total_timeout=limits['total_timeout_seconds'] or EMBED_FALLBACK_TIMEOUT_SECONDS)
         # Scheduling only (see Config.graph_max_concurrent_calls): deliberately absent
@@ -1204,10 +1209,12 @@ class KnowledgeEngine:
         """Retrieve an occurrence-local, revision/kind/chapter filtered allowlist."""
         if not mentions:
             return {},{}
-        await register_vector_async(self.db)
-        vectors=await self.embedder.embed([m['quote'] for m in mentions])
-        if len(vectors)!=len(mentions) or any(len(v)!=self.cfg.embed_dim for v in vectors):
-            raise ValueError('unexpected entity embedding count or dimension')
+        vectors=[]
+        if not self.hosted:
+            await register_vector_async(self.db)
+            vectors=await self.embedder.embed([m['quote'] for m in mentions])
+            if len(vectors)!=len(mentions) or any(len(v)!=self.cfg.embed_dim for v in vectors):
+                raise ValueError('unexpected entity embedding count or dimension')
         result={}
         novel_id = await self._resolve_novel_id()
         source_lang = (await (await self.db.execute(
@@ -1237,21 +1244,45 @@ class KnowledgeEngine:
         for hits in exact_hits.values():
             hits.sort(key=lambda hit:hit[0])
 
-        vector_rows=[(index,m['kind'],Vector(v))
-                     for index,(m,v) in enumerate(zip(mentions,vectors))]
-        placeholders=','.join(['(%s::int,%s::text,%s::vector)']*len(vector_rows))
         dense_hits={}
-        for index,eid,kind,canonical,distance in await (await self.db.execute(f'''
-            SELECT q.idx,c.entity_id,c.kind,c.canonical,c.distance
-            FROM (VALUES {placeholders}) AS q(idx,kind,vec)
-            CROSS JOIN LATERAL (
-                SELECT e.id::text AS entity_id,e.kind,e.canonical,e.embedding <=> q.vec AS distance
-                FROM entity e WHERE e.revision_id=%s AND e.kind=q.kind
-                AND e.first_seen_chapter<%s AND e.embedding IS NOT NULL
-                ORDER BY e.embedding <=> q.vec LIMIT %s) c''',
-            [value for row in vector_rows for value in row]
-            +[rid,chapter,CANDIDATE_LIMIT])).fetchall():
-            dense_hits.setdefault(index,[]).append((distance,eid,kind,canonical))
+        if self.hosted:
+            # Groq has no embedding endpoint. Give the hosted resolver exact aliases
+            # first, then bounded recently evidenced entities of the same ontology kind.
+            # The API model receives their prior source evidence and decides; this query
+            # never binds a name by itself (§0, entity-drift risk #2).
+            placeholders=','.join(['(%s::int,%s::text)']*len(rows))
+            for index,eid,kind,canonical,last_seen in await (await self.db.execute(f'''
+                SELECT q.idx,c.entity_id,c.kind,c.canonical,c.last_seen
+                FROM (VALUES {placeholders}) AS q(idx,kind)
+                CROSS JOIN LATERAL (
+                    SELECT e.id::text AS entity_id,e.kind,e.canonical,
+                           max(a.first_seen_chapter) AS last_seen
+                    FROM entity e LEFT JOIN alias a
+                      ON a.entity_id=e.id AND a.revision_id=e.revision_id
+                    WHERE e.revision_id=%s AND e.kind=q.kind
+                      AND e.first_seen_chapter<%s
+                    GROUP BY e.id,e.kind,e.canonical
+                    ORDER BY max(a.first_seen_chapter) DESC NULLS LAST,e.id
+                    LIMIT %s) c''',
+                [value for index,kind,_surface in rows for value in (index,kind)]
+                +[rid,chapter,CANDIDATE_LIMIT])).fetchall():
+                dense_hits.setdefault(index,[]).append((-last_seen if last_seen is not None else 0,
+                                                        eid,kind,canonical))
+        else:
+            vector_rows=[(index,m['kind'],Vector(v))
+                         for index,(m,v) in enumerate(zip(mentions,vectors))]
+            placeholders=','.join(['(%s::int,%s::text,%s::vector)']*len(vector_rows))
+            for index,eid,kind,canonical,distance in await (await self.db.execute(f'''
+                SELECT q.idx,c.entity_id,c.kind,c.canonical,c.distance
+                FROM (VALUES {placeholders}) AS q(idx,kind,vec)
+                CROSS JOIN LATERAL (
+                    SELECT e.id::text AS entity_id,e.kind,e.canonical,e.embedding <=> q.vec AS distance
+                    FROM entity e WHERE e.revision_id=%s AND e.kind=q.kind
+                    AND e.first_seen_chapter<%s AND e.embedding IS NOT NULL
+                    ORDER BY e.embedding <=> q.vec LIMIT %s) c''',
+                [value for row in vector_rows for value in row]
+                +[rid,chapter,CANDIDATE_LIMIT])).fetchall():
+                dense_hits.setdefault(index,[]).append((distance,eid,kind,canonical))
         for hits in dense_hits.values():
             # Stable, so ties keep the order the index returned them in.
             hits.sort(key=lambda hit:hit[0])
@@ -1552,7 +1583,6 @@ class KnowledgeEngine:
                 await self._activity(kind,str(item_id),'rejected',item)
         roots={i['target_id'] for i in verified_identities if i['outcome']=='new'}
         representatives=[m for m in mentions if m['id'] in roots]
-        vectors=[mention_vectors[m['id']] for m in representatives]
         rejection_counts={}
         for row in rejected:
             reason=row.get('rejection','unknown')
@@ -1566,7 +1596,8 @@ class KnowledgeEngine:
                               event='stage_summary',**diagnostics)),file=sys.stderr,flush=True)
         output=dict(mentions=mentions,name_coverage=coverage,items=[i for i in verified if i.get('type')!='alignment'],
                     candidate_ids={mid:[candidate['id'] for candidate in rows] for mid,rows in candidates.items()},
-                    embeddings={m['id']:v for m,v in zip(representatives,vectors)},
+                    embeddings=({} if self.hosted else
+                                {m['id']:mention_vectors[m['id']] for m in representatives}),
                     spans=spans if include_terms else [],rejected=rejected,diagnostics=diagnostics,
                     source_hash=digest(source),display_hash=digest(display))
         # Earlier empty cards can be resolved by a later explicit reveal, but that link
@@ -1740,4 +1771,5 @@ class KnowledgeEngine:
 
     async def close(self):
         await self.provider.aclose()
-        await self.embedder.aclose()
+        if self.embedder is not None:
+            await self.embedder.aclose()

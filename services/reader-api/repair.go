@@ -334,6 +334,7 @@ const (
 	repairCredentialRej    = "credential_rejected"
 	repairRateLimited      = "rate_limited"
 	repairQuotaExhausted   = "quota_exhausted"
+	repairRetryExhausted   = "provider_retry_exhausted"
 	repairModelUnavailable = "model_not_available"
 	repairUnknownCause     = "unknown"
 	repairNotRebuildErr    = "revision_not_rebuildable"
@@ -346,9 +347,13 @@ const (
 	repairCancelled      = "cancelled"
 	repairAbandoned      = "abandoned"
 	repairModelMissing   = "model_not_installed"
+	repairBadRequest     = "provider_bad_request"
+	repairInvalidJSON    = "provider_invalid_json"
 )
 
 var repairFailureDetail = map[string]string{
+	repairBadRequest:       "the provider rejected the request (HTTP 400/422); automatic retries stopped until the request or provider settings are corrected",
+	repairInvalidJSON:      "the provider could not generate valid JSON; automatic retries stopped. Use a supported structured-output model or correct the request before retrying",
 	repairModelChanged:     "the configured model or its inference settings changed after this rebuild was snapshotted, so publishing was refused",
 	repairInputChanged:     "the saved chapter text changed after this rebuild was snapshotted",
 	repairPromptTooBig:     "a chapter produced more context than the configured model can be given safely",
@@ -360,6 +365,7 @@ var repairFailureDetail = map[string]string{
 	repairCredentialRej:    "the configured provider rejected its API credential; update the book or account credential, then start a fresh rebuild",
 	repairRateLimited:      "the configured provider is rate limiting requests; the rebuild will retry automatically",
 	repairQuotaExhausted:   "the configured provider quota is exhausted; wait for its reset or use a provider with available quota, then start a fresh rebuild",
+	repairRetryExhausted:   "the configured provider rejected five consecutive attempts; automatic retries stopped to avoid repeatedly spending API quota",
 	repairModelUnavailable: "the configured provider could not find the pinned model; choose an available model and start a fresh rebuild",
 	repairUnreachable:      "the configured model provider could not be reached",
 	repairModelServerErr:   "the configured model provider answered with a server error; it may have failed while loading the model or its serving process may have stopped. This is retried automatically",
@@ -850,6 +856,16 @@ func buildTrack(row repairRow, failures []RepairFailure, targets []RepairRollbac
 			track.Reason = fmt.Sprintf(
 				"Stalled at %d of %d chapters — %s. %s %s stay withheld until this is resolved.",
 				row.done, row.total, track.Blocked.Detail, retry, capitalise(noun))
+			break
+		}
+		if track.WaitingOnProvider != nil {
+			detail := repairFailureDetail[track.WaitingOnProvider.Category]
+			if detail == "" {
+				detail = "the provider is temporarily unavailable"
+			}
+			track.Reason = fmt.Sprintf(
+				"Waiting on provider: %s. %d of %d chapters done, %d model calls completed. %s stay withheld until the rebuild is reviewed.",
+				detail, row.done, row.total, row.calls, capitalise(noun))
 			break
 		}
 		// Model calls, not claims: a claim only lands when a whole chapter publishes, so

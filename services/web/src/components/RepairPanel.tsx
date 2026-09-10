@@ -138,7 +138,7 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
           setGraphProvider(config.provider);
           setGraphSuggestion(config.extract_model || config.model || DEFAULT_MODEL[config.provider] || "");
         }
-        if (config?.extract_model && (config.provider === "ollama" || config.provider === "gemini")) {
+        if (config?.extract_model && (config.provider === "ollama" || config.provider === "gemini" || config.provider === "groq")) {
           setProvider((current) => (current === "ollama" ? config.provider : current));
           setModel((current) => ({ ...current, events: current.events || config.extract_model || "" }));
         }
@@ -234,6 +234,11 @@ export function RepairPanel({ novelId, openSignal = 0 }: Props) {
             {track.waiting_on_provider.retry_after_s > 0
               ? ` — retrying in ${Math.ceil(track.waiting_on_provider.retry_after_s)}s.`
               : " — retry is due now."}
+            {" "}
+            <button type="button" disabled={busy}
+              onClick={() => void act(name, "retry", {}, replacement?.revision_id)}>
+              Retry now
+            </button>
           </p>
         )}
 

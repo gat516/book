@@ -20,6 +20,7 @@ from typing_extensions import Annotated
 
 from pipeline.evidence import digest, passage, stable_id
 from novel_llm.gemini import GeminiProvider
+from novel_llm.groq import GroqProvider
 from pipeline.llm.ollama import OllamaProvider
 from pipeline.llm.provider import Class
 from pipeline.passages import PassageContract
@@ -29,7 +30,7 @@ EVENT_PROMPT_VERSION = "chapter-events-v11-schema-required-roles"
 # Providers an event revision may pin. Kept in step with novel_provider_config's provider
 # CHECK (migrations 0011, 0034) and event_completion's (migration 0040). Ollama is the only
 # one that can be identity-pinned by digest; see event_rebuild.extraction_model.
-EXTRACTION_PROVIDERS = ("ollama", "gemini")
+EXTRACTION_PROVIDERS = ("ollama", "gemini", "groq")
 PROMPT_HARD_BYTES = 42 * 1024
 MAX_EVENTS_PER_BATCH = 10
 MAX_EVENTS_PER_CHAPTER = 24
@@ -341,12 +342,20 @@ class EventEngine:
             # fails. One wall-clock timeout is the whole story, and a free-tier 429 comes
             # back as backpressure so ``resume`` requeues the chapter rather than failing it.
             connection = provider_connection or {}
-            self.provider = GeminiProvider(
-                model=self.model,
-                base_url=connection.get("base_url") or cfg.gemini_base_url,
-                api_key=connection.get("api_key") or cfg.gemini_api_key or None,
-                timeout=cfg.event_remote_timeout_seconds,
-            )
+            if self.served_provider == "gemini":
+                self.provider = GeminiProvider(
+                    model=self.model,
+                    base_url=connection.get("base_url") or cfg.gemini_base_url,
+                    api_key=connection.get("api_key") or cfg.gemini_api_key or None,
+                    timeout=cfg.event_remote_timeout_seconds,
+                )
+            else:
+                self.provider = GroqProvider(
+                    model=self.model,
+                    base_url=connection.get("base_url") or cfg.groq_base_url,
+                    api_key=connection.get("api_key") or cfg.groq_api_key or None,
+                    timeout=cfg.event_remote_timeout_seconds,
+                )
 
     async def _call(self, stage: str, internal_schema, payload: dict, passage_ids: set[str]):
         call_event_schema = payload.get("event_schema", self.revision["event_schema"])

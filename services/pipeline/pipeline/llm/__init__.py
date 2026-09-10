@@ -24,6 +24,7 @@ from novel_llm import (
     DeepSeekProvider,
     GatewayProvider,
     GeminiProvider,
+    GroqProvider,
     LLMProvider,
     OllamaProvider,
 )
@@ -56,6 +57,9 @@ def provider_from_env(cfg: Config, *, tenant: str = "default") -> LLMProvider:
                 base_url=cfg.gemini_base_url,
                 api_key=cfg.gemini_api_key or None,
             )
+        case "groq":
+            return GroqProvider(model=cfg.llm_model_extract, base_url=cfg.groq_base_url,
+                                api_key=cfg.groq_api_key or None)
         case "gateway":
             return GatewayProvider(address=cfg.gateway_addr, tenant=tenant,
                 provider=cfg.gateway_provider, model=cfg.llm_model_extract,

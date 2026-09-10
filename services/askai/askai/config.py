@@ -25,6 +25,8 @@ class Config:
     ollama_host: str = "http://localhost:11434"
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
+    groq_api_key: str = ""
+    groq_base_url: str = "https://api.groq.com/openai/v1"
     gateway_addr: str = "localhost:8081"
     gateway_backend: str = "local_gpu"
     gateway_provider: str = "ollama"
@@ -45,6 +47,8 @@ def load_config() -> Config:
         ollama_host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
         deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", ""),
         deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        groq_api_key=os.getenv("GROQ_API_KEY", ""),
+        groq_base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
         gateway_addr=os.getenv("LLM_GATEWAY_ADDR", "localhost:8081"),
         gateway_backend=os.getenv("LLM_GATEWAY_BACKEND", "local_gpu"),
         gateway_provider=os.getenv("LLM_GATEWAY_PROVIDER", "ollama"),

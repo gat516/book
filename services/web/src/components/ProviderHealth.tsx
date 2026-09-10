@@ -11,6 +11,7 @@ export const PROVIDER_FAILURE_DETAILS: Record<string, string> = {
   credential_rejected: "the provider rejected the API credential",
   rate_limited: "the provider is rate limiting requests; it will be tried again",
   quota_exhausted: "the provider quota is exhausted; wait for its reset or choose another provider",
+  provider_retry_exhausted: "the provider rejected five consecutive attempts; automatic retries stopped",
   model_not_available: "the provider could not find the pinned model",
   model_server_error: "the provider returned a server error",
   unknown: "the provider health check could not identify the cause",

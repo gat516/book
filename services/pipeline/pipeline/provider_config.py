@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from novel_llm import AnthropicProvider, DeepSeekProvider, GeminiProvider, LLMProvider, OllamaProvider
+from novel_llm import AnthropicProvider, DeepSeekProvider, GeminiProvider, GroqProvider, LLMProvider, OllamaProvider
 from pipeline.config import Config, names_runtime, resolve_runtime
 
 
@@ -145,6 +145,12 @@ def build_provider(row: ProviderConfigRow, cfg: Config) -> LLMProvider:
             return DeepSeekProvider(
                 model=row.extract_model or row.model or cfg.llm_model_extract,
                 base_url=row.base_url or cfg.deepseek_base_url,
+                api_key=row.api_key,
+            )
+        case "groq":
+            return GroqProvider(
+                model=row.extract_model or row.model or cfg.llm_model_extract,
+                base_url=row.base_url or cfg.groq_base_url,
                 api_key=row.api_key,
             )
         case other:

@@ -130,7 +130,7 @@ def failure_category(exc: BaseException) -> str:
     if admission_category == "unreachable":
         return "model_unreachable"
     if admission_category in {
-        "rate_limited", "quota_exhausted", "embed_unavailable", "model_server_error",
+        "rate_limited", "quota_exhausted", "provider_retry_exhausted", "embed_unavailable", "model_server_error",
     }:
         return admission_category
 
@@ -138,6 +138,23 @@ def failure_category(exc: BaseException) -> str:
     # ours to control, and the response body must never become a durable diagnostic.
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
+        if status == 413:
+            return "prompt_too_large"
+        if status in (400, 422):
+            # Only inspect a bounded provider code; never persist its freeform message.
+            try:
+                body = exc.response.json()
+                detail = body.get("error", {}) if isinstance(body, dict) else {}
+                code = detail.get("code") if isinstance(detail, dict) else None
+            except ValueError:
+                code = None
+            if code == "json_validate_failed":
+                return "provider_invalid_json"
+            if code == "context_length_exceeded":
+                return "prompt_too_large"
+            if code in ("model_not_found", "model_decommissioned"):
+                return "model_not_available"
+            return "provider_bad_request"
         if status in (401, 403):
             return "credential_rejected"
         if status == 404 and _is_model_request(exc.response):
@@ -163,7 +180,7 @@ def failure_category(exc: BaseException) -> str:
         return "prompt_too_large"
     # docs/knowledge-repair.md: hitting GRAPH_OLLAMA_NUM_PREDICT is a failure, never
     # publishable partial output.
-    if "num_predict" in text:
+    if "num_predict" in text or "provider output limit reached" in text:
         return "output_truncated"
     if "fenced" in text:
         return "fenced"

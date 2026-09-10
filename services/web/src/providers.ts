@@ -30,6 +30,10 @@ export const MODEL_OPTIONS: Record<ProviderName, ModelOption[]> = {
     { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", note: "Fast and cheap; replaces the retired deepseek-chat" },
     { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", note: "1M context, more capable, higher cost" },
   ],
+  groq: [
+    { id: "openai/gpt-oss-120b", label: "GPT-OSS 120B", note: "Strong free-tier extraction model; 8K token/minute allowance" },
+    { id: "qwen/qwen3.8-27b", label: "Qwen 3.8 27B", note: "Smaller fast structured-output alternative" },
+  ],
   anthropic: [
     { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", note: "Cheapest; sensible default for extraction" },
     { id: "claude-sonnet-5", label: "Claude Sonnet 5", note: "Balanced capability and cost" },
@@ -46,6 +50,7 @@ export const MODEL_OPTIONS: Record<ProviderName, ModelOption[]> = {
 export const DEFAULT_MODEL: Record<string, string> = {
   gemini: MODEL_OPTIONS.gemini[0].id,
   deepseek: MODEL_OPTIONS.deepseek[0].id,
+  groq: MODEL_OPTIONS.groq[0].id,
   anthropic: MODEL_OPTIONS.anthropic[0].id,
   ollama: "",
 };
@@ -54,6 +59,7 @@ export const PROVIDER_LABELS: Record<ProviderName, string> = {
   anthropic: "Anthropic",
   deepseek: "DeepSeek",
   gemini: "Gemini",
+  groq: "Groq",
   // Ollama may be local, remote, or reached through a tunnel. Calling the provider
   // "local" hid per-novel remote URL overrides and made connection failures confusing.
   ollama: "Ollama",
@@ -65,6 +71,7 @@ export const NEEDS_API_KEY: Record<ProviderName, boolean> = {
   anthropic: true,
   deepseek: true,
   gemini: true,
+  groq: true,
   ollama: false,
 };
 
@@ -74,5 +81,6 @@ export const MODEL_LIST_IS_ADVISORY: Record<ProviderName, boolean> = {
   anthropic: false,
   deepseek: false,
   gemini: false,
+  groq: false,
   ollama: true,
 };

@@ -850,6 +850,43 @@ async def test_candidate_retrieval_is_kind_filtered_exact_first_and_capped_at_ei
         await delete_novel(db_conn,novel)
 
 
+@pytest.mark.db
+async def test_hosted_candidate_retrieval_never_constructs_or_calls_ollama(db_conn):
+    from unittest.mock import AsyncMock
+    from pipeline.config import Config
+    from tests.fixtures import FakeProvider,delete_novel
+    novel=await make_novel(db_conn,ontology=json.dumps(ONTOLOGY))
+    engine=None
+    try:
+        rid=str((await(await db_conn.execute(
+            'SELECT active_graph_revision FROM novel WHERE id=%s',(novel,))).fetchone())[0])
+        exact=str((await(await db_conn.execute("""INSERT INTO entity
+            (id,novel_id,kind,canonical,first_seen_chapter,revision_id)
+            VALUES(gen_random_uuid(),%s,'character','Ling Feng',1,%s) RETURNING id""",
+            (novel,rid))).fetchone())[0])
+        await db_conn.execute("""INSERT INTO alias
+            (entity_id,surface,lang,first_seen_chapter,revision_id)
+            VALUES(%s,'凌峰','zh',1,%s)""",(exact,rid))
+        await db_conn.execute("""INSERT INTO entity
+            (id,novel_id,kind,canonical,first_seen_chapter,revision_id)
+            VALUES(gen_random_uuid(),%s,'character','Jiang Mengyue',2,%s)""",(novel,rid))
+        provider=FakeProvider(provider='groq')
+        provider.aclose=AsyncMock()
+        revision=dict(id=rid,novel_id=novel,ontology=ONTOLOGY,
+            model=dict(provider='groq',name='openai/gpt-oss-120b',strategy='api_two_pass'))
+        engine=KnowledgeEngine(db_conn,Config.load(),revision,provider=provider)
+        assert engine.embedder is None
+        mention=dict(id='m1',surface='凌峰',kind='character',quote='凌峰 arrived.')
+        candidates,vectors=await engine.candidates_for(25,[mention])
+        assert vectors == {}
+        assert candidates['m1'][0]['id']==exact
+        assert all(row['kind']=='character' for row in candidates['m1'])
+        assert provider.calls == []
+    finally:
+        if engine: await engine.close()
+        await delete_novel(db_conn,novel)
+
+
 def mentions(source='凌峰看向姜梦月。凌峰走进梦魇神殿。'):
     return source_mentions('book',1,source,Names(names=[dict(surface=name,kind=kind,quote=source,named=True)
         for name,kind in [('凌峰','character'),('姜梦月','character'),('梦魇神殿','place')]]),ONTOLOGY)

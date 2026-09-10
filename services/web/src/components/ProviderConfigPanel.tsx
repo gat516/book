@@ -15,7 +15,7 @@ interface Props {
   novelId: string;
 }
 
-const PROVIDERS: ProviderName[] = ["gemini", "deepseek", "anthropic", "ollama"];
+const PROVIDERS: ProviderName[] = ["gemini", "groq", "deepseek", "anthropic", "ollama"];
 
 // Per-novel provider settings for a novel that already exists. Previously this could only
 // be set at creation time, which meant a novel whose provider turned out to be a bad fit

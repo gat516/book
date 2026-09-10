@@ -139,7 +139,7 @@ async def local_model(cfg, name):
                 identity=graph_runtime(cfg)['identity'])
 
 
-HOSTED_GRAPH_PROVIDERS = frozenset({'anthropic','deepseek','gemini'})
+HOSTED_GRAPH_PROVIDERS = frozenset({'anthropic','deepseek','gemini','groq'})
 
 
 async def graph_provider_config(db, cfg, novel: str, provider: str, model: str
@@ -165,7 +165,7 @@ async def graph_model_identity(db, cfg, novel: str, provider: str, model: str) -
     if provider=='ollama':
         return await local_model(cfg,model)
     if provider not in HOSTED_GRAPH_PROVIDERS:
-        raise ValueError('graph provider must be anthropic, deepseek, gemini, or ollama')
+        raise ValueError('graph provider must be anthropic, deepseek, gemini, groq, or ollama')
     # Constructing validates that required credentials exist without spending a model call.
     configured=await graph_provider_config(db,cfg,novel,provider,model)
     candidate=build_provider(configured,cfg)
@@ -342,45 +342,48 @@ def graph_retry_delay_minutes(attempt: int) -> int | None:
     return {1:5,2:15,3:45}.get(attempt)
 
 
-PROVIDER_WAIT_BUDGET_SECONDS = 15 * 60
+PROVIDER_AUTO_RETRY_LIMIT = 5
+PROVIDER_RETRY_BASE_SECONDS = 60
 TERMINAL_PROVIDER_CATEGORIES = frozenset({
     "credential_rejected", "model_not_available", "quota_exhausted",
+    "provider_bad_request", "provider_invalid_json",
+    "prompt_too_large",
 })
 
 
-async def _record_provider_wait(db, rid: str, exc: AdmissionRejected) -> bool:
-    """Record safe provider wait state; return whether its wall-clock budget expired."""
+async def _record_provider_wait(db, rid: str, exc: AdmissionRejected) -> str | None:
+    """Record bounded exponential backoff; return a category when retries are spent."""
     category = getattr(exc, "category", "rate_limited")
-    retry_after = max(float(exc.retry_after_s), 0.0)
     row = await (await db.execute(
+        "SELECT provider_wait_attempts FROM graph_revision WHERE id=%s", (rid,)
+    )).fetchone()
+    attempt = (row[0] if row else 0) + 1
+    blocked = (category if category == "quota_exhausted" else
+               "provider_retry_exhausted" if attempt >= PROVIDER_AUTO_RETRY_LIMIT else None)
+    if blocked:
+        await record_blocked(db, "graph_revision", rid,
+                             AdmissionRejected(blocked, category=blocked))
+        await db.execute(
+            """UPDATE graph_revision SET provider_wait_since=NULL,
+                      provider_wait_retry_at=NULL, provider_wait_category=NULL,
+                      provider_wait_attempts=%s WHERE id=%s""", (attempt, rid))
+        return blocked
+    retry_after = max(float(exc.retry_after_s),
+                      PROVIDER_RETRY_BASE_SECONDS * (2 ** (attempt - 1)))
+    await db.execute(
         """UPDATE graph_revision
               SET provider_wait_since=COALESCE(provider_wait_since,now()),
                   provider_wait_retry_at=now()+(%s * interval '1 second'),
-                  provider_wait_category=%s
-            WHERE id=%s
-        RETURNING provider_wait_since,
-                  EXTRACT(EPOCH FROM now()-provider_wait_since)""",
-        (retry_after, category, rid),
-    )).fetchone()
-    if category == "quota_exhausted" or (
-        category == "rate_limited" and row and row[1] >= PROVIDER_WAIT_BUDGET_SECONDS
-    ):
-        exhausted = AdmissionRejected("quota_exhausted", category="quota_exhausted")
-        await record_blocked(db, "graph_revision", rid, exhausted)
-        await db.execute(
-            """UPDATE graph_revision SET provider_wait_since=NULL,
-                      provider_wait_retry_at=NULL, provider_wait_category=NULL
-                WHERE id=%s""",
-            (rid,),
-        )
-        return True
-    return False
+                  provider_wait_category=%s, provider_wait_attempts=%s
+            WHERE id=%s""", (retry_after, category, attempt, rid))
+    return None
 
 
 async def _clear_provider_wait(db, rid: str) -> None:
     await db.execute(
         """UPDATE graph_revision SET provider_wait_since=NULL,
-                  provider_wait_retry_at=NULL, provider_wait_category=NULL
+                  provider_wait_retry_at=NULL, provider_wait_category=NULL,
+                  provider_wait_attempts=0
             WHERE id=%s""",
         (rid,),
     )
@@ -396,7 +399,8 @@ async def record_job_failure(db,rid,index,exc):
     stays behind the database for operator debugging (migration 0046).
     """
     attempts=(await(await db.execute('SELECT attempts FROM graph_job WHERE revision_id=%s AND chapter_index=%s',(rid,index))).fetchone())[0]
-    delay=graph_retry_delay_minutes(attempts)
+    category=failure_category(exc)
+    delay=None if category in TERMINAL_PROVIDER_CATEGORIES else graph_retry_delay_minutes(attempts)
     await db.execute("""UPDATE graph_job SET state='failed',error=%s,category=%s,
         retry_at=CASE WHEN %s::int IS NULL THEN NULL ELSE now()+(%s::int*interval '1 minute') END,
         updated_at=now() WHERE revision_id=%s AND chapter_index=%s""",
@@ -501,17 +505,14 @@ async def resume(db,cfg,rid, *, limit=None):
                 print(json.dumps(dict(revision=rid,chapter=index,state='done',linked=len(state.resolutions))),flush=True)
             except AdmissionRejected as exc:
                 await db.execute("UPDATE graph_job SET state='pending',error=NULL,category=NULL,retry_at=NULL,updated_at=now() WHERE revision_id=%s AND chapter_index=%s",(rid,index))
-                exhausted = await _record_provider_wait(db, rid, exc)
+                blocked_category = await _record_provider_wait(db, rid, exc)
                 if engine.run_id:
-                    if exhausted:
-                        # The wait budget turns only a rate limit into a terminal
-                        # quota block.  The run itself must expose the same safe class
-                        # so the reader can explain why it stopped.
+                    if blocked_category:
                         await db.execute(
                             "UPDATE chapter_knowledge_run SET state='failed',"
-                            "blocked_category='quota_exhausted',blocked_at=now(),"
-                            "error='quota_exhausted',updated_at=now() WHERE id=%s",
-                            (engine.run_id,),
+                            "blocked_category=%s,blocked_at=now(),"
+                            "error=%s,updated_at=now() WHERE id=%s",
+                            (blocked_category, blocked_category, engine.run_id),
                         )
                     else:
                         # Admission deferrals remain resumable and never consume a
@@ -521,8 +522,8 @@ async def resume(db,cfg,rid, *, limit=None):
                             "blocked_category=NULL,blocked_at=NULL,updated_at=now() WHERE id=%s",
                             (engine.run_id,),
                         )
-                if exhausted:
-                    raise AdmissionRejected("quota_exhausted", category="quota_exhausted") from exc
+                if blocked_category:
+                    raise AdmissionRejected(blocked_category, category=blocked_category) from exc
                 raise
             except asyncio.CancelledError:
                 # SIGINT/SIGTERM must not leave a dead process looking like active work.
@@ -1050,7 +1051,7 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command',required=True)
     p=commands.add_parser('select-model');p.add_argument('--reports',nargs='+',required=True)
-    p = commands.add_parser('prepare'); p.add_argument('--novel',required=True); p.add_argument('--model',required=True); p.add_argument('--upto',type=int); p.add_argument('--provider',choices=['ollama','anthropic','deepseek','gemini'],default='ollama')
+    p = commands.add_parser('prepare'); p.add_argument('--novel',required=True); p.add_argument('--model',required=True); p.add_argument('--upto',type=int); p.add_argument('--provider',choices=['ollama','anthropic','deepseek','gemini','groq'],default='ollama')
     p = commands.add_parser('extend'); p.add_argument('--novel',required=True); p.add_argument('--upto',type=int,required=True)
     # F.1: destructive, operator-only, never called by the worker. See purge()'s docstring.
     p = commands.add_parser('purge'); p.add_argument('--novel',required=True)
