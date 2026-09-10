@@ -67,6 +67,30 @@ async def test_groq_and_deepseek_share_litellm_contract(monkeypatch):
     await deepseek.aclose()
 
 
+def test_groq_schema_transport_is_model_aware_for_default_and_override():
+    provider = GroqProvider(model="openai/gpt-oss-120b", api_key="groq-key")
+    assert provider.schema_transport() == "native"
+    assert provider.schema_transport("groq/openai/gpt-oss-120b") == "native"
+    assert provider.schema_transport("llama-3.3-70b-versatile") == "prompt"
+    assert provider.schema_transport("openai/gpt-oss-20b") == "native"
+
+
+@pytest.mark.asyncio
+async def test_groq_per_call_model_override_selects_prompt_schema_transport(monkeypatch):
+    calls = []
+
+    async def complete(**kwargs):
+        calls.append(kwargs)
+        return response(model="llama-3.3-70b-versatile", provider="groq")
+
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=complete))
+    provider = GroqProvider(model="openai/gpt-oss-120b", api_key="groq-key")
+    await provider.complete("source", model="llama-3.3-70b-versatile",
+                            json_schema={"type": "object"})
+    assert calls[0]["response_format"] == {"type": "json_object"}
+    assert '"type": "object"' in calls[0]["messages"][0]["content"]
+
+
 @pytest.mark.asyncio
 async def test_schema_transport_budget_identity_and_rate_headers(monkeypatch):
     calls = []

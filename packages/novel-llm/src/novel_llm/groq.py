@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from copy import deepcopy
+from typing import Literal
 
 from novel_llm.provider import (
     Class, Completion, system_with_schema,
@@ -140,17 +141,23 @@ class GroqProvider(HostedProvider):
                          timeout=timeout, max_output_tokens=max_output_tokens,
                          native_json_schema=model in STRICT_SCHEMA_MODELS)
 
+    def schema_transport(self, model: str | None = None) -> Literal["native", "prompt"]:
+        effective_model = model or self._model
+        if effective_model.startswith("groq/"):
+            effective_model = effective_model.removeprefix("groq/")
+        return "native" if effective_model in STRICT_SCHEMA_MODELS else "prompt"
+
     async def complete(self, prompt: str, *, system: str = "", json_mode: bool = False,
                        cls: Class = Class.BATCH, pin_model: bool = False,
                        model: str | None = None, json_schema: dict | None = None,
                        max_output_tokens: int | None = None) -> Completion:
         use_model = model or self._model
-        strict = json_schema is not None and use_model in STRICT_SCHEMA_MODELS
+        strict = json_schema is not None and self.schema_transport(use_model) == "native"
         if not strict:
-            return await super().complete(prompt, system=system, json_mode=json_mode, cls=cls,
-                                          pin_model=pin_model, model=model,
-                                          json_schema=json_schema,
-                                          max_output_tokens=max_output_tokens)
+            return await self._complete_hosted(
+                prompt, system=system, json_mode=json_mode, cls=cls,
+                pin_model=pin_model, model=model, json_schema=json_schema,
+                max_output_tokens=max_output_tokens, native_json_schema=False)
         # Adapt first: collapsing an ambiguous union can drop an enum whose only other
         # route to the model is this prompt, since a strict request omits the schema.
         widened: list[list] = []

@@ -14,7 +14,7 @@ import inspect
 import os
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 from novel_llm.provider import (
     AdmissionRejected,
@@ -136,6 +136,16 @@ class HostedProvider(SequentialBatchMixin):
 
     def _sdk_model(self, model: str) -> str:
         return model if model.startswith(self.model_prefix + "/") else f"{self.model_prefix}/{model}"
+
+    def schema_transport(self, model: str | None = None) -> Literal["native", "prompt"]:
+        """Return how ``json_schema`` is sent for the effective hosted model.
+
+        The answer is intentionally public so callers can explain or validate the
+        provider capability without duplicating SDK wire knowledge. Providers with a
+        model-specific capability (currently Groq) override this method.
+        """
+        del model
+        return "native" if self._native_json_schema else "prompt"
 
     def _schema_request(self, system: str, *, json_mode: bool,
                         json_schema: dict | None,
