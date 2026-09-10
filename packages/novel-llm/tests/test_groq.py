@@ -32,6 +32,37 @@ async def test_complete_records_groq_identity_usage_and_json_contract(monkeypatc
     assert calls[0]["num_retries"] == 0 and calls[0]["fallbacks"] == []
 
 
+def test_groq_request_counter_matches_strict_wire_guidance(monkeypatch):
+    calls = []
+
+    def token_counter(**kwargs):
+        calls.append(kwargs)
+        return 23 if "messages" in kwargs else 11
+
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(token_counter=token_counter))
+    provider = GroqProvider(model="openai/gpt-oss-120b", api_key="test-key")
+    schema = {"type": "object", "properties": {"facts": {"type": "array"}}}
+    assert provider.count_request_tokens(
+        "source", system="stable", json_schema=schema,
+    ) == 34
+    assert calls[0]["model"] == "groq/openai/gpt-oss-120b"
+    assert calls[0]["custom_tokenizer"] == {"type": "openai_tokenizer"}
+    assert calls[0]["messages"] == [{
+        "role": "system",
+        "content": (
+            "stable\nReturn only a JSON object matching the requested structure."
+            " Include every required top-level field: [\"facts\"]."
+            " Complete all fields before ending the response; use empty arrays when there are no supported items."
+        ),
+    }, {"role": "user", "content": "source"}]
+    assert calls[1]["text"] == (
+        '{"type": "json_schema", "json_schema": {"name": "completion", '
+        '"strict": true, "schema": {"type": "object", "properties": '
+        '{"facts": {"type": "array"}}, "additionalProperties": false, '
+        '"required": ["facts"]}}}'
+    )
+
+
 def test_requires_api_key(monkeypatch):
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     with pytest.raises(RuntimeError):

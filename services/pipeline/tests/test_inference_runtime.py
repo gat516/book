@@ -40,6 +40,13 @@ def test_runtime_identity_changes_with_output_and_schema_transport():
     assert "secret" not in credential_fingerprint("groq", "https://api.example/v1", "secret")
     assert "credential" not in vars(HostedCooldown(None, provider="groq", base_url="https://api.example", credential="secret"))
     assert runtime_identity(output_tokens=100, context_tokens=10) != runtime_identity(output_tokens=100, context_tokens=20)
+    assert runtime_identity(output_tokens=100, request_tokens=1000) != runtime_identity(
+        output_tokens=100, request_tokens=2000)
+
+
+def test_runtime_identity_rejects_request_budget_without_output_headroom():
+    with pytest.raises(ValueError, match="request_tokens must exceed output_tokens"):
+        runtime_identity(output_tokens=100, request_tokens=100)
 
 
 def test_schema_transport_uses_provider_capability_without_provider_branches():

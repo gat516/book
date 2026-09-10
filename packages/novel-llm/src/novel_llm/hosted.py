@@ -294,6 +294,55 @@ class HostedProvider(SequentialBatchMixin):
         # schema transport. Application-level validation remains authoritative.
         return system_with_schema(system, json_schema), {"type": "json_object"}
 
+    def _request_material(self, prompt: str, *, system: str, json_mode: bool,
+                          json_schema: dict | None,
+                          native_json_schema: bool | None = None) -> tuple[list[dict], dict | None]:
+        """Build the exact chat messages and response format sent to LiteLLM."""
+        system, response_format = self._schema_request(
+            system, json_mode=json_mode, json_schema=json_schema,
+            native_json_schema=native_json_schema)
+        messages = ([{"role": "system", "content": system}] if system else [])
+        messages.append({"role": "user", "content": prompt})
+        return messages, response_format
+
+    def count_request_tokens(self, prompt: str, *, system: str = "",
+                             json_mode: bool = False, model: str | None = None,
+                             json_schema: dict | None = None) -> int:
+        """Count the hosted request locally, including chat framing and schema wire data.
+
+        LiteLLM's default tokenizer selection may try to download a tokenizer for an
+        unknown hosted model. Explicitly selecting its local OpenAI tokenizer path keeps
+        this synchronous seam offline; the selected encoding is the best local estimate
+        when a provider-specific tokenizer is unavailable.
+        """
+        return self._count_request_tokens(
+            prompt, system=system, json_mode=json_mode, model=model,
+            json_schema=json_schema, native_json_schema=self._native_json_schema)
+
+    def _count_request_tokens(self, prompt: str, *, system: str, json_mode: bool,
+                              model: str | None, json_schema: dict | None,
+                              native_json_schema: bool | None) -> int:
+        if litellm is None or not callable(getattr(litellm, "token_counter", None)):
+            raise RuntimeError("LiteLLM is required for hosted request token counting")
+        use_model = model or self._model
+        messages, response_format = self._request_material(
+            prompt, system=system, json_mode=json_mode, json_schema=json_schema,
+            native_json_schema=native_json_schema)
+        counter_options = {
+            "model": self._sdk_model(use_model),
+            # Force LiteLLM's local tiktoken branch. Without this override an unknown
+            # provider model can trigger a Hugging Face tokenizer download.
+            "custom_tokenizer": {"type": "openai_tokenizer"},
+        }
+        total = litellm.token_counter(messages=messages, **counter_options)
+        if response_format is not None:
+            # response_format is request-body material rather than a chat message, so
+            # count its serialized contents separately and retain token_counter's chat
+            # framing exactly once for the actual messages.
+            total += litellm.token_counter(
+                text=json.dumps(response_format, ensure_ascii=False), **counter_options)
+        return int(total)
+
     async def complete(self, prompt: str, *, system: str = "", json_mode: bool = False,
                        cls: Class = Class.BATCH, pin_model: bool = False,
                        model: str | None = None, json_schema: dict | None = None,
@@ -310,11 +359,9 @@ class HostedProvider(SequentialBatchMixin):
                        native_json_schema: bool | None = None) -> Completion:
         del cls  # LiteLLM has no priority concept; the provider boundary still carries it.
         use_model = model or self._model
-        system, response_format = self._schema_request(system, json_mode=json_mode,
-                                                        json_schema=json_schema,
-                                                        native_json_schema=native_json_schema)
-        messages = ([{"role": "system", "content": system}] if system else [])
-        messages.append({"role": "user", "content": prompt})
+        messages, response_format = self._request_material(
+            prompt, system=system, json_mode=json_mode, json_schema=json_schema,
+            native_json_schema=native_json_schema)
         kwargs: dict[str, Any] = {
             "model": self._sdk_model(use_model),
             "messages": messages,

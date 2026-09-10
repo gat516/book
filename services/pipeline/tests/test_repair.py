@@ -178,6 +178,7 @@ async def test_hosted_graph_identity_does_not_probe_local_ollama(monkeypatch):
         object(), object(), "novel", "gemini", "gemini-test")
     assert identity == {"provider": "gemini", "name": "gemini-test", "strategy": "api_two_pass",
                         "identity": {"output_tokens": 2048, "context_tokens": 32768,
+                                     "request_tokens": 32768,
                                      "schema_transport": "prompt"}}
     local.assert_not_awaited()
 

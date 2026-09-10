@@ -49,6 +49,9 @@ class PassageTooLarge(PassagePackingError):
 
 
 SchemaTransport = Literal["native", "prompt", "duplicated"]
+# Counts input tokens for the actual provider request. The adapter owns chat framing
+# and schema transport; pipeline code only provides the request material.
+RequestTokenCounter = Callable[[str, str, dict | None, SchemaTransport], int]
 
 
 def conservative_token_estimate(text: str) -> int:
@@ -95,11 +98,13 @@ def pack_passages(
     schema: dict | None = None,
     context_tokens: int,
     output_tokens: int,
+    request_tokens: int | None = None,
     schema_transport: SchemaTransport = "native",
     max_chars: int | None = None,
     tokenizer: Callable[[str], int] | None = None,
+    request_counter: RequestTokenCounter | None = None,
 ) -> list[PassageBatch]:
-    """Pack complete existing passages under a context/output token budget.
+    """Pack complete existing passages under context and admission token budgets.
 
     ``system``/``instructions``, vocabulary, schema and source are measured separately.
     ``input_fields`` lets callers account for stable non-passage input fields (for
@@ -110,10 +115,16 @@ def pack_passages(
     overhead leaves no room, it raises :class:`FixedOverheadTooLarge`; if one complete
     passage is too large it raises :class:`PassageTooLarge`. Splitting must happen at a
     higher layer only after a provider explicitly reports a normalized request-size
-    failure.
+    failure. ``request_tokens`` is the provider/account ceiling for one request,
+    including ``output_tokens`` headroom; when present it is enforced independently
+    from the model ``context_tokens`` ceiling. ``request_counter`` may replace the
+    byte/tokenizer estimate with a provider-aware input counter. It receives the
+    assembled instruction text, serialized input payload, schema, and transport mode.
     """
     if context_tokens <= 0 or output_tokens < 0:
         raise ValueError("context_tokens must be positive and output_tokens non-negative")
+    if request_tokens is not None and request_tokens <= output_tokens:
+        raise ValueError("request_tokens must exceed output_tokens")
     if schema_transport not in {"native", "prompt", "duplicated"}:
         raise ValueError(f"unknown schema transport {schema_transport!r}")
     measure = tokenizer or conservative_token_estimate
@@ -127,7 +138,12 @@ def pack_passages(
             )
 
     # Match the stable wire shape used by PassageContract, including JSON delimiters.
-    instruction_text = system + instructions
+    # Keep the raw prompt separate from the legacy synthetic schema prompt. The
+    # provider-aware counter receives the former and owns schema transport, matching
+    # the actual HostedProvider wire request; the fallback estimator still measures the
+    # latter for adapters without that seam.
+    raw_instruction_text = system + instructions
+    instruction_text = raw_instruction_text
     vocabulary_text = _serialized(vocabulary)
     schema_text = _serialized(schema)
     if schema_transport in {"prompt", "duplicated"} and schema_text:
@@ -139,9 +155,15 @@ def pack_passages(
     }
     wire_schema = components["schema"] if schema_transport in {"native", "duplicated"} else 0
     overhead = components["instructions"] + components["vocabulary"] + wire_schema
-    available = context_tokens - output_tokens - overhead
+    total_budget = context_tokens if request_tokens is None else min(context_tokens, request_tokens)
+    if request_counter is not None:
+        empty_payload = dict(input_fields or {})
+        empty_payload["passages"] = []
+        overhead = request_counter(raw_instruction_text, _serialized(empty_payload),
+                                   schema, schema_transport)
+    available = total_budget - output_tokens - overhead
     if available <= 0:
-        raise FixedOverheadTooLarge(context_tokens=context_tokens, output_tokens=output_tokens,
+        raise FixedOverheadTooLarge(context_tokens=total_budget, output_tokens=output_tokens,
                                     overhead_tokens=overhead, components=components)
 
     batches: list[PassageBatch] = []
@@ -153,9 +175,11 @@ def pack_passages(
         payload["passages"] = [dict(id=row["id"], text=row["text"]) for row in rows_for_batch]
         source_text = _serialized(payload)
         prompt_tokens = measure(source_text)
-        request_tokens = overhead + prompt_tokens
-        return PassageBatch(tuple(rows_for_batch), request_tokens, source_tokens, overhead,
-                            output_tokens, request_tokens + output_tokens,
+        measured_request_tokens = (request_counter(raw_instruction_text, source_text, schema,
+                                                    schema_transport)
+                                   if request_counter is not None else overhead + prompt_tokens)
+        return PassageBatch(tuple(rows_for_batch), measured_request_tokens, source_tokens, overhead,
+                            output_tokens, measured_request_tokens + output_tokens,
                             len((instruction_text + vocabulary_text + source_text +
                                  (schema_text if wire_schema else "")).encode()))
 
@@ -163,19 +187,20 @@ def pack_passages(
         # Measure the actual serialized payload with this candidate appended. This
         # catches escaping, IDs and delimiters instead of treating source chars as tokens.
         candidate = current + [row]
-        candidate_source = finish(candidate, 0).tokens - overhead
-        if candidate_source > available:
+        candidate_request = finish(candidate, 0).tokens
+        if candidate_request + output_tokens > total_budget:
             if not current:
-                raise PassageTooLarge(row["id"], tokens=measure(_serialized({"passages": [dict(id=row["id"], text=row["text"])]})),
+                raise PassageTooLarge(row["id"], tokens=candidate_request,
                                       available_tokens=available)
             batches.append(finish(current, current_source_tokens))
             current = [row]
             current_source_tokens = finish(current, 0).tokens - overhead
-            if current_source_tokens > available:
-                raise PassageTooLarge(row["id"], tokens=current_source_tokens, available_tokens=available)
+            if current_source_tokens + overhead + output_tokens > total_budget:
+                raise PassageTooLarge(row["id"], tokens=finish(current, 0).tokens,
+                                      available_tokens=available)
         else:
             current = candidate
-            current_source_tokens = candidate_source
+            current_source_tokens = candidate_request - overhead
     if current:
         batches.append(finish(current, current_source_tokens))
     return batches

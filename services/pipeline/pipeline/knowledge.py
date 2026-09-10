@@ -169,6 +169,7 @@ class KnowledgeEngine:
                 output_tokens=cfg.hosted_graph_output_tokens,
                 schema_transport=effective_schema_transport(self.provider, self.model),
                 context_tokens=cfg.hosted_graph_context_tokens,
+                request_tokens=cfg.hosted_graph_request_tokens,
             )
             pinned_identity = revision['model'].get('identity')
             if not pinned_identity:
@@ -176,7 +177,8 @@ class KnowledgeEngine:
                     'hosted graph revision lacks pinned request identity; create a new staging revision'
                 )
             if any(pinned_identity.get(key) != derived_identity.get(key)
-                   for key in ('output_tokens', 'context_tokens', 'schema_transport')):
+                   for key in ('output_tokens', 'context_tokens', 'request_tokens',
+                               'schema_transport')):
                 raise ValueError(
                     'hosted graph runtime identity changed since revision staging; create a new staging revision'
                 )
@@ -186,6 +188,8 @@ class KnowledgeEngine:
         # see the module docstring at the top of this constants block.
         self.extract_window_chars = EXTRACT_WINDOW_CHARS_HOSTED if self.hosted else EXTRACT_WINDOW_CHARS
         self.extract_context_tokens = (cfg.hosted_graph_context_tokens if self.hosted
+                                       else None)
+        self.extract_request_tokens = (cfg.hosted_graph_request_tokens if self.hosted
                                        else None)
         self.extract_output_tokens = (cfg.hosted_graph_output_tokens if self.hosted
                                       else self.runtime['identity'].get('num_predict'))
@@ -433,6 +437,24 @@ class KnowledgeEngine:
         contract=PassageContract(source,selected)
         return self._identity_prompt_parts(payload,contract)[3]
 
+    def _request_token_counter(self):
+        """Adapt the provider's exact wire counter to the passage packer seam.
+
+        Hosted adapters own tokenizer choice, chat framing, and native-schema details;
+        the pipeline only supplies the complete user material assembled by the packer.
+        The counter is the optional ``RequestTokenCounting`` protocol, not part of
+        ``LLMProvider``: OllamaProvider, the gateway backend and test doubles cannot
+        answer it, and for them pack_passages keeps its conservative tokenizer fallback.
+        """
+        counter = getattr(self.provider, 'count_request_tokens', None)
+        if not callable(counter):
+            return None
+
+        def count(instruction_text, source_text, schema, _schema_transport):
+            return counter(prompt=instruction_text + source_text, system='',
+                            json_schema=schema, model=self.model)
+        return count
+
     async def call(self, stage: str, schema, payload: dict):
         requests=getattr(self,'_stage_requests',{})
         requests[stage]=requests.get(stage,0)+1
@@ -546,7 +568,9 @@ class KnowledgeEngine:
                 schema=wire_schema,
                 context_tokens=self.extract_context_tokens,
                 output_tokens=self.extract_output_tokens,
+                request_tokens=self.extract_request_tokens,
                 schema_transport=transport,
+                request_counter=self._request_token_counter(),
                 # Canonical source passages are 400-char slices, but explicitly offered
                 # context passages may be longer. The 24k source-window cap remains the
                 # safety bound; rejecting a valid context row here would lose coverage.
@@ -555,6 +579,7 @@ class KnowledgeEngine:
             prompt_metrics['request_tokens'] = packed[0].request_tokens if len(packed) == 1 else sum(
                 batch.request_tokens for batch in packed)
             prompt_metrics['output_headroom_tokens'] = self.extract_output_tokens
+            prompt_metrics['request_budget_tokens'] = self.extract_request_tokens
             prompt_metrics['schema_transport'] = transport
             if len(packed) > 1:
                 raise RequestBudgetExceeded(
@@ -1503,6 +1528,7 @@ class KnowledgeEngine:
             chunk_policy=dict(extract_window_chars=self.extract_window_chars,
                 extract_context_tokens=self.extract_context_tokens,
                 extract_output_tokens=self.extract_output_tokens,
+                extract_request_tokens=getattr(self, 'extract_request_tokens', None),
                 extract_budget_mode='tokens' if hosted else 'legacy-bytes',
                 extract_window_overlap=EXTRACT_WINDOW_OVERLAP,
                 extract_passage_chars=EXTRACT_PASSAGE_CHARS,

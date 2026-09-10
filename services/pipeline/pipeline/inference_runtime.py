@@ -14,10 +14,11 @@ from novel_llm.admission import lock_path
 
 def runtime_identity(*, output_tokens: int, schema_transport: str = "native",
                      schema_digest: str | None = None,
-                     context_tokens: int | None = None) -> dict:
+                     context_tokens: int | None = None,
+                     request_tokens: int | None = None) -> dict:
     """Return output-affecting request identity for cache/revision callers.
 
-    Output headroom, context segmentation, and schema transport change model behavior
+    Output headroom, context/request segmentation, and schema transport change model behavior
     and therefore belong in cache identity. Deadline/concurrency settings do not. This
     helper is intentionally pure so old revision records can keep their existing
     identity until callers opt in.
@@ -26,6 +27,8 @@ def runtime_identity(*, output_tokens: int, schema_transport: str = "native",
         raise ValueError("output_tokens must be positive")
     if context_tokens is not None and context_tokens <= 0:
         raise ValueError("context_tokens must be positive")
+    if request_tokens is not None and request_tokens <= output_tokens:
+        raise ValueError("request_tokens must exceed output_tokens")
     if schema_transport not in {"native", "prompt", "duplicated"}:
         raise ValueError(f"unknown schema transport {schema_transport!r}")
     identity = {"output_tokens": output_tokens, "schema_transport": schema_transport}
@@ -33,6 +36,8 @@ def runtime_identity(*, output_tokens: int, schema_transport: str = "native",
         identity["schema_digest"] = schema_digest
     if context_tokens is not None:
         identity["context_tokens"] = context_tokens
+    if request_tokens is not None:
+        identity["request_tokens"] = request_tokens
     return identity
 
 

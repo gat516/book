@@ -177,6 +177,7 @@ async def graph_model_identity(db, cfg, novel: str, provider: str, model: str) -
         identity = runtime_identity(
             output_tokens=getattr(cfg, 'hosted_graph_output_tokens', 2048),
             context_tokens=getattr(cfg, 'hosted_graph_context_tokens', 32768),
+            request_tokens=getattr(cfg, 'hosted_graph_request_tokens', 32768),
             schema_transport=effective_schema_transport(candidate, model),
         )
     finally:

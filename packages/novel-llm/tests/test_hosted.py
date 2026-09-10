@@ -117,6 +117,30 @@ async def test_schema_transport_budget_identity_and_rate_headers(monkeypatch):
     await provider.aclose()
 
 
+def test_hosted_request_counter_includes_chat_framing_and_response_format(monkeypatch):
+    calls = []
+
+    def token_counter(**kwargs):
+        calls.append(kwargs)
+        # Distinguish the message call from the request-body response_format call.
+        return 17 if "messages" in kwargs else 5
+
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(token_counter=token_counter))
+    provider = AnthropicProvider(model="claude-haiku", api_key="key")
+    total = provider.count_request_tokens(
+        "source", system="stable", json_mode=True, model="claude-haiku",
+    )
+    assert total == 22
+    assert calls[0]["model"] == "anthropic/claude-haiku"
+    assert calls[0]["messages"] == [
+        {"role": "system", "content": "stable"},
+        {"role": "user", "content": "source"},
+    ]
+    assert calls[0]["custom_tokenizer"] == {"type": "openai_tokenizer"}
+    assert calls[1]["text"] == '{"type": "json_object"}'
+    assert calls[1]["model"] == "anthropic/claude-haiku"
+
+
 @pytest.mark.asyncio
 async def test_credentials_from_environment(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "from-env")

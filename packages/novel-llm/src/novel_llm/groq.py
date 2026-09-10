@@ -83,6 +83,27 @@ class GroqProvider(HostedProvider):
             effective_model = effective_model.removeprefix("groq/")
         return "native" if effective_model in STRICT_SCHEMA_MODELS else "prompt"
 
+    def count_request_tokens(self, prompt: str, *, system: str = "",
+                             json_mode: bool = False, model: str | None = None,
+                             json_schema: dict | None = None) -> int:
+        """Count the exact Groq wire variant, including strict schema guidance."""
+        use_model = model or self._model
+        strict = json_schema is not None and self.schema_transport(use_model) == "native"
+        if not strict:
+            return self._count_request_tokens(
+                prompt, system=system, json_mode=json_mode, model=model,
+                json_schema=json_schema, native_json_schema=False)
+        wire_schema = strict_schema(json_schema)
+        system = system_with_schema(system, None)
+        if json_mode or json_schema is not None:
+            system += "\nReturn only a JSON object matching the requested structure."
+        system += (" Include every required top-level field: "
+                   + json.dumps(list(json_schema.get("properties", {})))
+                   + ". Complete all fields before ending the response; use empty arrays when there are no supported items.")
+        return self._count_request_tokens(
+            prompt, system=system, json_mode=json_mode, model=model,
+            json_schema=wire_schema, native_json_schema=True)
+
     async def complete(self, prompt: str, *, system: str = "", json_mode: bool = False,
                        cls: Class = Class.BATCH, pin_model: bool = False,
                        model: str | None = None, json_schema: dict | None = None,

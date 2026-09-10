@@ -146,11 +146,12 @@ class Config:
     # already recorded on an existing revision byte-identical.
     graph_ollama_think: bool | None = None
 
-    # Hosted extraction request budgets. The token budget is the primary window
-    # allowance; the character cap remains only a safety bound for pathological input.
-    # Output headroom is output-affecting and therefore joins graph request identity.
+    # Hosted extraction request budgets. Context is the model's capacity; request is
+    # the provider/account admission ceiling for one call (input plus reserved output).
+    # Both affect passage grouping, so both are pinned in graph request identity.
     hosted_graph_context_tokens: int = 32768
     hosted_graph_output_tokens: int = 2048
+    hosted_graph_request_tokens: int = 32768
 
     # Independent extraction calls (fact verification, claim focuses, alignment windows)
     # have no data dependency on each other, but they were always awaited one at a time.
@@ -224,6 +225,7 @@ class Config:
             graph_ollama_think=_optional_bool("GRAPH_OLLAMA_THINK"),
             hosted_graph_context_tokens=int(_getenv("HOSTED_GRAPH_CONTEXT_TOKENS", "32768")),
             hosted_graph_output_tokens=int(_getenv("HOSTED_GRAPH_OUTPUT_TOKENS", "2048")),
+            hosted_graph_request_tokens=int(_getenv("HOSTED_GRAPH_REQUEST_TOKENS", "32768")),
             event_remote_timeout_seconds=float(_getenv("EVENT_REMOTE_TIMEOUT_SECONDS", "300")),
             names_ollama_first_token_seconds=float(_getenv("NAMES_OLLAMA_FIRST_TOKEN_SECONDS", "900")),
             names_ollama_timeout_seconds=float(_getenv("NAMES_OLLAMA_TIMEOUT_SECONDS", "120")),
@@ -283,8 +285,11 @@ def graph_runtime(cfg: Config) -> dict:
         raise ValueError('graph timeouts must be finite, positive, and total >= first-token and idle')
     if cfg.graph_ollama_num_predict <= 0:
         raise ValueError('graph output budget must be positive')
-    if cfg.hosted_graph_context_tokens <= 0 or cfg.hosted_graph_output_tokens <= 0:
-        raise ValueError('hosted graph context/output budgets must be positive')
+    if (cfg.hosted_graph_context_tokens <= 0 or cfg.hosted_graph_output_tokens <= 0 or
+            cfg.hosted_graph_request_tokens <= 0):
+        raise ValueError('hosted graph context/output/request budgets must be positive')
+    if cfg.hosted_graph_request_tokens <= cfg.hosted_graph_output_tokens:
+        raise ValueError('hosted graph request budget must exceed output headroom')
     # num_ctx is intentionally absent: it is discovered per host by
     # graph_rebuild.discover_num_ctx() at prepare() time, not chosen from config, so a
     # revision's context window fits whatever VRAM is actually available on whichever

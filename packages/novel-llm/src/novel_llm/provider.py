@@ -135,6 +135,21 @@ TruncatedOutputError = TruncatedOutput
 
 
 @runtime_checkable
+class RequestTokenCounting(Protocol):
+    """Optional seam: adapters that can size a request exactly before sending it.
+
+    Deliberately separate from :class:`LLMProvider`. Only adapters that own a real
+    tokenizer and the exact wire framing (hosted/LiteLLM today) can answer this;
+    OllamaProvider and the gateway backend cannot, and must stay valid providers.
+    Callers therefore probe for it and fall back to a conservative estimate (§5.4).
+    """
+
+    def count_request_tokens(self, prompt: str, *, system: str = "",
+                             json_mode: bool = False, model: str | None = None,
+                             json_schema: dict | None = None) -> int: ...
+
+
+@runtime_checkable
 class LLMProvider(Protocol):
     async def complete(
         self,

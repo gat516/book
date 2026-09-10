@@ -1,6 +1,7 @@
 """Evidence, occurrence identity, revision publication and spoiler regressions."""
 import json
 from uuid import uuid4
+from types import SimpleNamespace
 
 import pytest
 from psycopg.types.json import Jsonb
@@ -160,6 +161,20 @@ async def test_graph_uses_configured_runtime_and_keeps_deadlines_out_of_identity
         graph_runtime(replace(cfg,graph_ollama_total_timeout_seconds=float('inf')))
     with pytest.raises(ValueError,match='output budget'):
         graph_runtime(replace(cfg,graph_ollama_num_predict=0))
+    with pytest.raises(ValueError,match='request budget'):
+        graph_runtime(replace(cfg,hosted_graph_request_tokens=cfg.hosted_graph_output_tokens))
+
+
+def test_request_token_counter_adapter_keeps_provider_wire_ownership():
+    calls = []
+    engine = object.__new__(KnowledgeEngine)
+    engine.model = 'model'
+    engine.provider = SimpleNamespace(count_request_tokens=lambda **kwargs: calls.append(kwargs) or 7)
+
+    assert engine._request_token_counter()('instructions', '{"passages":[]}',
+                                           {'type': 'object'}, 'prompt') == 7
+    assert calls == [dict(prompt='instructions{"passages":[]}', system='',
+                          json_schema={'type': 'object'}, model='model')]
 
 
 async def test_discover_num_ctx_reads_back_what_ollama_actually_loaded(monkeypatch):
@@ -837,9 +852,10 @@ async def test_hosted_candidate_retrieval_never_constructs_or_calls_ollama(db_co
         cfg=Config.load()
         revision=dict(id=rid,novel_id=novel,ontology=ONTOLOGY,
             model=dict(provider='groq',name='openai/gpt-oss-120b',strategy='api_two_pass',
-                identity=runtime_identity(output_tokens=cfg.hosted_graph_output_tokens,
-                    schema_transport=effective_schema_transport(provider,'openai/gpt-oss-120b'),
-                    context_tokens=cfg.hosted_graph_context_tokens)))
+                    identity=runtime_identity(output_tokens=cfg.hosted_graph_output_tokens,
+                        schema_transport=effective_schema_transport(provider,'openai/gpt-oss-120b'),
+                        context_tokens=cfg.hosted_graph_context_tokens,
+                        request_tokens=cfg.hosted_graph_request_tokens)))
         engine=KnowledgeEngine(db_conn,cfg,revision,provider=provider)
         assert engine.embedder is None
         mention=dict(id='m1',surface='凌峰',kind='character',quote='凌峰 arrived.')
