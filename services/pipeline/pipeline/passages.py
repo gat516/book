@@ -170,9 +170,9 @@ def pack_passages(
                                       available_tokens=available)
             batches.append(finish(current, current_source_tokens))
             current = [row]
-            current_source_tokens = candidate_source
-            if candidate_source > available:
-                raise PassageTooLarge(row["id"], tokens=candidate_source, available_tokens=available)
+            current_source_tokens = finish(current, 0).tokens - overhead
+            if current_source_tokens > available:
+                raise PassageTooLarge(row["id"], tokens=current_source_tokens, available_tokens=available)
         else:
             current = candidate
             current_source_tokens = candidate_source

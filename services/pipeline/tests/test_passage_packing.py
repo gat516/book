@@ -51,3 +51,12 @@ def test_one_complete_passage_too_large_is_reported_instead_of_truncated():
     with pytest.raises(PassageTooLarge, match="p1"):
         pack_passages([{"id": "p1", "text": "甲" * 200}], instructions="i",
                       context_tokens=20, output_tokens=5)
+
+
+def test_packer_flushes_a_fitting_row_into_a_new_batch():
+    rows = [{"id": "p1", "text": "x" * 10}, {"id": "p2", "text": "y" * 10}]
+    batches = pack_passages(rows, instructions="i", schema={}, context_tokens=55,
+                            output_tokens=1, tokenizer=len)
+
+    assert [[row["id"] for row in batch.passages] for batch in batches] == [["p1"], ["p2"]]
+    assert all(batch.request_tokens + batch.output_headroom <= 55 for batch in batches)
