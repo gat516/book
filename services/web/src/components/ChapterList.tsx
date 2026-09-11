@@ -160,9 +160,6 @@ export function ChapterList({ novelId, currentChapter, onOpen, onClose, onAdd }:
                       {chapter.status === "error" && chapter.failure_category && (
                         <small> · {providerFailureDetail(chapter.failure_category)}</small>
                       )}
-                      {chapter.status === "done" && chapter.graph_status && chapter.graph_status !== "done" && (
-                        <small> · {chapter.graph_status === "error" ? "Facts unavailable" : "Facts pending"}</small>
-                      )}
                       {chapter.status === "done" && chapter.translation_warning && <small> · Terminology warning</small>}
                     </td>
                     <td>

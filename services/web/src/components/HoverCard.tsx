@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { approveCharacterName, confirmGlossaryTerm, correctGlossaryTerm, getEntity } from "../api";
 import type { CharacterNameCandidate, EntityView, TermRenderingView, TermRole } from "../types";
+import { RecordList } from "./RecordList";
 
 interface Props {
   novelId: string;
@@ -151,17 +152,7 @@ export function HoverCard({ novelId, entityId, rendering, status, mention, at, c
             rendering={item} displayed={mention} saving={saving === item.source_term}
             onChoose={chooseRendering} onLeave={onClose} />)}
           {notice && <p className="hover-card-notice" role="status">{notice}</p>}
-          {entity.facts.length === 0 && <p>Identity linked. No supported facts yet.</p>}
-          <table className="hover-card-facts">
-            <tbody>
-              {entity.facts.map((fact) => (
-                <tr key={fact.attribute}>
-                  <td>{fact.attribute}</td>
-                  <td>{fact.value} <small>Chapter {fact.source_chapter}</small></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <RecordList rows={entity.records ?? []} />
         </>
       )}
       {!entity && spanRendering && <RenderingControl rendering={spanRendering} displayed={mention}

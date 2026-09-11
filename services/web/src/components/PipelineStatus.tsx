@@ -26,12 +26,13 @@ const IDLE_POLL_INTERVAL_MS = 20000;
 const STAGE_LABELS: Record<string, string> = {
   chunk: "Splitting into chunks",
   translate: "Translating",
-  character_names: "Checking character names",
-  scan: "Scanning for known names",
-  resolve: "Identifying characters and places",
-  display_scan: "Marking names in the translation",
-  state: "Extracting facts",
-  graph_write: "Saving to the knowledge graph",
+  display_scan: "Aligning translated mentions",
+  discover: "Discovering records",
+  parse: "Parsing records",
+  checks: "Checking record structure",
+  identity: "Resolving identities",
+  render: "Rendering records in English",
+  publish: "Publishing records",
 };
 
 const PIPELINE_STAGES = Object.keys(STAGE_LABELS);

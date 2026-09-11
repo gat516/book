@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, getChapter, getEventStatus, getKnowledgeStatus, putProgress } from "../api";
-import type { ChapterFactView, ChapterResponse, EntityView } from "../types";
+import { ApiError, getChapter, getRecords, putProgress } from "../api";
+import type { ChapterResponse, EntityView } from "../types";
 import { HoverCard } from "./HoverCard";
 import { EntityInspector } from "./EntityInspector";
 import { usePolling } from "../usePolling";
 import { applyRenderingChoices, lastMentionPerEntity, segment } from "../readerSegments";
-import { EventList } from "./EventList";
-import { ChapterKnowledgeWorkspace } from "./ChapterKnowledgeWorkspace";
+import { RecordList } from "./RecordList";
+import type { RecordsResponse } from "../types";
 
 interface Props {
   novelId: string;
@@ -22,19 +22,21 @@ interface Props {
   onOpenRepair?: () => void;
 }
 
-export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapterLoaded, onNoChapter, onOpenRepair }: Props) {
+export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapterLoaded, onNoChapter }: Props) {
   const [chapter, setChapter] = useState<ChapterResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hovered, setHovered] = useState<number | null>(null);
   const [selected, setSelected] = useState<{ id: string | null; mention: string } | null>(null);
+  const [records, setRecords] = useState<RecordsResponse | null>(null);
 
   // Both hover and click views share only the exact novel/chapter/clearance cache.
   // The server's `at` becomes known on load; changing it discards earlier entity data.
-  const cache = useMemo(() => new Map<string, EntityView>(), [novelId, chapterIndex, chapter?.at, chapter?.knowledge?.revision_id, chapter?.knowledge?.version]);
+  const cache = useMemo(() => new Map<string, EntityView>(), [novelId, chapterIndex, chapter?.at, records?.status.generation_id, records?.status.version]);
 
   useEffect(() => {
     setSelected(null);
     setHovered(null);
+    setRecords(null);
   }, [novelId, chapterIndex, clickableEntities]);
 
   useEffect(() => {
@@ -90,6 +92,13 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [novelId, chapterIndex]);
 
+  useEffect(() => {
+    if (!chapter) return;
+    let cancelled = false;
+    getRecords(novelId, chapterIndex).then(value => { if (!cancelled) setRecords(value); }).catch(() => { /* prose remains readable while enrichment is unavailable */ });
+    return () => { cancelled = true; };
+  }, [chapter, novelId, chapterIndex]);
+
   const generation = useRef(0);
   const polling = useRef(false);
   const needsBindingRefresh = useRef(false);
@@ -98,15 +107,14 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
     if (!chapter || polling.current) return;
     const current = generation.current;
     polling.current = true;
-    Promise.all([getKnowledgeStatus(novelId, chapterIndex), getEventStatus(novelId, chapterIndex)]).then(async ([status, eventStatus]) => {
+    getRecords(novelId, chapterIndex).then(async (recordStatus) => {
       if (current !== generation.current) return;
-      if (JSON.stringify(status) === JSON.stringify(chapter.knowledge) &&
-          JSON.stringify(eventStatus) === JSON.stringify(chapter.event_knowledge) && !needsBindingRefresh.current) return;
+      setRecords(recordStatus);
+      if (recordStatus.status.extraction_status !== "ready") return;
       needsBindingRefresh.current = true;
       // Close old cards immediately; late responses cannot repopulate the new cache.
       cache.clear(); setSelected(null); setHovered(null);
-      setChapter(previous => previous ? {...previous, knowledge: status,
-        spans: previous.spans.map(span => ({...span, entity_id: null}))} : previous);
+      setChapter(previous => previous ? {...previous, spans: previous.spans.map(span => ({...span, entity_id: null}))} : previous);
       const refreshed = await getChapter(novelId, chapterIndex);
       if (current !== generation.current) return;
       needsBindingRefresh.current = false;
@@ -122,18 +130,6 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
   // interactive anchor per distinct thing. The stored translation remains unchanged.
   const rendered = applyRenderingChoices(chapter.text, chapter.spans);
   const segments = segment(rendered.text, lastMentionPerEntity(rendered.text, rendered.spans));
-  const newFactsByEntity = new Map<string, ChapterFactView[]>();
-  for (const fact of chapter.new_facts ?? []) {
-    const held = newFactsByEntity.get(fact.entity_id);
-    if (held) held.push(fact);
-    else newFactsByEntity.set(fact.entity_id, [fact]);
-  }
-  const graphNeedsAction = !chapter.knowledge?.can_extract;
-  const eventKnowledge = chapter.event_knowledge ?? {
-    revision_id: "", version: 0, trusted: false, status: "unavailable",
-    legacy: false, chapter_snapshotted: false, can_extract: false,
-  };
-
   return (
     <div className="reader-pane">
       <p className="reader-pane-chapter-label">
@@ -154,56 +150,34 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
           </>
         )}
       </p>
-      {chapter.knowledge?.status === "repair" && <p role="status" className="reader-entity-hint">
-        Knowledge cards are under repair. Saved translations are unchanged; unverified facts are withheld.
-        {onOpenRepair && <> <button type="button" className="reader-inline-link" onClick={onOpenRepair}>See repair status</button></>}
-      </p>}
-      {chapter.knowledge?.status === "processing" && <p role="status">Checking names and supported facts…</p>}
-      {chapter.knowledge?.status === "failed" && <p role="status">Knowledge processing failed. The chapter is still readable.</p>}
+      {records?.status.extraction_status === "processing" && <p role="status">Extracting chapter records…</p>}
+      {records?.status.extraction_status === "failed" && <p role="status">Record extraction failed. The chapter is still readable.</p>}
       {chapter.translation_warning?.code === "locked_terms_missing" && <p role="status" className="reader-translation-warning">
         This chapter is readable, but {chapter.translation_warning.term_count} locked name{chapter.translation_warning.term_count === 1 ? " was" : "s were"} not preserved exactly.
       </p>}
-      {graphNeedsAction && <ChapterKnowledgeWorkspace novelId={novelId} chapter={chapterIndex} at={chapter.at} />}
-      {eventKnowledge.status !== "unavailable" &&
-        <section className="chapter-events" aria-labelledby="chapter-events-heading">
-          <h2 id="chapter-events-heading">What happened</h2>
-          <EventList events={chapter.events ?? []} knowledge={eventKnowledge} />
-        </section>}
+      {records && <RecordList rows={records.rows} status={records.status} onEntity={(id, surface) => setSelected({id, mention: surface})} />}
       {clickableEntities && chapter.spans.length === 0 && <p className="reader-entity-hint">
         No named mentions are available for this chapter yet. Cards do not require facts or a glossary entry.
       </p>}
       {segments.map((piece, index) => {
         if (!piece.mention) return <span key={index}>{piece.text}</span>;
-        const newFacts = piece.entityId ? newFactsByEntity.get(piece.entityId) ?? [] : [];
         return (
           <span className="mention-anchor" key={index}
             onMouseEnter={() => { if (!clickableEntities && !selected) setHovered(index); }}
             onMouseLeave={() => setHovered((current) => current === index ? null : current)}>
             <button
               type="button"
-              className={`mention mention-button${piece.entityId ? "" : " mention-unlinked"}${piece.rendering?.status === "locked" ? " mention-confirmed" : ""}${newFacts.length ? " mention-has-new-fact" : ""}`}
+              className={`mention mention-button${piece.entityId ? "" : " mention-unlinked"}${piece.rendering?.status === "locked" ? " mention-confirmed" : ""}`}
               aria-haspopup="dialog"
-              aria-label={newFacts.length
-                ? `Inspect ${piece.text} — ${newFacts.length} fact${newFacts.length > 1 ? "s" : ""} learned in this chapter`
-                : `Inspect ${piece.text}`}
+              aria-label={`Inspect ${piece.text}`}
               onClick={() => { setHovered(null); setSelected({ id: piece.entityId, mention: piece.text }); }}
             >{piece.text}</button>
-            {newFacts.length > 0 && (
-              <span className="mention-new-fact" role="note">
-                <span className="mention-new-fact-label">New this chapter</span>
-                {newFacts.map((fact) => (
-                  <span className="mention-new-fact-item" key={fact.attribute}>
-                    {fact.attribute} — {fact.value}
-                  </span>
-                ))}
-              </span>
-            )}
             {hovered === index && (
               <HoverCard
                 novelId={novelId}
                 entityId={piece.entityId}
                 rendering={piece.rendering}
-                status={chapter.knowledge?.status}
+                status={records?.status.extraction_status}
                 mention={piece.text}
                 at={chapter.at}
                 cache={cache}
@@ -223,12 +197,11 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
           </span>
         );
       })}
-      {!graphNeedsAction && <ChapterKnowledgeWorkspace novelId={novelId} chapter={chapterIndex} at={chapter.at} />}
       {selected && <EntityInspector
         key={`${novelId}:${chapterIndex}:${chapter.at}:${selected.id}`}
         novelId={novelId}
         entityId={selected.id}
-        status={chapter.knowledge?.status}
+        status={records?.status.extraction_status}
         mention={selected.mention}
         at={chapter.at}
         cache={cache}

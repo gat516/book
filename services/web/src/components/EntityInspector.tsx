@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { getEntity, getRelationships } from "../api";
-import type { EntityView, Relationship } from "../types";
+import { getEntity } from "../api";
+import type { EntityView } from "../types";
 import { GlossaryView } from "./GlossaryView";
+import { RecordList } from "./RecordList";
 
 interface Props {
   novelId: string;
@@ -20,7 +21,6 @@ export function EntityInspector({ novelId, entityId, status, mention, at, cache,
   const [entity, setEntity] = useState<EntityView | null>(entityId ? cache.get(entityId) ?? null : null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const [relationships, setRelationships] = useState<Relationship[]>([]);
   const [editing, setEditing] = useState(false);
 
   useEffect(() => {
@@ -48,15 +48,6 @@ export function EntityInspector({ novelId, entityId, status, mention, at, cache,
     return () => { cancelled = true; };
   }, [novelId, entityId, at, cache, attempt]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setRelationships([]);
-    if (entityId) getRelationships(novelId, entityId, at).then(r => {
-      if (!cancelled) setRelationships(r.relationships);
-    }).catch(() => { if (!cancelled) setError("Could not load relationships"); });
-    return () => { cancelled = true; };
-  }, [novelId, entityId, at, cache]);
-
   return (
     <dialog ref={dialog} className="entity-inspector" aria-labelledby={titleId} onClose={() => {
       // StrictMode replays effects; ignore the prior cleanup's queued close event if
@@ -74,15 +65,8 @@ export function EntityInspector({ novelId, entityId, status, mention, at, cache,
       {entity && <>
         <p><strong>{entity.canonical}</strong> · {entity.kind} · First seen in chapter {entity.first_seen_chapter}</p>
         {entity.aliases.length > 0 && <p>Also known as: {entity.aliases.join(", ")}</p>}
-        <h3>Known facts</h3>
-        {entity.facts.length === 0 ? <p>Identity linked. No supported facts are known at your reading progress yet.</p> :
-          <div className="entity-facts-wrap"><table className="entity-facts">
-            <thead><tr><th>Attribute</th><th>Value</th><th>Learned in chapter</th></tr></thead>
-            <tbody>{entity.facts.map((fact) => <tr key={fact.attribute}>
-              <td>{fact.attribute}</td><td>{fact.value}{fact.evidence && <details><summary>Source evidence · chapter {fact.evidence.chapter}</summary><blockquote>{fact.evidence.quote}</blockquote></details>}</td><td>{fact.source_chapter}</td>
-            </tr>)}</tbody>
-          </table></div>}
-        {relationships.length > 0 && <><h3>Relationships</h3><ul>{relationships.map(r => <li key={r.id}>{r.direction === "incoming" ? "From " : "To "}{r.entity.canonical}: {r.relation} · chapter {r.source_chapter}{r.evidence && <blockquote>{r.evidence.quote}</blockquote>}</li>)}</ul></>}
+        <h3>Participating records</h3>
+        {entity.records?.length ? <RecordList rows={entity.records} /> : <p>No supported records are known at your reading progress yet.</p>}
         <button className="entity-inspector-edit" aria-expanded={editing} aria-controls={editorId} onClick={() => setEditing((value) => !value)}>
           {editing ? "Hide glossary editor" : "Edit glossary terms"}
         </button>

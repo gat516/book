@@ -12,6 +12,7 @@ import { ProgressControls } from "./components/ProgressControls";
 import { ReaderPane } from "./components/ReaderPane";
 import { TranslationNotice } from "./components/TranslationNotice";
 import { TimelineView } from "./components/TimelineView";
+import { WikiView } from "./components/WikiView";
 import { BookSettingsView } from "./components/BookSettingsView";
 import { SettingsView } from "./components/SettingsView";
 import { QueueControls } from "./components/QueueControls";
@@ -66,14 +67,12 @@ export default function App() {
   const [showGlossary, setShowGlossary] = useState(false);
   const [showVocabulary, setShowVocabulary] = useState(false);
   const [showTimeline, setShowTimeline] = useState(false);
+  const [showWiki, setShowWiki] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   // Book-level settings (provider/model config, knowledge repair) — separate from the
   // account-level SettingsView above, which every book shares.
   const [showBookSettings, setShowBookSettings] = useState(false);
   const [showChapters, setShowChapters] = useState(true);
-  // Bumping this scrolls the repair panel into view and opens it, so the reader's
-  // "facts are withheld" notice can lead somewhere instead of dead-ending.
-  const [repairRequest, setRepairRequest] = useState(0);
   const [clickableEntities, setClickableEntities] = useState(savedClickableEntities);
   const [lookingForMore, setLookingForMore] = useState(false);
 
@@ -122,7 +121,7 @@ export default function App() {
     setShowGlossary(false);
     setShowVocabulary(false);
     setShowTimeline(false);
-    setRepairRequest(0);
+    setShowWiki(false);
     setShowBookSettings(false);
     setShowChapters(true);
   }
@@ -138,7 +137,7 @@ export default function App() {
     setShowGlossary(false);
     setShowVocabulary(false);
     setShowTimeline(false);
-    setRepairRequest(0);
+    setShowWiki(false);
     setShowBookSettings(false);
     setShowChapters(true);
   }
@@ -152,7 +151,7 @@ export default function App() {
     setShowGlossary(false);
     setShowVocabulary(false);
     setShowTimeline(false);
-    setRepairRequest(0);
+    setShowWiki(false);
     setShowChapters(true);
   }
 
@@ -183,7 +182,6 @@ export default function App() {
     setShowGlossary(false);
     setShowVocabulary(false);
     setShowTimeline(false);
-    setRepairRequest(0);
   }
 
   function chapterAdded(index: number) {
@@ -308,7 +306,6 @@ export default function App() {
     return (
       <BookSettingsView
         novelId={novelId}
-        repairOpenSignal={repairRequest}
         onClose={() => setShowBookSettings(false)}
       />
     );
@@ -330,6 +327,9 @@ export default function App() {
       <button className="app-toggle-glossary" onClick={() => { setShowTimeline((v) => !v); setShowGlossary(false); }}>
         {showTimeline ? "← Close timeline" : "Timeline"}
       </button>
+      <button className="app-toggle-glossary" onClick={() => { setShowWiki((v) => !v); setShowGlossary(false); setShowTimeline(false); }}>
+        {showWiki ? "← Close wiki" : "Wiki"}
+      </button>
       <button className="app-back" onClick={() => setShowBookSettings(true)}>
         Book settings
       </button>
@@ -338,8 +338,9 @@ export default function App() {
       </button>
       {showGlossary && <GlossaryView key={novelId} novelId={novelId} at={chapter?.at} />}
       {showVocabulary && <VocabularyView key={`vocabulary-${novelId}`} novelId={novelId} />}
-      {showTimeline && <TimelineView key={`timeline-${novelId}`} novelId={novelId} onClose={() => setShowTimeline(false)} />}
-      <div hidden={showGlossary || showVocabulary || showTimeline}>
+      {showTimeline && <TimelineView key={`timeline-${novelId}`} novelId={novelId} at={chapter?.at ?? chapterIndex} onClose={() => setShowTimeline(false)} />}
+      {showWiki && <WikiView key={`wiki-${novelId}`} novelId={novelId} at={chapter?.at ?? chapterIndex} onClose={() => setShowWiki(false)} />}
+      <div hidden={showGlossary || showVocabulary || showTimeline || showWiki}>
         {navigationError && <p role="alert" className="chapter-list-error">{navigationError}</p>}
         {addingChapter ? (
           <AddChapterForm
@@ -381,10 +382,6 @@ export default function App() {
                 clickableEntities={clickableEntities}
                 onChapterLoaded={chapterLoaded}
                 onNoChapter={handleNoChapter}
-                onOpenRepair={() => {
-                  setRepairRequest((count) => count + 1);
-                  setShowBookSettings(true);
-                }}
               />
             </div>
             <ProgressControls

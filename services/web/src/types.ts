@@ -10,6 +10,49 @@ export interface NovelSummary {
   created_at: string;
 }
 
+export type RecordType = "EVENT" | "SPEECH" | "STATE" | "RELATION" | "PROMISE" | "ABILITY" | "WORLD" | "IDENTITY" | string;
+export interface RecordsStatus {
+  generation_id: string | null;
+  version: string;
+  extraction_status: "pending" | "processing" | "ready" | "failed" | string;
+  rendering_status: "pending" | "ready" | "failed" | string;
+  warning_count: number;
+  failure_detail?: string | null;
+}
+export interface RecordEvidence {
+  passage_id: string;
+  run_id?: string;
+  chapter: number;
+  quote?: string | null;
+  text?: string;
+  char_start?: number;
+  char_end?: number;
+  ordinal?: number;
+}
+export interface RecordParticipant {
+  field: string;
+  ordinal?: number;
+  entity_id: string | null;
+  reference_id?: string | null;
+  surface: string;
+  unresolved_reason?: string | null;
+}
+export interface RecordValue { field: string; source: string; rendered?: string | null; render_status?: string; }
+export interface RecordView {
+  id: string;
+  type: RecordType;
+  original_index?: number;
+  source_chapter: number;
+  valid_from_chapter: number | null;
+  temporal_qualifier?: string | null;
+  values: RecordValue[];
+  participants: RecordParticipant[];
+  evidence: RecordEvidence[];
+}
+export interface RecordsResponse { novel_id: string; chapter_index: number; status: RecordsStatus; rows: RecordView[]; }
+export interface RecordsInspectorResponse { novel_id: string; chapter_index: number; status: RecordsStatus; parsed: number; retained: number; dropped: number; unresolved: number; rendering_failures: number; drops: Array<{ original_index: number; reasons: string[] }>; }
+export interface WikiResponse { novel_id: string; at?: number; status: RecordsStatus; entities: EntitySummary[]; rows?: RecordView[]; }
+
 export interface NovelListResponse {
   novels: NovelSummary[];
 }
@@ -183,7 +226,6 @@ export interface BootstrapGlossaryResponse {
 // only (never chapter text), which is why it is ungated: the spoiler gate that matters
 // still lives in GET /chapter/{n}.
 export interface ChapterListItem {
-  graph_status?: "pending" | "done" | "error";
   chapter_index: number;
   site_chapter_no?: string;
   source_url?: string;
@@ -292,8 +334,6 @@ export interface SpanView {
 }
 
 export interface ChapterResponse {
-  knowledge: KnowledgeStatus;
-  event_knowledge: KnowledgeStatus;
   novel_id: string;
   chapter_index: number;
   // The reader's STORED PROGRESS (not chapter_index) — see HoverCard.tsx for why this
@@ -304,8 +344,8 @@ export interface ChapterResponse {
   spans: SpanView[];
   // Facts whose source_chapter is exactly this chapter — what the reader learns HERE.
   // Everything learned earlier stays on the entity card, fetched on demand.
-  new_facts: ChapterFactView[];
-  events: EventView[];
+  records_status?: RecordsStatus;
+  record_rows?: RecordView[];
   has_next: boolean;
   translation_warning: TranslationWarning | null;
   // The source site's own printed chapter label (e.g. "第4610章"), when this chapter came
@@ -479,17 +519,15 @@ export interface EventView {
 }
 
 export interface TimelineResponse {
-  knowledge: KnowledgeStatus;
-  event_knowledge: KnowledgeStatus;
   novel_id: string;
   at: number;
-  events: EventView[];
+  status: RecordsStatus;
+  rows: RecordView[];
 }
 
 export interface EntityView extends EntitySummary {
-  knowledge: KnowledgeStatus;
   aliases: string[];
-  facts: FactView[];
+  records: RecordView[];
   renderings: TermRenderingView[];
 }
 
@@ -508,9 +546,10 @@ export interface EntityResponse {
 }
 
 export interface RetrievedSource {
-  kind: "chunk" | "fact" | "edge" | "event";
+  kind: "chunk" | "record" | string;
   id: number | string;
   chapter: number;
+  evidence?: RecordEvidence[];
 }
 
 export interface AskResponse {
@@ -518,8 +557,7 @@ export interface AskResponse {
   at: number;
   retrieved_sources: RetrievedSource[];
   served_by: { provider: string; model: string } | null;
-  knowledge?: KnowledgeStatus;
-  event_knowledge?: KnowledgeStatus;
+  records?: RecordsStatus;
 }
 
 export interface Progress {

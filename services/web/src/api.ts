@@ -6,11 +6,6 @@ import type {
   ChapterListResponse,
   CharacterNameReviewsResponse,
   ChapterResponse,
-  ChapterKnowledgeResponse,
-  ChapterKnowledgeActivity,
-  HeldKnowledgeResponse,
-  KnowledgeReviewRequest,
-  KnowledgeReviewResponse,
   CorrectGlossaryTermRequest,
   CorrectGlossaryTermResponse,
   CreateNovelRequest,
@@ -32,12 +27,10 @@ import type {
   Progress,
   ScrapeJobView,
   StartScrapeRequest,
-  RepairExtractedName,
-  RepairPreview,
-  RepairProgressFact,
-  RepairProposedClaim,
-  RepairStatus,
   TimelineResponse,
+  RecordsResponse,
+  RecordsInspectorResponse,
+  WikiResponse,
 } from "./types";
 
 class ApiError extends Error {
@@ -88,37 +81,6 @@ export function getNovel(novelId: string): Promise<NovelSummary> {
   return request(`/novels/${novelId}`);
 }
 
-export function getChapterKnowledge(novelId: string,chapter: number): Promise<ChapterKnowledgeResponse> {
-  return request(`/novels/${novelId}/chapter/${chapter}/knowledge`);
-}
-export function getChapterKnowledgeActivity(novelId:string,chapter:number,runId:string,after:number):Promise<{activity:ChapterKnowledgeActivity[]}>{
-  return request(`/novels/${novelId}/chapter/${chapter}/knowledge/activity?run_id=${encodeURIComponent(runId)}&after=${after}`);
-}
-export function editFactDisplay(novelId:string,factId:number,body:{revision_id:string;version:number;value_en:string}) {
-  return request<{version:number}>(`/novels/${novelId}/facts/${factId}/display`,{method:"PATCH",body:JSON.stringify(body)});
-}
-export function correctFact(novelId:string,factId:number,body:{revision_id:string;version:number;attribute:string;value_en:string;note?:string}) {
-  return request<{version:number}>(`/novels/${novelId}/facts/${factId}/corrections`,{method:"POST",body:JSON.stringify(body)});
-}
-export function removeFact(novelId:string,factId:number,body:{revision_id:string;version:number}) {
-  return request<{version:number}>(`/novels/${novelId}/facts/${factId}`,{method:"DELETE",body:JSON.stringify(body)});
-}
-export function startChapterReextract(novelId:string,chapter:number,scope:"terms"|"facts"|"all"="all") {
-  return request<{run_id:string;state:string}>(`/novels/${novelId}/chapter/${chapter}/knowledge/reextract`,{method:"POST",body:JSON.stringify({scope})});
-}
-export function applyChapterReextract(novelId:string,chapter:number,runId:string,body:{revision_id:string;version:number;decisions:Record<string,string>}) {
-  return request(`/novels/${novelId}/chapter/${chapter}/knowledge/reextract/${runId}/apply`,{method:"POST",body:JSON.stringify(body)});
-}
-
-// Phase D: held knowledge review. There is deliberately no "everything pending" view --
-// this always reads at the reader's own stored position, same as getChapterKnowledge.
-export function getHeldKnowledge(novelId:string,chapter:number):Promise<HeldKnowledgeResponse>{
-  return request(`/novels/${novelId}/chapter/${chapter}/knowledge/held`);
-}
-export function reviewChapterKnowledge(novelId:string,chapter:number,body:KnowledgeReviewRequest):Promise<KnowledgeReviewResponse>{
-  return request(`/novels/${novelId}/chapter/${chapter}/knowledge/review`,{method:"PATCH",body:JSON.stringify(body)});
-}
-
 export function createNovel(body: CreateNovelRequest): Promise<CreateNovelResponse> {
   return request(`/novels`, { method: "POST", body: JSON.stringify(body) });
 }
@@ -139,6 +101,25 @@ export function pasteChapter(novelId: string, body: PasteChapterRequest): Promis
 
 export function getChapter(novelId: string, n: number): Promise<ChapterResponse> {
   return request(`/novels/${novelId}/chapter/${n}`);
+}
+
+export function getRecords(novelId: string, chapter: number): Promise<RecordsResponse> {
+  return request(`/novels/${novelId}/chapter/${chapter}/rows`);
+}
+export function getRecordsInspector(novelId: string, chapter: number): Promise<RecordsInspectorResponse> {
+  return request(`/novels/${novelId}/chapter/${chapter}/records/status`);
+}
+export function getWiki(novelId: string, at: number): Promise<WikiResponse> {
+  return request(`/novels/${novelId}/wiki?at=${at}`);
+}
+export function retryRecords(novelId: string, chapter: number): Promise<{ status: string; run_id?: string }> {
+  return request(`/novels/${novelId}/chapter/${chapter}/records/retry`, { method: "POST" });
+}
+export function retryRecordRendering(novelId: string, chapter: number): Promise<{ status: string }> {
+  return request(`/novels/${novelId}/chapter/${chapter}/records/render-retry`, { method: "POST" });
+}
+export function rebuildRecords(novelId: string): Promise<{ generation_id: string; status: string }> {
+  return request(`/novels/${novelId}/records/rebuild`, { method: "POST" });
 }
 
 export function listChapters(novelId: string, limit: number, offset: number): Promise<ChapterListResponse> {
@@ -338,17 +319,8 @@ export function prioritizeChapter(novelId: string, chapter: number): Promise<{ p
   });
 }
 
-export function getKnowledgeStatus(novelId: string, chapter: number): Promise<import('./types').KnowledgeStatus> {
-  return request(`/novels/${novelId}/knowledge-status?chapter=${chapter}`);
-}
-export function getEventStatus(novelId: string, chapter: number): Promise<import('./types').KnowledgeStatus> {
-  return request(`/novels/${novelId}/event-status?chapter=${chapter}`);
-}
-export function getTimeline(novelId: string): Promise<TimelineResponse> {
-  return request(`/novels/${novelId}/timeline`);
-}
-export function getRelationships(novelId: string, entityId: string, at: number): Promise<{relationships: import('./types').Relationship[]}> {
-  return request(`/novels/${novelId}/relationships/${entityId}?at=${at}`);
+export function getTimeline(novelId: string, at?: number): Promise<TimelineResponse> {
+  return request(`/novels/${novelId}/timeline${at === undefined ? "" : `?at=${at}`}`);
 }
 
 
@@ -402,98 +374,4 @@ export async function deleteProviderCredential(provider: string): Promise<void> 
     method: "DELETE",
     headers: { "X-Reader-ID": readerId() },
   });
-}
-
-// Knowledge repair status. Ungated and safe for any reader to see: it reports that facts
-// are being withheld and how far a replacement has got, never any story content. The
-// `operator` field is the server's answer about THIS caller, and is what the UI keys the
-// repair controls off — never the presence of a token in this browser.
-export async function getRepairStatus(novelId: string): Promise<RepairStatus> {
-  return request(`/novels/${novelId}/repair`);
-}
-
-// Repair actions are operator-gated by reader-api, which then forwards to ingest-api's
-// token-gated route. 202 means recorded, not done: the worker picks it up on its next
-// idle tick, and the status endpoint's `requests` is where progress shows up.
-export async function requestRepair(
-  novelId: string,
-  body: {
-    track: string;
-    action: string;
-    revision_id?: string;
-    chapter_index?: number;
-    params?: unknown;
-  },
-): Promise<{ id: string; state: string }> {
-  return request(`/novels/${novelId}/repair`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-// 204 with an empty body, so this bypasses request() rather than having it parse JSON
-// that isn't there. Same shape as deleteProviderCredential.
-export async function cancelRepair(novelId: string, requestId: string): Promise<void> {
-  const response = await fetch(`/api/novels/${novelId}/repair/${requestId}`, {
-    method: "DELETE",
-    headers: { "X-Reader-ID": readerId() },
-  });
-  if (!response.ok) {
-    const body = await response.text();
-    let code = body || response.statusText;
-    try {
-      code = JSON.parse(body).error ?? code;
-    } catch {
-      // non-JSON error body: keep the raw text
-    }
-    throw new ApiError(response.status, code);
-  }
-}
-
-// Same 204-with-empty-body shape as cancelRepair.
-export async function retryRepairNow(novelId: string, requestId: string): Promise<void> {
-  const response = await fetch(`/api/novels/${novelId}/repair/${requestId}/retry-now`, {
-    method: "POST",
-    headers: { "X-Reader-ID": readerId() },
-  });
-  if (!response.ok) {
-    const body = await response.text();
-    let code = body || response.statusText;
-    try {
-      code = JSON.parse(body).error ?? code;
-    } catch {
-      // non-JSON error body: keep the raw text
-    }
-    throw new ApiError(response.status, code);
-  }
-}
-
-// The frozen review report. Operator-only, and the one repair response that carries story
-// content -- see reader-api's getRepairPreview for why that exception exists.
-export async function getRepairPreview(
-  novelId: string,
-  track: string,
-): Promise<RepairPreview> {
-  return request(`/novels/${novelId}/repair/preview?track=${track}`);
-}
-
-// What the running rebuild has extracted so far. Operator-only for the same reason as the
-// preview: unreviewed claims carrying source quotes from anywhere in the book.
-export async function getRepairProgress(
-  novelId: string,
-): Promise<{
-  facts: RepairProgressFact[];
-  names: RepairExtractedName[];
-  proposed: RepairProposedClaim[];
-}> {
-  const response = await request<{
-    facts: RepairProgressFact[];
-    names: RepairExtractedName[];
-    proposed: RepairProposedClaim[];
-  }>(`/novels/${novelId}/repair/progress`);
-  return {
-    facts: response.facts ?? [],
-    names: response.names ?? [],
-    proposed: response.proposed ?? [],
-  };
 }
