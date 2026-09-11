@@ -1,4 +1,30 @@
-# Pipeline runtime and reader cards
+# Pipeline runtime and reader records
+
+## Records enrichment
+
+Saved chapter prose is published independently of knowledge enrichment. The records
+worker freezes source passages, performs bounded typed discovery, mechanical grounding
+checks, and sends one name inventory to who's-who. Only who's-who assignments may bind
+an entity; uncertain names remain references. Source values and verbatim evidence are
+retained alongside optional offline target-language renderings.
+
+Backfill a saved novel without retranslating it:
+
+```bash
+cd services/pipeline
+../../scripts/with-env.sh .venv/bin/python -m pipeline.records_backfill NOVEL_UUID \
+  --manifest .codex/records-backfill.jsonl
+```
+
+The command is resumable and queue-deduplicated. It records source object hashes and
+durable translation URIs in the manifest; it never writes either object. A new prompt,
+ontology, extraction model, or source requires a new record generation. Readers only
+see published runs from the active generation at or before their knowledge chapter.
+
+Record discovery, identity, and rendering use separate cache identities. Every provider
+completion is attributed to its served model before caching. Transport failures retry;
+malformed individual records are dropped with bounded diagnostics; a valid empty chapter
+is complete. Rendering failure leaves source records available with an explicit fallback.
 
 ## Local graph repair runtime
 

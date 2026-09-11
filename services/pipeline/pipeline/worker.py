@@ -34,6 +34,7 @@ from pipeline.provider_config import (
 )
 from pipeline import queue
 from pipeline.failures import record_failure
+from pipeline.records_publish import publish_records
 from pipeline.stages import DEFAULT_STAGES
 from pipeline.stages.translate import TranslateStage
 from pipeline.textproc import textproc_from_config
@@ -523,14 +524,14 @@ class Worker:
             return
 
         novel = await self._fetch_one(
-            "SELECT source_lang, target_lang, ontology, EXISTS(SELECT 1 FROM graph_revision r WHERE r.id=novel.active_graph_revision AND (NOT r.legacy OR NOT r.trusted)) FROM novel WHERE id = %s",
+            "SELECT source_lang, target_lang, ontology FROM novel WHERE id = %s",
             (msg.novel_id,),
         )
         if novel is None:
             log.warning("no novel row for %s; dropping", msg.novel_id)
             await self._clear_preview(msg.novel_id, msg.chapter_index)
             return
-        source_lang, target_lang, ontology, managed_graph = novel
+        source_lang, target_lang, ontology = novel
         (provider, batch_manager, provider_id, names_provider, resolve_provider,
          model_override) = await self._provider_for_novel(msg.novel_id)
 
@@ -565,7 +566,6 @@ class Worker:
             model_override=model_override,
         )
         state = PipelineState(envelope=envelope)
-        enrichment_error: tuple[str, Exception] | None = None
         if readable or msg.enrichment:
             # Count this attempt. `readable` alone was not enough: a pre-TRANSLATE retry
             # never takes that branch, so enrichment_attempts stayed 0 forever and the
@@ -579,10 +579,6 @@ class Worker:
 
         try:
             for stage in DEFAULT_STAGES:
-                if managed_graph and stage.name in {"scan", "resolve", "display_scan", "state", "graph_write"}:
-                    continue
-                if enrichment_error and stage.name in {"state", "graph_write"}:
-                    continue
                 # Publish the stage name and its own start time atomically. The claim's
                 # original timestamp remains the total-chapter clock; conflating the two
                 # made the UI attribute every earlier stage's minutes to the current one.
@@ -617,14 +613,7 @@ class Worker:
                             await stage.run(ctx, state)
                         except AdmissionRejected:
                             raise
-                        except Exception as exc:
-                            if not readable and stage.name in {"scan", "resolve"}:
-                                # These stages enrich terminology, but the translator can
-                                # still use the already locked glossary. Do not write a
-                                # partial graph with missing identity bindings afterward.
-                                enrichment_error = (stage.name, exc)
-                                log.exception("%s failed; translating with existing glossary", stage.name)
-                                continue
+                        except Exception:
                             raise
                     if stage.name == TRANSLATE_STAGE and (not readable or msg.retranslate):
                         # The translation stage has validated and durably saved the text.
@@ -635,11 +624,6 @@ class Worker:
                         readable = True
                         log.info("chapter %s/%s translation ready", msg.novel_id, msg.chapter_index)
                         await self._clear_preview(msg.novel_id, msg.chapter_index)
-                        # An active event revision owns its own low-priority queue.  Adding
-                        # this readable source to its immutable snapshot does not delay or
-                        # roll back the translation that was just published (§0.2).
-                        from pipeline.event_rebuild import enqueue_completed as enqueue_events
-                        await enqueue_events(self.db, self.cfg, msg.novel_id)
                         if not msg.enrichment:
                             # Do not spend the reader queue's claim on optional graph work.
                             # RELEASE atomically swaps this pointer for enrichment=True,
@@ -653,23 +637,11 @@ class Worker:
                 finally:
                     if streaming:
                         _set_stream_sink(provider, None)
-            if managed_graph:
-                # Graph repair is independent of translation. Keep shared RAG chunks and
-                # empty presentation cards, but never run the legacy identity writer.
-                from pipeline.graph import GraphWriter
-                from pipeline.display_names import align_names, discover_names
-                writer=GraphWriter(self.db)
-                await writer.ready()
-                embeddings=await ctx.embed_provider.embed([c.text for c in state.chunks]) if state.chunks else []
-                names=await discover_names(ctx,state.translation or raw_text)
-                renderings=await align_names(ctx,raw_text,state.translation or raw_text,names)
-                async with self.db.transaction():
-                    await writer.replace_chunks(msg.novel_id,msg.chapter_index,state.chunks,embeddings)
-                    await writer.replace_mention_spans(msg.novel_id,msg.chapter_index,names,renderings)
-                from pipeline.graph_rebuild import enqueue_completed
-                await enqueue_completed(self.db,self.cfg,msg.novel_id)
-            if enrichment_error:
-                raise enrichment_error[1]
+            # Records publication owns the generation/run transaction and chunk rebuild.
+            # It is intentionally after translation so an untranslated chapter can become
+            # readable early and enrichment is retried as a low-priority queue message.
+            if state.records is not None:
+                await publish_records(ctx, state)
         except TranslationPublished:
             raise
         except AdmissionRejected:
@@ -681,8 +653,7 @@ class Worker:
             if await self._fetch_one("SELECT 1 FROM novel WHERE id=%s", (msg.novel_id,)) is None:
                 raise NovelDeleted(msg.novel_id) from exc
             async with self.db.transaction():
-                await record_failure(self.db, msg.novel_id, msg.chapter_index,
-                                     enrichment_error[0] if enrichment_error and exc is enrichment_error[1] else stage.name, exc)
+                await record_failure(self.db, msg.novel_id, msg.chapter_index, stage.name, exc)
                 await self._set_status(msg, "name_repair_error" if msg.retranslate else "error")
                 # Schedule a retry for ANY recorded failure. This used to be guarded by
                 # `if readable`, which silently made every pre-TRANSLATE failure terminal:

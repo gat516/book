@@ -1,6 +1,4 @@
-"""Pipeline stages (instructions.md §5). Reader-critical order: chunk → translate;
-then offline enrichment: character-names → scan → resolve → display-scan → state →
-graph-write.
+"""Production stages: chunk → translate → records.
 
 The build order deliberately differs from the runtime order (PLAN.md): state was filled
 before resolve even though it runs after it, because state populates fact/edge/event —
@@ -15,34 +13,19 @@ terms discovered while enriching this chapter apply forward-only to later transl
 """
 
 from pipeline.stages.chunk import ChunkStage
-from pipeline.stages.character_names import CharacterNamesStage
-from pipeline.stages.display_scan import DisplayScanStage
-from pipeline.stages.graph_write import GraphWriteStage
-from pipeline.stages.resolve import ResolveStage
-from pipeline.stages.scan import ScanStage
-from pipeline.stages.state import StateStage
+from pipeline.stages.records import RecordsStage
 from pipeline.stages.translate import TranslateStage
 
 # The pipeline in runtime order (§5).
 DEFAULT_STAGES = [
     ChunkStage(),
     TranslateStage(),
-    CharacterNamesStage(),
-    ScanStage(),
-    ResolveStage(),
-    DisplayScanStage(),
-    StateStage(),
-    GraphWriteStage(),
+    RecordsStage(),
 ]
 
 __all__ = [
     "ChunkStage",
-    "CharacterNamesStage",
-    "ScanStage",
-    "ResolveStage",
     "TranslateStage",
-    "DisplayScanStage",
-    "StateStage",
-    "GraphWriteStage",
+    "RecordsStage",
     "DEFAULT_STAGES",
 ]

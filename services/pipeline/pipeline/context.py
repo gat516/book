@@ -156,3 +156,8 @@ class PipelineState:
     # would re-insert an already-written chapter's facts (§0.2 is append-only).
     extraction: "Extraction | None" = None
     state_job_key: str | None = None
+
+    # Records enrichment output. The records writer consumes this frozen result in its
+    # publication transaction; it is intentionally separate from the retired graph
+    # extraction object so a retry cannot accidentally reinsert legacy facts.
+    records: dict[str, Any] | None = None
