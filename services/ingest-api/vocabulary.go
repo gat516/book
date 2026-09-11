@@ -285,7 +285,10 @@ func (s *Store) MutateVocabulary(ctx context.Context, novelID string, req vocabu
 	}(), rowHash, req.CreatedBy); err != nil {
 		return 0, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE graph_revision SET version=version+1 WHERE novel_id=$1 AND state <> 'archived'`, novelID); err != nil {
+	// Terminology changes invalidate future renderings while leaving published source
+	// records immutable. The generation config version is included in rendering cache
+	// keys by the records worker.
+	if _, err = tx.Exec(ctx, `UPDATE record_generation SET config_version=config_version+1 WHERE novel_id=$1 AND id=(SELECT active_record_generation FROM novel WHERE id=$1)`, novelID); err != nil {
 		return 0, err
 	}
 	if err = tx.Commit(ctx); err != nil {

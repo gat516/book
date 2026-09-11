@@ -64,6 +64,7 @@ type ReaderStore interface {
 	ListNameReviews(context.Context, string, *int) ([]CharacterNameReview, error)
 	ChapterKnowledge(context.Context, string, int, int) (ChapterKnowledgeView, error)
 	ChapterKnowledgeActivity(context.Context, string, int, int, string, int64) ([]ChapterKnowledgeActivity, error)
+	ListRecords(context.Context, string, int, int) (RecordsResponse, error)
 }
 
 func (s *Store) ListNameReviews(ctx context.Context, novelID string, chapter *int) ([]CharacterNameReview, error) {

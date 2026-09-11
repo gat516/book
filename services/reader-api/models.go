@@ -5,6 +5,53 @@ import (
 	"time"
 )
 
+type RecordsStatus struct {
+	GenerationID     string  `json:"generation_id"`
+	Version          string  `json:"version"`
+	ExtractionStatus string  `json:"extraction_status"`
+	RenderingStatus  string  `json:"rendering_status"`
+	WarningCount     int     `json:"warning_count"`
+	FailureDetail    *string `json:"failure_detail,omitempty"`
+}
+
+type RecordParticipantView struct {
+	Field       string  `json:"field"`
+	Surface     string  `json:"surface"`
+	EntityID    *string `json:"entity_id,omitempty"`
+	ReferenceID *string `json:"reference_id,omitempty"`
+}
+type RecordEvidenceView struct {
+	PassageID string  `json:"passage_id"`
+	Quote     *string `json:"quote,omitempty"`
+	Text      string  `json:"text"`
+	CharStart int     `json:"char_start"`
+	CharEnd   int     `json:"char_end"`
+	Ordinal   int     `json:"ordinal"`
+}
+type RecordValueView struct {
+	Field        string `json:"field"`
+	Source       string `json:"source"`
+	Rendered     string `json:"rendered"`
+	RenderStatus string `json:"render_status"`
+}
+type RecordView struct {
+	ID                string                  `json:"id"`
+	Type              string                  `json:"type"`
+	OriginalIndex     int                     `json:"original_index"`
+	SourceChapter     int                     `json:"source_chapter"`
+	ValidFromChapter  *int                    `json:"valid_from_chapter,omitempty"`
+	TemporalQualifier *string                 `json:"temporal_qualifier,omitempty"`
+	Values            []RecordValueView       `json:"values"`
+	Participants      []RecordParticipantView `json:"participants"`
+	Evidence          []RecordEvidenceView    `json:"evidence"`
+}
+type RecordsResponse struct {
+	NovelID      string        `json:"novel_id"`
+	ChapterIndex int           `json:"chapter_index"`
+	Status       RecordsStatus `json:"status"`
+	Rows         []RecordView  `json:"rows"`
+}
+
 type Progress struct {
 	NovelID        string    `json:"novel_id"`
 	ReaderID       string    `json:"reader_id"`

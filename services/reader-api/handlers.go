@@ -36,6 +36,8 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/relationships/{eid}", a.getRelationships)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}", a.getChapter)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}/knowledge", a.getChapterKnowledge)
+	mux.HandleFunc("GET /novels/{id}/chapter/{n}/rows", a.getRecords)
+	mux.HandleFunc("GET /novels/{id}/chapter/{n}/records/status", a.getRecords)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}/knowledge/activity", a.getChapterKnowledgeActivity)
 	mux.HandleFunc("POST /novels/{id}/chapter/{n}/knowledge/reextract", a.chapterKnowledgeMutation)
 	mux.HandleFunc("POST /novels/{id}/chapter/{n}/knowledge/reextract/{run}/apply", a.chapterKnowledgeMutation)
