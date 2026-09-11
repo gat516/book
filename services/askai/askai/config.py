@@ -14,9 +14,7 @@ class Config:
     port: int
     max_chunks: int = 8
     max_entities: int = 8
-    max_facts: int = 64
-    max_edges: int = 32
-    max_events: int = 24
+    max_records: int = 64
     max_context_chars: int = 48_000
     embed_model: str = "nomic-embed-text"
     # Process-wide provider defaults (PLAN.md Phase N4) — the fallback for a novel with
@@ -42,7 +40,7 @@ def load_config() -> Config:
         host=os.getenv("ASKAI_HOST", "0.0.0.0"),
         port=int(os.getenv("ASKAI_PORT", "8082")),
         embed_model=os.getenv("EMBED_MODEL", "nomic-embed-text"),
-        max_events=int(os.getenv("ASKAI_MAX_EVENTS", "24")),
+        max_records=int(os.getenv("ASKAI_MAX_RECORDS", "64")),
         llm_provider=os.getenv("LLM_PROVIDER", "anthropic"),
         ollama_host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
         deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", ""),

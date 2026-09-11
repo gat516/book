@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
+import json
 from psycopg import AsyncConnection
-
 
 @dataclass(frozen=True)
 class Source:
@@ -11,120 +10,172 @@ class Source:
     id: int | str
     chapter: int
     text: str
-    evidence: dict | None = None
-
+    evidence: list[dict] | dict | None = None
 
 def vector_literal(vector: list[float]) -> str:
     return "[" + ",".join(str(value) for value in vector) + "]"
 
+async def retrieve(conn: AsyncConnection, novel_id: str, at: int, embedding: list[float], *, question: str = "", max_chunks: int, max_entities: int = 8, max_records: int = 64) -> list[Source]:
+    """Retrieve chunks and active-generation records under the reader chapter gate.
 
-async def retrieve(conn: AsyncConnection, novel_id: str, at: int, embedding: list[float], *, question: str = "", max_chunks: int, max_entities: int, max_facts: int, max_edges: int, max_events: int = 24) -> list[Source]:
+    Record retrieval is entity-first: the nearest visible entities seed a bounded
+    participant-linked result set. If no such entities have records, the query falls
+    back to recent visible rows. Every predicate is repeated here because Ask AI's
+    connection role may be privileged in a deployment and RLS is only one layer of
+    the spoiler boundary.
+    """
     vector = vector_literal(embedding)
     async with conn.cursor() as cur:
-        await cur.execute("SELECT id, chapter_index, text FROM chunk WHERE novel_id = %s AND chapter_index <= %s ORDER BY embedding <=> %s::vector, id LIMIT %s", (novel_id, at, vector, max_chunks))
+        await cur.execute("""SELECT id, chapter_index, text FROM chunk
+          WHERE novel_id=%s AND chapter_index<=%s
+          ORDER BY embedding <=> %s::vector, id LIMIT %s""", (novel_id, at, vector, max_chunks))
         chunks = [Source("chunk", row[0], row[1], row[2]) for row in await cur.fetchall()]
-        # Events are already compact retrieval units, so lexical ranking avoids another
-        # embedding or model call. RLS independently selects active_event_revision and
-        # applies the same source-chapter authorization boundary as every other source.
-        await cur.execute("""SELECT e.id::text,e.chapter_index,
-          e.action || CASE WHEN count(a.*)>0 THEN ' (' || string_agg(a.role || ': ' || a.surface, ', ' ORDER BY a.ordinal) || ')' ELSE '' END ||
-          CASE WHEN e.result IS NOT NULL THEN '. Result: ' || e.result ELSE '' END || '. ' || e.summary,
-          jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash,'char_start',v.char_start,'char_end',v.char_end),
-          ts_rank(to_tsvector('simple',e.action || ' ' || e.summary || ' ' || coalesce(e.result,'') || ' ' || coalesce(string_agg(a.surface,' '),'')),websearch_to_tsquery('simple',%s)) AS rank
-          FROM chapter_event e JOIN event_evidence v ON v.id=e.evidence_id
-          LEFT JOIN chapter_event_argument a ON a.event_id=e.id
-          WHERE e.novel_id=%s AND e.chapter_index<=%s
-          GROUP BY e.id,v.id
-          ORDER BY rank DESC,e.chapter_index DESC,e.id LIMIT %s""", (question, novel_id, at, max_events))
-        events = [Source("event", row[0], row[1], row[2], row[3]) for row in await cur.fetchall()]
-        await cur.execute("SELECT id::text FROM entity WHERE novel_id = %s AND revision_id=reader_graph_revision() AND first_seen_chapter <= %s AND embedding IS NOT NULL ORDER BY embedding <=> %s::vector, id LIMIT %s", (novel_id, at, vector, max_entities))
+        # Active generation and published run are explicit here as well as in RLS.
+        # This keeps Ask AI fail-closed when called with a privileged local role.
+        await cur.execute("""SELECT e.id::text
+          FROM entity e JOIN novel n ON n.id=e.novel_id
+         WHERE e.novel_id=%s AND e.record_generation_id=n.active_record_generation
+           AND e.first_seen_chapter<=%s AND e.embedding IS NOT NULL
+           AND EXISTS (
+             SELECT 1 FROM record_participant p
+             JOIN record_row er ON er.id=p.row_id
+             JOIN record_run eu ON eu.id=er.run_id
+            WHERE p.entity_id=e.id AND er.novel_id=e.novel_id
+              AND er.generation_id=e.record_generation_id
+              AND eu.status='published' AND er.source_chapter<=%s
+           )
+         ORDER BY (
+           EXISTS (SELECT 1 FROM alias a WHERE a.entity_id=e.id
+                    AND a.first_seen_chapter<=%s
+                    AND position(lower(a.surface) in lower(%s)) > 0)
+           OR EXISTS (SELECT 1 FROM glossary g WHERE g.novel_id=e.novel_id
+                    AND g.entity_id=e.id AND g.locked_at_chapter<=%s
+                    AND position(lower(g.target_term) in lower(%s)) > 0)
+         ) DESC, e.embedding <=> %s::vector, e.id LIMIT %s""",
+            (novel_id, at, at, at, question, at, question, vector, max_entities))
         entity_ids = [row[0] for row in await cur.fetchall()]
-        if not entity_ids:
-            return events + chunks
-        await cur.execute("""WITH vocabulary AS (
-            SELECT name, aliases, status
-                FROM reader_vocabulary(%s::uuid,%s)
-               WHERE term_type='attribute'
-            ), visible AS (
-              SELECT f.*, canonical.name AS canonical_attribute
-                FROM fact f
-                LEFT JOIN LATERAL (
-                  SELECT v.name
-                    FROM vocabulary v
-                   WHERE f.attribute=ANY(v.aliases)
-                   ORDER BY v.name
-                   LIMIT 1
-                ) alias_match ON true
-                LEFT JOIN vocabulary exact ON exact.name=f.attribute
-                JOIN vocabulary canonical
-                  ON canonical.name=COALESCE(alias_match.name,exact.name)
-                 AND canonical.status='admitted'
-               WHERE f.novel_id = %s AND f.entity_id = ANY(%s::uuid[])
-                 AND f.source_chapter <= %s AND f.valid_from_chapter <= %s
-            ), current_facts AS (
-              SELECT DISTINCT ON (entity_id, canonical_attribute) *
-                FROM visible f
-               WHERE f.kind <> 'retraction'
-                 AND NOT EXISTS (SELECT 1 FROM visible successor WHERE successor.supersedes = f.id)
-               ORDER BY entity_id, canonical_attribute, valid_from_chapter DESC,
-                        source_chapter DESC, confidence DESC, id DESC
-            )
-            SELECT cf.id, cf.source_chapter,
-                   coalesce(e.canonical_en,e.canonical) || ': ' || cf.canonical_attribute || ' = ' || coalesce(cf.value_en, cf.value),
-                   (SELECT jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash)
-                      FROM graph_evidence v WHERE v.id=cf.evidence_id)
-              FROM current_facts cf JOIN entity e ON e.id = cf.entity_id
-             ORDER BY source_chapter DESC, id DESC LIMIT %s""", (novel_id, at, novel_id, entity_ids, at, at, max_facts))
-        facts = [Source("fact", row[0], row[1], row[2], row[3]) for row in await cur.fetchall()]
-        await cur.execute("""WITH vocabulary AS (
-            SELECT name, aliases, status
-                FROM reader_vocabulary(%s::uuid,%s)
-               WHERE term_type='relation'
-            ), eligible AS (
-              SELECT ed.*, canonical.name AS canonical_relation
-                FROM edge ed
-                LEFT JOIN LATERAL (
-                  SELECT v.name
-                    FROM vocabulary v
-                   WHERE ed.rel_type=ANY(v.aliases)
-                   ORDER BY v.name
-                   LIMIT 1
-                ) alias_match ON true
-                LEFT JOIN vocabulary exact ON exact.name=ed.rel_type
-                JOIN vocabulary canonical
-                  ON canonical.name=COALESCE(alias_match.name,exact.name)
-                 AND canonical.status='admitted'
-               WHERE ed.novel_id = %s
-                 AND (ed.src_id = ANY(%s::uuid[]) OR ed.dst_id = ANY(%s::uuid[]))
-                 AND ed.source_chapter <= %s AND ed.valid_from_chapter <= %s
-                 AND (ed.valid_to_chapter IS NULL OR ed.valid_to_chapter > %s)
-            ), current_edges AS (
-              SELECT e.*
-                FROM eligible e
-               WHERE e.kind <> 'retraction'
-                 AND NOT EXISTS (SELECT 1 FROM eligible successor WHERE successor.supersedes=e.id)
-            )
-            SELECT ed.id, ed.source_chapter,
-                   src.canonical || ' --' || ed.canonical_relation || '--> ' || dst.canonical,
-                   (SELECT jsonb_build_object('id',ev.id,'chapter',ev.chapter_index,'quote',ev.quote,'source_hash',ev.source_hash)
-                      FROM graph_evidence ev WHERE ev.id=ed.evidence_id)
-              FROM current_edges ed
-              JOIN entity src ON src.id = ed.src_id
-              JOIN entity dst ON dst.id = ed.dst_id
-             ORDER BY ed.source_chapter DESC, ed.id DESC LIMIT %s""", (novel_id, at, novel_id, entity_ids, entity_ids, at, at, at, max_edges))
-        edges = [Source("edge", row[0], row[1], row[2], row[3]) for row in await cur.fetchall()]
-    return events + chunks + facts + edges
 
+        # Use a participant-linked result whenever the entity snapshot has a match.
+        # A chapter-recency fallback keeps broad questions useful for books whose
+        # entity embeddings have not been populated yet.
+        entity_filter = "AND EXISTS (SELECT 1 FROM record_participant ep WHERE ep.row_id=r.id AND ep.entity_id = ANY(%s::uuid[]))" if entity_ids else ""
+        await cur.execute(f"""WITH active AS (
+            SELECT active_record_generation AS generation_id FROM novel WHERE id=%s
+          ), visible_rows AS (
+            SELECT r.id, r.run_id, r.source_chapter, r.record_type,
+                   r.valid_from_chapter, r.temporal_qualifier, r.original_index
+              FROM record_row r JOIN record_run run ON run.id=r.run_id
+              JOIN active a ON a.generation_id=r.generation_id
+             WHERE r.novel_id=%s AND run.novel_id=%s AND run.generation_id=a.generation_id
+               AND run.status='published' AND r.source_chapter<=%s
+               {entity_filter}
+          ), vals AS (
+            SELECT v.row_id,
+              jsonb_agg(jsonb_build_object(
+                'field', v.field_name,
+                'source', v.source_value,
+                'rendered', CASE WHEN rr.status='ready' THEN rr.target_value ELSE NULL END,
+                'render_status', coalesce(rr.status,'pending')
+              ) ORDER BY v.field_name) AS fields
+              FROM record_value v LEFT JOIN record_rendering rr
+                ON rr.row_id=v.row_id AND rr.field_name=v.field_name
+             GROUP BY v.row_id
+          ), participants AS (
+            SELECT p.row_id,
+              jsonb_agg(jsonb_build_object(
+                'field', p.field_name, 'surface', p.surface,
+                'entity_id', p.entity_id, 'reference_id', p.reference_id
+              ) ORDER BY p.ordinal) AS names
+              FROM record_participant p GROUP BY p.row_id
+          ), proof AS (
+            SELECT ev.row_id, jsonb_agg(jsonb_build_object(
+                'passage_id', pa.passage_id, 'run_id', pa.run_id,
+                'chapter', pa.chapter_index, 'quote', ev.quote,
+                'text', pa.text, 'char_start', pa.char_start,
+                'char_end', pa.char_end, 'ordinal', pa.ordinal
+              ) ORDER BY pa.ordinal) AS evidence
+              FROM record_evidence ev
+              JOIN record_passage pa ON pa.run_id=ev.run_id AND pa.passage_id=ev.passage_id
+             GROUP BY ev.row_id
+          )
+          SELECT vr.id::text, vr.source_chapter, vr.record_type, vr.original_index,
+                 vr.valid_from_chapter, vr.temporal_qualifier,
+                 coalesce(vals.fields,'[]'::jsonb), coalesce(participants.names,'[]'::jsonb),
+                 coalesce(proof.evidence,'[]'::jsonb)
+            FROM visible_rows vr
+            LEFT JOIN vals ON vals.row_id=vr.id
+            LEFT JOIN participants ON participants.row_id=vr.id
+            LEFT JOIN proof ON proof.row_id=vr.id
+           ORDER BY vr.source_chapter DESC, vr.original_index DESC
+           LIMIT %s""", [novel_id, novel_id, novel_id, at, *([entity_ids] if entity_ids else []), max_records])
+        record_rows = await cur.fetchall()
+        # If entity-linked retrieval has no rows, run the same query without the
+        # participant filter. This is deliberately a second bounded query, rather than
+        # mixing unrelated rows into a partial entity result.
+        if entity_ids and not record_rows:
+            await cur.execute("""WITH active AS (
+                SELECT active_record_generation AS generation_id FROM novel WHERE id=%s
+              ), visible_rows AS (
+                SELECT r.id, r.run_id, r.source_chapter, r.record_type,
+                       r.valid_from_chapter, r.temporal_qualifier, r.original_index
+                  FROM record_row r JOIN record_run run ON run.id=r.run_id
+                  JOIN active a ON a.generation_id=r.generation_id
+                 WHERE r.novel_id=%s AND run.novel_id=%s AND run.generation_id=a.generation_id
+                   AND run.status='published' AND r.source_chapter<=%s
+              ), vals AS (
+                SELECT v.row_id, jsonb_agg(jsonb_build_object(
+                  'field',v.field_name,'source',v.source_value,
+                  'rendered',CASE WHEN rr.status='ready' THEN rr.target_value ELSE NULL END,
+                  'render_status',coalesce(rr.status,'pending')) ORDER BY v.field_name) fields
+                  FROM record_value v LEFT JOIN record_rendering rr ON rr.row_id=v.row_id AND rr.field_name=v.field_name GROUP BY v.row_id
+              ), participants AS (
+                SELECT p.row_id, jsonb_agg(jsonb_build_object('field',p.field_name,'surface',p.surface,'entity_id',p.entity_id,'reference_id',p.reference_id) ORDER BY p.ordinal) names
+                  FROM record_participant p GROUP BY p.row_id
+              ), proof AS (
+                SELECT ev.row_id, jsonb_agg(jsonb_build_object('passage_id',pa.passage_id,'run_id',pa.run_id,'chapter',pa.chapter_index,'quote',ev.quote,'text',pa.text,'char_start',pa.char_start,'char_end',pa.char_end,'ordinal',pa.ordinal) ORDER BY pa.ordinal) evidence
+                  FROM record_evidence ev JOIN record_passage pa ON pa.run_id=ev.run_id AND pa.passage_id=ev.passage_id GROUP BY ev.row_id
+              )
+              SELECT vr.id::text,vr.source_chapter,vr.record_type,vr.original_index,vr.valid_from_chapter,vr.temporal_qualifier,
+                     coalesce(vals.fields,'[]'::jsonb),coalesce(participants.names,'[]'::jsonb),coalesce(proof.evidence,'[]'::jsonb)
+                FROM visible_rows vr LEFT JOIN vals ON vals.row_id=vr.id LEFT JOIN participants ON participants.row_id=vr.id LEFT JOIN proof ON proof.row_id=vr.id
+               ORDER BY vr.source_chapter DESC,vr.original_index DESC LIMIT %s""",
+                (novel_id, novel_id, novel_id, at, max_records))
+            record_rows = await cur.fetchall()
 
-def build_context(sources: list[Source], max_chars: int) -> tuple[str, list[dict[str, int | str | dict]]]:
+        records: list[Source] = []
+        for row in record_rows:
+            _, chapter, record_type, original_index, valid_from, temporal, fields, participants_json, evidence = row
+            fields = fields if isinstance(fields, list) else json.loads(fields)
+            participants_json = participants_json if isinstance(participants_json, list) else json.loads(participants_json)
+            evidence = evidence if isinstance(evidence, list) else json.loads(evidence)
+            field_text = "; ".join(
+                f"{item.get('field')}: {item.get('source')}" + (f" (English: {item['rendered']})" if item.get('rendered') else "")
+                for item in fields if isinstance(item, dict)
+            )
+            participant_text = ", ".join(str(item.get('surface') or '') for item in participants_json if isinstance(item, dict))
+            qualifier = f" [{temporal}]" if temporal else ""
+            text = f"{record_type} (record index {original_index}){qualifier}: {field_text}"
+            if participant_text:
+                text += f" (participants: {participant_text})"
+            records.append(Source("record", str(row[0]), chapter, text, evidence))
+    return chunks + records
+
+def build_context(sources: list[Source], max_chars: int) -> tuple[str, list[dict]]:
     parts: list[str] = []
-    used: list[dict[str, int | str | dict]] = []
+    used: list[dict] = []
     total = 0
     for source in sources:
-        item = f"[{source.kind}:{source.id} ch:{source.chapter}]\n{source.text}\n"
+        evidence = ""
+        if source.evidence:
+            evidence = "\nEvidence:\n" + "\n".join(
+                str(item.get("quote") or item.get("text") or "")
+                for item in (source.evidence if isinstance(source.evidence, list) else [source.evidence])
+                if isinstance(item, dict)
+            )
+        item = f"[{source.kind}:{source.id} ch:{source.chapter}]\n{source.text}{evidence}\n"
         if total + len(item) > max_chars:
             continue
         parts.append(item)
-        used.append({"kind": source.kind, "id": source.id, "chapter": source.chapter, **({"evidence":source.evidence} if source.evidence else {})})
+        used.append({"kind": source.kind, "id": source.id, "chapter": source.chapter, **({"evidence": source.evidence} if source.evidence else {})})
         total += len(item)
     return "\n".join(parts), used
