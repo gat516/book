@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, discardRecordsChapter, discardRecordsRebuild, getChapter, getRecords, getRecordsRebuildStatus, putProgress, rebuildRecords, retryRecords } from "../api";
-import type { ChapterResponse, EntityView, RecordsRebuildStatus } from "../types";
+import { ApiError, discardRecordsChapter, getChapter, getRecords, putProgress, retryRecords } from "../api";
+import type { ChapterResponse, EntityView } from "../types";
 import { HoverCard } from "./HoverCard";
 import { EntityInspector } from "./EntityInspector";
 import { usePolling } from "../usePolling";
@@ -34,10 +34,7 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
   const [recordsError, setRecordsError] = useState<string | null>(null);
   const [retryingRecords, setRetryingRecords] = useState(false);
   const [showRecordDiagnostics, setShowRecordDiagnostics] = useState(false);
-  const [graphStatus, setGraphStatus] = useState<RecordsRebuildStatus | null>(null);
-  const [graphError, setGraphError] = useState<string | null>(null);
   const [graphBusy, setGraphBusy] = useState(false);
-  const [discardGraphConfirm, setDiscardGraphConfirm] = useState(false);
   const [discardChapterConfirm, setDiscardChapterConfirm] = useState(false);
   const [graphMessage, setGraphMessage] = useState<string | null>(null);
 
@@ -52,35 +49,14 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
     setRecordsError(null);
     setRetryingRecords(false);
     setShowRecordDiagnostics(false);
-    setDiscardGraphConfirm(false);
     setDiscardChapterConfirm(false);
     setGraphMessage(null);
   }, [novelId, chapterIndex, clickableEntities]);
 
-  const loadGraphStatus = async () => {
-    try { setGraphStatus(await getRecordsRebuildStatus(novelId)); setGraphError(null); }
-    catch (reason) { setGraphError(errorMessage(reason)); }
-  };
-  useEffect(() => { void loadGraphStatus(); }, [novelId]);
-  usePolling(loadGraphStatus, 8000, graphStatus?.has_predecessor === true && graphStatus.missing_chapters > 0 && !graphError);
-
-  async function startGraph() {
-    setGraphBusy(true); setGraphError(null);
-    try { await rebuildRecords(novelId); await loadGraphStatus(); }
-    catch (reason) { setGraphError(errorMessage(reason)); }
-    finally { setGraphBusy(false); }
-  }
-  async function discardGraph() {
-    if (!graphStatus?.active_generation_id) return;
-    setGraphBusy(true); setGraphError(null);
-    try { await discardRecordsRebuild(novelId, graphStatus.active_generation_id); setDiscardGraphConfirm(false); await loadGraphStatus(); }
-    catch (reason) { setGraphError(errorMessage(reason)); }
-    finally { setGraphBusy(false); }
-  }
   async function discardChapterGraph() {
-    setGraphBusy(true); setGraphError(null);
-    try { await discardRecordsChapter(novelId, chapterIndex); setDiscardChapterConfirm(false); setGraphMessage("This chapter's graph attempt was discarded. It will remain idle until Retry is pressed."); const latest = await getRecords(novelId, chapterIndex); setRecords(latest); }
-    catch (reason) { setGraphError(errorMessage(reason)); }
+    setGraphBusy(true); setGraphMessage(null);
+    try { await discardRecordsChapter(novelId, chapterIndex); setDiscardChapterConfirm(false); setGraphMessage("This chapter's graph attempt was discarded. It will remain idle until Extract this chapter's facts is pressed."); const latest = await getRecords(novelId, chapterIndex); setRecords(latest); }
+    catch (reason) { setGraphMessage(errorMessage(reason)); }
     finally { setGraphBusy(false); }
   }
 
@@ -96,6 +72,12 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
     } finally {
       setRetryingRecords(false);
     }
+  }
+
+  async function extractChapterFacts() {
+    setGraphBusy(true);
+    try { await retryChapterRecords(); }
+    finally { setGraphBusy(false); }
   }
 
   useEffect(() => {
@@ -228,13 +210,9 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
       {records && <RecordStatusBanner status={records.status} busy={retryingRecords} onRetry={() => void retryChapterRecords()} />}
       <div className="chapter-knowledge-controls">
         <strong>Knowledge graph</strong>
-        <span>{graphStatus ? `Graph coverage: ${graphStatus.published_chapters}/${graphStatus.eligible_chapters} chapters` : "Graph status is loading…"}</span>
-        <button type="button" disabled={graphBusy} onClick={() => void startGraph()}>{graphBusy ? "Working…" : "Start / rebuild graph"}</button>
-        {graphStatus?.has_predecessor && graphStatus.discardable && !discardGraphConfirm && <button type="button" disabled={graphBusy} onClick={() => setDiscardGraphConfirm(true)}>Discard unfinished graph</button>}
-        {discardGraphConfirm && <span role="alert"><small>This discards only the unfinished replacement; published history is kept.</small> <button type="button" disabled={graphBusy} onClick={() => void discardGraph()}>Confirm graph discard</button> <button type="button" disabled={graphBusy} onClick={() => setDiscardGraphConfirm(false)}>Keep graph</button></span>}
+        <button type="button" disabled={graphBusy} onClick={() => void extractChapterFacts()}>{graphBusy ? "Extracting…" : "Extract this chapter's facts"}</button>
         {(records?.status.extraction_status === "processing" || records?.status.extraction_status === "pending" || !!records?.status.retry_at) && !discardChapterConfirm && <button type="button" disabled={graphBusy} onClick={() => setDiscardChapterConfirm(true)}>Discard this chapter attempt</button>}
         {discardChapterConfirm && <span role="alert"><small>Stop this chapter's current graph work and leave it idle until Retry.</small> <button type="button" disabled={graphBusy} onClick={() => void discardChapterGraph()}>Confirm chapter discard</button> <button type="button" disabled={graphBusy} onClick={() => setDiscardChapterConfirm(false)}>Keep working</button></span>}
-        {graphError && <small role="alert">{graphError}</small>}
         {graphMessage && <small role="status">{graphMessage}</small>}
       </div>
       {chapter.translation_warning?.code === "locked_terms_missing" && <p role="status" className="reader-translation-warning">

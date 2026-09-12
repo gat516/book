@@ -3,6 +3,7 @@ import { listChapters } from "../api";
 import type { ChapterListItem, ChapterListResponse, PipelineStatusResponse } from "../types";
 import { PipelineStatus } from "./PipelineStatus";
 import { providerFailureDetail } from "./ProviderHealth";
+import { KnowledgeGraphControls } from "./KnowledgeGraphControls";
 
 interface Props {
   novelId: string;
@@ -74,6 +75,7 @@ export function ChapterList({ novelId, currentChapter, onOpen, onClose, onAdd }:
 
       {/* Reuse the status poll; refresh rows only when pipeline activity changes. */}
       <PipelineStatus novelId={novelId} onProgress={load} onStatus={receiveStatus} />
+      <KnowledgeGraphControls novelId={novelId} />
 
       <div className="chapter-list-summary">
         <span>{page ? `${total} chapter(s)` : "Loading chapters…"}</span>
