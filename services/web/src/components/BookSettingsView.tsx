@@ -3,6 +3,7 @@ import { discardRecordsRebuild, getRecordsRebuildStatus, rebuildRecords } from "
 import type { RecordsRebuildStatus } from "../types";
 import { useCallback, useEffect, useState } from "react";
 import { usePolling } from "../usePolling";
+import { graphCoverageLabel } from "../knowledgeLabels";
 
 interface Props {
   novelId: string;
@@ -63,12 +64,12 @@ export function BookSettingsView({ novelId, onClose }: Props) {
       <h2>Book settings</h2>
 
       <ProviderConfigPanel key={`provider-${novelId}`} novelId={novelId} />
-      <section className="records-settings"><h3>Knowledge graph</h3><p>Start or rebuild the chapter knowledge graph in a new immutable generation. Published knowledge stays available while a replacement is built.</p><button type="button" onClick={() => void rebuild()} disabled={busy}>{busy ? "Starting graph rebuild…" : "Start / rebuild knowledge graph"}</button>
-        {status?.has_predecessor && status.active_generation_id && <p role="status">Rebuild {status.active_state}: {status.published_chapters}/{status.eligible_chapters} chapters published ({status.missing_chapters} remaining).</p>}
+      <section className="records-settings"><h3>Knowledge graph</h3><p>Start or rebuild the chapter knowledge graph in a new immutable generation. A rebuild becomes active immediately; chapters not published into it yet show pending knowledge while processing completes.</p><button type="button" onClick={() => void rebuild()} disabled={busy}>{busy ? "Starting graph rebuild…" : "Start / rebuild knowledge graph"}</button>
+        {status && <p role="status">{graphCoverageLabel(status)}{status.has_predecessor && " Published generations cannot be deleted; use chapter review to reject individual records from reader views."}</p>}
         {statusError && <p role="alert" className="reader-pane-error">Could not load rebuild status: {statusError} <button type="button" onClick={() => void loadStatus()}>Retry status</button></p>}
         {status?.has_predecessor && status.discardable && status.active_generation_id && <div className="rebuild-discard">
-          {!confirmDiscard ? <button type="button" onClick={() => setConfirmDiscard(true)}>Discard unfinished rebuild</button> : <>
-            <p role="alert">Discard this unfinished rebuild? Its partial work will no longer be active; the previous published generation is kept.</p>
+          {!confirmDiscard ? <button type="button" onClick={() => setConfirmDiscard(true)}>Discard unfinished graph rebuild</button> : <>
+            <p role="alert">Discard this unfinished graph rebuild? Its partial work will no longer be active; published generations cannot be deleted. Individual chapter records can instead be rejected from reader views in chapter review.</p>
             <button type="button" disabled={discardBusy} onClick={() => void discard()}>{discardBusy ? "Discarding…" : "Confirm discard"}</button>
             <button type="button" disabled={discardBusy} onClick={() => setConfirmDiscard(false)}>Keep rebuilding</button>
           </>}
