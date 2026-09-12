@@ -85,6 +85,10 @@ func (f *fakeIngestClient) RecordsRebuildStatus(_ context.Context, _ string) (js
 	return f.response, f.status, f.err
 }
 
+func (f *fakeIngestClient) StopRecordsBuild(_ context.Context, _ string) (json.RawMessage, int, error) {
+	return f.response, f.status, f.err
+}
+
 func (f *fakeIngestClient) DiscardRecordsRebuild(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
 	return f.response, f.status, f.err
@@ -118,11 +122,6 @@ func (f *fakeIngestClient) CorrectGlossaryTerm(_ context.Context, _, _ string, b
 	f.lastBody = body
 	return f.response, f.status, f.err
 }
-func (f *fakeIngestClient) MutateVocabulary(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
-	f.lastBody = body
-	return f.response, f.status, f.err
-}
-
 func (f *fakeIngestClient) DeleteGlossaryTerm(_ context.Context, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
 	return f.response, f.status, f.err
@@ -290,11 +289,6 @@ func (f *fakeStore) RequestScrapeCancel(context.Context, string) error {
 func (f *fakeStore) ListGlossary(_ context.Context, _ string, at int) ([]GlossaryTermView, error) {
 	f.lastAt = at
 	return f.glossary, f.glossaryErr
-}
-
-func (f *fakeStore) ListVocabulary(_ context.Context, _ string, at int) ([]VocabularyTermView, error) {
-	f.lastAt = at
-	return nil, nil
 }
 
 func (f *fakeStore) ListNameReviews(context.Context, string, *int) ([]CharacterNameReview, error) {
@@ -1003,46 +997,6 @@ func TestPatchGlossaryTermProxiesToIngestClient(t *testing.T) {
 	}
 }
 
-func TestVocabularyRequiresReaderAndUsesStoredProgress(t *testing.T) {
-	response := request(t, &API{store: readyFake(), ingest: &fakeIngestClient{}}, http.MethodGet,
-		"/novels/"+testNovelID+"/vocabulary", "", "")
-	if response.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d, want 401", response.Code)
-	}
-	response = request(t, &API{store: readyFake(), ingest: &fakeIngestClient{}}, http.MethodGet,
-		"/novels/"+testNovelID+"/vocabulary", "", "reader-a")
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d, want 200", response.Code)
-	}
-	if strings.Contains(response.Body.String(), "first_seen_chapter") || strings.Contains(response.Body.String(), "proposals") {
-		t.Fatalf("vocabulary response leaked future metadata: %s", response.Body.String())
-	}
-}
-
-func TestPatchVocabularyProxiesAndAddsActor(t *testing.T) {
-	ingest := &fakeIngestClient{response: json.RawMessage(`{"version":2}`), status: http.StatusOK}
-	response := request(t, &API{store: readyFake(), ingest: ingest}, http.MethodPatch,
-		"/novels/"+testNovelID+"/vocabulary", `{"action":"ban","term_type":"attribute","name":"description","chapter":5}`, "reader-a")
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d, body=%s", response.Code, response.Body.String())
-	}
-	if !strings.Contains(string(ingest.lastBody), `"created_by":"reader-a"`) {
-		t.Fatalf("actor not forwarded: %s", ingest.lastBody)
-	}
-}
-
-func TestPatchVocabularyRejectsBeyondStoredProgress(t *testing.T) {
-	ingest := &fakeIngestClient{response: json.RawMessage(`{"version":2}`), status: http.StatusOK}
-	response := request(t, &API{store: readyFake(), ingest: ingest}, http.MethodPatch,
-		"/novels/"+testNovelID+"/vocabulary", `{"action":"alias","term_type":"attribute","name":"description","alias":"old_description","chapter":6}`, "reader-a")
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("status=%d, want 403", response.Code)
-	}
-	if ingest.lastBody != nil {
-		t.Fatal("future vocabulary mutation was proxied")
-	}
-}
-
 func TestConfirmGlossaryTermRequiresPrincipalAndProxiesBody(t *testing.T) {
 	ingest := &fakeIngestClient{response: json.RawMessage(`{"version":2}`), status: http.StatusCreated}
 	api := &API{store: readyFake(), ingest: ingest}
@@ -1150,5 +1104,21 @@ func TestRecordsRebuildStatusProxiesMetadata(t *testing.T) {
 		"/novels/"+testNovelID+"/records/rebuild/status", "", "")
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"discardable":true`) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestNovelWideRecordsActionsProxyDistinctIntents(t *testing.T) {
+	for _, action := range []string{"extract", "rebuild"} {
+		ingest := &fakeIngestClient{}
+		api := &API{store: readyFake(), ingest: ingest}
+		response := request(t, api, http.MethodPost, "/novels/"+testNovelID+"/records/"+action, "", "")
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s: status=%d body=%s", action, response.Code, response.Body.String())
+		}
+		// Continuing the graph and replacing it are different operations; routing one to
+		// the other would silently throw away every published chapter.
+		if want := `{"chapter":"","action":"` + action + `"}`; string(ingest.lastBody) != want {
+			t.Fatalf("%s proxied as %s", action, ingest.lastBody)
+		}
 	}
 }

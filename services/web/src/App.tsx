@@ -5,7 +5,6 @@ import { AskBox } from "./components/AskBox";
 import { ChapterList } from "./components/ChapterList";
 import { ChapterPending } from "./components/ChapterPending";
 import { GlossaryView } from "./components/GlossaryView";
-import { VocabularyView } from "./components/VocabularyView";
 import { NovelCreateForm } from "./components/NovelCreateForm";
 import { NovelPicker } from "./components/NovelPicker";
 import { ProgressControls } from "./components/ProgressControls";
@@ -65,7 +64,6 @@ export default function App() {
   // ChapterPending for it holds them here and polls until it's readable.
   const [pending, setPending] = useState<PendingChapter | null>(null);
   const [showGlossary, setShowGlossary] = useState(false);
-  const [showVocabulary, setShowVocabulary] = useState(false);
   const [showTimeline, setShowTimeline] = useState(false);
   const [showWiki, setShowWiki] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -119,7 +117,6 @@ export default function App() {
     setPending(null);
     setLookingForMore(false);
     setShowGlossary(false);
-    setShowVocabulary(false);
     setShowTimeline(false);
     setShowWiki(false);
     setShowBookSettings(false);
@@ -135,7 +132,6 @@ export default function App() {
     setPending(null);
     setLookingForMore(false);
     setShowGlossary(false);
-    setShowVocabulary(false);
     setShowTimeline(false);
     setShowWiki(false);
     setShowBookSettings(false);
@@ -149,7 +145,6 @@ export default function App() {
     setPending(null);
     setAddingChapter(false);
     setShowGlossary(false);
-    setShowVocabulary(false);
     setShowTimeline(false);
     setShowWiki(false);
     setShowChapters(true);
@@ -180,7 +175,6 @@ export default function App() {
     setPending(null);
     setShowChapters(false);
     setShowGlossary(false);
-    setShowVocabulary(false);
     setShowTimeline(false);
   }
 
@@ -314,33 +308,39 @@ export default function App() {
   return (
     <main className="app">
       <QueueControls novelId={novelId} />
-      <button className="app-back" onClick={showChapters ? backToNovels : backToChapters}>
-        {showChapters ? "← All novels" : "← All chapters"}
-      </button>
-
-      <button className="app-toggle-glossary" onClick={() => { setShowGlossary((v) => !v); setShowTimeline(false); }}>
-        {showGlossary ? "← Close glossary" : "Glossary"}
-      </button>
-      <button className="app-toggle-glossary" onClick={() => { setShowVocabulary((v) => !v); setShowGlossary(false); setShowTimeline(false); }}>
-        {showVocabulary ? "← Close vocabulary" : "Vocabulary"}
-      </button>
-      <button className="app-toggle-glossary" onClick={() => { setShowTimeline((v) => !v); setShowGlossary(false); }}>
-        {showTimeline ? "← Close timeline" : "Timeline"}
-      </button>
-      <button className="app-toggle-glossary" onClick={() => { setShowWiki((v) => !v); setShowGlossary(false); setShowTimeline(false); }}>
-        {showWiki ? "← Close wiki" : "Wiki"}
-      </button>
-      <button className="app-back" onClick={() => setShowBookSettings(true)}>
-        Book settings
-      </button>
-      <button className="app-back" onClick={() => setShowSettings(true)}>
-        Account settings
-      </button>
+      {/* One row, one flex gap. These buttons previously sat loose in the page: the two
+          settings ones are borderless, so with no margin between them they rendered as a
+          single run-on word. Settings are pushed to the trailing edge to separate "change
+          what I'm looking at" from "change how the book works". */}
+      <nav className="app-nav" aria-label="Book navigation">
+        <button className="app-nav-back" onClick={showChapters ? backToNovels : backToChapters}>
+          {showChapters ? "← All novels" : "← All chapters"}
+        </button>
+        <button className="app-toggle-glossary" aria-pressed={showGlossary} onClick={() => { setShowGlossary((v) => !v); setShowTimeline(false); }}>
+          {showGlossary ? "← Close glossary" : "Glossary"}
+        </button>
+        <button className="app-toggle-glossary" aria-pressed={showTimeline} onClick={() => { setShowTimeline((v) => !v); setShowGlossary(false); }}>
+          {showTimeline ? "← Close timeline" : "Timeline"}
+        </button>
+        <button className="app-toggle-glossary" aria-pressed={showWiki} onClick={() => { setShowWiki((v) => !v); setShowGlossary(false); setShowTimeline(false); }}>
+          {showWiki ? "← Close wiki" : "Wiki"}
+        </button>
+        {/* Grouped so the pair wraps as one unit. Pushing each button individually to the
+            trailing edge let the first claim the row's last slot and stranded the second
+            on a line of its own. */}
+        <span className="app-nav-settings-group">
+          <button className="app-nav-settings" onClick={() => setShowBookSettings(true)}>
+            Book settings
+          </button>
+          <button className="app-nav-settings" onClick={() => setShowSettings(true)}>
+            Account settings
+          </button>
+        </span>
+      </nav>
       {showGlossary && <GlossaryView key={novelId} novelId={novelId} at={chapter?.at} />}
-      {showVocabulary && <VocabularyView key={`vocabulary-${novelId}`} novelId={novelId} />}
       {showTimeline && <TimelineView key={`timeline-${novelId}`} novelId={novelId} at={chapter?.at ?? chapterIndex} onClose={() => setShowTimeline(false)} />}
       {showWiki && <WikiView key={`wiki-${novelId}`} novelId={novelId} at={chapter?.at ?? chapterIndex} onClose={() => setShowWiki(false)} />}
-      <div hidden={showGlossary || showVocabulary || showTimeline || showWiki}>
+      <div hidden={showGlossary || showTimeline || showWiki}>
         {navigationError && <p role="alert" className="chapter-list-error">{navigationError}</p>}
         {addingChapter ? (
           <AddChapterForm

@@ -46,7 +46,6 @@ func main() {
 	mux.HandleFunc("POST /novels/{id}/glossary/bootstrap", api.bootstrapGlossary)
 	mux.HandleFunc("POST /novels/{id}/glossary/confirm", api.confirmGlossaryTerm)
 	mux.HandleFunc("POST /novels/{id}/name-reviews/{term}/approve", api.approveCharacterName)
-	mux.Handle("PATCH /novels/{id}/vocabulary", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.mutateVocabulary)))
 	mux.HandleFunc("POST /novels/{id}/translate-ahead", api.translateAhead)
 	// Records maintenance. Internal-token gated like every other write; reader-api
 	// proxies these on the operator's behalf.
@@ -54,6 +53,8 @@ func main() {
 	mux.Handle("POST /novels/{id}/chapter/{n}/records/discard", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsDiscardChapter)))
 	mux.Handle("POST /novels/{id}/chapter/{n}/records/render-retry", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsRenderRetry)))
 	mux.Handle("POST /novels/{id}/records/rebuild", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsRebuild)))
+	mux.Handle("POST /novels/{id}/records/extract", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsExtract)))
+	mux.Handle("POST /novels/{id}/records/stop", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsStop)))
 	mux.Handle("GET /novels/{id}/records/rebuild/status", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsRebuildStatus)))
 	mux.Handle("POST /novels/{id}/records/rebuild/discard", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsRebuildDiscard)))
 	mux.Handle("PATCH /novels/{id}/chapter/{n}/records/review", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordReview)))

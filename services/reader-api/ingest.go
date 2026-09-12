@@ -22,10 +22,14 @@ var ErrIngestUnavailable = errors.New("ingest-api unavailable")
 type IngestClient interface {
 	QueueControl(ctx context.Context, method string, body json.RawMessage) (json.RawMessage, int, error)
 	// RecordsAction runs one records maintenance intent: retry a failed chapter
-	// extraction, retry only its rendering, or rebuild the novel into a fresh
-	// generation. chapter is "" for the novel-wide rebuild.
+	// extraction, retry only its rendering, continue the novel's graph ("extract"), or
+	// rebuild it into a fresh generation. chapter is "" for the two novel-wide actions.
 	RecordsAction(ctx context.Context, novelID, chapter, action string) (json.RawMessage, int, error)
 	RecordsRebuildStatus(ctx context.Context, novelID string) (json.RawMessage, int, error)
+	// StopRecordsBuild pauses the novel's whole graph build. Distinct from
+	// DiscardRecordsRebuild, which rolls a replacement generation back to its
+	// predecessor and so cannot act on a first build.
+	StopRecordsBuild(ctx context.Context, novelID string) (json.RawMessage, int, error)
 	DiscardRecordsRebuild(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	ReviewRecord(ctx context.Context, novelID, chapter string, body json.RawMessage) (json.RawMessage, int, error)
 	CreateNovel(ctx context.Context, body json.RawMessage) (json.RawMessage, int, error)
@@ -43,13 +47,8 @@ type IngestClient interface {
 	BootstrapGlossary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	ConfirmGlossaryTerm(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	ApproveCharacterName(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
-	MutateVocabulary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	TranslateAhead(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	UpdateNovelSettings(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
-}
-
-func (c *ingestHTTPClient) MutateVocabulary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
-	return c.send(ctx, http.MethodPatch, "/novels/"+novelID+"/vocabulary", body, true)
 }
 
 func (c *ingestHTTPClient) QueueControl(ctx context.Context, method string, body json.RawMessage) (json.RawMessage, int, error) {
@@ -58,13 +57,17 @@ func (c *ingestHTTPClient) QueueControl(ctx context.Context, method string, body
 
 func (c *ingestHTTPClient) RecordsAction(ctx context.Context, novelID, chapter, action string) (json.RawMessage, int, error) {
 	if chapter == "" {
-		return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/records/rebuild", nil, true)
+		return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/records/"+action, nil, true)
 	}
 	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/chapter/"+chapter+"/records/"+action, nil, true)
 }
 
 func (c *ingestHTTPClient) RecordsRebuildStatus(ctx context.Context, novelID string) (json.RawMessage, int, error) {
 	return c.send(ctx, http.MethodGet, "/novels/"+novelID+"/records/rebuild/status", nil, true)
+}
+
+func (c *ingestHTTPClient) StopRecordsBuild(ctx context.Context, novelID string) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/records/stop", nil, true)
 }
 
 func (c *ingestHTTPClient) DiscardRecordsRebuild(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {

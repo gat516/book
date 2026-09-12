@@ -55,14 +55,49 @@ export function QueueControls({ novelId }: { novelId: string | null }) {
     };
   }, [novelId, apply, refresh]);
 
-  // A failed queue read is actionable, not a reason to hammer a backend that may be
-  // down. The visible Retry control below re-arms polling after the reader chooses.
-  usePolling(refresh, 8000, error === null);
+  // Back off on failure rather than stopping. Polling used to halt entirely and wait for
+  // the Retry control below to re-arm it, which was reasonable while that control was
+  // always on screen -- but the panel now collapses, so a single blip would strand the
+  // summary reading "Unavailable" forever behind a button nobody knew to open. A relaxed
+  // cadence still spares a backend that is genuinely down, and recovers on its own.
+  usePolling(refresh, error === null ? 8000 : 30000, true);
   const focused = queue?.books.find((book) => book.novel_id === queue.focus_novel_id);
   const active = queue?.books.flatMap((book) => book.in_flight.map((chapter) => ({ book, chapter }))) ?? [];
 
-  return <section className="queue-controls" aria-label="Library processing queue">
-    <h2>Processing queue</h2>
+  // Collapsed by default: this is operator machinery, and expanded it pushed the chapter
+  // itself below the fold. That makes the summary the only thing visible at rest, so it --
+  // not the body -- has to carry every state worth acting on. Reporting in-flight work
+  // alone is not enough: an unreachable API and a queue nobody is draining both look
+  // exactly like "nothing to do", and silently reading as "Idle" is the one wrong answer.
+  const pending = queue?.books.reduce((sum, book) => sum + book.pending, 0) ?? 0;
+  const headline =
+    error !== null ? { text: `Unavailable — ${error}`, tone: "bad" }
+    : queue === null ? { text: "Checking…", tone: "quiet" }
+    // Ranked above "Paused" on purpose: the heartbeat renews independently of queue mode,
+    // so a worker missing while paused is still genuinely broken, and saying "Paused"
+    // there would suggest resuming is all it takes.
+    : queue.worker_alive === false ? { text: "Worker offline — nothing will be processed", tone: "bad" }
+    // Grey, not amber: a pause is a deliberate choice, so it should read as switched-off
+    // rather than as something gone wrong that needs attention.
+    : queue.mode === "paused" ? { text: "Paused", tone: "quiet" }
+    : active.length > 0 ? {
+        text: `Running chapter ${active[0].chapter.chapter_index} — ${describeStage(active[0].chapter.stage)}`,
+        tone: "live",
+      }
+    // The worker is alive by this point, so waiting work is normally just the gap between
+    // two chapters rather than a fault. Still surfaced, since a wedged worker keeps its
+    // heartbeat while claiming nothing.
+    : pending > 0 ? { text: `${pending} queued, none running yet`, tone: "warn" }
+    : { text: "Idle", tone: "quiet" };
+
+  return <details className="queue-controls" aria-label="Library processing queue">
+    <summary>
+      <span className="queue-controls-title">Processing queue</span>
+      <span className={`status-pill status-pill-${headline.tone}`}>
+        {headline.tone === "live" && <span className="reader-records-dot" aria-hidden="true" />}
+        {headline.text}
+      </span>
+    </summary>
     <label>Work on {" "}
       <select aria-label="Queue mode" value={queue?.mode ?? "all"} disabled={busy || !queue}
         onChange={(event) => {
@@ -109,5 +144,5 @@ export function QueueControls({ novelId }: { novelId: string | null }) {
       </li>)}</ul>
     </details>}
     {error && <p role="alert">Queue controls unavailable: {error} <button onClick={() => void (novelId ? apply({ focus_novel_id: novelId }) : refresh())}>Retry</button></p>}
-  </section>;
+  </details>;
 }

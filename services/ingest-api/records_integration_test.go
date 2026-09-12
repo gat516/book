@@ -122,6 +122,7 @@ func TestDiscardMidRebuildRestoresPredecessorAndSequentialRebuildsRemainPossible
 
 type recordsEnqueueRecorder struct {
 	messages []QueueMessage
+	payloads []string
 }
 
 func (h *recordsEnqueueRecorder) DialHook(next redis.DialHook) redis.DialHook { return next }
@@ -132,6 +133,18 @@ func (h *recordsEnqueueRecorder) ProcessPipelineHook(next redis.ProcessPipelineH
 
 func (h *recordsEnqueueRecorder) ProcessHook(_ redis.ProcessHook) redis.ProcessHook {
 	return func(_ context.Context, cmd redis.Cmder) error {
+		// Status reads the queue to report whether graph work is running; answer from what
+		// this recorder was sent, newest first like a real LPUSH list.
+		if cmd.Name() == "lrange" {
+			values := []string{}
+			if cmd.Args()[1] == pendingQueue {
+				for i := len(h.payloads) - 1; i >= 0; i-- {
+					values = append(values, h.payloads[i])
+				}
+			}
+			cmd.(*redis.StringSliceCmd).SetVal(values)
+			return nil
+		}
 		if cmd.Name() != "lpush" {
 			return fmt.Errorf("unexpected Redis command %s", cmd.Name())
 		}
@@ -145,6 +158,7 @@ func (h *recordsEnqueueRecorder) ProcessHook(_ redis.ProcessHook) redis.ProcessH
 			return err
 		}
 		h.messages = append(h.messages, msg)
+		h.payloads = append(h.payloads, string(payload))
 		return nil
 	}
 }

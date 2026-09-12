@@ -16,6 +16,14 @@ type RecordsStatus struct {
 	RetryMaxAttempts int        `json:"retry_max_attempts,omitempty"`
 	RetryAt          *time.Time `json:"retry_at,omitempty"`
 	RetryCategory    *string    `json:"retry_category,omitempty"`
+	// Set only when the status was asked for one chapter. A discarded chapter has no run
+	// row, so without this its extraction is indistinguishable from "queued".
+	Discarded bool `json:"discarded"`
+	// The earliest readable chapter before this one with no published run, when there is
+	// one. Chapters publish in order (who's-who resolves against earlier chapters), so a
+	// retry of this chapter cannot succeed until that one is done. Single-chapter only;
+	// it can only name an earlier chapter, so it reveals nothing past the reader's gate.
+	WaitingOnChapter *int `json:"waiting_on_chapter,omitempty"`
 }
 
 type RecordParticipantView struct {
@@ -164,21 +172,6 @@ type GlossaryTermView struct {
 	TargetTerm      string  `json:"target_term"`
 	Version         int     `json:"version"`
 	LockedAtChapter int     `json:"locked_at_chapter"`
-}
-
-// VocabularyTermView intentionally omits proposals, evidence, revisions and all
-// chapter metadata. Those fields can reveal future terminology even when the name
-// itself has passed the reader's chapter gate (§0.3/C.10).
-type VocabularyTermView struct {
-	TermType    string   `json:"term_type"`
-	Name        string   `json:"name"`
-	Kinds       []string `json:"kinds"`
-	DstKinds    []string `json:"dst_kinds,omitempty"`
-	Cardinality string   `json:"cardinality"`
-	Status      string   `json:"status"`
-	Polarity    int16    `json:"polarity,omitempty"`
-	Gloss       string   `json:"gloss,omitempty"`
-	Aliases     []string `json:"aliases,omitempty"`
 }
 
 type GlossaryResponse struct {

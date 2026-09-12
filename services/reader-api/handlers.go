@@ -43,6 +43,8 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("POST /novels/{id}/chapter/{n}/records/discard", a.postRecordsAction)
 	mux.HandleFunc("POST /novels/{id}/chapter/{n}/records/render-retry", a.postRecordsAction)
 	mux.HandleFunc("POST /novels/{id}/records/rebuild", a.postRecordsAction)
+	mux.HandleFunc("POST /novels/{id}/records/extract", a.postRecordsAction)
+	mux.HandleFunc("POST /novels/{id}/records/stop", a.stopRecordsBuild)
 	mux.HandleFunc("GET /novels/{id}/records/rebuild/status", a.getRecordsRebuildStatus)
 	mux.HandleFunc("POST /novels/{id}/records/rebuild/discard", a.discardRecordRebuild)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}/records/review", a.getRecordReviews)
@@ -64,8 +66,6 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/scrape/status", a.getScrapeStatus)
 	mux.HandleFunc("POST /novels/{id}/scrape/cancel", a.postScrapeCancel)
 	mux.HandleFunc("GET /novels/{id}/glossary", a.getGlossary)
-	mux.HandleFunc("GET /novels/{id}/vocabulary", a.getVocabulary)
-	mux.HandleFunc("PATCH /novels/{id}/vocabulary", a.patchVocabulary)
 	mux.HandleFunc("PATCH /novels/{id}/glossary/{term}", a.patchGlossaryTerm)
 	mux.HandleFunc("DELETE /novels/{id}/glossary/{term}", a.patchGlossaryTerm)
 	mux.HandleFunc("POST /novels/{id}/glossary/bootstrap", a.postBootstrapGlossary)
@@ -816,97 +816,6 @@ func (a *API) getGlossary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, GlossaryResponse{NovelID: novelID, At: at, Terms: terms})
-}
-
-// getVocabulary is gated by the reader's stored position. Unlike the legacy glossary
-// endpoint it has no `at` parameter: vocabulary metadata itself can reveal future terms.
-func (a *API) getVocabulary(w http.ResponseWriter, r *http.Request) {
-	prepareReaderResponse(w)
-	reader, ok := readerID(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "X-Reader-ID is required")
-		return
-	}
-	novelID, ok := pathUUID(r, "id")
-	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid novel id")
-		return
-	}
-	at := 0
-	progress, err := a.store.GetProgress(r.Context(), reader, novelID)
-	if err != nil && !errors.Is(err, ErrNotFound) {
-		writeError(w, http.StatusInternalServerError, "could not resolve reader progress")
-		return
-	}
-	if err == nil {
-		at = progress.CurrentChapter
-	}
-	terms, err := a.store.ListVocabulary(r.Context(), novelID, at)
-	if err != nil {
-		log.Printf("list vocabulary: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not load vocabulary")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"novel_id": novelID, "at": at, "terms": terms})
-}
-
-// patchVocabulary is a development-authenticated proxy. X-Reader-ID is the repository's
-// existing weaker single-operator convention, not a stronger operator token; the
-// internal bearer token is still added only by the server-to-server client.
-func (a *API) patchVocabulary(w http.ResponseWriter, r *http.Request) {
-	prepareReaderResponse(w)
-	actor, ok := readerID(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "X-Reader-ID is required")
-		return
-	}
-	novelID, ok := pathUUID(r, "id")
-	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid novel id")
-		return
-	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, paramsRequestLimit))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "could not read request body")
-		return
-	}
-	var chapterBody struct {
-		Chapter *int `json:"chapter"`
-	}
-	if err := json.Unmarshal(body, &chapterBody); err != nil || chapterBody.Chapter == nil || *chapterBody.Chapter < 0 {
-		writeError(w, http.StatusBadRequest, "a nonnegative chapter is required")
-		return
-	}
-	progress, progressErr := a.store.GetProgress(r.Context(), actor, novelID)
-	if progressErr != nil && !errors.Is(progressErr, ErrNotFound) {
-		writeError(w, http.StatusInternalServerError, "could not resolve reader progress")
-		return
-	}
-	maxChapter := 0
-	if progressErr == nil {
-		maxChapter = progress.CurrentChapter
-	}
-	if *chapterBody.Chapter > maxChapter {
-		writeError(w, http.StatusForbidden, "chapter is beyond stored reading progress")
-		return
-	}
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(body, &payload); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	encoded, _ := json.Marshal(actor)
-	payload["created_by"] = encoded
-	body, _ = json.Marshal(payload)
-	result, status, err := a.ingest.MutateVocabulary(r.Context(), novelID, body)
-	if err != nil {
-		log.Printf("mutate vocabulary: %v", err)
-		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(result)
 }
 
 // patchGlossaryTerm proxies a human correction to ingest-api (see ingest.go). Gated with

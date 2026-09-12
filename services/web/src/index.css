@@ -57,6 +57,50 @@ button:disabled {
   margin: 0.5rem 0;
 }
 
+/* View switches live in one flex row so spacing comes from a single gap rather than each
+   button's own margins -- the borderless settings buttons had none, and ran together. */
+.app-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.app-nav .app-toggle-glossary { margin: 0; }
+.app-nav-back {
+  background: none;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  padding: 0.4rem 0.2rem;
+  font-size: 0.9rem;
+}
+.app-nav-back:hover:not(:disabled) { background: none; color: #222; }
+/* margin-left:auto on the first one pushes the pair to the trailing edge; the second
+   rejoins it on the normal gap. */
+/* The group takes the trailing edge, so the two buttons move and wrap together. */
+.app-nav-settings-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+.app-nav-settings {
+  background: none;
+  border: 1px solid transparent;
+  color: #666;
+  font-size: 0.9rem;
+}
+.app-nav-settings:hover:not(:disabled) { background: #f1f1f1; border-color: #ddd; color: #222; }
+/* An open panel should look open, reusing the chapter-range tab's selected treatment. */
+.app-toggle-glossary[aria-pressed="true"] {
+  background: #fff3b0;
+  border-color: #9a7b16;
+  color: #493900;
+  font-weight: 600;
+}
+
 .reader-pane {
   white-space: pre-wrap;
   font-size: 1.1rem;
@@ -133,6 +177,12 @@ button:disabled {
   border-top: 1px dashed #ddd4c2;
 }
 .graph-confirm small { color: #666; flex-basis: 100%; font-weight: normal; }
+.graph-notice { flex-basis: 100%; color: #315d35; }
+.graph-advanced { flex-basis: 100%; }
+.graph-advanced summary { cursor: pointer; color: #666; font-size: .9em; }
+.graph-advanced[open] { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem .7rem; }
+.graph-advanced[open] summary { flex-basis: 100%; }
+.reader-records-progress { flex-basis: 100%; width: 100%; height: .35rem; }
 
 .graph-error, .reader-records-error { color: #7c3029; background: #f8e5e2; border-radius: 5px; padding: .5rem .7rem; margin: .55rem 0; }
 .graph-error button, .reader-records-error button { margin-left: .4rem; }
@@ -169,9 +219,32 @@ button:disabled {
 .knowledge-gate-action { display: flex; flex-direction: column; gap: .5rem; }
 .knowledge-gate-action label { display: flex; align-items: center; gap: .4rem; }
 
-.reader-records-status { margin: .55rem 0; padding: .55rem .7rem; background: #f4f1e7; border-radius: 5px; }
-.reader-records-status-error { background: #f8e5e2; color: #7c3029; }
-.reader-records-status button { margin-left: .65rem; }
+/* Chapter-level knowledge status. Built exactly like the processing-queue bar -- neutral
+   container, bold label, then the shared status pill carrying the colour -- so the two
+   read as one instrument at different scopes rather than two unrelated notices. */
+.reader-records-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem;
+  margin: .55rem 0;
+  padding: .6rem .75rem;
+  border: 1px solid #d8dce3;
+  border-radius: 8px;
+  background: #f7f9fc;
+}
+.reader-records-label { font-size: 1rem; }
+.reader-records-status button { margin-left: auto; }
+.reader-records-waiting { margin-left: auto; color: #666; }
+.reader-records-dot {
+  flex: none;
+  width: .6rem;
+  height: .6rem;
+  border-radius: 50%;
+  background: #2f7d4a;
+  box-shadow: 0 0 0 0 rgb(47 125 74 / 45%);
+  animation: pipeline-pulse 1.8s infinite;
+}
 .record-review-panel { margin-top: 1rem; padding: .8rem; border: 1px solid #d8d0bf; border-radius: 6px; background: #fcfbf7; }
 .record-review-panel > h3 { margin-top: 0; }
 .record-review-item { margin: .8rem 0; padding: .65rem; border: 1px solid #e1dccf; border-radius: 5px; }
@@ -640,7 +713,8 @@ button:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pipeline-status-live-dot { animation: none; }
+  .pipeline-status-live-dot,
+  .reader-records-dot { animation: none; }
 }
 
 .pipeline-status p {
@@ -748,7 +822,25 @@ button:disabled {
 .name-review select { max-width: 100%; padding: 0.35rem; }
 
 .queue-controls { margin: 0 0 1rem; padding: 1rem; border: 1px solid #d8dce3; border-radius: 8px; background: #f7f9fc; font-size: 0.9rem; }
-.queue-controls h2 { font-size: 1rem; margin: 0 0 0.65rem; }
+.queue-controls > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: 600; }
+.queue-controls[open] > summary { margin-bottom: 0.65rem; }
+.queue-controls-title { font-size: 1rem; }
+/* One status pill, shared by the library queue bar and the per-chapter knowledge bar, so
+   a colour means the same thing wherever it appears. Reuses the 999px pill idiom the
+   event and repair surfaces already use. */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.1rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.status-pill-quiet { background: #eceff3; color: #586275; }
+.status-pill-live { background: #e4efe4; color: #22502f; }
+.status-pill-warn { background: #fff1c9; color: #7a5c00; }
+.status-pill-bad { background: #f4dddd; color: #b00020; }
 .queue-controls select { max-width: 100%; padding: 0.35rem; }
 .queue-controls p { margin: 0.5rem 0; }
 .queue-controls .queue-note { color: #586275; font-size: 0.8rem; }

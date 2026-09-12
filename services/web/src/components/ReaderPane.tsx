@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, discardRecordsChapter, getChapter, getRecords, putProgress, retryRecords } from "../api";
+import { ApiError, getChapter, getRecords, putProgress } from "../api";
 import type { ChapterResponse, EntityView } from "../types";
 import { HoverCard } from "./HoverCard";
 import { EntityInspector } from "./EntityInspector";
@@ -12,6 +12,7 @@ import { uniqueChapterRenderings } from "../recordPresentation";
 import { ChapterKnowledgeWorkspace } from "./ChapterKnowledgeWorkspace";
 import { recordPollInterval, recordsTerminal } from "../recordPolling";
 import { RecordStatusBanner } from "./RecordStatusBanner";
+import { KnowledgeGraphControls } from "./KnowledgeGraphControls";
 import { chapterKnowledgeReviewLabel } from "../knowledgeLabels";
 
 interface Props {
@@ -32,11 +33,7 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
   const [selected, setSelected] = useState<{ id: string | null; mention: string } | null>(null);
   const [records, setRecords] = useState<RecordsResponse | null>(null);
   const [recordsError, setRecordsError] = useState<string | null>(null);
-  const [retryingRecords, setRetryingRecords] = useState(false);
   const [showRecordDiagnostics, setShowRecordDiagnostics] = useState(false);
-  const [graphBusy, setGraphBusy] = useState(false);
-  const [discardChapterConfirm, setDiscardChapterConfirm] = useState(false);
-  const [graphMessage, setGraphMessage] = useState<string | null>(null);
 
   // Both hover and click views share only the exact novel/chapter/clearance cache.
   // The server's `at` becomes known on load; changing it discards earlier entity data.
@@ -47,38 +44,8 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
     setHovered(null);
     setRecords(null);
     setRecordsError(null);
-    setRetryingRecords(false);
     setShowRecordDiagnostics(false);
-    setDiscardChapterConfirm(false);
-    setGraphMessage(null);
   }, [novelId, chapterIndex, clickableEntities]);
-
-  async function discardChapterGraph() {
-    setGraphBusy(true); setGraphMessage(null);
-    try { await discardRecordsChapter(novelId, chapterIndex); setDiscardChapterConfirm(false); setGraphMessage("This chapter's graph attempt was discarded. It will remain idle until Extract this chapter's facts is pressed."); const latest = await getRecords(novelId, chapterIndex); setRecords(latest); }
-    catch (reason) { setGraphMessage(errorMessage(reason)); }
-    finally { setGraphBusy(false); }
-  }
-
-  async function retryChapterRecords() {
-    setRetryingRecords(true);
-    setRecordsError(null);
-    try {
-      await retryRecords(novelId, chapterIndex);
-      const latest = await getRecords(novelId, chapterIndex);
-      setRecords(latest);
-    } catch (reason) {
-      setRecordsError(errorMessage(reason));
-    } finally {
-      setRetryingRecords(false);
-    }
-  }
-
-  async function extractChapterFacts() {
-    setGraphBusy(true);
-    try { await retryChapterRecords(); }
-    finally { setGraphBusy(false); }
-  }
 
   useEffect(() => {
     let cancelled = false;
@@ -207,18 +174,16 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
           void getRecords(novelId, chapterIndex).then(setRecords).catch((reason) => setRecordsError(errorMessage(reason)));
         }}>Retry</button>
       </p>}
-      {records && <RecordStatusBanner status={records.status} busy={retryingRecords} onRetry={() => void retryChapterRecords()} />}
-      <div className="chapter-knowledge-controls">
-        <strong>Knowledge graph</strong>
-        <button type="button" disabled={graphBusy} onClick={() => void extractChapterFacts()}>{graphBusy ? "Extracting…" : "Extract this chapter's facts"}</button>
-        {(records?.status.extraction_status === "processing" || records?.status.extraction_status === "pending" || !!records?.status.retry_at) && !discardChapterConfirm && <button type="button" disabled={graphBusy} onClick={() => setDiscardChapterConfirm(true)}>Discard this chapter attempt</button>}
-        {discardChapterConfirm && <span role="alert" className="graph-confirm">
-          <small>Stop this chapter's current graph work and leave it idle until Retry.</small>
-          <button type="button" className="btn-danger" disabled={graphBusy} onClick={() => void discardChapterGraph()}>Confirm chapter discard</button>
-          <button type="button" disabled={graphBusy} onClick={() => setDiscardChapterConfirm(false)}>Keep working</button>
-        </span>}
-        {graphMessage && <small role="status">{graphMessage}</small>}
-      </div>
+      {/* Unguarded: the bar reports "still loading" itself, so the chapter always has a
+          knowledge status rather than showing nothing until one arrives. */}
+      {/* Status only: starting and stopping extraction is book-wide (the graph controls
+          below), since chapters are extracted in order and one button per chapter was a
+          second, conflicting way to drive the same queue. */}
+      <RecordStatusBanner status={records?.status ?? null} />
+      {/* The book-wide graph status lived only in the chapter index, so while actually
+          reading there was no way to see build coverage or stop a run. It renders here too
+          -- the two views are mutually exclusive, so only one instance ever polls. */}
+      <KnowledgeGraphControls novelId={novelId} />
       {chapter.translation_warning?.code === "locked_terms_missing" && <p role="status" className="reader-translation-warning">
         This chapter is readable, but {chapter.translation_warning.term_count} locked name{chapter.translation_warning.term_count === 1 ? " was" : "s were"} not preserved exactly.
       </p>}

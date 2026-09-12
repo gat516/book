@@ -132,6 +132,24 @@ func (a *API) patchRecordReview(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(result)
 }
 
+func (a *API) stopRecordsBuild(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	novel, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	result, status, err := a.ingest.StopRecordsBuild(r.Context(), novel)
+	if err != nil {
+		log.Printf("stop records build: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
+}
+
 func (a *API) discardRecordRebuild(w http.ResponseWriter, r *http.Request) {
 	prepareReaderResponse(w)
 	novel, ok := pathUUID(r, "id")

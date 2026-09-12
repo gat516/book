@@ -22,6 +22,12 @@ export interface RecordsStatus {
   retry_max_attempts?: number;
   retry_at?: string | null;
   retry_category?: string | null;
+  // Extraction explicitly stopped for this chapter. Only populated for a single-chapter
+  // status; a book-wide one always reports false.
+  discarded?: boolean;
+  // Earliest earlier chapter still unextracted. Chapters publish in order, so retrying
+  // this one cannot succeed until that chapter is done. Single-chapter status only.
+  waiting_on_chapter?: number | null;
 }
 export interface RecordEvidence {
   passage_id: string;
@@ -93,6 +99,8 @@ export interface RecordsRebuildStatus {
   published_chapters: number;
   missing_chapters: number;
   discardable: boolean;
+  // Graph work for the book is queued, claimed, or waiting on a scheduled retry.
+  running: boolean;
 }
 export interface WikiResponse { novel_id: string; at?: number; status: RecordsStatus; entities: EntitySummary[]; rows?: RecordView[]; }
 
@@ -176,37 +184,6 @@ export interface GlossaryResponse {
   novel_id: string;
   at: number;
   terms: GlossaryTermView[];
-}
-
-export interface VocabularyTermView {
-  term_type: "attribute" | "relation";
-  name: string;
-  status: "candidate" | "admitted" | "banned" | "retired";
-  kinds: string[];
-  dst_kinds?: string[];
-  cardinality: "single" | "accretive";
-  polarity?: number;
-  gloss?: string;
-  aliases?: string[];
-}
-
-export interface VocabularyResponse {
-  novel_id: string;
-  at: number;
-  terms: VocabularyTermView[];
-}
-
-export type VocabularyMutationAction = "admit" | "ban" | "rename-to-alias" | "set-cardinality" | "set-kinds" | "edit-gloss";
-export interface VocabularyMutationRequest {
-  action: VocabularyMutationAction;
-  term_type: "attribute" | "relation";
-  name: string;
-  chapter: number;
-  alias?: string;
-  cardinality?: "single" | "accretive";
-  kinds?: string[];
-  dst_kinds?: string[];
-  gloss?: string;
 }
 
 export interface CharacterNameCandidate {

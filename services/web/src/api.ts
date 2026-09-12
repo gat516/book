@@ -16,8 +16,6 @@ import type {
   NovelSummary,
   PipelineStatusResponse,
   TranslationHealth,
-  VocabularyMutationRequest,
-  VocabularyResponse,
   PasteChapterRequest,
   ProviderConfigView,
   ProviderCredentialsResponse,
@@ -131,8 +129,18 @@ export function discardRecordsChapter(novelId: string, chapter: number): Promise
 export function retryRecordRendering(novelId: string, chapter: number): Promise<{ status: string }> {
   return request(`/novels/${novelId}/chapter/${chapter}/records/render-retry`, { method: "POST" });
 }
+// Continues the book's graph in place: unfinished chapters resume in order and published
+// chapters are left alone. rebuildRecords is the from-scratch alternative.
+export function extractRecords(novelId: string): Promise<{ chapters_enqueued: number }> {
+  return request(`/novels/${novelId}/records/extract`, { method: "POST" });
+}
 export function rebuildRecords(novelId: string): Promise<{ generation_id: string; status: string }> {
   return request(`/novels/${novelId}/records/rebuild`, { method: "POST" });
+}
+// Pauses the whole book's graph build. Unlike discardRecordsRebuild this needs no
+// generation to roll back to, so it also reaches a first build that has never finished.
+export function stopRecordsBuild(novelId: string): Promise<{ stopped: boolean; chapters_stopped: number }> {
+  return request(`/novels/${novelId}/records/stop`, { method: "POST" });
 }
 export function getRecordsRebuildStatus(novelId: string): Promise<RecordsRebuildStatus> {
   return request(`/novels/${novelId}/records/rebuild/status`);
@@ -174,6 +182,10 @@ export interface QueueControl {
 	mode_changed_at?: string;
 	mode_changed_by?: string;
 	mode_reason?: string;
+  // Presence of the worker's Redis heartbeat (TTL-bounded, so true means it checked in
+  // recently). Optional, and read strictly against `false`, so a backend predating the
+  // field reads as "unknown" rather than reporting a healthy worker as offline.
+  worker_alive?: boolean;
   books: Array<{
     novel_id: string;
     title: string;
@@ -220,14 +232,6 @@ export function cancelScrape(novelId: string): Promise<{ status: string }> {
 
 export function getGlossary(novelId: string, at?: number): Promise<GlossaryResponse> {
   return request(`/novels/${novelId}/glossary${at === undefined ? "" : `?at=${at}`}`);
-}
-
-export function getVocabulary(novelId: string): Promise<VocabularyResponse> {
-  return request(`/novels/${novelId}/vocabulary`);
-}
-
-export function mutateVocabulary(novelId: string, body: VocabularyMutationRequest): Promise<unknown> {
-  return request(`/novels/${novelId}/vocabulary`, { method: "PATCH", body: JSON.stringify(body) });
 }
 
 export function correctGlossaryTerm(

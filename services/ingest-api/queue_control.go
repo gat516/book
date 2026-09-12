@@ -17,6 +17,13 @@ import (
 // It never ingests chapters, advances reader progress, or interrupts an active claim.
 const queueControlKey = "jobs:control"
 
+// workerHeartbeatKey mirrors WORKER_HEARTBEAT in services/pipeline/pipeline/worker.py.
+// The worker renews it from _heartbeat_forever, a task deliberately independent of the
+// work loop, so it stays fresh through long inference calls and provider backoff alike.
+// Presence is therefore the whole signal -- the key carries a TTL, so its existing at all
+// means a worker checked in inside that window, and no clock is compared across services.
+const workerHeartbeatKey = "jobs:worker:heartbeat"
+
 type queueControlPatch struct {
 	Mode         *string `json:"mode,omitempty"`
 	FocusNovelID *string `json:"focus_novel_id,omitempty"`
@@ -79,6 +86,7 @@ type queueControlResponse struct {
 	ModeChangedAt string       `json:"mode_changed_at,omitempty"`
 	ModeChangedBy string       `json:"mode_changed_by,omitempty"`
 	ModeReason    string       `json:"mode_reason,omitempty"`
+	WorkerAlive   bool         `json:"worker_alive"`
 	Books         []*queueBook `json:"books"`
 }
 
@@ -88,6 +96,10 @@ func (s *Store) queueControl(ctx context.Context) (queueControlResponse, error) 
 	pending := pipe.LRange(ctx, pendingQueue, 0, -1)
 	processing := pipe.LRange(ctx, "jobs:processing", 0, -1)
 	stages := pipe.HGetAll(ctx, "jobs:processing:stage")
+	// Exists, not Get: a missing key is the answer here, and Get would return redis.Nil
+	// and fail the whole pipeline -- reporting a dead worker as an unreachable queue,
+	// which is the one substitution this endpoint must never make.
+	workerAlive := pipe.Exists(ctx, workerHeartbeatKey)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return queueControlResponse{}, err
 	}
@@ -95,6 +107,7 @@ func (s *Store) queueControl(ctx context.Context) (queueControlResponse, error) 
 		Mode: settings.Val()["mode"], FocusNovelID: settings.Val()["focus_novel_id"],
 		ModeChangedAt: settings.Val()["mode_changed_at"], ModeChangedBy: settings.Val()["mode_changed_by"],
 		ModeReason: settings.Val()["mode_reason"], Books: []*queueBook{},
+		WorkerAlive: workerAlive.Val() == 1,
 	}
 	if result.Mode == "" {
 		result.Mode = "all"

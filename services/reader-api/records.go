@@ -32,6 +32,7 @@ func recordsStatusFor(ctx context.Context, tx pgx.Tx, novelID string, chapter *i
 	var retryAttempts, enrichmentAttempts int
 	var retryAt *time.Time
 	var retryCategory *string
+	var discarded bool
 	err := tx.QueryRow(ctx, `
 SELECT g.id::text,
   COALESCE((SELECT CASE WHEN EXISTS (
@@ -124,17 +125,35 @@ SELECT g.id::text,
     ORDER BY c.chapter_index LIMIT 1),
   COALESCE((SELECT c.enrichment_attempts FROM chapter c
     WHERE c.novel_id=$1 AND ($3::int IS NULL OR c.chapter_index=$3::int)
-    ORDER BY c.chapter_index LIMIT 1),0)
+    ORDER BY c.chapter_index LIMIT 1),0),
+  -- Deliberately answers only for a named chapter. A discarded chapter has no run row,
+  -- so its extraction reads as 'pending' and the reader is told work is queued when the
+  -- queue is empty and nothing will ever claim it. Aggregated over a whole book this
+  -- would instead report one paused chapter as a paused library, so it stays false there.
+  COALESCE((SELECT c.enrichment_discarded FROM chapter c
+    WHERE c.novel_id=$1 AND $3::int IS NOT NULL AND c.chapter_index=$3::int),false)
   FROM novel n JOIN record_generation g ON g.id=n.active_record_generation
  WHERE n.id=$1`, novelID, at, chapter).
 		Scan(&generation, &extraction, &rendering, &version, &warnings, &detail,
-			&retryAttempts, &retryAt, &retryCategory, &enrichmentAttempts)
+			&retryAttempts, &retryAt, &retryCategory, &enrichmentAttempts, &discarded)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// No active generation yet: the novel exists, its knowledge does not.
 		return "", RecordsStatus{Version: "none:0", ExtractionStatus: "pending", RenderingStatus: "pending"}, nil
 	}
 	if err != nil {
 		return "", RecordsStatus{}, err
+	}
+	var waitingOn *int
+	if chapter != nil {
+		if err := tx.QueryRow(ctx, `SELECT min(c.chapter_index) FROM chapter c
+			WHERE c.novel_id=$1 AND c.chapter_index < $2
+			  AND c.translation_ready
+			  AND NOT EXISTS (SELECT 1 FROM record_run r
+			        WHERE r.novel_id=c.novel_id AND r.generation_id=$3::uuid
+			          AND r.chapter_index=c.chapter_index AND r.status='published')`,
+			novelID, *chapter, generation).Scan(&waitingOn); err != nil {
+			return "", RecordsStatus{}, err
+		}
 	}
 	if extraction != "ready" && rendering == "ready" {
 		rendering = "pending"
@@ -159,6 +178,8 @@ SELECT g.id::text,
 		RetryMaxAttempts: 5,
 		RetryAt:          retryAt,
 		RetryCategory:    retryCategory,
+		Discarded:        discarded,
+		WaitingOnChapter: waitingOn,
 	}, nil
 }
 
@@ -534,6 +555,10 @@ func (a *API) writeRecords(w http.ResponseWriter, out any, err error) {
 		return
 	}
 	if err != nil {
+		// The reader gets a generic message, but something has to record the cause. Without
+		// this, a permission-denied on one column was indistinguishable from any other
+		// failure: the surface said "could not load records" and the logs said nothing.
+		log.Printf("load records: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load records")
 		return
 	}
@@ -552,6 +577,8 @@ func (a *API) postRecordsAction(w http.ResponseWriter, r *http.Request) {
 	chapter := r.PathValue("n")
 	action := "rebuild"
 	switch {
+	case chapter == "" && strings.HasSuffix(r.URL.Path, "/extract"):
+		action = "extract"
 	case chapter == "":
 		action = "rebuild"
 	case strings.HasSuffix(r.URL.Path, "/render-retry"):

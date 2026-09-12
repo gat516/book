@@ -47,7 +47,6 @@ type ReaderStore interface {
 	LatestScrapeJob(context.Context, string) (ScrapeJobView, error)
 	RequestScrapeCancel(context.Context, string) error
 	ListGlossary(context.Context, string, int) ([]GlossaryTermView, error)
-	ListVocabulary(context.Context, string, int) ([]VocabularyTermView, error)
 	ListNameReviews(context.Context, string, *int) ([]CharacterNameReview, error)
 	ListRecords(context.Context, string, int, int) (RecordsResponse, error)
 	ListRecordsInspector(context.Context, string, int, int) (RecordsInspectorResponse, error)
@@ -588,29 +587,6 @@ func (s *Store) ListGlossary(ctx context.Context, novelID string, at int) ([]Glo
 				&term.SourceTerm, &term.TargetTerm, &term.Version, &term.LockedAtChapter,
 				&term.EntityID,
 			); err != nil {
-				return err
-			}
-			terms = append(terms, term)
-		}
-		return rows.Err()
-	})
-	return terms, err
-}
-
-// ListVocabulary is deliberately a redacted reader view. The database definer function
-// owns the chapter/alias redaction and is called inside the same RLS transaction as every
-// other reader graph query; the caller has already resolved stored progress.
-func (s *Store) ListVocabulary(ctx context.Context, novelID string, at int) ([]VocabularyTermView, error) {
-	terms := []VocabularyTermView{}
-	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT term_type,name,kinds,dst_kinds,cardinality,status,polarity,gloss,aliases FROM reader_vocabulary($1,$2)`, novelID, at)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var term VocabularyTermView
-			if err := rows.Scan(&term.TermType, &term.Name, &term.Kinds, &term.DstKinds, &term.Cardinality, &term.Status, &term.Polarity, &term.Gloss, &term.Aliases); err != nil {
 				return err
 			}
 			terms = append(terms, term)
