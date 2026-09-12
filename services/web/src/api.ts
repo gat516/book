@@ -49,14 +49,21 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api${path}`, {
-    ...init,
-    headers: {
-      "X-Reader-ID": readerId(),
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...init?.headers,
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`/api${path}`, {
+      ...init,
+      headers: {
+        "X-Reader-ID": readerId(),
+        ...(init?.body ? { "Content-Type": "application/json" } : {}),
+        ...init?.headers,
+      },
+    });
+  } catch {
+    // The browser couldn't even reach reader-api (dev server down, network drop) — a raw
+    // "Failed to fetch" TypeError is not a message a reader should have to interpret.
+    throw new ApiError(0, "Could not reach the server. Check your connection and try again.");
+  }
   if (!response.ok) {
     const body = await response.text();
     let code = body || response.statusText;
@@ -68,7 +75,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         if (typeof value === "string") code = value;
       }
     } catch {
-      // non-JSON error body: fall back to the raw text set above
+      // Not our JSON error envelope — most likely a missing route or a proxy/gateway
+      // failure (e.g. Go's bare "404 page not found"), not something meant for a reader
+      // to see verbatim. Keep the status code for anyone debugging; drop the raw text.
+      code = `The server could not complete this request (${response.status}).`;
     }
     throw new ApiError(response.status, code, parsed);
   }

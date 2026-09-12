@@ -40,7 +40,11 @@ export function KnowledgeGraphControls({ novelId }: { novelId: string }) {
     </div>
     <button type="button" disabled={busy} onClick={() => void rebuild()}>{busy ? "Starting graph…" : "Start / rebuild graph"}</button>
     {status?.has_predecessor && status.discardable && !confirmDiscard && <button type="button" disabled={busy} onClick={() => setConfirmDiscard(true)}>Discard unfinished graph</button>}
-    {confirmDiscard && <span role="alert"><small>Discard only the unfinished replacement; published generations remain immutable.</small> <button type="button" disabled={busy} onClick={() => void discard()}>Confirm discard</button> <button type="button" disabled={busy} onClick={() => setConfirmDiscard(false)}>Keep graph</button></span>}
-    {error && <p role="alert">Graph controls unavailable: {error} <button type="button" onClick={() => void load()}>Retry status</button></p>}
+    {confirmDiscard && <span role="alert" className="graph-confirm">
+      <small>Discard only the unfinished replacement; published generations remain immutable.</small>
+      <button type="button" className="btn-danger" disabled={busy} onClick={() => void discard()}>Confirm discard</button>
+      <button type="button" disabled={busy} onClick={() => setConfirmDiscard(false)}>Keep graph</button>
+    </span>}
+    {error && <p role="alert" className="graph-error">Graph controls unavailable: {error} <button type="button" onClick={() => void load()}>Retry status</button></p>}
   </section>;
 }

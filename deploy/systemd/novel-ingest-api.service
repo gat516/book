@@ -13,6 +13,15 @@ StartLimitIntervalSec=0
 Type=simple
 WorkingDirectory=@REPO@/services/ingest-api
 EnvironmentFile=@REPO@/.env
+# Schema before code. A service can otherwise start against a database missing the
+# columns its queries name: the code is rebuilt on every start here, but the schema was
+# only ever advanced by hand, so a forgotten `db/migrate.sh` surfaced as a generic
+# 500 from a handler rather than as anything pointing at the real cause. The runner is
+# forward-only and ledger-idempotent, so re-running it on each start is a no-op once
+# applied. ingest-api owns this because it is the writer service; the other units retry
+# forever (see StartLimitIntervalSec above), so one that loses the race to a migration
+# still in flight self-heals on its next restart.
+ExecStartPre=@REPO@/db/migrate.sh
 ExecStartPre=/usr/bin/go build -o @REPO@/services/ingest-api/ingest-api .
 ExecStart=@REPO@/services/ingest-api/ingest-api
 Restart=always

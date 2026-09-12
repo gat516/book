@@ -212,7 +212,11 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
         <strong>Knowledge graph</strong>
         <button type="button" disabled={graphBusy} onClick={() => void extractChapterFacts()}>{graphBusy ? "Extracting…" : "Extract this chapter's facts"}</button>
         {(records?.status.extraction_status === "processing" || records?.status.extraction_status === "pending" || !!records?.status.retry_at) && !discardChapterConfirm && <button type="button" disabled={graphBusy} onClick={() => setDiscardChapterConfirm(true)}>Discard this chapter attempt</button>}
-        {discardChapterConfirm && <span role="alert"><small>Stop this chapter's current graph work and leave it idle until Retry.</small> <button type="button" disabled={graphBusy} onClick={() => void discardChapterGraph()}>Confirm chapter discard</button> <button type="button" disabled={graphBusy} onClick={() => setDiscardChapterConfirm(false)}>Keep working</button></span>}
+        {discardChapterConfirm && <span role="alert" className="graph-confirm">
+          <small>Stop this chapter's current graph work and leave it idle until Retry.</small>
+          <button type="button" className="btn-danger" disabled={graphBusy} onClick={() => void discardChapterGraph()}>Confirm chapter discard</button>
+          <button type="button" disabled={graphBusy} onClick={() => setDiscardChapterConfirm(false)}>Keep working</button>
+        </span>}
         {graphMessage && <small role="status">{graphMessage}</small>}
       </div>
       {chapter.translation_warning?.code === "locked_terms_missing" && <p role="status" className="reader-translation-warning">
