@@ -45,21 +45,15 @@ func (s *Store) retryRecords(ctx context.Context, novelID string, chapter int) e
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit records retry: %w", err)
 	}
-	return s.enqueue(ctx, QueueMessage{NovelID: novelID, ChapterIndex: chapter, Priority: true})
+	return s.enqueue(ctx, QueueMessage{NovelID: novelID, ChapterIndex: chapter, Priority: true, Enrichment: true})
 }
 
-// retryRendering re-runs only the English rendering of an already-published chapter.
-// The source records and their evidence are untouched; only target-language values are
-// cleared, so a rendering outage never costs a re-extraction.
+// retryRendering cannot delete child rows from an already-published run: the publication
+// is frozen as a whole, not just its record_run metadata. A rendering retry therefore
+// opens a fresh generation and re-enriches chapters in order, just like a rebuild.
 func (s *Store) retryRendering(ctx context.Context, novelID string, chapter int) error {
-	if _, err := s.db.Exec(ctx, `DELETE FROM record_rendering rr
-		USING record_row w, novel n
-		WHERE rr.row_id=w.id AND w.novel_id=n.id AND n.id=$1
-		  AND w.generation_id=n.active_record_generation AND w.source_chapter=$2`,
-		novelID, chapter); err != nil {
-		return fmt.Errorf("clear renderings: %w", err)
-	}
-	return s.enqueue(ctx, QueueMessage{NovelID: novelID, ChapterIndex: chapter, Priority: true})
+	_, _, err := s.rebuildRecords(ctx, novelID)
+	return err
 }
 
 // rebuildRecords opens a fresh generation and re-enriches every saved chapter in order.
@@ -82,8 +76,11 @@ func (s *Store) rebuildRecords(ctx context.Context, novelID string) (string, int
 		return "", 0, fmt.Errorf("find novel: %w", err)
 	}
 	var generation string
-	if err = tx.QueryRow(ctx, `INSERT INTO record_generation (novel_id,state,ontology,reason)
-		VALUES ($1,'active',$2,'operator rebuild') RETURNING id::text`, novelID, ontology).Scan(&generation); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO record_generation
+		(novel_id,state,ontology,prompt_version,checks_version,extraction_model,source_lang,target_lang)
+		SELECT id,'active',ontology,'records-v1','records-v1','',source_lang,target_lang
+		  FROM novel WHERE id=$1
+		RETURNING id::text`, novelID).Scan(&generation); err != nil {
 		return "", 0, fmt.Errorf("create generation: %w", err)
 	}
 	if _, err = tx.Exec(ctx, `UPDATE record_generation SET state='retired'
@@ -117,7 +114,7 @@ func (s *Store) rebuildRecords(ctx context.Context, novelID string) (string, int
 	// Chronological order matters: who's-who resolves a chapter against the identities
 	// published before it, so enriching out of order would resolve against nothing.
 	for _, index := range chapters {
-		if err := s.enqueue(ctx, QueueMessage{NovelID: novelID, ChapterIndex: index}); err != nil {
+		if err := s.enqueue(ctx, QueueMessage{NovelID: novelID, ChapterIndex: index, Enrichment: true}); err != nil {
 			return generation, 0, err
 		}
 	}

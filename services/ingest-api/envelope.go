@@ -37,5 +37,8 @@ type QueueMessage struct {
 	NovelID      string `json:"novel_id"`
 	ChapterIndex int    `json:"chapter_index"`
 	Priority     bool   `json:"priority,omitempty"`
-	Retranslate  bool   `json:"retranslate,omitempty"`
+	// Enrichment keeps an already-readable chapter out of the translation-critical
+	// queue. The pipeline uses this to reuse durable prose while rebuilding records.
+	Enrichment  bool `json:"enrichment,omitempty"`
+	Retranslate bool `json:"retranslate,omitempty"`
 }
