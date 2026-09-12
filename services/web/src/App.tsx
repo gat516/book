@@ -382,6 +382,7 @@ export default function App() {
                 clickableEntities={clickableEntities}
                 onChapterLoaded={chapterLoaded}
                 onNoChapter={handleNoChapter}
+                onOpenRepair={() => setShowBookSettings(true)}
               />
             </div>
             <ProgressControls

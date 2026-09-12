@@ -75,6 +75,9 @@ body {
 .chapter-knowledge h2 { margin: 0; font-size: 1.2rem; }
 .chapter-knowledge h3 { margin-bottom: .35rem; }
 .chapter-knowledge header p { margin: .2rem 0 1rem; color: #666; max-width: 34rem; }
+.chapter-knowledge-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem .7rem; margin: .7rem 0 1rem; padding: .6rem .7rem; background: #f4f1e7; border-radius: 5px; }
+.chapter-knowledge-controls span { font-weight: 650; }
+.chapter-knowledge-controls small { color: #666; flex-basis: 100%; }
 .chapter-knowledge details { border-top: 1px solid #e3dfd3; padding: .75rem 0; }
 .chapter-knowledge summary { cursor: pointer; font-weight: 650; }
 .chapter-knowledge-list { list-style: none; padding: 0; margin: .6rem 0; display: grid; gap: .7rem; }

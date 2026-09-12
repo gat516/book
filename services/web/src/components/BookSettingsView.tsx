@@ -63,7 +63,7 @@ export function BookSettingsView({ novelId, onClose }: Props) {
       <h2>Book settings</h2>
 
       <ProviderConfigPanel key={`provider-${novelId}`} novelId={novelId} />
-      <section className="records-settings"><h3>Knowledge records</h3><p>Rebuild extraction in a new immutable generation when the ontology or extraction configuration changes.</p><button type="button" onClick={() => void rebuild()} disabled={busy}>{busy ? "Starting rebuild…" : "Rebuild records"}</button>
+      <section className="records-settings"><h3>Knowledge graph</h3><p>Start or rebuild the chapter knowledge graph in a new immutable generation. Published knowledge stays available while a replacement is built.</p><button type="button" onClick={() => void rebuild()} disabled={busy}>{busy ? "Starting graph rebuild…" : "Start / rebuild knowledge graph"}</button>
         {status?.has_predecessor && status.active_generation_id && <p role="status">Rebuild {status.active_state}: {status.published_chapters}/{status.eligible_chapters} chapters published ({status.missing_chapters} remaining).</p>}
         {statusError && <p role="alert" className="reader-pane-error">Could not load rebuild status: {statusError} <button type="button" onClick={() => void loadStatus()}>Retry status</button></p>}
         {status?.has_predecessor && status.discardable && status.active_generation_id && <div className="rebuild-discard">

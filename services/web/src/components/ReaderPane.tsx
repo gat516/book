@@ -27,7 +27,7 @@ interface Props {
   onOpenRepair?: () => void;
 }
 
-export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapterLoaded, onNoChapter }: Props) {
+export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapterLoaded, onNoChapter, onOpenRepair }: Props) {
   const [chapter, setChapter] = useState<ChapterResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hovered, setHovered] = useState<number | null>(null);
@@ -192,6 +192,11 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
         }}>Retry</button>
       </p>}
       {records && <RecordStatusBanner status={records.status} busy={retryingRecords} onRetry={() => void retryChapterRecords()} />}
+      <div className="chapter-knowledge-controls">
+        <span>Knowledge graph</span>
+        <button type="button" onClick={onOpenRepair}>Start / manage graph extraction</button>
+        <small>Rebuild, monitor, or discard an unfinished generation in Book settings.</small>
+      </div>
       {chapter.translation_warning?.code === "locked_terms_missing" && <p role="status" className="reader-translation-warning">
         This chapter is readable, but {chapter.translation_warning.term_count} locked name{chapter.translation_warning.term_count === 1 ? " was" : "s were"} not preserved exactly.
       </p>}
