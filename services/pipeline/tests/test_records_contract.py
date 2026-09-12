@@ -35,6 +35,26 @@ def test_discovery_prompt_offers_only_exact_passage_ids():
     assert "authoritative_passage_ids" in prompt
 
 
+def test_parse_records_recovers_compact_typed_fragment_list():
+    passages = {"p0_hash": "安若素在碎星滩带队寻找星莲。", "p1_hash": "凌峰答应协助寻找。"}
+    reply = '''<STATE character="安若素" goal="寻找星莲" location="碎星滩" evidence="p0_hash"/>
+<PROMISE promiser="凌峰" promisee="安若素" promised="协助寻找" status="答应" evidence="p1_hash"/>'''
+
+    parsed = parse_records(reply, passages)
+
+    assert parsed["document"] == "recovered_fragments"
+    assert parsed["counts"] == {"records": 2, "usable": 2}
+    assert parsed["records"][0]["type"] == "STATE"
+    assert parsed["records"][0]["fields"]["character"] == "安若素"
+    assert parsed["records"][1]["fields"]["promised"] == "协助寻找"
+
+
+def test_parse_records_rejects_empty_compact_record():
+    parsed = parse_records('<STATE evidence="p0_hash"/>', {"p0_hash"})
+    assert parsed["counts"] == {"records": 1, "usable": 0}
+    assert "contains no non-empty fields" in parsed["records"][0]["issues"]
+
+
 def test_records_cache_key_changes_when_system_or_prompt_changes():
     ctx = _ctx()
     payload = {"passages": {"p0_a": "text"}}

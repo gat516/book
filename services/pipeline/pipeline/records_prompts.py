@@ -1,6 +1,6 @@
 """Stable prompts for production record discovery and identity resolution."""
 
-PROMPT_CONTRACT_VERSION = "typed-records-v2"
+PROMPT_CONTRACT_VERSION = "typed-records-v3"
 
 DISCOVERY_SYSTEM = """Read the supplied chapter passages and emit only explicit source-grounded typed records as XML.
 Use exactly these record types and child tags (the child element names are mandatory; never use a generic
@@ -14,9 +14,14 @@ Keep every field value in the chapter's source language; English display renderi
 The INPUT DATA contains the authoritative passage IDs. Cite every supporting passage using only an exact
 ID from that input; never invent, normalize, or copy an example passage ID. Emit at most 30 records.
 Return XML only. Each record has a type and comma-separated evidence IDs copied from INPUT DATA,
-followed by the named child tags listed above. For example, an EVENT uses <what>, <who>, <outcome>,
-and <told>; a STATE uses <character>, <goal>, <knows>, <unknown>, <condition>, and <location>.
-Never emit <field> elements."""
+followed by named child tags. Omit a child when it is not applicable. Never emit <field> elements.
+
+OUTPUT SHAPE: one <records> root containing <record> elements. Each <record> has type and evidence
+attributes, then named child elements. A STATE uses <character>, <goal>, <knows>, <unknown>,
+<condition>, and <location>. An EVENT uses <what>, <who>, <outcome>, and <told>. A RELATION uses
+<side_a>, <side_b>, <kind>, and <polarity>. Copy the child tag names exactly from the type list above.
+If no explicit record is supported, return <records/>. Do not return prose, Markdown, JSON, or a second
+attempt."""
 
 RESOLVE_SYSTEM = """You are the sole identity resolver. Group supplied name IDs only when the passages
 make the same referent clear. Never merge by spelling, title, or similarity. Every name must occur exactly

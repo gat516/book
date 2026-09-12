@@ -64,26 +64,53 @@ def parse_records(text: str, passages: dict[str, str] | set[str]) -> dict[str, A
     try:
         root = ET.fromstring(body)
         if root.tag != "records":
-            problems.append({"where": "document", "problem": f"root is <{root.tag}>, expected <records>"})
-        elements = list(enumerate(root))
+            # Small local models commonly omit the container when they emit exactly
+            # one compact typed record.  Treat the known, unambiguous typed element
+            # as that one record; unknown roots remain document errors.
+            if root.tag.upper() in RECORD_TYPES:
+                elements = [(0, root)]
+                problems.append({"where": "document", "problem": "missing <records> wrapper; recovered typed record"})
+            else:
+                problems.append({"where": "document", "problem": f"root is <{root.tag}>, expected <records>"})
+                elements = list(enumerate(root))
+        else:
+            elements = list(enumerate(root))
         document = "well_formed"
     except ET.ParseError as exc:
         document = "malformed"
         problems.append({"where": "document", "problem": f"malformed XML ({exc})"})
-        for position, block in enumerate(re.findall(r"<record\b.*?</record>", body, re.S)):
+        # A sequence of individually well-formed <STATE .../>, <EVENT .../>, etc.
+        # has multiple XML roots, but each assertion is still deterministic to read.
+        # Wrapping only parses structure; every recovered record still goes through
+        # the same type, field, evidence, and grounding checks below.
+        try:
+            recovered = ET.fromstring(f"<records>{body}</records>")
+            elements = list(enumerate(recovered))
+            document = "recovered_fragments"
+            problems.append({"where": "document", "problem": "missing <records> wrapper; recovered record list"})
+        except ET.ParseError:
+            pass
+        for position, block in enumerate(re.findall(r"<record\b.*?</record>", body, re.S)) if not elements else []:
             try:
                 elements.append((position, ET.fromstring(block)))
             except ET.ParseError as block_exc:
                 problems.append({"where": f"record at position {position}", "problem": f"unreadable: {block_exc}", "raw": block[:400]})
     records: list[dict[str, Any]] = []
     for position, element in elements:
-        if element.tag != "record":
+        typed_element = element.tag.upper() in RECORD_TYPES
+        if element.tag != "record" and not typed_element:
             problems.append({"where": f"position {position}", "problem": f"<{element.tag}> is not a <record>"})
             continue
-        rtype = (element.get("type") or "").strip().upper()
+        rtype = element.tag.upper() if typed_element else (element.get("type") or "").strip().upper()
         evidence = [p.strip() for p in re.split(r"[,;、，\s]+", element.get("evidence") or "") if p.strip()]
         issues: list[str] = []
         fields: dict[str, str] = {}
+        # Compact typed elements use named attributes, for example
+        # <STATE evidence="p..." character="..." location="..."/>.  Attribute
+        # names are just as explicit as named child tags and require no guessing.
+        if typed_element:
+            fields.update({name: value.strip() for name, value in element.attrib.items()
+                           if name not in {"evidence", "type"} and value.strip()})
         for child in element:
             # Named tags are the canonical wire shape (<character>凌峰</character>).
             # Accept <field name="character"> as an equally unambiguous shape, but
@@ -103,6 +130,8 @@ def parse_records(text: str, passages: dict[str, str] | set[str]) -> dict[str, A
             extra = [k for k in fields if k not in RECORD_TYPES[rtype] and k != "quote"]
             if extra:
                 issues.append(f"fields not defined for {rtype}: {extra}")
+            if not fields and not issues:
+                issues.append("contains no non-empty fields")
         unknown = [p for p in evidence if p not in passage_ids]
         if unknown: issues.append(f"cites passages that do not exist: {unknown}")
         if not evidence: issues.append("cites no passage")
