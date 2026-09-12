@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { graphStageState } from "../src/graphBuildStatus.ts";
 import type { RepairTrack } from "../src/types.ts";
+import { describeStage, stageProgress } from "../src/pipelineStages.ts";
 
 test("a failed chapter in a rebuilding revision stops the stage timer", () => {
   const track = { state: "rebuilding", worker: {
@@ -18,4 +19,10 @@ test("a resumed chapter advances the timer and clears failed state", () => {
     job_state: "processing", updated_at: "2026-09-10T01:13:02Z",
   }} as RepairTrack;
   assert.deepEqual(graphStageState(track, 100), {failed: false, stageEnd: 100});
+});
+
+test("pipeline status labels the records stage and keeps unknown stages readable", () => {
+  assert.equal(describeStage("records"), "Extracting records");
+  assert.deepEqual(stageProgress("records"), { step: 5, total: 7 });
+  assert.equal(describeStage("future_stage"), "Pipeline stage: future_stage");
 });

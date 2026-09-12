@@ -149,6 +149,15 @@ body {
   vertical-align: top;
 }
 
+.record-list > h3,
+.term-list > h3 { margin: 0.7rem 0 0.35rem; font-size: 0.98rem; }
+.term-list { margin: 0.75rem 0; white-space: normal; }
+.term-list ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.3rem; }
+.term-list li { padding: 0.3rem 0.45rem; background: #faf8f2; border-radius: 4px; }
+.term-source { color: #555; }
+.term-target { font-weight: 600; }
+.term-list small { color: #666; }
+
 .hover-card-rendering {
   display: grid;
   gap: 0.25rem;

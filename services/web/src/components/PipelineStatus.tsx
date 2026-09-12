@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getPipelineStatus } from "../api";
 import type { PipelineStatusResponse } from "../types";
 import { usePolling } from "../usePolling";
+import { describeStage, stageProgress } from "../pipelineStages";
+export { describeStage, stageProgress } from "../pipelineStages";
 
 interface Props {
   novelId: string;
@@ -21,27 +23,6 @@ const POLL_INTERVAL_MS = 8000;
 // chapter. Backing off keeps an idle page cheap without making it blind.
 const IDLE_POLL_INTERVAL_MS = 20000;
 
-// Human labels for the pipeline's stage names (worker.py's DEFAULT_STAGES). The raw names
-// are internal jargon; "resolve" means nothing to someone waiting on a chapter.
-const STAGE_LABELS: Record<string, string> = {
-  chunk: "Splitting into chunks",
-  translate: "Translating",
-  display_scan: "Aligning translated mentions",
-  discover: "Discovering records",
-  parse: "Parsing records",
-  checks: "Checking record structure",
-  identity: "Resolving identities",
-  render: "Rendering records in English",
-  publish: "Publishing records",
-};
-
-const PIPELINE_STAGES = Object.keys(STAGE_LABELS);
-
-export function describeStage(stage?: string): string {
-  if (!stage) return "Starting…";
-  return STAGE_LABELS[stage] ?? stage;
-}
-
 function elapsed(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
@@ -53,7 +34,7 @@ function elapsed(seconds: number): string {
 // stage has finished — so "still working" and "worker is dead" look identical without it.
 export function PipelineStatus({ novelId, onProgress, onStatus }: Props) {
   const [status, setStatus] = useState<PipelineStatusResponse | null>(null);
-  const [unreachable, setUnreachable] = useState(false);
+  const [unreachable, setUnreachable] = useState<string | null>(null);
   const [polledAt, setPolledAt] = useState(Date.now());
   const [clock, setClock] = useState(Date.now());
   const previous = useRef<string | null>(null);
@@ -71,9 +52,9 @@ export function PipelineStatus({ novelId, onProgress, onStatus }: Props) {
       setPolledAt(now);
       setClock(now);
       callbacks.current.onStatus?.(latest);
-      setUnreachable(false);
-    } catch {
-      setUnreachable(true);
+      setUnreachable(null);
+    } catch (reason) {
+      setUnreachable(errorMessage(reason));
       callbacks.current.onStatus?.(null);
     }
   }, [novelId]);
@@ -81,6 +62,7 @@ export function PipelineStatus({ novelId, onProgress, onStatus }: Props) {
   useEffect(() => {
     previous.current = null;
     setStatus(null);
+    setUnreachable(null);
     callbacks.current.onStatus?.(null);
     poll();
   }, [poll]);
@@ -88,7 +70,7 @@ export function PipelineStatus({ novelId, onProgress, onStatus }: Props) {
   // Poll fast while there is something to report, slowly otherwise — but never stop, so
   // work starting after an idle reading is still noticed (see IDLE_POLL_INTERVAL_MS).
   const busy = status === null || status.in_flight.length > 0 || status.pending > 0;
-  usePolling(poll, busy ? POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS, true);
+  usePolling(poll, busy ? POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS, unreachable === null);
 
   // Keep elapsed time visibly moving between network polls. Long local-model stages can
   // take minutes; a ticking timer reassures the reader that the status view itself is live.
@@ -98,27 +80,27 @@ export function PipelineStatus({ novelId, onProgress, onStatus }: Props) {
     return () => window.clearInterval(timer);
   }, [status?.in_flight.length]);
 
-  if (unreachable) return <p className="pipeline-status">Pipeline status unavailable.</p>;
+  if (unreachable) return <p className="pipeline-status" role="alert">
+    Pipeline status unavailable: {unreachable} <button type="button" onClick={() => { setUnreachable(null); void poll(); }}>Retry</button>
+  </p>;
   if (!status) return null;
 
   const working = status.in_flight.length > 0;
   const sincePoll = Math.max(0, Math.floor((clock - polledAt) / 1000));
-
   return (
     <div className={`pipeline-status ${working ? "pipeline-status-working" : ""}`} aria-live="polite">
       {working ? (
         status.in_flight.map((item) => {
-          const stageIndex = PIPELINE_STAGES.indexOf(item.stage ?? "");
-          const step = stageIndex >= 0 ? stageIndex + 1 : 1;
+          const { step, total } = stageProgress(item.stage);
           return <div className="pipeline-status-job" key={item.chapter_index}>
             <p className="pipeline-status-heading">
               <span className="pipeline-status-live-dot" aria-hidden="true" />
               <strong>Actively processing chapter {item.chapter_index}</strong>
             </p>
             <p>
-              {describeStage(item.stage)} · step {step} of {PIPELINE_STAGES.length} · {elapsed(item.stage_elapsed_secs + sincePoll)} in this step · {elapsed(item.elapsed_secs + sincePoll)} total
+              {describeStage(item.stage)} · step {step} of {total} · {elapsed(item.stage_elapsed_secs + sincePoll)} in this step · {elapsed(item.elapsed_secs + sincePoll)} total
             </p>
-            <progress value={step} max={PIPELINE_STAGES.length} aria-label={`Chapter ${item.chapter_index} pipeline progress`} />
+            <progress value={step} max={total} aria-label={`Chapter ${item.chapter_index} pipeline progress`} />
           </div>;
         })
       ) : (
@@ -139,4 +121,8 @@ export function PipelineStatus({ novelId, onProgress, onStatus }: Props) {
       </p>}
     </div>
   );
+}
+
+function errorMessage(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason);
 }

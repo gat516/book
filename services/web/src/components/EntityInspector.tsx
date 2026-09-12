@@ -3,6 +3,7 @@ import { getEntity } from "../api";
 import type { EntityView } from "../types";
 import { GlossaryView } from "./GlossaryView";
 import { RecordList } from "./RecordList";
+import { TermList } from "./TermList";
 
 interface Props {
   novelId: string;
@@ -65,8 +66,9 @@ export function EntityInspector({ novelId, entityId, status, mention, at, cache,
       {entity && <>
         <p><strong>{entity.canonical}</strong> · {entity.kind} · First seen in chapter {entity.first_seen_chapter}</p>
         {entity.aliases.length > 0 && <p>Also known as: {entity.aliases.join(", ")}</p>}
-        <h3>Participating records</h3>
+        <h3>Facts and records</h3>
         {entity.records?.length ? <RecordList rows={entity.records} /> : <p>No supported records are known at your reading progress yet.</p>}
+        <TermList renderings={entity.renderings} title="Terms" />
         <button className="entity-inspector-edit" aria-expanded={editing} aria-controls={editorId} onClick={() => setEditing((value) => !value)}>
           {editing ? "Hide glossary editor" : "Edit glossary terms"}
         </button>

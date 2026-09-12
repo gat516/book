@@ -49,7 +49,7 @@ export interface RecordView {
   participants: RecordParticipant[];
   evidence: RecordEvidence[];
 }
-export interface RecordsResponse { novel_id: string; chapter_index: number; status: RecordsStatus; rows: RecordView[]; }
+export interface RecordsResponse { novel_id: string; chapter_index: number; at: number; status: RecordsStatus; rows: RecordView[]; }
 export interface RecordsInspectorResponse { novel_id: string; chapter_index: number; status: RecordsStatus; parsed: number; retained: number; dropped: number; unresolved: number; rendering_failures: number; drops: Array<{ original_index: number; reasons: string[] }>; }
 export interface WikiResponse { novel_id: string; at?: number; status: RecordsStatus; entities: EntitySummary[]; rows?: RecordView[]; }
 

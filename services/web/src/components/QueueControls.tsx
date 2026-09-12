@@ -55,7 +55,9 @@ export function QueueControls({ novelId }: { novelId: string | null }) {
     };
   }, [novelId, apply, refresh]);
 
-  usePolling(refresh, 8000, true);
+  // A failed queue read is actionable, not a reason to hammer a backend that may be
+  // down. The visible Retry control below re-arms polling after the reader chooses.
+  usePolling(refresh, 8000, error === null);
   const focused = queue?.books.find((book) => book.novel_id === queue.focus_novel_id);
   const active = queue?.books.flatMap((book) => book.in_flight.map((chapter) => ({ book, chapter }))) ?? [];
 

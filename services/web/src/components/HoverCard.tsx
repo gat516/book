@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { approveCharacterName, confirmGlossaryTerm, correctGlossaryTerm, getEntity } from "../api";
 import type { CharacterNameCandidate, EntityView, TermRenderingView, TermRole } from "../types";
 import { RecordList } from "./RecordList";
+import { TermList } from "./TermList";
 
 interface Props {
   novelId: string;
@@ -152,7 +153,8 @@ export function HoverCard({ novelId, entityId, rendering, status, mention, at, c
             rendering={item} displayed={mention} saving={saving === item.source_term}
             onChoose={chooseRendering} onLeave={onClose} />)}
           {notice && <p className="hover-card-notice" role="status">{notice}</p>}
-          <RecordList rows={entity.records ?? []} />
+          <RecordList rows={entity.records ?? []} title="Facts and records" />
+          <TermList renderings={entity.renderings} title="Terms" />
         </>
       )}
       {!entity && spanRendering && <RenderingControl rendering={spanRendering} displayed={mention}

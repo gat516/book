@@ -30,8 +30,10 @@ export function ScrapeForm({ novelId, onDone }: Props) {
     // than assuming a fresh mount means no job exists.
     getScrapeStatus(novelId)
       .then(setJob)
-      .catch(() => {
-        /* no job yet for this novel — fine, the form below is the way to start one */
+      .catch((reason) => {
+        // A 404 is the normal first-use state. Do not turn an API/database outage into
+        // "no job yet"; status is unknown and should be visible to the reader.
+        if (!(reason instanceof ApiError && reason.status === 404)) setError(errorMessage(reason));
       });
   }, [novelId]);
 
@@ -41,7 +43,7 @@ export function ScrapeForm({ novelId, onDone }: Props) {
       setJob(latest);
       if (latest.status !== "pending" && latest.status !== "running") onDone();
     } catch (err) {
-      setError(String(err));
+      setError(errorMessage(err));
     }
     // onDone is recreated by the parent on every render; depending on it here would
     // rebuild this callback constantly. usePolling holds the callback in a ref, so the
@@ -66,7 +68,7 @@ export function ScrapeForm({ novelId, onDone }: Props) {
       // start call to forget.
       setJob(await getScrapeStatus(novelId));
     } catch (err) {
-      setError(err instanceof ApiError && err.status === 409 ? "A scrape is already running for this novel." : String(err));
+      setError(err instanceof ApiError && err.status === 409 ? "A scrape is already running for this novel." : errorMessage(err));
     } finally {
       setPending(false);
     }
@@ -76,7 +78,7 @@ export function ScrapeForm({ novelId, onDone }: Props) {
     try {
       await cancelScrape(novelId);
     } catch (err) {
-      setError(String(err));
+      setError(errorMessage(err));
     }
   }
 
@@ -89,6 +91,9 @@ export function ScrapeForm({ novelId, onDone }: Props) {
         <button onClick={cancel} disabled={job.cancel_requested}>
           {job.cancel_requested ? "Cancelling…" : "Cancel"}
         </button>
+        {error && <p role="alert" className="scrape-form-error">
+          Could not refresh scrape status: {error} <button type="button" onClick={() => { setError(null); void poll(); }}>Retry</button>
+        </p>}
       </div>
     );
   }
@@ -131,4 +136,8 @@ export function ScrapeForm({ novelId, onDone }: Props) {
       {error && <p className="scrape-form-error">{error}</p>}
     </div>
   );
+}
+
+function errorMessage(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason);
 }

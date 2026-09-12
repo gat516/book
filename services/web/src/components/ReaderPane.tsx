@@ -6,7 +6,9 @@ import { EntityInspector } from "./EntityInspector";
 import { usePolling } from "../usePolling";
 import { applyRenderingChoices, lastMentionPerEntity, segment } from "../readerSegments";
 import { RecordList } from "./RecordList";
+import { TermList } from "./TermList";
 import type { RecordsResponse } from "../types";
+import { uniqueChapterRenderings } from "../recordPresentation";
 
 interface Props {
   novelId: string;
@@ -22,12 +24,19 @@ interface Props {
   onOpenRepair?: () => void;
 }
 
+// Record extraction can take minutes on a local model. Pending means the worker has not
+// published a run yet, so check slowly; once processing starts, tighter checks make the
+// transition to linked spans feel live without hammering the API.
+const RECORD_PENDING_POLL_MS = 20000;
+const RECORD_PROCESSING_POLL_MS = 8000;
+
 export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapterLoaded, onNoChapter }: Props) {
   const [chapter, setChapter] = useState<ChapterResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hovered, setHovered] = useState<number | null>(null);
   const [selected, setSelected] = useState<{ id: string | null; mention: string } | null>(null);
   const [records, setRecords] = useState<RecordsResponse | null>(null);
+  const [recordsError, setRecordsError] = useState<string | null>(null);
 
   // Both hover and click views share only the exact novel/chapter/clearance cache.
   // The server's `at` becomes known on load; changing it discards earlier entity data.
@@ -37,6 +46,7 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
     setSelected(null);
     setHovered(null);
     setRecords(null);
+    setRecordsError(null);
   }, [novelId, chapterIndex, clickableEntities]);
 
   useEffect(() => {
@@ -81,6 +91,16 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
           return;
         }
         setChapter(response);
+        // The chapter response already carries the records introduced at this exact
+        // source chapter. Use that payload for the first paint; the rows endpoint is
+        // only needed while extraction/rendering is still in flight.
+        setRecords(response.records_status ? {
+          novel_id: response.novel_id,
+          chapter_index: response.chapter_index,
+          at: response.at,
+          status: response.records_status,
+          rows: response.record_rows ?? [],
+        } : null);
         onChapterLoaded(response);
       })
       .catch((err) => {
@@ -92,16 +112,8 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [novelId, chapterIndex]);
 
-  useEffect(() => {
-    if (!chapter) return;
-    let cancelled = false;
-    getRecords(novelId, chapterIndex).then(value => { if (!cancelled) setRecords(value); }).catch(() => { /* prose remains readable while enrichment is unavailable */ });
-    return () => { cancelled = true; };
-  }, [chapter, novelId, chapterIndex]);
-
   const generation = useRef(0);
   const polling = useRef(false);
-  const needsBindingRefresh = useRef(false);
   useEffect(() => { generation.current++; }, [novelId, chapterIndex]);
   usePolling(() => {
     if (!chapter || polling.current) return;
@@ -109,19 +121,23 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
     polling.current = true;
     getRecords(novelId, chapterIndex).then(async (recordStatus) => {
       if (current !== generation.current) return;
+      const previous = records?.status;
       setRecords(recordStatus);
-      if (recordStatus.status.extraction_status !== "ready") return;
-      needsBindingRefresh.current = true;
+      setRecordsError(null);
+      const extractionBecameReady = recordStatus.status.extraction_status === "ready" && previous?.extraction_status !== "ready";
+      const renderingBecameReady = recordStatus.status.rendering_status === "ready" && previous?.rendering_status !== "ready";
+      if (!extractionBecameReady && !renderingBecameReady) return;
       // Close old cards immediately; late responses cannot repopulate the new cache.
       cache.clear(); setSelected(null); setHovered(null);
       setChapter(previous => previous ? {...previous, spans: previous.spans.map(span => ({...span, entity_id: null}))} : previous);
       const refreshed = await getChapter(novelId, chapterIndex);
       if (current !== generation.current) return;
-      needsBindingRefresh.current = false;
       setChapter(refreshed); onChapterLoaded(refreshed);
-    }).catch(() => { /* Keep readable prose; retry the status request next interval. */ })
+    }).catch((reason) => {
+      if (current === generation.current) setRecordsError(errorMessage(reason));
+    })
       .finally(() => { polling.current = false; });
-  }, 4000, chapter !== null);
+  }, recordPollInterval(records), chapter !== null && recordsError === null && !recordsTerminal(records));
 
   if (error) return <p className="reader-pane-error">Could not load chapter: {error}</p>;
   if (!chapter) return <p>Loading chapter…</p>;
@@ -150,12 +166,19 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
           </>
         )}
       </p>
+      {recordsError && <p role="alert" className="reader-records-error">
+        Could not load chapter knowledge: {recordsError} <button type="button" onClick={() => {
+          setRecordsError(null);
+          void getRecords(novelId, chapterIndex).then(setRecords).catch((reason) => setRecordsError(errorMessage(reason)));
+        }}>Retry</button>
+      </p>}
       {records?.status.extraction_status === "processing" && <p role="status">Extracting chapter records…</p>}
-      {records?.status.extraction_status === "failed" && <p role="status">Record extraction failed. The chapter is still readable.</p>}
+      {records?.status.extraction_status === "failed" && <p role="status">Record extraction failed. The chapter is still readable{records.status.failure_detail ? ` (${records.status.failure_detail})` : ""}.</p>}
       {chapter.translation_warning?.code === "locked_terms_missing" && <p role="status" className="reader-translation-warning">
         This chapter is readable, but {chapter.translation_warning.term_count} locked name{chapter.translation_warning.term_count === 1 ? " was" : "s were"} not preserved exactly.
       </p>}
-      {records && <RecordList rows={records.rows} status={records.status} onEntity={(id, surface) => setSelected({id, mention: surface})} />}
+      {records && <RecordList rows={records.rows} status={records.status} title="Facts and records learned here" onEntity={(id, surface) => setSelected({id, mention: surface})} />}
+      <TermList renderings={uniqueChapterRenderings(chapter.spans)} title="Terms used here" />
       {clickableEntities && chapter.spans.length === 0 && <p className="reader-entity-hint">
         No named mentions are available for this chapter yet. Cards do not require facts or a glossary entry.
       </p>}
@@ -209,4 +232,24 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
       />}
     </div>
   );
+}
+
+function recordsTerminal(records: RecordsResponse | null): boolean {
+  if (!records) return false;
+  if (records.status.extraction_status === "failed") return true;
+  const extractionDone = records.status.extraction_status === "ready" || records.status.extraction_status === "failed";
+  const renderingDone = records.status.rendering_status === "ready" || records.status.rendering_status === "failed";
+  return extractionDone && renderingDone;
+}
+
+function recordPollInterval(records: RecordsResponse | null): number {
+  if (!records) return RECORD_PENDING_POLL_MS;
+  return records.status.extraction_status === "processing" ||
+    (records.status.extraction_status === "ready" && records.status.rendering_status === "pending")
+    ? RECORD_PROCESSING_POLL_MS
+    : RECORD_PENDING_POLL_MS;
+}
+
+function errorMessage(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason);
 }
