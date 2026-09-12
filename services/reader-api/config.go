@@ -9,13 +9,9 @@ type Config struct {
 	ListenAddr          string
 	ReaderDatabaseURL   string
 	ProgressDatabaseURL string
-	// RepairOperatorDatabaseURL backs the pool that holds repair_operator, the only role
-	// permitted to call repair_preview. Separate from the reader pool so a spoiler-bearing
-	// report is refused by Postgres rather than only by a check in this process.
-	RepairOperatorDatabaseURL string
-	AskAIURL                  string
-	AskAIInternalToken        string
-	AskAITimeoutSeconds       int
+	AskAIURL            string
+	AskAIInternalToken  string
+	AskAITimeoutSeconds int
 
 	IngestAPIURL        string
 	IngestInternalToken string
@@ -44,13 +40,12 @@ func loadConfig() Config {
 		timeout = 120
 	}
 	return Config{
-		ListenAddr:                getenv("READER_LISTEN_ADDR", ":8081"),
-		ReaderDatabaseURL:         getenv("READER_DATABASE_URL", baseURL),
-		ProgressDatabaseURL:       getenv("PROGRESS_DATABASE_URL", baseURL),
-		RepairOperatorDatabaseURL: getenv("REPAIR_OPERATOR_DATABASE_URL", baseURL),
-		AskAIURL:                  getenv("ASKAI_URL", "http://localhost:8082"),
-		AskAIInternalToken:        os.Getenv("ASKAI_INTERNAL_TOKEN"),
-		AskAITimeoutSeconds:       timeout,
+		ListenAddr:          getenv("READER_LISTEN_ADDR", ":8081"),
+		ReaderDatabaseURL:   getenv("READER_DATABASE_URL", baseURL),
+		ProgressDatabaseURL: getenv("PROGRESS_DATABASE_URL", baseURL),
+		AskAIURL:            getenv("ASKAI_URL", "http://localhost:8082"),
+		AskAIInternalToken:  os.Getenv("ASKAI_INTERNAL_TOKEN"),
+		AskAITimeoutSeconds: timeout,
 
 		IngestAPIURL:        getenv("INGEST_API_URL", "http://localhost:8080"),
 		IngestInternalToken: os.Getenv("INGEST_INTERNAL_TOKEN"),

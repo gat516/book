@@ -22,43 +22,47 @@ func TestVocabularyMutationsAreAppendOnlyAndVersioned(t *testing.T) {
 	if _, err := store.db.Exec(ctx, `INSERT INTO novel(id,title,source_lang,target_lang,ontology) VALUES($1,'Vocabulary integration','zh','en',$2)`, novelID, ontology); err != nil {
 		t.Fatal(err)
 	}
-	var legacy string
-	if err := store.db.QueryRow(ctx, `SELECT active_graph_revision::text FROM novel WHERE id=$1`, novelID).Scan(&legacy); err != nil {
-		t.Fatal(err)
-	}
-	var staging string
-	if err := store.db.QueryRow(ctx, `INSERT INTO graph_revision(novel_id,state,trusted,legacy,ontology,snapshot) VALUES($1,'staging',false,false,$2,'{}') RETURNING id::text`, novelID, ontology).Scan(&staging); err != nil {
+	// A terminology decision never edits published extraction: it bumps the active
+	// generation's config_version, which is what rendering caches key on, and leaves
+	// every record row exactly as extracted.
+	var generation string
+	if err := store.db.QueryRow(ctx, `SELECT active_record_generation::text FROM novel WHERE id=$1`, novelID).Scan(&generation); err != nil {
 		t.Fatal(err)
 	}
 	entityA, entityB := uuid.NewString(), uuid.NewString()
-	if _, err := store.db.Exec(ctx, `INSERT INTO entity(id,novel_id,kind,canonical,first_seen_chapter) VALUES($1,$3,'character','A',0),($2,$3,'sect','B',0)`, entityA, entityB, novelID); err != nil {
+	if _, err := store.db.Exec(ctx, `INSERT INTO entity(id,novel_id,record_generation_id,kind,canonical,first_seen_chapter) VALUES($1,$3,$4,'character','A',0),($2,$3,$4,'sect','B',0)`, entityA, entityB, novelID, generation); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(ctx, `INSERT INTO fact(novel_id,entity_id,attribute,value,valid_from_chapter,source_chapter) VALUES($1,$2,'description','sentinel',0,0)`, novelID, entityA); err != nil {
+	runID := uuid.NewString()
+	if _, err := store.db.Exec(ctx, `INSERT INTO chapter(novel_id,chapter_index,raw_uri,raw_hash,source_meta) VALUES($1,0,'raw://c','vocab-hash','{}'::jsonb)`, novelID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(ctx, `INSERT INTO edge(novel_id,src_id,dst_id,rel_type,valid_from_chapter,source_chapter) VALUES($1,$2,$3,'ally',0,0)`, novelID, entityA, entityB); err != nil {
+	if _, err := store.db.Exec(ctx, `INSERT INTO record_run(id,novel_id,generation_id,chapter_index,source_hash,request_identity,extraction_model,status,publication_version,published_at) VALUES($1,$2,$3,0,'vocab-hash','identity','test-model','published',1,now())`, runID, novelID, generation); err != nil {
+		t.Fatal(err)
+	}
+	rowID := uuid.NewString()
+	if _, err := store.db.Exec(ctx, `INSERT INTO record_row(id,novel_id,generation_id,run_id,original_index,record_type,source_chapter,source_hash) VALUES($1,$2,$3,$4,0,'EVENT',0,'vocab-hash')`, rowID, novelID, generation, runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(ctx, `INSERT INTO record_value(row_id,field_name,source_value) VALUES($1,'what','sentinel')`, rowID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.Exec(ctx, `INSERT INTO novel_vocabulary(novel_id,term_type,name,kinds,status,first_seen_chapter,admitted_at_chapter) VALUES($1,'attribute','candidate_term',ARRAY['character'],'candidate',0,NULL)`, novelID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{`DELETE FROM novel_vocabulary_changelog WHERE novel_id=$1`, `DELETE FROM novel_vocabulary_alias WHERE novel_id=$1`, `DELETE FROM novel_vocabulary_chapter WHERE novel_id=$1`, `DELETE FROM novel_vocabulary WHERE novel_id=$1`, `DELETE FROM edge WHERE novel_id=$1`, `DELETE FROM fact WHERE novel_id=$1`, `DELETE FROM entity WHERE novel_id=$1`, `UPDATE novel SET active_graph_revision=NULL WHERE id=$1`, `DELETE FROM graph_revision WHERE novel_id=$1`, `DELETE FROM novel WHERE id=$1`} {
+		for _, q := range []string{`DELETE FROM novel_vocabulary_changelog WHERE novel_id=$1`, `DELETE FROM novel_vocabulary_alias WHERE novel_id=$1`, `DELETE FROM novel_vocabulary_chapter WHERE novel_id=$1`, `DELETE FROM novel_vocabulary WHERE novel_id=$1`, `DELETE FROM novel WHERE id=$1`} {
 			_, _ = store.db.Exec(context.Background(), q, novelID)
 		}
 	})
-	versions := func() (int64, int64) {
-		var a, b int64
-		if err := store.db.QueryRow(ctx, `SELECT version FROM graph_revision WHERE id=$1`, legacy).Scan(&a); err != nil {
+	configVersion := func() int64 {
+		var v int64
+		if err := store.db.QueryRow(ctx, `SELECT config_version FROM record_generation WHERE id=$1`, generation).Scan(&v); err != nil {
 			t.Fatal(err)
 		}
-		if err := store.db.QueryRow(ctx, `SELECT version FROM graph_revision WHERE id=$1`, staging).Scan(&b); err != nil {
-			t.Fatal(err)
-		}
-		return a, b
+		return v
 	}
-	a0, b0 := versions()
+	before := configVersion()
 	mut := func(req vocabularyMutationRequest) {
 		req.CreatedBy = "test"
 		if _, err := store.MutateVocabulary(ctx, novelID, req); err != nil {
@@ -78,19 +82,15 @@ func TestVocabularyMutationsAreAppendOnlyAndVersioned(t *testing.T) {
 		t.Fatalf("banned admit err=%v", err)
 	}
 	mut(vocabularyMutationRequest{Action: "admit", TermType: "attribute", Name: "candidate_term", Chapter: 1})
-	a1, b1 := versions()
-	if a1-a0 != 7 || b1-b0 != 7 {
-		t.Fatalf("versions active=%d staging=%d, want 7/7", a1-a0, b1-b0)
+	if got := configVersion() - before; got != 7 {
+		t.Fatalf("config_version advanced by %d, want 7", got)
 	}
-	var attr, rel string
-	if err := store.db.QueryRow(ctx, `SELECT attribute FROM fact WHERE novel_id=$1`, novelID).Scan(&attr); err != nil {
+	var field, value string
+	if err := store.db.QueryRow(ctx, `SELECT field_name,source_value FROM record_value WHERE row_id=$1`, rowID).Scan(&field, &value); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.QueryRow(ctx, `SELECT rel_type FROM edge WHERE novel_id=$1`, novelID).Scan(&rel); err != nil {
-		t.Fatal(err)
-	}
-	if attr != "description" || rel != "ally" {
-		t.Fatalf("sentinels changed: %q %q", attr, rel)
+	if field != "what" || value != "sentinel" {
+		t.Fatalf("published record changed: %q %q", field, value)
 	}
 	var alias string
 	if err := store.db.QueryRow(ctx, `SELECT surface FROM novel_vocabulary_alias WHERE novel_id=$1`, novelID).Scan(&alias); err != nil {

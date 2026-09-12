@@ -58,7 +58,7 @@ var errProviderHealthNovelNotFound = errors.New("novel not found")
 
 func providerHealthTrack(track string) bool {
 	switch track {
-	case "graph", "events", "translate", "extract":
+	case "translate", "extract":
 		return true
 	default:
 		return false
@@ -66,54 +66,29 @@ func providerHealthTrack(track string) bool {
 }
 
 // providerHealthConfigFor resolves the same provider source used by execution (§5.4):
-// graph/events use their newest staging revision, falling back to the active pin;
-// ordinary work uses the effective novel/account/process provider configuration.
+// the effective novel/account/process provider configuration.
+//
+// The graph and events tracks are gone with the revision tables they read (migration
+// 0089). Extraction is pinned per record generation now, and a generation that disagrees
+// with the novel's configured model is not a health question -- it is a new generation.
 func (s *Store) providerHealthConfigFor(ctx context.Context, novelID, track string, cfg Config) (providerHealthConfig, error) {
 	if !providerHealthTrack(track) {
 		return providerHealthConfig{}, fmt.Errorf("unsupported track %q", track)
 	}
 
-	var provider, pinnedModel, bookProvider, bookBaseURL *string
+	var provider, bookProvider, bookBaseURL *string
 	var bookModel, bookTranslateModel, bookExtractModel *string
-	if track == "graph" || track == "events" {
-		table, activeColumn := "graph_revision", "active_graph_revision"
-		if track == "events" {
-			table, activeColumn = "event_revision", "active_event_revision"
+	err := s.db.QueryRow(ctx, `
+		SELECT c.provider, c.base_url, c.model, c.translate_model, c.extract_model
+		FROM novel n LEFT JOIN novel_provider_config c ON c.novel_id=n.id
+		WHERE n.id=$1`, novelID).Scan(&bookProvider, &bookBaseURL, &bookModel, &bookTranslateModel, &bookExtractModel)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return providerHealthConfig{}, errProviderHealthNovelNotFound
 		}
-		// The table/column names are constants selected only after validating track.
-		query := fmt.Sprintf(`
-			SELECT COALESCE(
-				(SELECT r.model->>'provider' FROM %s r
-				 WHERE r.novel_id=n.id AND r.state='staging'
-				 ORDER BY r.created_at DESC LIMIT 1),
-				(SELECT r.model->>'provider' FROM %s r WHERE r.id=n.%s)
-			), COALESCE(
-				(SELECT r.model->>'name' FROM %s r
-				 WHERE r.novel_id=n.id AND r.state='staging'
-				 ORDER BY r.created_at DESC LIMIT 1),
-				(SELECT r.model->>'name' FROM %s r WHERE r.id=n.%s)
-			), c.provider, c.base_url
-			FROM novel n LEFT JOIN novel_provider_config c ON c.novel_id=n.id
-			WHERE n.id=$1`, table, table, activeColumn, table, table, activeColumn)
-		if err := s.db.QueryRow(ctx, query, novelID).Scan(&provider, &pinnedModel, &bookProvider, &bookBaseURL); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return providerHealthConfig{}, errProviderHealthNovelNotFound
-			}
-			return providerHealthConfig{}, fmt.Errorf("resolve %s provider: %w", track, err)
-		}
-	} else {
-		err := s.db.QueryRow(ctx, `
-			SELECT c.provider, c.base_url, c.model, c.translate_model, c.extract_model
-			FROM novel n LEFT JOIN novel_provider_config c ON c.novel_id=n.id
-			WHERE n.id=$1`, novelID).Scan(&bookProvider, &bookBaseURL, &bookModel, &bookTranslateModel, &bookExtractModel)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return providerHealthConfig{}, errProviderHealthNovelNotFound
-			}
-			return providerHealthConfig{}, fmt.Errorf("resolve %s provider: %w", track, err)
-		}
-		provider = bookProvider
+		return providerHealthConfig{}, fmt.Errorf("resolve %s provider: %w", track, err)
 	}
+	provider = bookProvider
 
 	chosen := ""
 	if provider != nil {
@@ -122,41 +97,22 @@ func (s *Store) providerHealthConfigFor(ctx context.Context, novelID, track stri
 	if chosen == "" {
 		chosen = strings.ToLower(strings.TrimSpace(getenv("LLM_PROVIDER", "ollama")))
 	}
-	model := ""
-	if track == "graph" || track == "events" {
-		if pinnedModel != nil {
-			model = strings.TrimSpace(*pinnedModel)
-		}
-	} else {
-		model = processProviderModel(track)
-		if track == "translate" && bookTranslateModel != nil && strings.TrimSpace(*bookTranslateModel) != "" {
-			model = strings.TrimSpace(*bookTranslateModel)
-		} else if track == "extract" && bookExtractModel != nil && strings.TrimSpace(*bookExtractModel) != "" {
-			model = strings.TrimSpace(*bookExtractModel)
-		} else if bookModel != nil && strings.TrimSpace(*bookModel) != "" {
-			model = strings.TrimSpace(*bookModel)
-		}
+	model := processProviderModel(track)
+	if track == "translate" && bookTranslateModel != nil && strings.TrimSpace(*bookTranslateModel) != "" {
+		model = strings.TrimSpace(*bookTranslateModel)
+	} else if track == "extract" && bookExtractModel != nil && strings.TrimSpace(*bookExtractModel) != "" {
+		model = strings.TrimSpace(*bookExtractModel)
+	} else if bookModel != nil && strings.TrimSpace(*bookModel) != "" {
+		model = strings.TrimSpace(*bookModel)
 	}
 	baseURL := ""
 	if bookBaseURL != nil {
 		baseURL = strings.TrimSpace(*bookBaseURL)
 	}
-	// A novel URL belongs to the novel's configured provider. A graph/event revision
-	// may be pinned to a different provider after that setting changed, in which case
-	// execution deliberately ignores the stale book URL.
-	if (track == "graph" || track == "events") &&
-		(bookProvider == nil || strings.ToLower(strings.TrimSpace(*bookProvider)) != chosen) {
-		baseURL = ""
-	}
-
-	// Local graph/event execution is intentionally tied to the process Ollama host.
-	// Ordinary Ollama work follows book URL -> account URL -> process host, matching
-	// resolve_provider_config. Hosted graph/event execution borrows a matching book URL, then the account URL,
-	// exactly as graph_provider_config/event provider_connection do.
+	// Ollama work follows book URL -> account URL -> process host, matching
+	// resolve_provider_config.
 	if chosen == "ollama" {
-		if track == "graph" || track == "events" {
-			baseURL = cfg.OllamaHost
-		} else if baseURL == "" {
+		if baseURL == "" {
 			accountBase, _, accountErr := s.accountCredential(ctx, chosen, cfg.ProviderConfigKey)
 			if accountErr != nil {
 				return providerHealthConfig{provider: chosen, model: model, endpointKind: "local"}, accountErr
@@ -239,7 +195,7 @@ func (s *Store) accountCredential(ctx context.Context, provider string, key [32]
 func (a *API) providerHealth(w http.ResponseWriter, r *http.Request) {
 	track := r.URL.Query().Get("track")
 	if !providerHealthTrack(track) {
-		writeErr(w, http.StatusBadRequest, "track must be graph, events, translate, or extract")
+		writeErr(w, http.StatusBadRequest, "track must be translate or extract")
 		return
 	}
 	config, err := a.store.providerHealthConfigFor(r.Context(), r.PathValue("id"), track, a.cfg)

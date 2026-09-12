@@ -40,7 +40,6 @@ func main() {
 	mux.Handle("PATCH /queue", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.queueControl)))
 	mux.Handle("POST /novels", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.createNovel)))
 	mux.Handle("DELETE /novels/{id}", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.deleteNovel)))
-	mux.Handle("DELETE /novels/{id}/graph", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.deleteGraph)))
 	mux.HandleFunc("POST /novels/{id}/chapters", api.pasteChapter)
 	mux.HandleFunc("PATCH /novels/{id}/glossary/{term}", api.correctGlossaryTerm)
 	mux.HandleFunc("DELETE /novels/{id}/glossary/{term}", api.deleteGlossaryTerm)
@@ -49,21 +48,11 @@ func main() {
 	mux.HandleFunc("POST /novels/{id}/name-reviews/{term}/approve", api.approveCharacterName)
 	mux.Handle("PATCH /novels/{id}/vocabulary", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.mutateVocabulary)))
 	mux.HandleFunc("POST /novels/{id}/translate-ahead", api.translateAhead)
-	// Knowledge repair intents (0043). Token-gated: these quarantine a book's facts and
-	// activate replacements. reader-api is the only intended caller and checks its own,
-	// weaker operator credential before forwarding.
-	mux.Handle("POST /novels/{id}/repair", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.requestRepair)))
-	mux.Handle("DELETE /novels/{id}/repair/{request}", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.cancelRepair)))
-	mux.Handle("POST /novels/{id}/repair/{request}/retry-now", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.retryRepairNow)))
-	mux.Handle("PATCH /novels/{id}/facts/{fact}/display", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.mutateFact)))
-	mux.Handle("POST /novels/{id}/facts/{fact}/corrections", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.mutateFact)))
-	mux.Handle("DELETE /novels/{id}/facts/{fact}", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.mutateFact)))
-	mux.Handle("POST /novels/{id}/chapter/{n}/knowledge/reextract", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.chapterKnowledgeReextract)))
-	mux.Handle("POST /novels/{id}/chapter/{n}/knowledge/reextract/{run}/apply", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.chapterKnowledgeApply)))
-	// Phase D: pass/reject held facts, edges and events for one chapter (migration 0074).
-	// reader-api is the only intended caller and authorizes the reader's own stored
-	// reading position before forwarding, same as the repair and fact-edit routes above.
-	mux.Handle("PATCH /novels/{id}/chapter/{n}/knowledge/review", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.reviewChapterKnowledge)))
+	// Records maintenance. Internal-token gated like every other write; reader-api
+	// proxies these on the operator's behalf.
+	mux.Handle("POST /novels/{id}/chapter/{n}/records/retry", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsRetry)))
+	mux.Handle("POST /novels/{id}/chapter/{n}/records/render-retry", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsRenderRetry)))
+	mux.Handle("POST /novels/{id}/records/rebuild", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsRebuild)))
 	mux.HandleFunc("PATCH /novels/{id}/settings", api.patchNovelSettings)
 	mux.HandleFunc("GET /novels/{id}/provider-config", api.getProviderConfig)
 	mux.HandleFunc("PATCH /novels/{id}/provider-config", api.putProviderConfig)

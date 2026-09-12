@@ -4,9 +4,6 @@ import { useState } from "react";
 
 interface Props {
   novelId: string;
-  // Forwarded to RepairPanel: incremented when something elsewhere (the reader's "facts
-  // are withheld" notice) wants the repair panel opened, not just this page shown.
-  repairOpenSignal: number;
   onClose: () => void;
 }
 

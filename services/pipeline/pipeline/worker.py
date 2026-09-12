@@ -33,7 +33,7 @@ from pipeline.provider_config import (
     resolve_provider_config,
 )
 from pipeline import queue
-from pipeline.failures import record_failure
+from pipeline.failures import error_code, record_failure
 from pipeline.records_publish import publish_records
 from pipeline.stages import DEFAULT_STAGES
 from pipeline.stages.translate import TranslateStage
@@ -353,34 +353,13 @@ class Worker:
                                       raw, claimed_at, disposition, enrichment_raw)
 
     async def _drain_background(self) -> None:
-        from pipeline.event_rebuild import drain_active as drain_events
-        from pipeline.graph_rebuild import drain_active
-        from pipeline.repair import drain_staging
-        control = await self.redis.hgetall(queue.KEYS[5])
-        mode, focus = control.get("mode", "all"), control.get("focus_novel_id") or None
-        # These are explicit operator intents, including the escape from an unfinished
-        # rebuild. Queue pause/focus controls automatic processing, not whether an already
-        # accepted Discard/Activate/Review request is allowed to settle.
-        if await self._drain_repair_requests():
-            return
-        if mode == "paused" or (mode == "focused" and focus is None):
-            return
-        # A prepared rebuild advances before ordinary enrichment: a quarantined book shows
-        # its reader no facts at all, while an active revision already has some. This can
-        # hold enrichment back for the length of a rebuild, which is the intended trade.
-        if await drain_staging(self.cfg, novel_id=focus if mode == "focused" else None):
-            return
-        # Chapter actions are independently reviewable and substantially cheaper than
-        # full identity repair.  Both remain below reader-critical translation work and
-        # share the same process-wide Ollama reservation (§0.1, §6.3).
-        await drain_events(self.cfg, novel_id=focus if mode == "focused" else None)
-        await drain_active(self.cfg, novel_id=focus if mode == "focused" else None,
-                           preferred_novel=focus)
+        """Nothing runs below chapter work any more.
 
-    async def _drain_repair_requests(self) -> str | None:
-        """Execute one explicit repair intent without requiring model readiness."""
-        from pipeline.repair import drain_requests
-        return await drain_requests(self.cfg)
+        The graph/event rebuild lifecycles and the repair queue they served were retired
+        with the legacy graph: a records generation is rebuilt by re-enriching chapters
+        in order, which is ordinary chapter work and goes through the normal queue.
+        """
+        return
 
     async def _handle_claim(self, raw: str) -> None:
         msg = QueueMessage.model_validate_json(raw)
@@ -654,6 +633,16 @@ class Worker:
                 raise NovelDeleted(msg.novel_id) from exc
             async with self.db.transaction():
                 await record_failure(self.db, msg.novel_id, msg.chapter_index, stage.name, exc)
+                if stage.name == "records":
+                    # The run row is the reader-facing progress surface for this chapter.
+                    # Without this it stays 'processing' forever and a failed extraction is
+                    # indistinguishable from a slow one. Only the bounded category from
+                    # failures.py is stored -- never the exception text (§0, migration 0046).
+                    await self.db.execute(
+                        "UPDATE record_run SET status='failed',"
+                        "diagnostics=jsonb_build_object('failure',%s::text) "
+                        "WHERE novel_id=%s AND chapter_index=%s AND status='processing'",
+                        (error_code(exc), msg.novel_id, msg.chapter_index))
                 await self._set_status(msg, "name_repair_error" if msg.retranslate else "error")
                 # Schedule a retry for ANY recorded failure. This used to be guarded by
                 # `if readable`, which silently made every pre-TRANSLATE failure terminal:

@@ -12,20 +12,29 @@ terms discovered while enriching this chapter apply forward-only to later transl
 (§0.2); knowledge-graph latency must never hold reader-visible prose hostage (§5).
 """
 
+from pipeline.stages.character_names import CharacterNamesStage
 from pipeline.stages.chunk import ChunkStage
+from pipeline.stages.display_scan import DisplayScanStage
 from pipeline.stages.records import RecordsStage
+from pipeline.stages.scan import ScanStage
 from pipeline.stages.translate import TranslateStage
 
 # The pipeline in runtime order (§5).
 DEFAULT_STAGES = [
     ChunkStage(),
     TranslateStage(),
+    CharacterNamesStage(),
+    ScanStage(),
     RecordsStage(),
+    DisplayScanStage(),
 ]
 
 __all__ = [
+    "CharacterNamesStage",
     "ChunkStage",
-    "TranslateStage",
+    "DisplayScanStage",
     "RecordsStage",
+    "ScanStage",
+    "TranslateStage",
     "DEFAULT_STAGES",
 ]

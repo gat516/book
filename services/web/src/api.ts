@@ -91,10 +91,6 @@ export function deleteNovel(novelId: string): Promise<{ deleted: boolean }> {
 	return request(`/novels/${novelId}`, { method: "DELETE" });
 }
 
-export function deleteGraph(novelId: string): Promise<{ deleted: boolean; revisions_deleted: number }> {
-	return request(`/novels/${novelId}/graph`, { method: "DELETE" });
-}
-
 export function pasteChapter(novelId: string, body: PasteChapterRequest): Promise<PasteChapterResponse> {
   return request(`/novels/${novelId}/chapters`, { method: "POST", body: JSON.stringify(body) });
 }

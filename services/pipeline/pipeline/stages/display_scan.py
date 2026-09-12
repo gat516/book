@@ -71,10 +71,10 @@ class DisplayScanStage:
             # Displayed text IS the source text, unchanged — the step-2 scan already
             # computed correct offsets against it. Re-scanning would be redundant work
             # producing an identical result.
-            # ``mention_span`` is the legacy presentation ledger. Managed identity is
-            # revision-scoped and is published through display_mention/mention_binding;
-            # carrying those ids into this table would cross the revision fence (§0.3).
-            if await self._legacy_presentation_revision(ctx) is not None:
+            # SCAN already matched against the active generation's aliases, which are
+            # written only by who's-who publication, so those ids are authoritative
+            # identity rather than a spelling match made here.
+            if await self._active_generation(ctx) is not None:
                 state.display_spans = state.mentions
             else:
                 state.display_spans = [span.model_copy(update={"alias_id": ""})
@@ -88,25 +88,33 @@ class DisplayScanStage:
             return
 
         # The target term remains useful presentation data even while its source term
-        # has no entity. Resolve ids only from the verified legacy binding for the exact
-        # active revision. In particular, never use glossary.entity_id or a managed
-        # revision's binding in the legacy mention_span table.
-        legacy_revision = await self._legacy_presentation_revision(ctx)
+        # has no entity. Identity comes from the generation's own alias ledger, and only
+        # when that ledger is unambiguous: a source term that two entities answer to is
+        # left unbound rather than guessed. glossary.entity_id is never consulted --
+        # terminology wording and identity are separate decisions (§0.3).
+        generation = await self._active_generation(ctx)
         rows = await (
             await ctx.db.execute(
                 """
-                SELECT g.source_term, g.target_term, b.entity_id
+                SELECT g.source_term, g.target_term,
+                       CASE WHEN count(DISTINCT e.id) = 1
+                            THEN min(e.id::text) END AS entity_id
                   FROM glossary g
-                  LEFT JOIN glossary_binding b
-                   ON b.novel_id = g.novel_id
-                   AND b.source_term = g.source_term
-                   AND b.revision_id = %s::uuid
-                   AND g.locked_at_chapter <= %s
-                   AND b.known_from_chapter <= %s
-                 WHERE g.novel_id = %s AND NOT g.deleted
+                  LEFT JOIN alias a
+                    ON a.surface = g.source_term
+                   AND a.record_generation_id = %s::uuid
+                   AND a.first_seen_chapter <= %s
+                  LEFT JOIN entity e
+                    ON e.id = a.entity_id
+                   AND e.novel_id = g.novel_id
+                   AND e.record_generation_id = %s::uuid
+                   AND e.first_seen_chapter <= %s
+                 WHERE g.novel_id = %s AND NOT g.deleted AND g.locked_at_chapter <= %s
+                 GROUP BY g.source_term, g.target_term
                 """,
-                (legacy_revision, state.envelope.chapter_index, state.envelope.chapter_index,
-                 ctx.novel.id),
+                (generation, state.envelope.chapter_index, generation,
+                 state.envelope.chapter_index, ctx.novel.id,
+                 state.envelope.chapter_index),
             )
         ).fetchall()
 
@@ -139,25 +147,15 @@ class DisplayScanStage:
             len(state.display_spans),
         )
 
-    async def _legacy_presentation_revision(self, ctx: StageContext) -> str | None:
-        """Return the only revision allowed to supply legacy entity links.
+    async def _active_generation(self, ctx: StageContext) -> str | None:
+        """The generation whose identity decisions may be attached to display spans.
 
-        ``GraphWriter.replace_mention_spans`` intentionally has no revision argument and
-        migration 0024's trigger assigns the legacy revision. Therefore a managed or
-        quarantined graph may still write empty presentation spans, but it may not attach
-        an id from that graph to them. This is a write-path fence; reader authorization
-        remains the revision/RLS fence on managed display rows (§0.3).
+        A novel mid-reset has no active generation; spans are still published so prose
+        stays readable and highlightable, they simply carry no entity id (§0.5).
         """
         row = await (
             await ctx.db.execute(
-                """
-                SELECT r.id
-                  FROM novel n
-                  JOIN graph_revision r ON r.id = n.active_graph_revision
-                 WHERE n.id = %s
-                   AND r.legacy AND r.state = 'active' AND r.trusted
-                """,
-                (ctx.novel.id,),
+                "SELECT active_record_generation FROM novel WHERE id = %s", (ctx.novel.id,)
             )
         ).fetchone()
-        return str(row[0]) if row else None
+        return str(row[0]) if row and row[0] else None

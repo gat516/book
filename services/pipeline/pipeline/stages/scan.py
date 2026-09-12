@@ -34,15 +34,23 @@ class ScanStage:
     name = "scan"
 
     async def run(self, ctx: StageContext, state: PipelineState) -> None:
+        # Aliases are written only by records publication, so this ledger is the
+        # authoritative identity result carried forward (§0.3). Scoping to the active
+        # generation keeps a retired generation's names from re-entering a scan, and the
+        # chapter bound keeps a later chapter's alias out of an earlier one.
         rows = await (
             await ctx.db.execute(
                 """
                 SELECT a.entity_id, a.surface
                 FROM alias a
                 JOIN entity e ON e.id = a.entity_id
+                JOIN novel n ON n.id = e.novel_id
                 WHERE e.novel_id = %s
+                  AND e.record_generation_id = n.active_record_generation
+                  AND a.record_generation_id = n.active_record_generation
+                  AND e.first_seen_chapter <= %s
                 """,
-                (ctx.novel.id,),
+                (ctx.novel.id, state.envelope.chapter_index),
             )
         ).fetchall()
 

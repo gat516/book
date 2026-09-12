@@ -180,39 +180,16 @@ async def make_novel(
 
 
 async def delete_novel(conn, novel_id: str) -> None:
-    """Manual cascade — 0001 declares FKs without ON DELETE CASCADE. ``job`` has no FK
-    at all (0001), so it is cleaned by novel_id like the rest rather than by cascade."""
-    for table in ("display_mention", "mention_binding", "source_mention", "glossary_binding", "glossary_proposal_chapter", "graph_job", "graph_completion"):
-        await conn.execute(f"DELETE FROM {table} WHERE revision_id IN (SELECT id FROM graph_revision WHERE novel_id=%s)", (novel_id,))
-    for table in (
-        "fact",
-        "edge",
-        "event",
-        "chunk",
-        "mention_span",
-        "alias",
-        "glossary_changelog",
-        "glossary_candidate",
-        "glossary_candidate_chapter",
-        "glossary",
-        "entity",
-        "job",
-        "chapter",
-        "novel",
-    ):
-        if table == "alias":
-            await conn.execute(
-                "DELETE FROM alias WHERE entity_id IN (SELECT id FROM entity WHERE novel_id = %s)",
-                (novel_id,),
-            )
-        elif table == "novel":
-            await conn.execute("DELETE FROM graph_evidence WHERE novel_id=%s",(novel_id,))
-            await conn.execute("DELETE FROM graph_audit WHERE novel_id=%s",(novel_id,))
-            await conn.execute("UPDATE novel SET active_graph_revision=NULL WHERE id=%s",(novel_id,))
-            await conn.execute("DELETE FROM graph_revision WHERE novel_id=%s",(novel_id,))
-            await conn.execute("DELETE FROM novel WHERE id = %s", (novel_id,))
-        else:
-            await conn.execute(f"DELETE FROM {table} WHERE novel_id = %s", (novel_id,))
+    """One DELETE plus the two tables that have no FK to ``novel``.
+
+    Migration 0030 made every novel-scoped FK ``ON DELETE CASCADE``, so the ordered pile
+    of DELETEs this used to carry was a hand-maintained copy of the FK graph -- it rotted
+    the moment 0089 dropped the legacy graph tables. ``job`` predates the FKs (0001) and
+    ``chapter_failure`` is keyed by novel_id without one, so both are cleaned by id.
+    """
+    await conn.execute("DELETE FROM job WHERE novel_id = %s", (novel_id,))
+    await conn.execute("DELETE FROM chapter_failure WHERE novel_id = %s", (novel_id,))
+    await conn.execute("DELETE FROM novel WHERE id = %s", (novel_id,))
 
 
 async def seed_entities(
@@ -231,39 +208,60 @@ async def seed_entities(
     ``fact.entity_id`` is real.
     """
     resolutions: dict[str, str] = {}
+    # Identity is scoped to the novel's active record generation since 0087: an entity
+    # belongs to the extraction that discovered it, so seeding one means joining that
+    # generation rather than floating free of it.
+    generation = (await (await conn.execute(
+        "SELECT active_record_generation FROM novel WHERE id=%s", (novel_id,))).fetchone())[0]
     for surface, kind in surfaces.items():
         entity_id = str(uuid.uuid4())
         resolutions[surface] = entity_id
         await conn.execute(
-            "INSERT INTO entity (id, novel_id, kind, canonical, first_seen_chapter) "
-            "VALUES (%s, %s, %s, %s, %s)",
-            (entity_id, novel_id, kind, surface, chapter),
+            "INSERT INTO entity (id, novel_id, record_generation_id, kind, canonical, first_seen_chapter) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (entity_id, novel_id, generation, kind, surface, chapter),
         )
         await conn.execute(
-            "INSERT INTO alias (entity_id, surface, lang, first_seen_chapter) "
-            "VALUES (%s, %s, %s, %s)",
-            (entity_id, surface, lang, chapter),
+            "INSERT INTO alias (entity_id, surface, lang, first_seen_chapter, record_generation_id) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (entity_id, surface, lang, chapter, generation),
         )
     return resolutions
 
 
 async def seed_flashback(conn, novel_id: str) -> dict:
-    """The Phase 2 tripwire fixture (PLAN.md 1.4 Task 6): an entity revealed at
-    story-time chapter 10 but whose fact isn't extracted/knowable until chapter 500 —
-    a flashback. A reader at chapter 220 must not see it; the gate gates on
-    source_chapter (knowledge-time), never valid_from_chapter (story-time)."""
+    """The tripwire fixture (PLAN.md 1.4 Task 6): a record row about something that
+    happened at story-time chapter 10 but is not knowable until chapter 500 -- a
+    flashback. A reader at chapter 220 must not see it; the gate gates on
+    ``source_chapter`` (knowledge-time), never ``valid_from_chapter`` (story-time).
+
+    Written over ``record_row`` since the records pipeline replaced ``fact``; both time
+    columns survived that move intact, which is the whole point of the tripwire.
+    """
+    generation = (await (await conn.execute(
+        "SELECT active_record_generation FROM novel WHERE id=%s", (novel_id,))).fetchone())[0]
+    await conn.execute(
+        "INSERT INTO chapter (novel_id, chapter_index, raw_uri, raw_hash, source_meta) "
+        "VALUES (%s, 500, 'raw://flashback', 'flashback-hash', '{}'::jsonb)",
+        (novel_id,),
+    )
     entity_id = str(uuid.uuid4())
     await conn.execute(
-        "INSERT INTO entity (id, novel_id, kind, canonical, first_seen_chapter) "
-        "VALUES (%s, %s, %s, %s, %s)",
-        (entity_id, novel_id, "character", "Flashback Character", 10),
+        "INSERT INTO entity (id, novel_id, record_generation_id, kind, canonical, first_seen_chapter) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (entity_id, novel_id, generation, "character", "Flashback Character", 10),
     )
-    row = await (
-        await conn.execute(
-            "INSERT INTO fact (novel_id, entity_id, attribute, value, "
-            "valid_from_chapter, source_chapter) VALUES (%s, %s, %s, %s, %s, %s) "
-            "RETURNING id",
-            (novel_id, entity_id, "secret_origin", "was the villain all along", 10, 500),
-        )
-    ).fetchone()
-    return {"entity_id": entity_id, "fact_id": row[0]}
+    run_id = str(uuid.uuid4())
+    await conn.execute(
+        """INSERT INTO record_run (id, novel_id, generation_id, chapter_index, source_hash,
+             request_identity, extraction_model, status, publication_version, published_at)
+           VALUES (%s, %s, %s, 500, 'flashback-hash', 'identity', 'test-model', 'published', 1, now())""",
+        (run_id, novel_id, generation),
+    )
+    row = await (await conn.execute(
+        """INSERT INTO record_row (novel_id, generation_id, run_id, original_index, record_type,
+             source_chapter, source_hash, valid_from_chapter)
+           VALUES (%s, %s, %s, 0, 'EVENT', 500, 'flashback-hash', 10) RETURNING id::text""",
+        (novel_id, generation, run_id),
+    )).fetchone()
+    return {"entity_id": entity_id, "row_id": row[0]}

@@ -26,7 +26,7 @@ from pipeline.llm.provider import Class
 from pipeline.name_renderings import conventional_english_names
 from pipeline.passages import source_passages
 from pipeline.pinyin_names import GENERIC_TITLES, NameCandidate, NamePlan, plan_character_name
-from pipeline.stages.resolve import _lock_glossary
+from pipeline.glossary_locks import _lock_glossary
 
 log = logging.getLogger(__name__)
 STAGE = "character_names"

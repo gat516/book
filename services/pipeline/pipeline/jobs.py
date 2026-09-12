@@ -35,7 +35,7 @@ from pipeline.config import Config
 # LLM-bearing stages that get a job row (the job.stage enum, 0001_init.sql:130).
 # chunk/scan are not here: chunk is pure CPU (no LLM, no row); scan's LLM work is folded
 # into resolve.
-LLM_STAGES = ("extract", "character_names", "resolve", "translate", "state")
+LLM_STAGES = ("character_names", "records", "translate")
 
 _UNIT_SEPARATOR = "\x1f"
 
@@ -97,16 +97,17 @@ def stage_config_version(
 ) -> str:
     """Per-stage config version input to the idempotency key (§3.5).
 
-    ``state`` resolves to the ontology hash and REQUIRES ``ontology`` — passing none
+    ``records`` resolves to the ontology hash and REQUIRES ``ontology`` — passing none
     raises rather than quietly falling back to ``cfg.config_version``, because that
     fallback is indistinguishable from a correct key until the day someone edits an
-    ontology and every chapter serves a stale extraction. Translate uses the supplied
-    glossary snapshot version and otherwise falls back for compatibility.
+    ontology and every chapter serves a stale extraction. An ontology edit also forces a
+    new records generation, so this key and the generation move together. Translate uses
+    the supplied glossary snapshot version and otherwise falls back for compatibility.
     """
-    if stage == "state":
+    if stage == "records":
         if ontology is None:
             raise ValueError(
-                "the state stage's config version is the ontology hash (§3.5); "
+                "the records stage's config version is the ontology hash (§3.5); "
                 "pass ontology= so an ontology edit invalidates the cache"
             )
         return ontology_version(ontology)

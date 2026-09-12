@@ -25,8 +25,6 @@ func seedNovelForChapters(t *testing.T, store *Store) string {
 	}
 	t.Cleanup(func() {
 		store.db.Exec(context.Background(), `DELETE FROM chapter WHERE novel_id = $1`, novelID)
-		store.db.Exec(context.Background(), `UPDATE novel SET active_graph_revision=NULL WHERE id=$1`, novelID)
-		store.db.Exec(context.Background(), `DELETE FROM graph_revision WHERE novel_id=$1`, novelID)
 		store.db.Exec(context.Background(), `DELETE FROM novel WHERE id = $1`, novelID)
 	})
 	return novelID

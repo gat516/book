@@ -104,57 +104,45 @@ progress` (404 otherwise). Its response `at` field is always the stored progress
 `n`; the web client uses that value as the entity-hover cache key for spans on that
 chapter (see `services/web/`).
 
-## Knowledge repair status
+## Records status and maintenance
 
-`GET /novels/{id}/repair` reports whether this novel's knowledge is being withheld and
-what, if anything, is replacing it. Ungated and safe for any reader: it returns counts,
-states and revision identifiers, never quote text or claim values.
+Knowledge is a **records generation**: one immutable extraction configuration per novel,
+filled chapter by chapter. `novel.active_record_generation` says which one readers see.
 
 ```bash
-# Anyone may read it.
-curl localhost:8081/novels/<novel-id>/repair -H 'X-Reader-ID: local-reader'
+# One chapter's records, plus the status envelope every records surface carries.
+curl "localhost:8081/novels/<novel-id>/chapter/3/rows" -H 'X-Reader-ID: local-reader'
 
-# An operator additionally presents the repair token; the response's `operator` field is
-# the server's answer, and is what the UI keys its controls off.
-curl localhost:8081/novels/<novel-id>/repair \
-  -H 'X-Reader-ID: local-reader' \
-  -H "X-Operator-Token: $READER_REPAIR_OPERATOR_TOKEN"
+# What the deterministic checks rejected, and which names stayed unresolved.
+curl "localhost:8081/novels/<novel-id>/chapter/3/records/inspector" -H 'X-Reader-ID: local-reader'
 ```
 
-Two independent tracks, `graph` and `events`, because event extraction has its own
-activation pointer (migration 0039) — one can be quarantined while the other is fine.
-Each reports a `state` (`ready`, `quarantined`, `rebuilding`, `awaiting_review`, `failed`,
-`unavailable`), a server-authored `reason` sentence clients should render rather than
-re-derive, `withheld_claims`, the `chapters` counts for whichever revision is currently
-doing work, the staging `replacement` if one exists, and a bounded `failures` ledger.
+`status` reports `extraction_status` (`pending`, `processing`, `ready`, `failed`),
+`rendering_status` (`pending`, `ready`, `failed`), a bounded `failure_detail`, a warning
+count, and an opaque `version`. The version is derived only from runs at or below the
+reader's own chapter, so publishing chapter 40 never invalidates a chapter-3 reader's
+cache token.
 
-Two things about that ledger are load-bearing:
+Rendering is separate on purpose: a failed English rendering publishes the source records
+with `render_status=failed` and the UI falls back to source-language values, rather than
+discarding an extraction over a display problem.
 
-- `failures[].category` is a safe class and `detail` a fixed sentence. The stored
-  exception text is freeform and can embed source prose or a connection string, so
-  `pipeline/failures.py` classifies it at the moment of failure and stores only the class
-  (migration 0046). The text never leaves the database, and Go only renders the class —
-  `tests/test_repair.py` fails the build if a class Python emits has no sentence here.
-  Migration 0020 kept such text out of the durable failure history for the same reason.
-- `retryable` goes false once every failure has exhausted its attempts.
-  `graph_rebuild.graph_retry_delay_minutes` returns `None` past attempt 3 and `retry_at`
-  is never set again, so the chapter is silently abandoned. This field is how that
-  otherwise-invisible dead end reaches a screen.
+Three maintenance actions replace the old repair panel. All proxy to ingest-api behind its
+internal token, so the browser never holds it:
 
-Repair reads and writes are **ungated** on this deployment. The panel shows unreviewed
-claims and their source quotes from chapters ahead of the reader, and anyone who can reach
-the page can start, activate or roll back a rebuild. That is a deliberate choice for a
-single-operator install.
+- `POST /novels/{id}/chapter/{n}/records/retry` — re-run a failed chapter. Published runs
+  are untouched.
+- `POST /novels/{id}/chapter/{n}/records/render-retry` — re-run only the English
+  rendering; source records and evidence stay as they are.
+- `POST /novels/{id}/records/rebuild` — open a new generation and re-enrich every saved
+  chapter in order. Published extraction content is immutable, so a prompt, ontology or
+  model change is a new generation rather than an edit. The new generation becomes active
+  immediately and starts empty: readers see pending knowledge while it fills, instead of a
+  mix of two generations' identity decisions.
 
-Two things still hold. The server-to-server bearer token to ingest-api is unchanged, so a
-browser still cannot reach ingest-api directly. And `repair_preview` / `repair_progress` /
-`repair_extraction` remain executable only by the `repair_operator` role, reached through
-its own pool (`REPAIR_OPERATOR_DATABASE_URL`) — that keeps spoiler-bearing rows away from
-`rls_reader`, which askai connects as, without asking anyone to sign in.
-
-If this ever serves readers who are not the operator, the gate belongs on **reading
-progress** — show a chapter's names once that chapter has been read — rather than on an
-admin credential, which answers a different question than the one that matters.
+Failure classes stay a bounded vocabulary: `pipeline/failures.py` classifies an exception
+at the moment it is raised and stores only the class, so freeform provider text or source
+prose never reaches a read path (migration 0046).
 
 ## Tests
 

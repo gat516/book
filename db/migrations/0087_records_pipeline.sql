@@ -47,16 +47,15 @@ CREATE TRIGGER novel_record_generation_init AFTER INSERT ON novel
 
 -- Entity IDs are generation-local. Canonical source names and initial kinds are frozen;
 -- later identity information is represented by chapter-indexed aliases and records.
+-- Nullable here on purpose. The legacy write fence (guard_graph_write, 0023/0024) still
+-- guards entity/alias at this point and rejects a backfill UPDATE, and 0088 empties both
+-- tables anyway. 0089 sets NOT NULL once the fence is gone and the tables are empty.
 ALTER TABLE entity ADD COLUMN record_generation_id UUID;
-UPDATE entity e SET record_generation_id = n.active_record_generation FROM novel n WHERE n.id=e.novel_id;
-ALTER TABLE entity ALTER COLUMN record_generation_id SET NOT NULL;
 ALTER TABLE entity ADD CONSTRAINT entity_record_generation_fkey
   FOREIGN KEY (record_generation_id, novel_id) REFERENCES record_generation(id, novel_id) ON DELETE CASCADE;
 ALTER TABLE entity ADD CONSTRAINT entity_record_scope_uq UNIQUE (id, novel_id, record_generation_id);
 ALTER TABLE entity ADD CONSTRAINT entity_record_generation_uq UNIQUE (id, record_generation_id);
 ALTER TABLE alias ADD COLUMN record_generation_id UUID;
-UPDATE alias a SET record_generation_id=e.record_generation_id FROM entity e WHERE e.id=a.entity_id;
-ALTER TABLE alias ALTER COLUMN record_generation_id SET NOT NULL;
 ALTER TABLE alias ADD CONSTRAINT alias_record_generation_fkey
   FOREIGN KEY (entity_id, record_generation_id) REFERENCES entity(id, record_generation_id) ON DELETE CASCADE;
 ALTER TABLE alias ADD CONSTRAINT alias_generation_scope_uq UNIQUE (entity_id, surface, lang, record_generation_id);

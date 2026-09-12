@@ -250,10 +250,30 @@ def coordinated_provider(provider, redis, *, provider_id: str, base_url: str = "
     return CooldownProvider(provider, cooldown, owns_redis=owns_redis)
 
 
+# Moved here when the graph-rebuild lifecycle was retired: probing which local model
+# is installed is a runtime concern, not a knowledge-revision one.
+async def local_model(cfg, name):
+    from urllib.parse import urlparse
+    if urlparse(cfg.ollama_host).hostname not in {'localhost','127.0.0.1','::1'}:
+        raise ValueError('local Ollama required')
+    async with httpx.AsyncClient(base_url=cfg.ollama_host) as client:
+        response = await client.get('/api/tags')
+        response.raise_for_status()
+        matches = [m for m in response.json()['models'] if m['name']==name]
+    if len(matches)!=1:
+        raise ValueError('requested model is not installed; no automatic download or provider fallback')
+    from pipeline.config import graph_runtime
+    # Only generation-affecting settings identify a graph revision. Deadline budgets are
+    # operational controls and stay live in Config for resumable work. num_ctx is
+    # deliberately absent here too -- it is discovered per host by discover_num_ctx(),
+    # called only from prepare(), and is excluded from drift comparisons by
+    # _without_num_ctx() below. This function must stay side-effect-free: preflight
+    # calls it and promises never to load a model or generate a token.
+    return dict(provider='ollama',name=name,digest=matches[0]['digest'],
+                identity=graph_runtime(cfg)['identity'])
+
+
 async def preflight(cfg, model):
-    # Keep this module importable from knowledge.py without graph_rebuild's reverse
-    # import cycle; preflight is the only caller that needs the model probe.
-    from pipeline.graph_rebuild import local_model
     identity = await local_model(cfg, model)  # also enforces installed, loopback-only
     async with httpx.AsyncClient(base_url=cfg.ollama_host, timeout=10) as client:
         version = await client.get('/api/version')

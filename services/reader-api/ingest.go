@@ -21,9 +21,12 @@ var ErrIngestUnavailable = errors.New("ingest-api unavailable")
 // rather than inventing a second proxy pattern.
 type IngestClient interface {
 	QueueControl(ctx context.Context, method string, body json.RawMessage) (json.RawMessage, int, error)
+	// RecordsAction runs one records maintenance intent: retry a failed chapter
+	// extraction, retry only its rendering, or rebuild the novel into a fresh
+	// generation. chapter is "" for the novel-wide rebuild.
+	RecordsAction(ctx context.Context, novelID, chapter, action string) (json.RawMessage, int, error)
 	CreateNovel(ctx context.Context, body json.RawMessage) (json.RawMessage, int, error)
 	DeleteNovel(ctx context.Context, novelID string) (json.RawMessage, int, error)
-	DeleteGraph(ctx context.Context, novelID string) (json.RawMessage, int, error)
 	PasteChapter(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	CorrectGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
 	DeleteGlossaryTerm(ctx context.Context, novelID, sourceTerm string, body json.RawMessage) (json.RawMessage, int, error)
@@ -40,54 +43,21 @@ type IngestClient interface {
 	MutateVocabulary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	TranslateAhead(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	UpdateNovelSettings(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
-	RequestRepair(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
-	CancelRepair(ctx context.Context, novelID, requestID string) (json.RawMessage, int, error)
-	RetryRepairNow(ctx context.Context, novelID, requestID string) (json.RawMessage, int, error)
-	MutateFact(ctx context.Context, method, novelID, factID, suffix string, body json.RawMessage) (json.RawMessage, int, error)
-	ChapterKnowledgeMutation(ctx context.Context, novelID, chapter, runID string, body json.RawMessage) (json.RawMessage, int, error)
-	ReviewChapterKnowledge(ctx context.Context, novelID, chapter string, body json.RawMessage) (json.RawMessage, int, error)
 }
 
 func (c *ingestHTTPClient) MutateVocabulary(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
 	return c.send(ctx, http.MethodPatch, "/novels/"+novelID+"/vocabulary", body, true)
 }
 
-func (c *ingestHTTPClient) ChapterKnowledgeMutation(ctx context.Context, novelID, chapter, runID string, body json.RawMessage) (json.RawMessage, int, error) {
-	path := "/novels/" + novelID + "/chapter/" + chapter + "/knowledge/reextract"
-	if runID != "" {
-		path += "/" + runID + "/apply"
-	}
-	return c.send(ctx, http.MethodPost, path, body, true)
-}
-
-func (c *ingestHTTPClient) MutateFact(ctx context.Context, method, novelID, factID, suffix string, body json.RawMessage) (json.RawMessage, int, error) {
-	return c.send(ctx, method, "/novels/"+novelID+"/facts/"+factID+suffix, body, true)
-}
-
-// ReviewChapterKnowledge passes/rejects held fact, edge and event rows for one chapter
-// (migration 0074, Phase D). Token-gated like every other write that changes reader
-// visibility (MutateFact, MutateVocabulary): the browser never sees INGEST_INTERNAL_TOKEN.
-func (c *ingestHTTPClient) ReviewChapterKnowledge(ctx context.Context, novelID, chapter string, body json.RawMessage) (json.RawMessage, int, error) {
-	return c.send(ctx, http.MethodPatch, "/novels/"+novelID+"/chapter/"+chapter+"/knowledge/review", body, true)
-}
-
 func (c *ingestHTTPClient) QueueControl(ctx context.Context, method string, body json.RawMessage) (json.RawMessage, int, error) {
 	return c.send(ctx, method, "/queue", body, true)
 }
 
-// Repair actions quarantine facts and activate replacements, so ingest-api gates them on
-// the internal token. reader-api has already checked its own, weaker operator credential
-// before calling these: the browser never sees the internal token.
-func (c *ingestHTTPClient) RequestRepair(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
-	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/repair", body, true)
-}
-
-func (c *ingestHTTPClient) CancelRepair(ctx context.Context, novelID, requestID string) (json.RawMessage, int, error) {
-	return c.send(ctx, http.MethodDelete, "/novels/"+novelID+"/repair/"+requestID, nil, true)
-}
-
-func (c *ingestHTTPClient) RetryRepairNow(ctx context.Context, novelID, requestID string) (json.RawMessage, int, error) {
-	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/repair/"+requestID+"/retry-now", nil, true)
+func (c *ingestHTTPClient) RecordsAction(ctx context.Context, novelID, chapter, action string) (json.RawMessage, int, error) {
+	if chapter == "" {
+		return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/records/rebuild", nil, true)
+	}
+	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/chapter/"+chapter+"/records/"+action, nil, true)
 }
 
 type ingestHTTPClient struct {

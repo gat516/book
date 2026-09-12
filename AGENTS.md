@@ -25,8 +25,8 @@ Non-negotiable principles (spec §0, short form):
 
 The Milestone-1 vertical slice is complete end-to-end (PLAN.md Phases 1–5): local infra
 (compose), migrations through 0008, the Go `ingest-api` paste path, the Python
-`pipeline` worker with all seven stages (CHUNK, SCAN, RESOLVE, TRANSLATE, DISPLAY_SCAN,
-STATE-EXTRACT, GRAPH-WRITE), the Go `reader-api` spoiler gate (RLS + app-layer, plus a
+`pipeline` worker (stages: CHUNK, TRANSLATE, CHARACTER-NAMES, SCAN, RECORDS,
+DISPLAY-SCAN), the Go `reader-api` spoiler gate (RLS + app-layer, plus a
 chapter-text endpoint), the Rust `textproc` gRPC scanner, the Python `askai` RAG
 service, and a one-page React `web` reader UI. Post-Milestone-1 work in progress (see
 `.Codex/plans/` for the active phased plan): novel management is done — `GET /novels`,
@@ -41,7 +41,7 @@ start/status/cancel endpoints, and a web UI method picker with live polling.
 `TranslateStage` gained a bootstrap early-out (`translated_by='external'`) for
 chapters that arrive pre-translated. Glossary human-correction (Phase N2) is also done —
 `GET /novels/{id}/glossary` (gated on `locked_at_chapter`) + a `PATCH` correction path,
-with `ingest-api/glossary.go` porting `resolve.py`'s hash-chain audit invariants to Go
+with `ingest-api/glossary.go` porting `glossary_locks.py`'s hash-chain audit invariants to Go
 (novel-wide version counter, hand-built JSON to byte-match Python's `json.dumps` exactly
 — see `glossary_hash_test.go`'s golden-value cross-language guard), plus a Glossary
 toggle in `web`. Forward-only: a correction doesn't retroactively touch already-translated
@@ -62,23 +62,36 @@ different provider than the process default no longer wrongly raises); `askai`'s
 role `SELECT` on `novel_provider_config`. Phase N6 (generalized half-translated bootstrap) is also done,
 closing out the whole post-Milestone-1 bundle (N1–N6, all six phases): a new
 `POST /novels/{id}/glossary/bootstrap` (`ingest-api/glossary.go`'s
-`BootstrapGlossaryTerm`, ported from `resolve.py`'s `_lock_glossary` "original insert"
+`BootstrapGlossaryTerm`, ported from `_lock_glossary`'s "original insert"
 path the same way N2's `CorrectGlossaryTerm` was) locks human-supplied source→target
 term pairs before any entity exists for them (`entity_id NULL`, `locked_at_chapter=0`);
-`resolve.py`'s `_lock_glossary` now backfills that `NULL` `entity_id` instead of raising
-when RESOLVE later creates the real entity, and `_decide` overrides the model's proposed
+`glossary_locks.py`'s `_lock_glossary` (lifted out of the deleted `resolve.py`, since
+terminology locking is not identity) backfills that `NULL` `entity_id` instead of raising
+when an entity for the term appears later, and `_decide` overrides the model's proposed
 `target_term` with the locked one structurally rather than trusting a prompt hint. Web's
 `AddChapterForm` gained a `BootstrapChapterForm` for pasting a paired raw+translation
-chapter with an explicit term-mapping table. Not started: Milestone 3 polish beyond this
+chapter with an explicit term-mapping table. The **records pipeline** replaced STATE-EXTRACT/GRAPH-WRITE and, with them, the whole
+repair/quarantine lifecycle. Knowledge is scoped to an immutable `record_generation`
+(prompt, checks, ontology, model, languages) and published per chapter as a `record_run`;
+a published run is frozen. Changing any input opens a **new generation** and re-extracts in
+chapter order rather than mutating what readers already have. Migrations 0087–0089 added
+that storage and dropped the legacy graph; 0090–0093 finished the retreat. Not started: Milestone 3 polish beyond this
 bundle (retro-update engine, timeline/relationship UI, bulk backfill, multi-novel). Build
 order is
 spec §11 / PLAN.md for the original slice; the post-slice work follows its own plan
 document.
 
-- **`state.resolutions` is the only way a name becomes an `entity.id`.** RESOLVE owns it;
-  graph-write does no name matching of its own and drops rows whose surface is
-  unresolved. The exact-match binder that stood in for this through 1.5 is gone — exact
-  matching *is* the entity-drift bug (§12 risk #2), not an approximation of resolution.
+- **`state.resolutions` is the only way a name becomes an `entity.id`.** The RECORDS
+  stage's who's-who pass owns it; nothing else matches names. SCAN retrieves occurrences
+  and candidates but never turns a spelling match into an identity decision, and the
+  publisher drops a binding whose surface who's-who left unresolved. Exact matching *is*
+  the entity-drift bug (§12 risk #2), not an approximation of resolution.
+- **Knowledge is typed records in an immutable generation, not `fact`/`edge`/`event`.**
+  RECORDS runs discovery (typed XML records citing chapter passages), deterministic code
+  checks that drop an individual record without failing the chapter, who's-who identity
+  resolution against earlier published chapters, and offline English rendering stored
+  apart from the source values. A prompt, ontology, model or source change means a new
+  `record_generation` and a chronological rebuild — published extraction is immutable.
 - `proto/textproc.proto` is the pinned Python↔Rust contract (§3.3); `services/textproc`
   is the real Rust implementation, selected via `TEXTPROC_BACKEND`. `pipeline/mentions.py`
   keeps the pure-Python fallback behind the same `TextProcClient` interface.

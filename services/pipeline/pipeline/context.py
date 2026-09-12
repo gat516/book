@@ -20,7 +20,6 @@ if TYPE_CHECKING:
 
     from pipeline.batch import BatchManager
     from pipeline.cache import LLMCache
-    from pipeline.extraction import Extraction
     from pipeline.llm.provider import LLMProvider
     from pipeline.mentions import Span
     from pipeline.textproc import TextProcClient
@@ -149,15 +148,8 @@ class PipelineState:
 
     translation: str | None = None  # translate stage
 
-    # state stage (1.5). ``extraction`` is None when the stage was skipped entirely
-    # because its job row is already ``done`` — which is NOT the same as an empty
-    # Extraction (a chapter that legitimately yielded nothing). graph-write must write
-    # nothing in the first case and may write nothing in the second; conflating them
-    # would re-insert an already-written chapter's facts (§0.2 is append-only).
-    extraction: "Extraction | None" = None
-    state_job_key: str | None = None
-
-    # Records enrichment output. The records writer consumes this frozen result in its
-    # publication transaction; it is intentionally separate from the retired graph
-    # extraction object so a retry cannot accidentally reinsert legacy facts.
+    # Records enrichment output: parsed records, check results, the authoritative
+    # who's-who resolution and renderings. ``None`` means the stage did not run, which
+    # is NOT the same as a chapter that legitimately yielded nothing — the publisher
+    # writes a completed empty run for the second and nothing at all for the first.
     records: dict[str, Any] | None = None

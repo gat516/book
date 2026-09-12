@@ -42,7 +42,7 @@ func TestHostedProviderHealthUsesProviderModelEndpointsAndHeaders(t *testing.T) 
 				if got := r.Header.Get(tt.header); got == "" {
 					t.Fatalf("missing %s header", tt.header)
 				}
-			if (tt.provider == "deepseek" || tt.provider == "groq") && r.Header.Get("Authorization") != "Bearer secret" {
+				if (tt.provider == "deepseek" || tt.provider == "groq") && r.Header.Get("Authorization") != "Bearer secret" {
 					t.Fatalf("authorization header was not bearer encoded")
 				}
 				w.WriteHeader(http.StatusOK)

@@ -140,35 +140,6 @@ async def test_focused_mode_and_pause_preserve_queue_and_claims(scheduled):
     assert await call(client, queue.CLAIM, "108") == message(1, "a", priority=True)
 
 
-async def test_queue_controls_also_gate_idle_graph_work(scheduled, monkeypatch):
-    from pipeline import event_rebuild, graph_rebuild, repair
-    client, keys = scheduled
-    worker = Worker.__new__(Worker)
-    worker.redis, worker.cfg = client, make_config()
-    drain = AsyncMock()
-    drain_events = AsyncMock()
-    drain_requests = AsyncMock(return_value=None)
-    monkeypatch.setattr(graph_rebuild, "drain_active", drain)
-    monkeypatch.setattr(event_rebuild, "drain_active", drain_events)
-    monkeypatch.setattr(repair, "drain_requests", drain_requests)
-    for mode in ("paused", "focused"):
-        await client.hset(keys[5], "mode", mode)
-        await worker._drain_background()
-        drain.assert_not_awaited()
-        drain_events.assert_not_awaited()
-    await client.hset(keys[5], "focus_novel_id", "b")
-    await worker._drain_background()
-    drain_events.assert_awaited_once_with(worker.cfg, novel_id="b")
-    drain.assert_awaited_once_with(worker.cfg, novel_id="b", preferred_novel="b")
-    drain.reset_mock()
-    drain_events.reset_mock()
-    await client.hset(keys[5], "mode", "all")
-    await worker._drain_background()
-    drain_events.assert_awaited_once_with(worker.cfg, novel_id=None)
-    drain.assert_awaited_once_with(worker.cfg, novel_id=None, preferred_novel="b")
-    assert drain_requests.await_count == 3
-
-
 async def test_embedding_probe_is_memoized_after_a_successful_chapter_check():
     worker = Worker.__new__(Worker)
     worker.cfg = SimpleNamespace(embed_dim=3, embed_model="test-embed")
@@ -804,9 +775,10 @@ def test_translation_is_the_reader_critical_path_before_enrichment():
 
     names = [stage.name for stage in DEFAULT_STAGES]
     assert names[:2] == ["chunk", "translate"]
-    assert names[2:] == [
-        "character_names", "scan", "resolve", "display_scan", "state", "graph_write"
-    ]
+    # Enrichment order after translation: terminology and occurrences first, then records
+    # (discovery, checks, who's-who, rendering), then display alignment, which needs both
+    # the locked glossary and the identities records published.
+    assert names[2:] == ["character_names", "scan", "records", "display_scan"]
 
 
 async def test_enrichment_retries_are_deduplicated_and_yield_to_reading(scheduled):

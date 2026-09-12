@@ -73,23 +73,38 @@ async def novel(db_conn):
         await delete_novel(db_conn, novel_id)
 
 
-async def test_translated_novel_scans_the_translated_text_against_the_glossary(db_conn, novel):
+async def _link_term(db_conn, novel, *, entity_chapter: int = 1, locked_at: int = 1,
+                     generation=None) -> str:
+    """Lock 青云宗 -> Azure Cloud Sect and give it an identity in one generation.
+
+    DISPLAY_SCAN links a glossary term to an entity through ``alias.surface`` now, not
+    through the retired ``glossary_binding`` ledger: an alias is what says "this surface
+    is that character", and it is scoped to the record generation that decided it.
+    """
+    if generation is None:
+        generation = (await (await db_conn.execute(
+            "SELECT active_record_generation FROM novel WHERE id=%s", (novel,))).fetchone())[0]
     entity_id = str(uuid.uuid4())
     await db_conn.execute(
-        "INSERT INTO entity (id, novel_id, kind, canonical, first_seen_chapter) "
-        "VALUES (%s, %s, 'sect', 'Azure Cloud Sect', 1)",
-        (entity_id, novel),
+        "INSERT INTO entity (id, novel_id, record_generation_id, kind, canonical, first_seen_chapter) "
+        "VALUES (%s, %s, %s, 'sect', 'Azure Cloud Sect', %s)",
+        (entity_id, novel, generation, entity_chapter),
+    )
+    await db_conn.execute(
+        "INSERT INTO alias (entity_id, surface, lang, first_seen_chapter, record_generation_id) "
+        "VALUES (%s, '青云宗', 'zh', %s, %s)",
+        (entity_id, entity_chapter, generation),
     )
     await db_conn.execute(
         "INSERT INTO glossary (novel_id, source_term, target_term, entity_id, locked_at_chapter) "
-        "VALUES (%s, '青云宗', 'Azure Cloud Sect', %s, 1)",
-        (novel, entity_id),
+        "VALUES (%s, '青云宗', 'Azure Cloud Sect', %s, %s)",
+        (novel, entity_id, locked_at),
     )
-    revision_id = (await (await db_conn.execute(
-        "SELECT active_graph_revision FROM novel WHERE id=%s", (novel,))).fetchone())[0]
-    await db_conn.execute(
-        "INSERT INTO glossary_binding(novel_id,source_term,revision_id,entity_id,known_from_chapter) "
-        "VALUES (%s,'青云宗',%s,%s,1)", (novel, revision_id, entity_id))
+    return entity_id
+
+
+async def test_translated_novel_scans_the_translated_text_against_the_glossary(db_conn, novel):
+    entity_id = await _link_term(db_conn, novel)
 
     ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
     translated = "He returned to the Azure Cloud Sect."
@@ -119,28 +134,19 @@ async def test_translated_novel_keeps_glossary_rows_with_no_bound_entity_as_plac
     assert state.translation[span.char_start : span.char_end] == "Azure Cloud Sect"
 
 
-async def test_legacy_glossary_links_are_knowledge_time_gated(db_conn, novel):
+async def test_glossary_links_are_knowledge_time_gated(db_conn, novel):
+    """A term locked at chapter 10 still renders at chapter 9 -- but unlinked.
+
+    The identity behind it was learned at chapter 10, so naming it to a chapter-9 reader
+    would be a spoiler in the §0 sense: the gate is knowledge-time, and it applies to who
+    a name refers to just as much as to what happened.
+    """
     await db_conn.execute(
         "INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status) "
         "VALUES (%s,9,%s,'raw/early.txt','{}','done')",
         (novel, f"sha256:{novel}:early"),
     )
-    entity_id = str(uuid.uuid4())
-    await db_conn.execute(
-        "INSERT INTO entity (id, novel_id, kind, canonical, first_seen_chapter) "
-        "VALUES (%s, %s, 'sect', 'Azure Cloud Sect', 10)",
-        (entity_id, novel),
-    )
-    await db_conn.execute(
-        "INSERT INTO glossary (novel_id, source_term, target_term, entity_id, locked_at_chapter) "
-        "VALUES (%s, '青云宗', 'Azure Cloud Sect', %s, 10)",
-        (novel, entity_id),
-    )
-    revision_id = (await (await db_conn.execute(
-        "SELECT active_graph_revision FROM novel WHERE id=%s", (novel,))).fetchone())[0]
-    await db_conn.execute(
-        "INSERT INTO glossary_binding(novel_id,source_term,revision_id,entity_id,known_from_chapter) "
-        "VALUES (%s,'青云宗',%s,%s,10)", (novel, revision_id, entity_id))
+    entity_id = await _link_term(db_conn, novel, entity_chapter=10, locked_at=9)
     ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
 
     early = _state(source_lang="zh", translation="He returned to the Azure Cloud Sect.",
@@ -200,20 +206,7 @@ async def test_unlinked_names_publish_before_facts_and_do_not_create_entities(db
 
 
 async def test_discovery_preserves_verified_link_and_does_not_link_other_names(db_conn, novel):
-    entity_id = str(uuid.uuid4())
-    await db_conn.execute(
-        "INSERT INTO entity (id, novel_id, kind, canonical, first_seen_chapter) VALUES (%s,%s,'sect','Azure Cloud Sect',1)",
-        (entity_id, novel),
-    )
-    await db_conn.execute(
-        "INSERT INTO glossary (novel_id, source_term, target_term, entity_id, locked_at_chapter) VALUES (%s,'青云宗','Azure Cloud Sect',%s,1)",
-        (novel, entity_id),
-    )
-    revision_id = (await (await db_conn.execute(
-        "SELECT active_graph_revision FROM novel WHERE id=%s", (novel,))).fetchone())[0]
-    await db_conn.execute(
-        "INSERT INTO glossary_binding(novel_id,source_term,revision_id,entity_id,known_from_chapter) "
-        "VALUES (%s,'青云宗',%s,%s,1)", (novel, revision_id, entity_id))
+    entity_id = await _link_term(db_conn, novel)
     ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
     ctx.provider.response = lambda _prompt, system: (
         '{"alignments":[]}' if "Map each offered" in system
@@ -224,28 +217,19 @@ async def test_discovery_preserves_verified_link_and_does_not_link_other_names(d
         ("", "Ling Feng"), (entity_id, "Azure Cloud Sect")]
 
 
-async def test_legacy_links_follow_active_trusted_revision_only(db_conn, novel):
-    """Legacy spans are presentation fallbacks; managed revision ids never enter them."""
-    entity_id = str(uuid.uuid4())
-    await db_conn.execute(
-        "INSERT INTO entity (id, novel_id, kind, canonical, first_seen_chapter) "
-        "VALUES (%s, %s, 'sect', 'Azure Cloud Sect', 1)",
-        (entity_id, novel),
-    )
-    await db_conn.execute(
-        "INSERT INTO glossary (novel_id, source_term, target_term, entity_id, locked_at_chapter) "
-        "VALUES (%s, '青云宗', 'Azure Cloud Sect', %s, 1)",
-        (novel, entity_id),
-    )
-    legacy = (await (await db_conn.execute(
-        "SELECT active_graph_revision FROM novel WHERE id=%s", (novel,))).fetchone())[0]
-    await db_conn.execute(
-        "INSERT INTO glossary_binding(novel_id,source_term,revision_id,entity_id,known_from_chapter) "
-        "VALUES (%s,'青云宗',%s,%s,1)", (novel, legacy, entity_id))
-    managed = (await (await db_conn.execute(
-        "INSERT INTO graph_revision(novel_id,state,trusted,legacy,ontology) "
-        "VALUES (%s,'staging',false,false,%s) RETURNING id", (novel, json.dumps(ONTOLOGY))
-    )).fetchone())[0]
+async def test_links_follow_the_active_record_generation_only(db_conn, novel):
+    """Identity belongs to the generation that decided it.
+
+    A retired generation's entity is not an authority over today's display: after a
+    rebuild the old entity ids may name different characters entirely, so a span must
+    fall back to an unlinked placeholder rather than carry a stale id forward.
+    """
+    retired = (await (await db_conn.execute(
+        """INSERT INTO record_generation (novel_id, ontology, prompt_version, checks_version,
+             extraction_model, source_lang, target_lang, state, retired_at)
+           VALUES (%s, %s, 'v0', 'v0', 'test-model', 'zh', 'en', 'retired', now())
+           RETURNING id""", (novel, json.dumps(ONTOLOGY)))).fetchone())[0]
+    active_entity = await _link_term(db_conn, novel)
     ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
 
     async def scan() -> str:
@@ -254,26 +238,19 @@ async def test_legacy_links_follow_active_trusted_revision_only(db_conn, novel):
         [span] = state.display_spans
         return span.alias_id
 
-    # The original legacy graph may link a verified binding.
-    assert await scan() == entity_id
+    assert await scan() == active_entity
 
-    # No active revision and a staging/quarantined active revision can still write the
-    # presentation ledger, but only as empty placeholders.
-    await db_conn.execute("UPDATE novel SET active_graph_revision=NULL WHERE id=%s", (novel,))
-    assert await scan() == ""
-    await db_conn.execute("UPDATE novel SET active_graph_revision=%s WHERE id=%s", (managed, novel))
-    assert await scan() == ""
-    await db_conn.execute("UPDATE novel SET active_graph_revision=%s WHERE id=%s", (legacy, novel))
-    await db_conn.execute("UPDATE graph_revision SET trusted=false WHERE id=%s", (legacy,))
-    assert await scan() == ""
-
-    # Cutover to a trusted managed revision still cannot make its binding eligible for
-    # legacy mention_span. Managed identity is reader-authorized through its own tables.
-    await db_conn.execute("UPDATE graph_revision SET state='archived' WHERE id=%s", (legacy,))
+    # Point the novel at the retired generation: its identity has no entity of its own
+    # for this surface, so the term still renders but names nobody.
+    current = (await (await db_conn.execute(
+        "SELECT active_record_generation FROM novel WHERE id=%s", (novel,))).fetchone())[0]
     await db_conn.execute(
-        "UPDATE graph_revision SET state='active',trusted=true WHERE id=%s", (managed,))
-    await db_conn.execute("UPDATE novel SET active_graph_revision=%s WHERE id=%s", (managed, novel))
+        "UPDATE novel SET active_record_generation=%s WHERE id=%s", (retired, novel))
     assert await scan() == ""
+
+    await db_conn.execute(
+        "UPDATE novel SET active_record_generation=%s WHERE id=%s", (current, novel))
+    assert await scan() == active_entity
 
 
 async def test_unlinked_mentions_are_still_chapter_gated_by_rls(db_conn, novel):

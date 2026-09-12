@@ -46,10 +46,13 @@ type RecordView struct {
 	Evidence          []RecordEvidenceView    `json:"evidence"`
 }
 type RecordsResponse struct {
-	NovelID      string        `json:"novel_id"`
-	ChapterIndex int           `json:"chapter_index"`
-	Status       RecordsStatus `json:"status"`
-	Rows         []RecordView  `json:"rows"`
+	NovelID      string `json:"novel_id"`
+	ChapterIndex int    `json:"chapter_index"`
+	// At is the reader's stored progress, the same cache key every other reader surface
+	// uses; ChapterIndex is which chapter's records these are.
+	At     int           `json:"at"`
+	Status RecordsStatus `json:"status"`
+	Rows   []RecordView  `json:"rows"`
 }
 
 type Progress struct {
@@ -66,20 +69,12 @@ type EntitySummary struct {
 	FirstSeenChapter int    `json:"first_seen_chapter"`
 }
 
-type FactView struct {
-	Evidence         json.RawMessage `json:"evidence"`
-	Attribute        string          `json:"attribute"`
-	Value            string          `json:"value"`
-	ValidFromChapter int             `json:"valid_from_chapter"`
-	SourceChapter    int             `json:"source_chapter"`
-	Confidence       float32         `json:"confidence"`
-}
-
 type EntityView struct {
-	Knowledge KnowledgeStatus `json:"knowledge"`
 	EntitySummary
+	// Aliases carry their own first_seen_chapter in the database; only the ones a reader
+	// at this chapter could have met are listed here.
 	Aliases    []string            `json:"aliases"`
-	Facts      []FactView          `json:"facts"`
+	Records    []RecordView        `json:"records"`
 	Renderings []TermRenderingView `json:"renderings"`
 }
 
@@ -94,67 +89,48 @@ type TermRenderingView struct {
 	Candidates []CharacterNameCandidate `json:"candidates"`
 }
 
-type EventView struct {
-	Evidence     json.RawMessage     `json:"evidence"`
-	ID           string              `json:"id"`
-	ChapterIndex int                 `json:"chapter_index"`
-	EventType    string              `json:"event_type"`
-	Action       string              `json:"action"`
-	Status       string              `json:"status"`
-	Summary      string              `json:"summary"`
-	Result       *string             `json:"result"`
-	Arguments    []EventArgumentView `json:"arguments"`
-	// Entities is retained as a compact compatibility/indexing view. Argument surfaces
-	// remain useful even when RESOLVE could not safely establish an identity (§0.3).
-	Entities []EntitySummary `json:"entities"`
-}
-
-type EventArgumentView struct {
-	Role     string         `json:"role"`
-	Surface  string         `json:"surface"`
-	EntityID *string        `json:"entity_id"`
-	Entity   *EntitySummary `json:"entity,omitempty"`
-}
-
-type RelationshipView struct {
-	Evidence         json.RawMessage `json:"evidence"`
-	ID               int64           `json:"id"`
-	Relation         string          `json:"relation"`
-	Direction        string          `json:"direction"`
-	Entity           EntitySummary   `json:"entity"`
-	ValidFromChapter int             `json:"valid_from_chapter"`
-	ValidToChapter   *int            `json:"valid_to_chapter"`
-	SourceChapter    int             `json:"source_chapter"`
-}
-
 type EntityResponse struct {
-	Knowledge KnowledgeStatus `json:"knowledge"`
-	NovelID   string          `json:"novel_id"`
-	At        int             `json:"at"`
-	Entity    EntityView      `json:"entity"`
+	NovelID string     `json:"novel_id"`
+	At      int        `json:"at"`
+	Entity  EntityView `json:"entity"`
 }
 
 type WikiResponse struct {
-	Knowledge KnowledgeStatus `json:"knowledge"`
-	NovelID   string          `json:"novel_id"`
-	At        int             `json:"at"`
-	Entities  []EntitySummary `json:"entities"`
+	NovelID  string          `json:"novel_id"`
+	At       int             `json:"at"`
+	Status   RecordsStatus   `json:"status"`
+	Entities []EntitySummary `json:"entities"`
+	Rows     []RecordView    `json:"rows"`
 }
 
+// TimelineResponse orders by knowledge chapter, then passage order. A record that
+// recounts something older keeps its temporal qualifier rather than being given a made-up
+// story time (§0.2: source_chapter is when the reader learned it).
 type TimelineResponse struct {
-	Knowledge      KnowledgeStatus `json:"knowledge"`
-	EventKnowledge KnowledgeStatus `json:"event_knowledge"`
-	NovelID        string          `json:"novel_id"`
-	At             int             `json:"at"`
-	Events         []EventView     `json:"events"`
+	NovelID string        `json:"novel_id"`
+	At      int           `json:"at"`
+	Status  RecordsStatus `json:"status"`
+	Rows    []RecordView  `json:"rows"`
 }
 
-type RelationshipsResponse struct {
-	Knowledge     KnowledgeStatus    `json:"knowledge"`
-	NovelID       string             `json:"novel_id"`
-	At            int                `json:"at"`
-	EntityID      string             `json:"entity_id"`
-	Relationships []RelationshipView `json:"relationships"`
+// RecordsInspectorResponse is the operator view of one chapter's extraction: what the
+// checks kept, what they rejected and why, and what identity stayed unresolved.
+type RecordsInspectorResponse struct {
+	NovelID           string           `json:"novel_id"`
+	ChapterIndex      int              `json:"chapter_index"`
+	At                int              `json:"at"`
+	Status            RecordsStatus    `json:"status"`
+	Parsed            int              `json:"parsed"`
+	Retained          int              `json:"retained"`
+	Dropped           int              `json:"dropped"`
+	Unresolved        int              `json:"unresolved"`
+	RenderingFailures int              `json:"rendering_failures"`
+	Drops             []RecordDropView `json:"drops"`
+}
+
+type RecordDropView struct {
+	OriginalIndex int      `json:"original_index"`
+	Reasons       []string `json:"reasons"`
 }
 
 type GlossaryTermView struct {
@@ -181,10 +157,9 @@ type VocabularyTermView struct {
 }
 
 type GlossaryResponse struct {
-	Knowledge KnowledgeStatus    `json:"knowledge"`
-	NovelID   string             `json:"novel_id"`
-	At        int                `json:"at"`
-	Terms     []GlossaryTermView `json:"terms"`
+	NovelID string             `json:"novel_id"`
+	At      int                `json:"at"`
+	Terms   []GlossaryTermView `json:"terms"`
 }
 
 type CharacterNameCandidate struct {
@@ -361,146 +336,11 @@ type TranslationHealth struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// ChapterView is what the store hands back; ChapterResponse is what the handler sends.
-// Kept separate so the store layer doesn't know about JSON tags.
-// ChapterFactView is one fact the reader learns IN this chapter — a fact whose
-// source_chapter is exactly this chapter index. It rides along on the chapter response so
-// the reader UI can mark the mention where a thing was last named as the place something
-// new was learned, without a per-entity round trip for every span on the page.
-//
-// Knowledge-time, not story-time (instructions.md §0.1): source_chapter is when the reader
-// LEARNS the fact, which is what "new in this chapter" means. ValidFromChapter is carried
-// for display only — it is when the fact became true in-story and says nothing about who
-// may see it.
-type ChapterFactView struct {
-	ID               int64           `json:"id"`
-	EntityID         string          `json:"entity_id"`
-	EntityCanonical  string          `json:"entity_canonical"`
-	Attribute        string          `json:"attribute"`
-	Value            string          `json:"value"`
-	ValueSource      string          `json:"value_source"`
-	ValueEN          *string         `json:"value_en"`
-	Kind             string          `json:"kind"`
-	Supersedes       *int64          `json:"supersedes,omitempty"`
-	Status           string          `json:"status"`
-	Evidence         json.RawMessage `json:"evidence"`
-	ValidFromChapter int             `json:"valid_from_chapter"`
-	SourceChapter    int             `json:"source_chapter"`
-	Confidence       float64         `json:"confidence"`
-}
-
-type ChapterTermView struct {
-	SourceTerm   string `json:"source_term"`
-	TargetTerm   string `json:"target_term"`
-	CharStart    int    `json:"char_start"`
-	CharEnd      int    `json:"char_end"`
-	NewInChapter bool   `json:"new_in_chapter"`
-	Deleted      bool   `json:"deleted"`
-}
-
-type ChapterKnowledgeRunView struct {
-	ID              string          `json:"id"`
-	Mode            string          `json:"mode"`
-	Scope           string          `json:"scope"`
-	State           string          `json:"state"`
-	CreatedAt       time.Time       `json:"created_at"`
-	Preview         json.RawMessage `json:"preview,omitempty"`
-	BlockedCategory string          `json:"blocked_category,omitempty"`
-	BlockedDetail   string          `json:"blocked_detail,omitempty"`
-	BlockedAt       *time.Time      `json:"blocked_at,omitempty"`
-}
-
-// ChapterGraphExtractionView exposes only aggregate results from an untrusted staging
-// revision. The claims themselves remain behind the active-revision RLS fence (§0), but
-// these counts let the reader distinguish "not extracted" from "extracted and awaiting
-// graph review".
-type ChapterGraphExtractionView struct {
-	State             string `json:"state"`
-	VerifiedTerms     int    `json:"verified_terms"`
-	VerifiedClaims    int    `json:"verified_claims"`
-	PublishedFactRows int    `json:"published_fact_rows"`
-}
-
-type ChapterKnowledgeView struct {
-	NovelID      string `json:"novel_id"`
-	ChapterIndex int    `json:"chapter_index"`
-	RevisionID   string `json:"revision_id"`
-	Version      int64  `json:"version"`
-	Trusted      bool   `json:"trusted"`
-	Status       string `json:"status"`
-	// Legacy, ChapterSnapshotted and CanExtract mirror KnowledgeStatus's fields of the
-	// same name (migration 0058) — the real predicate ingest-api enforces, not just
-	// Trusted, decides whether this chapter is writable.
-	Legacy             bool `json:"legacy"`
-	ChapterSnapshotted bool `json:"chapter_snapshotted"`
-	CanExtract         bool `json:"can_extract"`
-	// BlockedReason names the one cause CanExtract is false, so the client can render an
-	// accurate sentence per cause instead of one banner for all of them. "" when writable.
-	BlockedReason   string                      `json:"blocked_reason"`
-	TermsExtracted  bool                        `json:"terms_extracted"`
-	FactsExtracted  bool                        `json:"facts_extracted"`
-	Facts           []ChapterFactView           `json:"facts"`
-	Terms           []ChapterTermView           `json:"terms"`
-	Run             *ChapterKnowledgeRunView    `json:"run,omitempty"`
-	GraphExtraction *ChapterGraphExtractionView `json:"graph_extraction,omitempty"`
-}
-
-// HeldKnowledgeItem mirrors one row of reader_held_knowledge (migration 0074). Exactly
-// one of {Attribute, RelType} and one of {EntityID, (SrcID,DstID)} is populated depending
-// on ItemType. RevisionVersion is the write-side stale-check token: the caller must echo
-// it back on PATCH .../knowledge/review (Phase D).
-type HeldKnowledgeItem struct {
-	ItemType        string  `json:"item_type"`
-	ItemID          int64   `json:"item_id"`
-	RevisionID      string  `json:"revision_id"`
-	RevisionVersion int64   `json:"revision_version"`
-	ChapterIndex    int     `json:"chapter_index"`
-	EntityID        *string `json:"entity_id,omitempty"`
-	SrcID           *string `json:"src_id,omitempty"`
-	DstID           *string `json:"dst_id,omitempty"`
-	Attribute       *string `json:"attribute,omitempty"`
-	RelType         *string `json:"rel_type,omitempty"`
-	Value           *string `json:"value,omitempty"`
-	Summary         *string `json:"summary,omitempty"`
-	EvidenceID      *string `json:"evidence_id,omitempty"`
-	EvidenceQuote   *string `json:"evidence_quote,omitempty"`
-	ReviewState     string  `json:"review_state"`
-	ReviewFlag      *string `json:"review_flag,omitempty"`
-	// BulkEligible mirrors the exact set pass_all_corroborated would apply (migration
-	// 0076's corroborated_fact_ids, computed identically for both this preview and the
-	// write). Always false for edge/event items -- the corroboration ledger has no
-	// equivalent for them.
-	BulkEligible bool `json:"bulk_eligible"`
-}
-
-// HeldKnowledgeResponse is the review workspace's read surface for one chapter. There is
-// deliberately no "everything pending" operator view (plan §0.3/Phase D) — a reviewer
-// only ever sees held knowledge at their own reading position, exactly like every other
-// reader-api response.
-type HeldKnowledgeResponse struct {
-	NovelID      string              `json:"novel_id"`
-	ChapterIndex int                 `json:"chapter_index"`
-	At           int                 `json:"at"`
-	Items        []HeldKnowledgeItem `json:"items"`
-}
-
-type ChapterKnowledgeActivity struct {
-	Sequence  int64           `json:"sequence"`
-	RunID     string          `json:"run_id"`
-	ItemKind  string          `json:"item_kind"`
-	ItemKey   string          `json:"item_key"`
-	Phase     string          `json:"phase"`
-	Payload   json.RawMessage `json:"payload"`
-	CreatedAt time.Time       `json:"created_at"`
-}
-
 type ChapterView struct {
-	Knowledge          KnowledgeStatus
-	EventKnowledge     KnowledgeStatus
+	RecordsStatus      RecordsStatus
 	Text               string
 	Spans              []SpanView
-	NewFacts           []ChapterFactView
-	Events             []EventView
+	RecordRows         []RecordView
 	HasNext            bool
 	SiteChapterNo      string // "" when this chapter has none (a plain paste, not a scrape)
 	SourceURL          string // persisted provenance; "" for legacy/plain pasted chapters
@@ -509,10 +349,9 @@ type ChapterView struct {
 }
 
 type ChapterResponse struct {
-	Knowledge      KnowledgeStatus `json:"knowledge"`
-	EventKnowledge KnowledgeStatus `json:"event_knowledge"`
-	NovelID        string          `json:"novel_id"`
-	ChapterIndex   int             `json:"chapter_index"`
+	RecordsStatus RecordsStatus `json:"records_status"`
+	NovelID       string        `json:"novel_id"`
+	ChapterIndex  int           `json:"chapter_index"`
 	// SiteChapterNo is the source site's own printed chapter label (e.g. "第4610章"),
 	// distinct from ChapterIndex — our own sequential counter for THIS ingestion batch,
 	// not the novel's overall chapter number (instructions.md §3.1: chapter_index is the
@@ -533,11 +372,10 @@ type ChapterResponse struct {
 	At    int        `json:"at"`
 	Text  string     `json:"text"`
 	Spans []SpanView `json:"spans"`
-	// NewFacts holds only facts first learned in THIS chapter, so the UI can badge the
-	// mention that introduced them. Facts learned earlier stay where they always were —
-	// on the entity card, fetched on demand.
-	NewFacts           []ChapterFactView   `json:"new_facts"`
-	Events             []EventView         `json:"events"`
+	// RecordRows holds the records this chapter established, so the reader sees what was
+	// learned here next to the prose that established it. Earlier chapters' records stay
+	// where they were — on the entity page, fetched on demand.
+	RecordRows         []RecordView        `json:"record_rows"`
 	HasNext            bool                `json:"has_next"`
 	TranslationWarning *TranslationWarning `json:"translation_warning"`
 }

@@ -23,13 +23,106 @@ DROP TRIGGER IF EXISTS graph_integrity ON edge;
 DROP TRIGGER IF EXISTS graph_integrity ON event;
 DROP TRIGGER IF EXISTS graph_integrity ON alias;
 DROP TRIGGER IF EXISTS graph_integrity ON mention_span;
+-- The same integrity trigger also guards the managed mention/glossary binding tables.
+-- They are dropped below, but the function they depend on goes first, so name them here
+-- rather than reaching for DROP ... CASCADE on a shared function.
+DROP TRIGGER IF EXISTS graph_integrity ON mention_binding;
+DROP TRIGGER IF EXISTS graph_integrity ON display_mention;
+DROP TRIGGER IF EXISTS graph_integrity ON glossary_binding;
+DROP TRIGGER IF EXISTS graph_integrity ON glossary_proposal_chapter;
+DROP TRIGGER IF EXISTS graph_integrity ON source_mention;
+DROP TRIGGER IF EXISTS graph_integrity ON graph_evidence;
 DROP TRIGGER IF EXISTS edge_supersession_guard ON edge;
 DROP TRIGGER IF EXISTS event_evidence_integrity ON event_evidence;
 DROP TRIGGER IF EXISTS chapter_event_integrity ON chapter_event;
 DROP TRIGGER IF EXISTS chapter_event_argument_integrity ON chapter_event_argument;
 
--- Functions that expose or mutate the old graph/review lifecycle are retired before the
--- tables. Vocabulary functions are deliberately retained because terminology state is
+
+ALTER TABLE novel DROP CONSTRAINT IF EXISTS novel_active_graph_revision_fkey;
+ALTER TABLE novel DROP CONSTRAINT IF EXISTS novel_active_event_revision_fkey;
+ALTER TABLE novel DROP COLUMN IF EXISTS active_graph_revision;
+ALTER TABLE novel DROP COLUMN IF EXISTS active_event_revision;
+
+-- Remove old foreign keys/policies from the retained identity tables, then scope them to
+-- records generations. Empty after 0088, so no data conversion is needed.
+DROP POLICY IF EXISTS revision_entity ON entity;
+DROP POLICY IF EXISTS revision_alias ON alias;
+DROP POLICY IF EXISTS revision_fact ON fact;
+DROP POLICY IF EXISTS revision_edge ON edge;
+DROP POLICY IF EXISTS revision_event ON event;
+
+-- entity, alias and mention_span survive, but their foreign keys point into tables that
+-- do not. Release those first; the columns themselves come off after the table drops,
+-- because entity's revision-scoped unique index is still referenced until then.
+ALTER TABLE entity DROP CONSTRAINT IF EXISTS entity_revision_id_fkey;
+ALTER TABLE alias DROP CONSTRAINT IF EXISTS alias_revision_id_fkey;
+ALTER TABLE alias DROP CONSTRAINT IF EXISTS alias_evidence_revision;
+ALTER TABLE alias DROP CONSTRAINT IF EXISTS alias_evidence_id_fkey;
+ALTER TABLE alias DROP COLUMN IF EXISTS evidence_id;
+ALTER TABLE mention_span DROP CONSTRAINT IF EXISTS mention_span_revision_id_fkey;
+-- The job table outlives the graph; only its pointer into it goes, and it must go before
+-- graph_revision is dropped.
+ALTER TABLE job DROP CONSTRAINT IF EXISTS job_revision_id_fkey;
+ALTER TABLE job DROP COLUMN IF EXISTS revision_id;
+
+-- Child-first table retirement. These are all disposable knowledge/review/cache tables;
+-- chapter, glossary, vocabulary, translation and scraper tables are absent from this list.
+-- Child-first, in an order derived from the live foreign-key graph: every table is
+-- dropped only after everything referencing it. An explicit inventory, not a CASCADE,
+-- so a table added later cannot disappear silently.
+DROP TABLE IF EXISTS novel_assertion_evidence;
+DROP TABLE IF EXISTS fact_edit_audit;
+DROP TABLE IF EXISTS knowledge_review_audit;
+DROP TABLE IF EXISTS chapter_knowledge_activity;
+DROP TABLE IF EXISTS graph_completion_run;
+DROP TABLE IF EXISTS graph_completion;
+DROP TABLE IF EXISTS completion_cache_run;
+DROP TABLE IF EXISTS completion_cache;
+DROP TABLE IF EXISTS chapter_knowledge_run;
+DROP TABLE IF EXISTS graph_job;
+DROP TABLE IF EXISTS graph_audit;
+DROP TABLE IF EXISTS event_audit;
+DROP TABLE IF EXISTS event_completion;
+DROP TABLE IF EXISTS event_job;
+DROP TABLE IF EXISTS chapter_event_argument;
+DROP TABLE IF EXISTS chapter_event;
+DROP TABLE IF EXISTS event_evidence;
+DROP TABLE IF EXISTS event_revision;
+DROP TABLE IF EXISTS fact;
+DROP TABLE IF EXISTS edge;
+DROP TABLE IF EXISTS event;
+DROP TABLE IF EXISTS display_mention;
+DROP TABLE IF EXISTS mention_binding;
+DROP TABLE IF EXISTS source_mention;
+DROP TABLE IF EXISTS glossary_binding;
+DROP TABLE IF EXISTS glossary_proposal_chapter;
+DROP TABLE IF EXISTS graph_evidence;
+DROP TABLE IF EXISTS graph_revision;
+
+-- Identity tables keep their rows' shape but lose the revision scaffolding. This waits
+-- until the knowledge tables are gone: their foreign keys referenced entity's
+-- revision-scoped unique index, so dropping it earlier would need a CASCADE.
+-- alias_same_revision is backed by entity's revision-scoped unique index, so it goes first.
+ALTER TABLE alias DROP CONSTRAINT IF EXISTS alias_same_revision;
+ALTER TABLE entity DROP CONSTRAINT IF EXISTS entity_revision_unique;
+ALTER TABLE entity DROP CONSTRAINT IF EXISTS entity_revision_id_fkey;
+ALTER TABLE alias DROP CONSTRAINT IF EXISTS alias_revision_id_fkey;
+ALTER TABLE entity DROP COLUMN IF EXISTS revision_id;
+ALTER TABLE alias DROP COLUMN IF EXISTS revision_id;
+
+-- Safe now: the fence is gone and 0088 emptied both tables, so every surviving row is
+-- written by the records publisher, which always supplies a generation.
+ALTER TABLE entity ALTER COLUMN record_generation_id SET NOT NULL;
+ALTER TABLE alias ALTER COLUMN record_generation_id SET NOT NULL;
+
+-- Translation, character naming and records enrichment are the surviving pipeline jobs.
+ALTER TABLE job DROP CONSTRAINT IF EXISTS job_stage_check;
+ALTER TABLE job ADD CONSTRAINT job_stage_check CHECK (stage IN ('translate','character_names','records'));
+
+
+-- Functions come out AFTER their tables: policies and triggers on the dropped tables
+-- reference these functions, and dropping a function out from under them would need a
+-- CASCADE that could take an unrelated object with it. Vocabulary functions are deliberately retained because terminology state is
 -- part of the translation contract.
 DROP FUNCTION IF EXISTS initialize_graph_revision();
 DROP FUNCTION IF EXISTS guard_graph_write();
@@ -57,65 +150,6 @@ DROP FUNCTION IF EXISTS corroborated_fact_ids(UUID, UUID, INT);
 DROP FUNCTION IF EXISTS reader_held_knowledge(UUID, INT);
 DROP FUNCTION IF EXISTS reader_held_knowledge_bulk_eligible(UUID, INT);
 
-ALTER TABLE novel DROP CONSTRAINT IF EXISTS novel_active_graph_revision_fkey;
-ALTER TABLE novel DROP CONSTRAINT IF EXISTS novel_active_event_revision_fkey;
-ALTER TABLE novel DROP COLUMN IF EXISTS active_graph_revision;
-ALTER TABLE novel DROP COLUMN IF EXISTS active_event_revision;
-
--- Remove old foreign keys/policies from the retained identity tables, then scope them to
--- records generations. Empty after 0088, so no data conversion is needed.
-DROP POLICY IF EXISTS revision_entity ON entity;
-DROP POLICY IF EXISTS revision_alias ON alias;
-DROP POLICY IF EXISTS revision_fact ON fact;
-DROP POLICY IF EXISTS revision_edge ON edge;
-DROP POLICY IF EXISTS revision_event ON event;
-ALTER TABLE entity DROP CONSTRAINT IF EXISTS entity_revision_unique;
-ALTER TABLE alias DROP CONSTRAINT IF EXISTS alias_same_revision;
-ALTER TABLE entity DROP CONSTRAINT IF EXISTS entity_revision_id_fkey;
-ALTER TABLE alias DROP CONSTRAINT IF EXISTS alias_revision_id_fkey;
-ALTER TABLE entity DROP COLUMN IF EXISTS revision_id;
-ALTER TABLE alias DROP COLUMN IF EXISTS revision_id;
-
--- Child-first table retirement. These are all disposable knowledge/review/cache tables;
--- chapter, glossary, vocabulary, translation and scraper tables are absent from this list.
-DROP TABLE IF EXISTS novel_assertion_evidence;
-DROP TABLE IF EXISTS fact_edit_audit;
-DROP TABLE IF EXISTS knowledge_review_audit;
-DROP TABLE IF EXISTS chapter_knowledge_activity;
-DROP TABLE IF EXISTS chapter_knowledge_run;
-DROP TABLE IF EXISTS completion_cache_run;
-DROP TABLE IF EXISTS completion_cache;
-DROP TABLE IF EXISTS graph_completion_run;
-DROP TABLE IF EXISTS graph_completion;
-DROP TABLE IF EXISTS graph_job;
-DROP TABLE IF EXISTS graph_audit;
-DROP TABLE IF EXISTS graph_evidence;
-DROP TABLE IF EXISTS event_audit;
-DROP TABLE IF EXISTS event_completion;
-DROP TABLE IF EXISTS event_job;
-DROP TABLE IF EXISTS chapter_event_argument;
-DROP TABLE IF EXISTS chapter_event;
-DROP TABLE IF EXISTS event_evidence;
-DROP TABLE IF EXISTS event_revision;
-DROP TABLE IF EXISTS fact;
-DROP TABLE IF EXISTS edge;
-DROP TABLE IF EXISTS event;
-DROP TABLE IF EXISTS display_mention;
-DROP TABLE IF EXISTS mention_binding;
-DROP TABLE IF EXISTS source_mention;
-DROP TABLE IF EXISTS mention_span;
-DROP TABLE IF EXISTS term_rendering_occurrence;
-DROP TABLE IF EXISTS glossary_binding;
-DROP TABLE IF EXISTS glossary_candidate_chapter;
-DROP TABLE IF EXISTS glossary_candidate;
-DROP TABLE IF EXISTS glossary_proposal_chapter;
-
--- Translation remains the only pipeline job in the original job table.
-ALTER TABLE job DROP CONSTRAINT IF EXISTS job_revision_id_fkey;
-ALTER TABLE job DROP COLUMN IF EXISTS revision_id;
-ALTER TABLE job DROP CONSTRAINT IF EXISTS job_stage_check;
-ALTER TABLE job ADD CONSTRAINT job_stage_check CHECK (stage='translate');
-DROP TABLE IF EXISTS graph_revision;
 
 -- Generation-scoped identity gates replace the removed revision policies. Entity and alias
 -- rows are visible only through the active generation and the reader's chapter cap.

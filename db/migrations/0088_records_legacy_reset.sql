@@ -12,12 +12,14 @@ DELETE FROM chunk;
 DELETE FROM novel_assertion_evidence;
 DELETE FROM fact_edit_audit;
 DELETE FROM knowledge_review_audit;
-DELETE FROM chapter_knowledge_activity;
-DELETE FROM chapter_knowledge_run;
-DELETE FROM completion_cache_run;
-DELETE FROM completion_cache;
+-- Child-first: graph_completion references chapter_knowledge_run, and the cache/run
+-- ledgers reference their own runs.
 DELETE FROM graph_completion_run;
 DELETE FROM graph_completion;
+DELETE FROM completion_cache_run;
+DELETE FROM completion_cache;
+DELETE FROM chapter_knowledge_activity;
+DELETE FROM chapter_knowledge_run;
 DELETE FROM graph_audit;
 DELETE FROM graph_job;
 DELETE FROM graph_evidence;

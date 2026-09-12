@@ -23,14 +23,16 @@ type fakeStore struct {
 	progressErr     error
 	advance         Progress
 	advanceErr      error
-	entity          EntityView
+	entity          EntityResponse
 	entityErr       error
-	wiki            []EntitySummary
+	wiki            WikiResponse
 	wikiErr         error
-	timeline        []EventView
+	timeline        TimelineResponse
 	timelineErr     error
-	relationships   []RelationshipView
-	relationshipErr error
+	records         RecordsResponse
+	recordsErr      error
+	inspector       RecordsInspectorResponse
+	inspectorErr    error
 	chapter         ChapterView
 	chapterErr      error
 	novels          []NovelSummary
@@ -61,27 +63,6 @@ type fakeStore struct {
 	previewErr             error
 	health                 TranslationHealth
 	healthErr2             error
-	repair                 RepairStatus
-	repairErr              error
-	repairPreview          RepairPreview
-	repairPreviewErr       error
-	repairProgress         []RepairProgressFact
-	repairProgressErr      error
-	chapterKnowledge       ChapterKnowledgeView
-	chapterKnowledgeErr    error
-	knowledgeActivity      []ChapterKnowledgeActivity
-	knowledgeActivityErr   error
-}
-
-func (f *fakeStore) ChapterKnowledge(_ context.Context, _ string, chapter, at int) (ChapterKnowledgeView, error) {
-	f.lastChapter = chapter
-	f.lastAt = at
-	return f.chapterKnowledge, f.chapterKnowledgeErr
-}
-func (f *fakeStore) ChapterKnowledgeActivity(_ context.Context, _ string, chapter, at int, _ string, _ int64) ([]ChapterKnowledgeActivity, error) {
-	f.lastChapter = chapter
-	f.lastAt = at
-	return f.knowledgeActivity, f.knowledgeActivityErr
 }
 
 type fakeIngestClient struct {
@@ -91,6 +72,11 @@ type fakeIngestClient struct {
 	lastBody        json.RawMessage
 	lastHealthNovel string
 	lastHealthTrack string
+}
+
+func (f *fakeIngestClient) RecordsAction(_ context.Context, _, chapter, action string) (json.RawMessage, int, error) {
+	f.lastBody = json.RawMessage(`{"chapter":"` + chapter + `","action":"` + action + `"}`)
+	return json.RawMessage(`{"ok":true}`), 200, nil
 }
 
 func (f *fakeIngestClient) QueueControl(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
@@ -104,10 +90,6 @@ func (f *fakeIngestClient) CreateNovel(_ context.Context, body json.RawMessage) 
 }
 
 func (f *fakeIngestClient) DeleteNovel(_ context.Context, _ string) (json.RawMessage, int, error) {
-	return f.response, f.status, f.err
-}
-
-func (f *fakeIngestClient) DeleteGraph(_ context.Context, _ string) (json.RawMessage, int, error) {
 	return f.response, f.status, f.err
 }
 
@@ -126,20 +108,6 @@ func (f *fakeIngestClient) MutateVocabulary(_ context.Context, _ string, body js
 }
 
 func (f *fakeIngestClient) DeleteGlossaryTerm(_ context.Context, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
-	f.lastBody = body
-	return f.response, f.status, f.err
-}
-
-func (f *fakeIngestClient) MutateFact(_ context.Context, _, _, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
-	f.lastBody = body
-	return f.response, f.status, f.err
-}
-func (f *fakeIngestClient) ChapterKnowledgeMutation(_ context.Context, _, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
-	f.lastBody = body
-	return f.response, f.status, f.err
-}
-
-func (f *fakeIngestClient) ReviewChapterKnowledge(_ context.Context, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
 	return f.response, f.status, f.err
 }
@@ -189,19 +157,6 @@ func (f *fakeIngestClient) ApproveCharacterName(_ context.Context, _, _ string, 
 	return f.response, f.status, f.err
 }
 
-func (f *fakeIngestClient) RequestRepair(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
-	f.lastBody = body
-	return f.response, f.status, f.err
-}
-
-func (f *fakeIngestClient) CancelRepair(_ context.Context, _, _ string) (json.RawMessage, int, error) {
-	return f.response, f.status, f.err
-}
-
-func (f *fakeIngestClient) RetryRepairNow(_ context.Context, _, _ string) (json.RawMessage, int, error) {
-	return f.response, f.status, f.err
-}
-
 func (f *fakeIngestClient) TranslateAhead(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
 	f.lastBody = body
 	return f.response, f.status, f.err
@@ -244,34 +199,45 @@ func (f *fakeStore) AdvanceProgress(
 
 func (f *fakeStore) GetEntity(
 	_ context.Context, _, _ string, at int,
-) (EntityView, error) {
+) (EntityResponse, error) {
 	f.lastAt = at
 	return f.entity, f.entityErr
 }
 
 func (f *fakeStore) ListWiki(
 	_ context.Context, _ string, at int,
-) ([]EntitySummary, error) {
+) (WikiResponse, error) {
 	f.lastAt = at
 	return f.wiki, f.wikiErr
 }
 
 func (f *fakeStore) ListTimeline(
 	_ context.Context, _ string, at int,
-) ([]EventView, error) {
+) (TimelineResponse, error) {
 	f.lastAt = at
 	return f.timeline, f.timelineErr
 }
 
-func (f *fakeStore) EventStatus(context.Context, string, int, int) (KnowledgeStatus, error) {
-	return KnowledgeStatus{RevisionID: "events", Version: 1, Trusted: true, Status: "done"}, nil
+func (f *fakeStore) ListRecords(_ context.Context, _ string, chapter, at int) (RecordsResponse, error) {
+	f.lastChapter = chapter
+	f.lastAt = at
+	if chapter > at {
+		return RecordsResponse{}, ErrNotFound
+	}
+	out := f.records
+	out.At = at
+	return out, f.recordsErr
 }
 
-func (f *fakeStore) ListRelationships(
-	_ context.Context, _, _ string, at int,
-) ([]RelationshipView, error) {
+func (f *fakeStore) ListRecordsInspector(_ context.Context, _ string, chapter, at int) (RecordsInspectorResponse, error) {
+	f.lastChapter = chapter
 	f.lastAt = at
-	return f.relationships, f.relationshipErr
+	if chapter > at {
+		return RecordsInspectorResponse{}, ErrNotFound
+	}
+	out := f.inspector
+	out.At = at
+	return out, f.inspectorErr
 }
 
 func (f *fakeStore) ListNovels(context.Context) ([]NovelSummary, error) {
@@ -300,12 +266,6 @@ func (f *fakeStore) ListGlossary(_ context.Context, _ string, at int) ([]Glossar
 }
 
 func (f *fakeStore) ListVocabulary(_ context.Context, _ string, at int) ([]VocabularyTermView, error) {
-	f.lastAt = at
-	return nil, nil
-}
-
-func (f *fakeStore) ListHeldKnowledge(_ context.Context, _ string, chapter, at int) ([]HeldKnowledgeItem, error) {
-	f.lastChapter = chapter
 	f.lastAt = at
 	return nil, nil
 }
@@ -342,28 +302,6 @@ func (f *fakeStore) TranslationHealth(_ context.Context, novelID string) (Transl
 	return health, f.healthErr2
 }
 
-func (f *fakeStore) RepairPreview(_ context.Context, _, _ string) (RepairPreview, error) {
-	return f.repairPreview, f.repairPreviewErr
-}
-
-func (f *fakeStore) RepairProgress(_ context.Context, _ string) ([]RepairProgressFact, error) {
-	return f.repairProgress, f.repairProgressErr
-}
-
-func (f *fakeStore) RepairExtraction(_ context.Context, _ string) ([]RepairExtractedName, error) {
-	return nil, nil
-}
-
-func (f *fakeStore) RepairProposedClaims(_ context.Context, _ string) ([]RepairProposedClaim, error) {
-	return nil, nil
-}
-
-func (f *fakeStore) RepairStatus(_ context.Context, novelID string) (RepairStatus, error) {
-	status := f.repair
-	status.NovelID = novelID
-	return status, f.repairErr
-}
-
 func request(t *testing.T, api *API, method, target, body, reader string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
@@ -384,15 +322,19 @@ func readyFake() *fakeStore {
 		advance: Progress{
 			NovelID: testNovelID, ReaderID: "reader-a", CurrentChapter: 5, UpdatedAt: time.Now(),
 		},
-		entity: EntityView{
-			EntitySummary: EntitySummary{
-				ID: testEntityID, Canonical: "Hero", Kind: "character", FirstSeenChapter: 1,
+		entity: EntityResponse{
+			NovelID: testNovelID,
+			Entity: EntityView{
+				EntitySummary: EntitySummary{
+					ID: testEntityID, Canonical: "Hero", Kind: "character", FirstSeenChapter: 1,
+				},
+				Aliases: []string{}, Records: []RecordView{}, Renderings: []TermRenderingView{},
 			},
-			Aliases: []string{}, Facts: []FactView{},
 		},
-		wiki:          []EntitySummary{},
-		timeline:      []EventView{},
-		relationships: []RelationshipView{},
+		wiki:      WikiResponse{NovelID: testNovelID, At: 5, Entities: []EntitySummary{}, Rows: []RecordView{}},
+		timeline:  TimelineResponse{NovelID: testNovelID, At: 5, Rows: []RecordView{}},
+		records:   RecordsResponse{NovelID: testNovelID, Rows: []RecordView{}},
+		inspector: RecordsInspectorResponse{NovelID: testNovelID, Drops: []RecordDropView{}},
 		chapter: ChapterView{
 			Text:      "chapter text",
 			Spans:     []SpanView{{EntityID: &entityID, CharStart: 0, CharEnd: 7}},
@@ -467,17 +409,17 @@ func TestLowerRequestedChapterIsUsed(t *testing.T) {
 
 func TestCollectionEndpointsReturnStableEnvelopes(t *testing.T) {
 	store := readyFake()
-	store.timeline = []EventView{{ID: "00000000-0000-0000-0000-000000000001", ChapterIndex: 2, Summary: "Event", Entities: []EntitySummary{}, Arguments: []EventArgumentView{}}}
-	store.relationships = []RelationshipView{{
-		ID: 1, Relation: "ally", Direction: "outgoing",
-		Entity: EntitySummary{ID: testEntityID, Canonical: "Ally", Kind: "character"},
-	}}
+	row := RecordView{ID: "00000000-0000-0000-0000-000000000001", Type: "EVENT", SourceChapter: 2,
+		Values: []RecordValueView{}, Participants: []RecordParticipantView{}, Evidence: []RecordEvidenceView{}}
+	store.timeline = TimelineResponse{NovelID: testNovelID, At: 5, Rows: []RecordView{row}}
+	store.records = RecordsResponse{NovelID: testNovelID, ChapterIndex: 2, Rows: []RecordView{row}}
 	tests := []struct {
 		name   string
 		target string
 	}{
 		{name: "timeline", target: "/novels/" + testNovelID + "/timeline"},
-		{name: "relationships", target: "/novels/" + testNovelID + "/relationships/" + testEntityID},
+		{name: "chapter rows", target: "/novels/" + testNovelID + "/chapter/2/rows"},
+		{name: "records inspector", target: "/novels/" + testNovelID + "/chapter/2/records/inspector"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -870,15 +812,15 @@ func TestProviderHealthProxiesSafeCategoryAndStatus(t *testing.T) {
 	}
 	api := &API{store: readyFake(), ingest: ingest}
 	response := request(t, api, http.MethodGet,
-		"/novels/"+testNovelID+"/provider-health?track=graph", "", "")
+		"/novels/"+testNovelID+"/provider-health?track=extract", "", "")
 	if response.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502; body=%s", response.Code, response.Body.String())
 	}
 	if !strings.Contains(response.Body.String(), `"category":"credential_rejected"`) {
 		t.Fatalf("safe category missing: %s", response.Body.String())
 	}
-	if ingest.lastHealthNovel != testNovelID || ingest.lastHealthTrack != "graph" {
-		t.Fatalf("health request = (%q, %q), want (%q, graph)", ingest.lastHealthNovel, ingest.lastHealthTrack, testNovelID)
+	if ingest.lastHealthNovel != testNovelID || ingest.lastHealthTrack != "extract" {
+		t.Fatalf("health request = (%q, %q), want (%q, extract)", ingest.lastHealthNovel, ingest.lastHealthTrack, testNovelID)
 	}
 	if strings.Contains(response.Body.String(), "SECRET") {
 		t.Fatalf("upstream body leaked: %s", response.Body.String())
@@ -909,23 +851,6 @@ func TestDeleteNovelProxiesToIngestClient(t *testing.T) {
 func TestDeleteNovelRejectsBadID(t *testing.T) {
 	api := &API{store: readyFake(), ingest: &fakeIngestClient{}}
 	response := request(t, api, http.MethodDelete, "/novels/not-a-uuid", "", "")
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
-	}
-}
-
-func TestDeleteGraphProxiesToIngestClient(t *testing.T) {
-	ingest := &fakeIngestClient{response: json.RawMessage(`{"deleted":true,"revisions_deleted":2}`), status: http.StatusOK}
-	api := &API{store: readyFake(), ingest: ingest}
-	response := request(t, api, http.MethodDelete, "/novels/"+testNovelID+"/graph", "", "reader-1")
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"revisions_deleted":2`) {
-		t.Fatalf("response: %d %s", response.Code, response.Body.String())
-	}
-}
-
-func TestDeleteGraphRejectsBadID(t *testing.T) {
-	api := &API{store: readyFake(), ingest: &fakeIngestClient{}}
-	response := request(t, api, http.MethodDelete, "/novels/not-a-uuid/graph", "", "reader-1")
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
 	}
@@ -1144,22 +1069,16 @@ func TestDeleteGlossaryRequiresPrincipalAndProxiesBody(t *testing.T) {
 	}
 }
 
-func (f *fakeStore) KnowledgeStatus(context.Context, string, int, int) (KnowledgeStatus, error) {
-	return KnowledgeStatus{RevisionID: "test", Version: 1, Trusted: true, Status: "done"}, nil
-}
-
-func TestKnowledgeStatusUsesStoredProgress(t *testing.T) {
+func TestRecordsStatusUsesStoredProgress(t *testing.T) {
 	api := &API{store: readyFake()}
 	for _, tc := range []struct {
 		chapter string
 		status  int
 	}{{"2", 200}, {"5", 200}, {"6", 404}, {"-1", 400}, {"bad", 400}} {
-		response := request(t, api, http.MethodGet, "/novels/"+testNovelID+"/knowledge-status?chapter="+tc.chapter, "", "reader-a")
+		response := request(t, api, http.MethodGet,
+			"/novels/"+testNovelID+"/chapter/"+tc.chapter+"/records/status", "", "reader-a")
 		if response.Code != tc.status {
 			t.Fatalf("chapter=%s status=%d body=%s", tc.chapter, response.Code, response.Body.String())
-		}
-		if tc.status == 200 && !strings.Contains(response.Body.String(), `"revision_id":"test"`) {
-			t.Fatal("missing revision metadata")
 		}
 	}
 }

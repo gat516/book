@@ -224,6 +224,21 @@ async def publish_records(ctx: StageContext, state: PipelineState) -> None:
         for problem in result.get("problems", []):
             await ctx.db.execute("INSERT INTO record_drop (novel_id,generation_id,run_id,original_index,malformed_fragment,reasons) VALUES (%s,%s,%s,NULL,%s,%s)", (ctx.novel.id,generation_id,run_id,str(problem.get("raw", ""))[:400],Jsonb([problem.get("problem", "malformed discovery")])) )
 
+        # Display occurrences: where a rendered mention sits, and which entity it renders.
+        # Alignment says which source mention an occurrence corresponds to; it never
+        # decides identity, so a span binds only when the authoritative resolution
+        # already owns that surface. Anything else is published unbound (§0.3).
+        await ctx.db.execute("DELETE FROM record_mention_binding WHERE run_id=%s", (run_id,))
+        entity_ids = {str(e["id"]) for e in (result.get("resolution") or {}).get("entities", [])}
+        for span in getattr(state, "display_spans", []) or []:
+            bound = str(span.alias_id) if span.alias_id else ""
+            await ctx.db.execute(
+                """INSERT INTO record_mention_binding
+                   (novel_id,generation_id,run_id,entity_id,source_chapter,char_start,char_end)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                (ctx.novel.id, generation_id, run_id, bound if bound in entity_ids else None,
+                 chapter, span.char_start, span.char_end))
+
         await ctx.db.execute("DELETE FROM chunk WHERE novel_id=%s AND chapter_index=%s", (ctx.novel.id, chapter))
         if target_chunks:
             await ctx.db.executemany("INSERT INTO chunk (novel_id,chapter_index,text,embedding) VALUES (%s,%s,%s,%s)", [(ctx.novel.id,chapter,c.text,e) for c,e in zip(target_chunks,embeddings)])

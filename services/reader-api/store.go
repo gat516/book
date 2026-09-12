@@ -27,32 +27,20 @@ var (
 const (
 	readerRole   = "rls_reader"
 	progressRole = "reader_progress_writer"
-	// operatorRole may execute repair_preview and nothing else. rls_reader is deliberately
-	// NOT a member: askai connects as rls_reader, and the preview carries source quotes
-	// from every snapshotted chapter regardless of reading progress (migration 0046).
-	operatorRole = "repair_operator"
 )
 
 type ReaderStore interface {
 	Health(context.Context) error
 	GetProgress(context.Context, string, string) (Progress, error)
 	AdvanceProgress(context.Context, string, string, int) (Progress, error)
-	GetEntity(context.Context, string, string, int) (EntityView, error)
-	ListWiki(context.Context, string, int) ([]EntitySummary, error)
-	ListTimeline(context.Context, string, int) ([]EventView, error)
-	EventStatus(context.Context, string, int, int) (KnowledgeStatus, error)
-	ListRelationships(context.Context, string, string, int) ([]RelationshipView, error)
+	GetEntity(context.Context, string, string, int) (EntityResponse, error)
+	ListWiki(context.Context, string, int) (WikiResponse, error)
+	ListTimeline(context.Context, string, int) (TimelineResponse, error)
 	GetChapter(context.Context, string, int, int) (ChapterView, error)
-	KnowledgeStatus(context.Context, string, int, int) (KnowledgeStatus, error)
 	ListChapters(context.Context, string, int, int) ([]ChapterListItem, int, error)
 	PipelineStatus(context.Context, string) (PipelineStatusResponse, error)
 	TranslationPreview(context.Context, string, int) (string, bool, string, string, error)
 	TranslationHealth(context.Context, string) (TranslationHealth, error)
-	RepairStatus(context.Context, string) (RepairStatus, error)
-	RepairPreview(context.Context, string, string) (RepairPreview, error)
-	RepairProgress(context.Context, string) ([]RepairProgressFact, error)
-	RepairExtraction(context.Context, string) ([]RepairExtractedName, error)
-	RepairProposedClaims(context.Context, string) ([]RepairProposedClaim, error)
 	ListNovels(context.Context) ([]NovelSummary, error)
 	GetNovel(context.Context, string) (NovelSummary, error)
 	CreateScrapeJob(context.Context, string, string, string) (int64, error)
@@ -60,11 +48,9 @@ type ReaderStore interface {
 	RequestScrapeCancel(context.Context, string) error
 	ListGlossary(context.Context, string, int) ([]GlossaryTermView, error)
 	ListVocabulary(context.Context, string, int) ([]VocabularyTermView, error)
-	ListHeldKnowledge(context.Context, string, int, int) ([]HeldKnowledgeItem, error)
 	ListNameReviews(context.Context, string, *int) ([]CharacterNameReview, error)
-	ChapterKnowledge(context.Context, string, int, int) (ChapterKnowledgeView, error)
-	ChapterKnowledgeActivity(context.Context, string, int, int, string, int64) ([]ChapterKnowledgeActivity, error)
 	ListRecords(context.Context, string, int, int) (RecordsResponse, error)
+	ListRecordsInspector(context.Context, string, int, int) (RecordsInspectorResponse, error)
 }
 
 func (s *Store) ListNameReviews(ctx context.Context, novelID string, chapter *int) ([]CharacterNameReview, error) {
@@ -95,9 +81,6 @@ func (s *Store) ListNameReviews(ctx context.Context, novelID string, chapter *in
 type Store struct {
 	readerDB   *pgxpool.Pool
 	progressDB *pgxpool.Pool
-	// operatorDB is used by exactly one method, RepairPreview. Do not reach for it because
-	// a query is inconvenient on readerDB — its whole value is that it is narrow.
-	operatorDB *pgxpool.Pool
 	objects    *minio.Client
 	bucket     string
 	redis      *redis.Client
@@ -142,16 +125,16 @@ func newRolePool(ctx context.Context, databaseURL, role string) (*pgxpool.Pool, 
 }
 
 func newStore(ctx context.Context, cfg Config, objects *minio.Client, redisClient *redis.Client) (*Store, error) {
-	// Opened in a loop rather than with a cascade of hand-written Close() calls: with two
-	// pools the cascade was fine, with three it is a shape that silently leaks the day
-	// someone adds a fourth and forgets a branch.
+	// Opened in a loop rather than with a cascade of hand-written Close() calls: the
+	// cascade is a shape that silently leaks the day someone adds a pool and forgets a
+	// branch. (A third pool held repair_operator for repair_preview; both are gone with
+	// the legacy repair path.)
 	specs := []struct {
 		url  string
 		role string
 	}{
 		{cfg.ReaderDatabaseURL, readerRole},
 		{cfg.ProgressDatabaseURL, progressRole},
-		{cfg.RepairOperatorDatabaseURL, operatorRole},
 	}
 	pools := make([]*pgxpool.Pool, 0, len(specs))
 	for _, spec := range specs {
@@ -167,7 +150,6 @@ func newStore(ctx context.Context, cfg Config, objects *minio.Client, redisClien
 	return &Store{
 		readerDB:   pools[0],
 		progressDB: pools[1],
-		operatorDB: pools[2],
 		objects:    objects,
 		bucket:     cfg.ObjectBucket,
 		redis:      redisClient,
@@ -177,7 +159,6 @@ func newStore(ctx context.Context, cfg Config, objects *minio.Client, redisClien
 func (s *Store) Close() {
 	s.readerDB.Close()
 	s.progressDB.Close()
-	s.operatorDB.Close()
 }
 
 func (s *Store) Health(ctx context.Context) error {
@@ -186,9 +167,6 @@ func (s *Store) Health(ctx context.Context) error {
 	}
 	if err := s.progressDB.Ping(ctx); err != nil {
 		return fmt.Errorf("progress database: %w", err)
-	}
-	if err := s.operatorDB.Ping(ctx); err != nil {
-		return fmt.Errorf("repair operator database: %w", err)
 	}
 	return nil
 }
@@ -581,166 +559,6 @@ func (s *Store) withReaderTx(
 	return tx.Commit(ctx)
 }
 
-func (s *Store) GetEntity(
-	ctx context.Context, novelID, entityID string, at int,
-) (EntityView, error) {
-	view := EntityView{Aliases: []string{}, Facts: []FactView{}, Renderings: []TermRenderingView{}}
-	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
-		var err error
-		view.Knowledge, err = knowledgeInTx(ctx, tx, at)
-		if err != nil {
-			return err
-		}
-		if err := tx.QueryRow(ctx,
-			`SELECT id::text, COALESCE(canonical_en,canonical), kind, first_seen_chapter
-			 FROM entity
-			 WHERE novel_id = $1 AND id = $2 AND first_seen_chapter <= $3`,
-			novelID, entityID, at,
-		).Scan(&view.ID, &view.Canonical, &view.Kind, &view.FirstSeenChapter); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return err
-		}
-
-		aliasRows, err := tx.Query(ctx,
-			`SELECT surface FROM alias
-			 WHERE entity_id = $1 AND first_seen_chapter <= $2
-			 ORDER BY first_seen_chapter, surface`, entityID, at)
-		if err != nil {
-			return err
-		}
-		defer aliasRows.Close()
-		for aliasRows.Next() {
-			var alias string
-			if err := aliasRows.Scan(&alias); err != nil {
-				return err
-			}
-			view.Aliases = append(view.Aliases, alias)
-		}
-		if err := aliasRows.Err(); err != nil {
-			return err
-		}
-
-		// Locked glossary decisions are attached through the revision-specific binding,
-		// never by matching a displayed name back to an entity. That preserves RESOLVE's
-		// sole ownership of identity while making the existing alternatives available at
-		// the exact place a reader encounters the term.
-		renderingRows, err := tx.Query(ctx,
-			`SELECT g.source_term,g.target_term,'locked',COALESCE(r.term_role,''),
-			        COALESCE(r.candidates,'[]'::jsonb)
-			 FROM glossary g
-			 LEFT JOIN glossary_binding gb ON gb.novel_id=g.novel_id AND gb.source_term=g.source_term
-			 LEFT JOIN character_name_review r ON r.novel_id=g.novel_id
-			   AND r.source_term=g.source_term AND r.first_seen_chapter <= $3
-			 WHERE g.novel_id=$1 AND COALESCE(gb.entity_id,g.entity_id)=$2
-			   AND g.locked_at_chapter <= $3 AND NOT g.deleted
-			 UNION ALL
-			 SELECT DISTINCT r.source_term,NULL::text,'pending',r.term_role,r.candidates
-			 FROM character_name_review r
-			 JOIN source_mention m ON m.novel_id=r.novel_id AND m.surface=r.source_term
-			 JOIN mention_binding b ON b.revision_id=m.revision_id AND b.mention_id=m.id
-			 WHERE r.novel_id=$1 AND b.entity_id=$2 AND r.status='pending'
-			   AND r.first_seen_chapter <= $3 AND b.known_from_chapter <= $3
-			 ORDER BY 1`, novelID, entityID, at)
-		if err != nil {
-			return err
-		}
-		defer renderingRows.Close()
-		for renderingRows.Next() {
-			var rendering TermRenderingView
-			var candidates []byte
-			if err := renderingRows.Scan(
-				&rendering.SourceTerm, &rendering.TargetTerm, &rendering.Status,
-				&rendering.TermRole, &candidates,
-			); err != nil {
-				return err
-			}
-			if err := json.Unmarshal(candidates, &rendering.Candidates); err != nil {
-				return err
-			}
-			view.Renderings = append(view.Renderings, rendering)
-		}
-		if err := renderingRows.Err(); err != nil {
-			return err
-		}
-
-		factRows, err := tx.Query(ctx,
-			// COALESCE, not a second column: value_en is a display gloss of the
-			// source-language value (migration 0051) and is NULL for every fact
-			// extracted before it existed, which must still render.
-			`WITH vocabulary AS (SELECT * FROM reader_vocabulary($1,$3)), visible AS (
-			   SELECT id, attribute, COALESCE(value_en, value) AS value, kind, supersedes,
-			          valid_from_chapter, source_chapter, confidence, evidence_id
-			   FROM fact
-			   WHERE novel_id = $1 AND entity_id = $2
-			     AND source_chapter <= $3 AND valid_from_chapter <= $3
-			 ), eligible AS (
-			   SELECT f.*, rv.name AS canonical_name FROM visible f
-			   JOIN vocabulary rv
-			    ON rv.term_type='attribute' AND (f.attribute=ANY(rv.aliases) OR
-			       (rv.name=f.attribute AND NOT EXISTS (SELECT 1 FROM vocabulary newer
-			          WHERE newer.term_type='attribute' AND f.attribute=ANY(newer.aliases))))
-			    AND rv.status='admitted'
-			 )
-			 SELECT DISTINCT ON (f.canonical_name)
-			        f.canonical_name, f.value, f.valid_from_chapter, f.source_chapter, f.confidence, COALESCE((SELECT jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash,'char_start',v.char_start,'char_end',v.char_end) FROM graph_evidence v WHERE v.id=f.evidence_id),'null'::jsonb)
-			 FROM eligible f
-			 WHERE f.kind <> 'retraction'
-			   AND NOT EXISTS (SELECT 1 FROM eligible successor WHERE successor.supersedes = f.id)
-			 ORDER BY f.canonical_name, f.valid_from_chapter DESC, f.source_chapter DESC,
-			          f.confidence DESC, f.id DESC`, novelID, entityID, at)
-		if err != nil {
-			return err
-		}
-		defer factRows.Close()
-		for factRows.Next() {
-			var fact FactView
-			if err := factRows.Scan(
-				&fact.Attribute, &fact.Value, &fact.ValidFromChapter,
-				&fact.SourceChapter, &fact.Confidence, &fact.Evidence,
-			); err != nil {
-				return err
-			}
-			view.Facts = append(view.Facts, fact)
-		}
-		return factRows.Err()
-	})
-	return view, err
-}
-
-func (s *Store) ListWiki(ctx context.Context, novelID string, at int) ([]EntitySummary, error) {
-	entities := []EntitySummary{}
-	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx,
-			`SELECT id::text, COALESCE(canonical_en,canonical), kind, first_seen_chapter
-			 FROM entity
-			 WHERE novel_id = $1 AND first_seen_chapter <= $2
-			 ORDER BY first_seen_chapter, COALESCE(canonical_en,canonical), id`, novelID, at)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var entity EntitySummary
-			if err := rows.Scan(
-				&entity.ID, &entity.Canonical, &entity.Kind, &entity.FirstSeenChapter,
-			); err != nil {
-				return err
-			}
-			entities = append(entities, entity)
-		}
-		return rows.Err()
-	})
-	return entities, err
-}
-
-// ListGlossary gates on locked_at_chapter <= at, mirroring ListWiki's
-// first_seen_chapter <= at pattern — a term locked at chapter 400 (e.g. proving a sect
-// exists) is itself spoiler information. glossary carries no RLS policy (0002_rls.sql
-// doesn't list it), so — unlike every other gated read here — this filter is app-layer
-// only; still routed through withReaderTx for the same connection/role discipline as
-// everything else, even though there's no inner RLS layer to back it up for this table.
 func (s *Store) ListGlossary(ctx context.Context, novelID string, at int) ([]GlossaryTermView, error) {
 	// A seed term can be linked to an entity discovered later. Only expose that ID
 	// once the entity is authorized too; LEFT JOIN preserves the visible seed (§0.3).
@@ -803,209 +621,6 @@ func (s *Store) ListVocabulary(ctx context.Context, novelID string, at int) ([]V
 // reader_chapter() from inside the definer context, so this is defense in depth, not the
 // only gate — but it still runs inside withReaderTx for the same GUC/connection
 // discipline as every other reader query (§0.3).
-func (s *Store) ListHeldKnowledge(ctx context.Context, novelID string, chapter, at int) ([]HeldKnowledgeItem, error) {
-	items := []HeldKnowledgeItem{}
-	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT item_type,item_id,revision_id::text,revision_version,chapter_index,
-			entity_id::text,src_id::text,dst_id::text,attribute,rel_type,value,summary,
-			evidence_id::text,evidence_quote,review_state,review_flag
-		 FROM reader_held_knowledge($1,$2)`, novelID, chapter)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var item HeldKnowledgeItem
-			if err := rows.Scan(&item.ItemType, &item.ItemID, &item.RevisionID, &item.RevisionVersion,
-				&item.ChapterIndex, &item.EntityID, &item.SrcID, &item.DstID, &item.Attribute, &item.RelType,
-				&item.Value, &item.Summary, &item.EvidenceID, &item.EvidenceQuote, &item.ReviewState,
-				&item.ReviewFlag); err != nil {
-				return err
-			}
-			items = append(items, item)
-		}
-		if err = rows.Err(); err != nil {
-			return err
-		}
-		// Second definer-function call, same transaction/GUCs. Kept separate from
-		// reader_held_knowledge deliberately -- that function's return signature is relied
-		// on elsewhere and must not change shape; this is migration 0076's own narrow
-		// SECURITY DEFINER wrapper around corroborated_fact_ids, the exact same rule
-		// ingest-api's write path applies.
-		eligible, err := tx.Query(ctx, `SELECT item_id FROM reader_held_knowledge_bulk_eligible($1,$2)`, novelID, chapter)
-		if err != nil {
-			return err
-		}
-		defer eligible.Close()
-		eligibleIDs := map[int64]bool{}
-		for eligible.Next() {
-			var id int64
-			if err := eligible.Scan(&id); err != nil {
-				return err
-			}
-			eligibleIDs[id] = true
-		}
-		if err = eligible.Err(); err != nil {
-			return err
-		}
-		for i := range items {
-			if items[i].ItemType == "fact" {
-				items[i].BulkEligible = eligibleIDs[items[i].ItemID]
-			}
-		}
-		return nil
-	})
-	return items, err
-}
-
-func (s *Store) ListTimeline(ctx context.Context, novelID string, at int) ([]EventView, error) {
-	events := []EventView{}
-	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
-		var err error
-		events, err = listEventsInTx(ctx, tx, novelID, nil, at)
-		return err
-	})
-	return events, err
-}
-
-// listEventsInTx reads the independently activated event ledger. RLS applies both the
-// reader's knowledge-time cap and novel.active_event_revision (§0.1/§0.2). An argument's
-// literal surface is always returned; its optional entity link is visible only when the
-// linked entity is also authorized in the active graph revision.
-func listEventsInTx(ctx context.Context, tx pgx.Tx, novelID string, chapter *int, at int) ([]EventView, error) {
-	events := []EventView{}
-	rows, err := tx.Query(ctx,
-		`SELECT e.id::text,e.chapter_index,e.event_type,e.action,e.status,e.summary,e.result,
-		        jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,
-		          'source_hash',v.source_hash,'char_start',v.char_start,'char_end',v.char_end)
-		 FROM chapter_event e JOIN event_evidence v ON v.id=e.evidence_id
-		 WHERE e.novel_id=$1 AND e.chapter_index<=$3
-		   AND ($2::int IS NULL OR e.chapter_index=$2)
-		 ORDER BY e.chapter_index,e.id`, novelID, chapter, at)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		event := EventView{Arguments: []EventArgumentView{}, Entities: []EntitySummary{}}
-		if err := rows.Scan(&event.ID, &event.ChapterIndex, &event.EventType, &event.Action,
-			&event.Status, &event.Summary, &event.Result, &event.Evidence); err != nil {
-			return nil, err
-		}
-		events = append(events, event)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	rows.Close()
-
-	for index := range events {
-		argumentRows, err := tx.Query(ctx,
-			`SELECT a.role,a.surface,visible.id::text,COALESCE(visible.canonical_en,visible.canonical),visible.kind,visible.first_seen_chapter
-			 FROM chapter_event_argument a
-			 LEFT JOIN entity visible ON visible.id=a.entity_id
-			   AND visible.revision_id=a.linked_graph_revision
-			 WHERE a.event_id=$1 ORDER BY a.ordinal`, events[index].ID)
-		if err != nil {
-			return nil, err
-		}
-		seenEntities := map[string]bool{}
-		for argumentRows.Next() {
-			var argument EventArgumentView
-			var canonical, kind *string
-			var firstSeen *int
-			if err := argumentRows.Scan(&argument.Role, &argument.Surface, &argument.EntityID,
-				&canonical, &kind, &firstSeen); err != nil {
-				argumentRows.Close()
-				return nil, err
-			}
-			if argument.EntityID != nil && canonical != nil && kind != nil && firstSeen != nil {
-				entity := EntitySummary{ID: *argument.EntityID, Canonical: *canonical, Kind: *kind, FirstSeenChapter: *firstSeen}
-				argument.Entity = &entity
-				if !seenEntities[entity.ID] {
-					events[index].Entities = append(events[index].Entities, entity)
-					seenEntities[entity.ID] = true
-				}
-			}
-			events[index].Arguments = append(events[index].Arguments, argument)
-		}
-		if err := argumentRows.Err(); err != nil {
-			argumentRows.Close()
-			return nil, err
-		}
-		argumentRows.Close()
-	}
-	return events, nil
-}
-
-func (s *Store) ListRelationships(
-	ctx context.Context, novelID, entityID string, at int,
-) ([]RelationshipView, error) {
-	relationships := []RelationshipView{}
-	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
-		var exists bool
-		if err := tx.QueryRow(ctx,
-			`SELECT EXISTS (
-			   SELECT 1 FROM entity
-			   WHERE novel_id = $1 AND id = $2 AND first_seen_chapter <= $3
-			 )`, novelID, entityID, at,
-		).Scan(&exists); err != nil {
-			return err
-		}
-		if !exists {
-			return ErrNotFound
-		}
-
-		rows, err := tx.Query(ctx,
-			`WITH vocabulary AS (SELECT * FROM reader_vocabulary($1,$3)), eligible AS (
-			   SELECT edge.*, rv.name AS canonical_name FROM edge
-			   JOIN vocabulary rv
-			    ON rv.term_type='relation' AND (edge.rel_type=ANY(rv.aliases) OR
-			       (rv.name=edge.rel_type AND NOT EXISTS (SELECT 1 FROM vocabulary newer
-			          WHERE newer.term_type='relation' AND edge.rel_type=ANY(newer.aliases))))
-			    AND rv.status='admitted'
-			   WHERE edge.novel_id=$1 AND (edge.src_id=$2 OR edge.dst_id=$2)
-			     AND edge.source_chapter <= $3 AND edge.valid_from_chapter <= $3
-			     AND (edge.valid_to_chapter IS NULL OR edge.valid_to_chapter > $3)
-			 )
-			 SELECT edge.id, edge.canonical_name,
-			        CASE WHEN edge.src_id = $2 THEN 'outgoing' ELSE 'incoming' END,
-			        other.id::text, COALESCE(other.canonical_en,other.canonical), other.kind, other.first_seen_chapter,
-			        edge.valid_from_chapter, edge.valid_to_chapter, edge.source_chapter, COALESCE((SELECT jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash,'char_start',v.char_start,'char_end',v.char_end) FROM graph_evidence v WHERE v.id=edge.evidence_id),'null'::jsonb)
-			 FROM eligible edge
-			 JOIN entity other ON other.id = CASE
-			   WHEN edge.src_id = $2 THEN edge.dst_id ELSE edge.src_id END
-				 WHERE edge.novel_id = $1 AND (edge.src_id = $2 OR edge.dst_id = $2)
-				   AND edge.kind <> 'retraction'
-				   AND NOT EXISTS (SELECT 1 FROM eligible successor WHERE successor.supersedes=edge.id)
-			   AND edge.source_chapter <= $3 AND edge.valid_from_chapter <= $3
-			   AND (edge.valid_to_chapter IS NULL OR edge.valid_to_chapter > $3)
-			   AND other.novel_id = $1 AND other.first_seen_chapter <= $3
-			 ORDER BY edge.canonical_name,
-			          CASE WHEN edge.src_id = $2 THEN 'outgoing' ELSE 'incoming' END,
-			          COALESCE(other.canonical_en,other.canonical), edge.id`, novelID, entityID, at)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var relationship RelationshipView
-			if err := rows.Scan(
-				&relationship.ID, &relationship.Relation, &relationship.Direction,
-				&relationship.Entity.ID, &relationship.Entity.Canonical,
-				&relationship.Entity.Kind, &relationship.Entity.FirstSeenChapter,
-				&relationship.ValidFromChapter, &relationship.ValidToChapter,
-				&relationship.SourceChapter, &relationship.Evidence,
-			); err != nil {
-				return err
-			}
-			relationships = append(relationships, relationship)
-		}
-		return rows.Err()
-	})
-	return relationships, err
-}
-
 func (s *Store) readObject(ctx context.Context, key string) (string, error) {
 	obj, err := s.objects.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
@@ -1019,65 +634,31 @@ func (s *Store) readObject(ctx context.Context, key string) (string, error) {
 	return string(body), nil
 }
 
-// newFactsInTx loads the facts whose source_chapter is exactly this chapter — what the
-// reader learns HERE, as opposed to everything they now know. It runs inside
-// withReaderTx so the visible set is gated on reader_chapter() like every other read path
-// (§0.2): being allowed to read chapter n is not on its own permission to see a fact
-// carrying a later source_chapter, and this must not become the one path that assumes it.
-//
-// Gating is on source_chapter (knowledge-time). valid_from_chapter appears in the visible
-// set only to match the entity card's display semantics — story-time never authorizes.
-//
-// Supersession and retraction are applied exactly as GetEntity applies them, so a fact
-// introduced here but already overturned by a chapter the reader has since passed does not
-// resurface as news. The alternative — badging it anyway — would contradict the entity
-// card the badge links to.
-func newFactsInTx(ctx context.Context, tx pgx.Tx, novelID string, n int, view *ChapterView) error {
-	rows, err := tx.Query(ctx,
-		`WITH vocabulary AS (SELECT * FROM reader_vocabulary($1,reader_chapter())), visible AS (
-		   SELECT id, entity_id, attribute, COALESCE(value_en, value) AS value, kind, supersedes,
-		          valid_from_chapter, source_chapter, confidence
-		   FROM fact
-		   WHERE novel_id = $1
-		     AND source_chapter <= reader_chapter() AND valid_from_chapter <= reader_chapter()
-		 ), eligible AS (
-		   SELECT f.*, rv.name AS canonical_name FROM visible f
-		   JOIN vocabulary rv
-		    ON rv.term_type='attribute' AND (f.attribute=ANY(rv.aliases) OR
-		       (rv.name=f.attribute AND NOT EXISTS (SELECT 1 FROM vocabulary newer
-		          WHERE newer.term_type='attribute' AND f.attribute=ANY(newer.aliases))))
-		    AND rv.status='admitted'
-		 )
-	 SELECT DISTINCT ON (f.entity_id, f.canonical_name)
-	        f.entity_id::text, COALESCE(e.canonical_en,e.canonical), f.canonical_name, f.value, f.valid_from_chapter,
-		        f.source_chapter, f.confidence
-	 FROM eligible f
-	 JOIN entity e ON e.id = f.entity_id
-		 WHERE f.source_chapter = $2
-		   AND f.entity_id IS NOT NULL
-		   AND f.kind <> 'retraction'
-		   AND NOT EXISTS (SELECT 1 FROM eligible successor WHERE successor.supersedes = f.id)
-	 ORDER BY f.entity_id, f.canonical_name, f.valid_from_chapter DESC,
-		          f.source_chapter DESC, f.confidence DESC, f.id DESC`,
-		novelID, n)
+// chapterRecordsInTx loads the records whose source_chapter is exactly this chapter —
+// what the reader learns HERE, as opposed to everything they now know. It runs inside
+// withReaderTx so the visible set is gated on reader_chapter() like every other read
+// path (§0.2): being allowed to read chapter n is not on its own permission to see a
+// record carrying a later source_chapter, and this must not become the one path that
+// assumes it.
+func chapterRecordsInTx(ctx context.Context, tx pgx.Tx, novelID string, n, at int, view *ChapterView) error {
+	generation, status, err := recordsStatusFor(ctx, tx, novelID, &n, at)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var fact ChapterFactView
-		if err := rows.Scan(&fact.EntityID, &fact.EntityCanonical, &fact.Attribute, &fact.Value,
-			&fact.ValidFromChapter, &fact.SourceChapter, &fact.Confidence); err != nil {
-			return err
-		}
-		view.NewFacts = append(view.NewFacts, fact)
+	view.RecordsStatus = status
+	if generation == "" {
+		return nil
 	}
-	return rows.Err()
+	base, err := tx.Query(ctx, `SELECT id::text,record_type,original_index,source_chapter,valid_from_chapter,temporal_qualifier
+		FROM record_row WHERE novel_id=$1 AND generation_id=$2 AND source_chapter=$3
+		ORDER BY original_index LIMIT 500`, novelID, generation, n)
+	if err != nil {
+		return err
+	}
+	view.RecordRows, err = hydrateRows(ctx, tx, base)
+	return err
 }
 
-// chapterSpansInTx is the reader's revision-authorized presentation selection. The
-// caller must already have entered withReaderTx so reader_graph_revision(),
-// reader_chapter(), and table RLS all refer to the same reader snapshot.
 func chapterSpansInTx(ctx context.Context, tx pgx.Tx, novelID string, chapter int) ([]SpanView, error) {
 	rows, err := tx.Query(ctx,
 		`SELECT d.id::text, e.id::text,d.char_start,d.char_end,b.known_from_chapter,d.mention_id::text, COALESCE((SELECT jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash) FROM graph_evidence v WHERE v.id=COALESCE(b.evidence_id,d.evidence_id)),'null'::jsonb)
@@ -1148,7 +729,7 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n, at int) (Chap
 		return ChapterView{}, err
 	}
 
-	view := ChapterView{Text: text, Spans: []SpanView{}, NewFacts: []ChapterFactView{}, Events: []EventView{}, Part: part}
+	view := ChapterView{Text: text, Spans: []SpanView{}, RecordRows: []RecordView{}, Part: part}
 	if warningCode != nil {
 		view.TranslationWarning = &TranslationWarning{Code: *warningCode, TermCount: warningCount}
 	}
@@ -1160,16 +741,7 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n, at int) (Chap
 	}
 	if err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
 		var err error
-		view.Knowledge, err = knowledgeInTx(ctx, tx, n)
-		if err != nil {
-			return err
-		}
-		view.EventKnowledge, err = eventKnowledgeInTx(ctx, tx, n)
-		if err != nil {
-			return err
-		}
-		view.Events, err = listEventsInTx(ctx, tx, novelID, &n, at)
-		if err != nil {
+		if err := chapterRecordsInTx(ctx, tx, novelID, n, at, &view); err != nil {
 			return err
 		}
 		spans, err := chapterSpansInTx(ctx, tx, novelID, n)
@@ -1177,7 +749,7 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n, at int) (Chap
 			return err
 		}
 		for _, span := range spans {
-			span.EnrichmentStatus = view.Knowledge.Status
+			span.EnrichmentStatus = view.RecordsStatus.ExtractionStatus
 			if span.EnrichmentStatus == "done" || span.EnrichmentStatus == "ready" {
 				if span.EntityID == nil {
 					span.EnrichmentStatus = "unresolved"
@@ -1187,10 +759,7 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n, at int) (Chap
 			}
 			view.Spans = append(view.Spans, span)
 		}
-		if err := attachChapterRenderings(ctx, tx, novelID, n, at, text, view.Spans); err != nil {
-			return err
-		}
-		return newFactsInTx(ctx, tx, novelID, n, &view)
+		return attachChapterRenderings(ctx, tx, novelID, n, at, text, view.Spans)
 	}); err != nil {
 		return ChapterView{}, err
 	}

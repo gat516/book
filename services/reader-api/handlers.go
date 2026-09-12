@@ -33,40 +33,25 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/entity/{eid}", a.getEntity)
 	mux.HandleFunc("GET /novels/{id}/wiki", a.getWiki)
 	mux.HandleFunc("GET /novels/{id}/timeline", a.getTimeline)
-	mux.HandleFunc("GET /novels/{id}/relationships/{eid}", a.getRelationships)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}", a.getChapter)
-	mux.HandleFunc("GET /novels/{id}/chapter/{n}/knowledge", a.getChapterKnowledge)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}/rows", a.getRecords)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}/records/status", a.getRecords)
-	mux.HandleFunc("GET /novels/{id}/chapter/{n}/knowledge/activity", a.getChapterKnowledgeActivity)
-	mux.HandleFunc("POST /novels/{id}/chapter/{n}/knowledge/reextract", a.chapterKnowledgeMutation)
-	mux.HandleFunc("POST /novels/{id}/chapter/{n}/knowledge/reextract/{run}/apply", a.chapterKnowledgeMutation)
-	mux.HandleFunc("GET /novels/{id}/chapter/{n}/knowledge/held", a.getHeldKnowledge)
-	mux.HandleFunc("PATCH /novels/{id}/chapter/{n}/knowledge/review", a.postKnowledgeReview)
+	mux.HandleFunc("GET /novels/{id}/chapter/{n}/records/inspector", a.getRecordsInspector)
+	mux.HandleFunc("POST /novels/{id}/chapter/{n}/records/retry", a.postRecordsAction)
+	mux.HandleFunc("POST /novels/{id}/chapter/{n}/records/render-retry", a.postRecordsAction)
+	mux.HandleFunc("POST /novels/{id}/records/rebuild", a.postRecordsAction)
 	mux.HandleFunc("GET /novels/{id}/chapters", a.getChapters)
 	mux.HandleFunc("GET /novels/{id}/progress", a.getProgress)
-	mux.HandleFunc("GET /novels/{id}/knowledge-status", a.getKnowledgeStatus)
-	mux.HandleFunc("GET /novels/{id}/event-status", a.getEventStatus)
 	mux.HandleFunc("GET /novels/{id}/pipeline", a.getPipelineStatus)
 	mux.HandleFunc("POST /novels/{id}/translate-ahead", a.postTranslateAhead)
 	mux.HandleFunc("PATCH /novels/{id}/settings", a.patchNovelSettings)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}/preview", a.getChapterPreview)
 	mux.HandleFunc("GET /novels/{id}/translation-health", a.getTranslationHealth)
-	mux.HandleFunc("GET /novels/{id}/repair", a.getRepairStatus)
-	mux.HandleFunc("GET /novels/{id}/repair/preview", a.getRepairPreview)
-	mux.HandleFunc("GET /novels/{id}/repair/progress", a.getRepairProgress)
-	mux.HandleFunc("POST /novels/{id}/repair", a.postRepair)
-	mux.HandleFunc("DELETE /novels/{id}/repair/{request}", a.deleteRepair)
-	mux.HandleFunc("POST /novels/{id}/repair/{request}/retry-now", a.retryRepairNow)
-	mux.HandleFunc("PATCH /novels/{id}/facts/{fact}/display", a.mutateFact)
-	mux.HandleFunc("POST /novels/{id}/facts/{fact}/corrections", a.mutateFact)
-	mux.HandleFunc("DELETE /novels/{id}/facts/{fact}", a.mutateFact)
 	mux.HandleFunc("POST /novels/{id}/ask", a.postAsk)
 	mux.HandleFunc("GET /novels", a.getNovels)
 	mux.HandleFunc("GET /novels/{id}", a.getNovel)
 	mux.HandleFunc("POST /novels", a.postNovel)
 	mux.HandleFunc("DELETE /novels/{id}", a.deleteNovel)
-	mux.HandleFunc("DELETE /novels/{id}/graph", a.deleteGraph)
 	mux.HandleFunc("POST /novels/{id}/chapters", a.postChapter)
 	mux.HandleFunc("POST /novels/{id}/scrape", a.postScrape)
 	mux.HandleFunc("GET /novels/{id}/scrape/status", a.getScrapeStatus)
@@ -186,6 +171,10 @@ func (a *API) approveCharacterName(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(status)
 	_, _ = w.Write(result)
 }
+
+// Request bodies are bounded before they are read: an operator action is small, and an
+// unbounded read is a denial-of-service surface rather than a feature.
+const paramsRequestLimit = 1 << 20
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -341,116 +330,6 @@ func (a *API) queueAhead(ctx context.Context, novelID string, from int) {
 	}
 }
 
-func (a *API) getEntity(w http.ResponseWriter, r *http.Request) {
-	_, novelID, at, ok := a.gate(w, r)
-	if !ok {
-		return
-	}
-	entityID, ok := pathUUID(r, "eid")
-	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid entity id")
-		return
-	}
-	entity, err := a.store.GetEntity(r.Context(), novelID, entityID, at)
-	if errors.Is(err, ErrNotFound) {
-		writeError(w, http.StatusNotFound, "entity not found")
-		return
-	}
-	if err != nil {
-		log.Printf("get entity: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not load entity")
-		return
-	}
-	writeJSON(w, http.StatusOK, EntityResponse{Knowledge: entity.Knowledge, NovelID: novelID, At: at, Entity: entity})
-}
-
-func (a *API) getWiki(w http.ResponseWriter, r *http.Request) {
-	_, novelID, at, ok := a.gate(w, r)
-	if !ok {
-		return
-	}
-	knowledge, knowledgeErr := a.store.KnowledgeStatus(r.Context(), novelID, at, at)
-	if knowledgeErr != nil {
-		writeError(w, http.StatusInternalServerError, "could not load knowledge status")
-		return
-	}
-	entities, err := a.store.ListWiki(r.Context(), novelID, at)
-	if err != nil {
-		log.Printf("list wiki: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not load wiki")
-		return
-	}
-	if !a.knowledgeUnchanged(w, r, novelID, at, knowledge) {
-		return
-	}
-	writeJSON(w, http.StatusOK, WikiResponse{Knowledge: knowledge, NovelID: novelID, At: at, Entities: entities})
-}
-
-func (a *API) getTimeline(w http.ResponseWriter, r *http.Request) {
-	_, novelID, at, ok := a.gate(w, r)
-	if !ok {
-		return
-	}
-	knowledge, knowledgeErr := a.store.KnowledgeStatus(r.Context(), novelID, at, at)
-	if knowledgeErr != nil {
-		writeError(w, http.StatusInternalServerError, "could not load knowledge status")
-		return
-	}
-	eventKnowledge, eventKnowledgeErr := a.store.EventStatus(r.Context(), novelID, at, at)
-	if eventKnowledgeErr != nil {
-		writeError(w, http.StatusInternalServerError, "could not load event status")
-		return
-	}
-	events, err := a.store.ListTimeline(r.Context(), novelID, at)
-	if err != nil {
-		log.Printf("list timeline: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not load timeline")
-		return
-	}
-	if !a.knowledgeUnchanged(w, r, novelID, at, knowledge) {
-		return
-	}
-	eventAfter, err := a.store.EventStatus(r.Context(), novelID, at, at)
-	if err != nil || eventAfter.RevisionID != eventKnowledge.RevisionID || eventAfter.Version != eventKnowledge.Version {
-		writeError(w, http.StatusConflict, "events changed; retry request")
-		return
-	}
-	writeJSON(w, http.StatusOK, TimelineResponse{Knowledge: knowledge, EventKnowledge: eventKnowledge, NovelID: novelID, At: at, Events: events})
-}
-
-func (a *API) getRelationships(w http.ResponseWriter, r *http.Request) {
-	_, novelID, at, ok := a.gate(w, r)
-	if !ok {
-		return
-	}
-	entityID, ok := pathUUID(r, "eid")
-	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid entity id")
-		return
-	}
-	knowledge, knowledgeErr := a.store.KnowledgeStatus(r.Context(), novelID, at, at)
-	if knowledgeErr != nil {
-		writeError(w, http.StatusInternalServerError, "could not load knowledge status")
-		return
-	}
-	relationships, err := a.store.ListRelationships(r.Context(), novelID, entityID, at)
-	if errors.Is(err, ErrNotFound) {
-		writeError(w, http.StatusNotFound, "entity not found")
-		return
-	}
-	if err != nil {
-		log.Printf("list relationships: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not load relationships")
-		return
-	}
-	if !a.knowledgeUnchanged(w, r, novelID, at, knowledge) {
-		return
-	}
-	writeJSON(w, http.StatusOK, RelationshipsResponse{Knowledge: knowledge,
-		NovelID: novelID, At: at, EntityID: entityID, Relationships: relationships,
-	})
-}
-
 func (a *API) getChapter(w http.ResponseWriter, r *http.Request) {
 	// requested=nil: "at" has no meaning for which chapter to serve (chapter n IS the
 	// resource) — gateAt is reused purely for the reader/novel validation + progress
@@ -483,15 +362,13 @@ func (a *API) getChapter(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load chapter")
 	default:
 		writeJSON(w, http.StatusOK, ChapterResponse{
-			Knowledge:          chapter.Knowledge,
-			EventKnowledge:     chapter.EventKnowledge,
+			RecordsStatus:      chapter.RecordsStatus,
 			NovelID:            novelID,
 			ChapterIndex:       n,
 			At:                 progress,
 			Text:               chapter.Text,
 			Spans:              chapter.Spans,
-			NewFacts:           chapter.NewFacts,
-			Events:             chapter.Events,
+			RecordRows:         chapter.RecordRows,
 			HasNext:            chapter.HasNext,
 			SiteChapterNo:      chapter.SiteChapterNo,
 			SourceURL:          chapter.SourceURL,
@@ -790,27 +667,6 @@ func (a *API) deleteNovel(w http.ResponseWriter, r *http.Request) {
 // deleteGraph is temporarily reader-facing until accounts own their own graphs. The
 // writer service still owns the destructive transaction; this API never gets broad
 // database write privileges. It returns no story data, so the spoiler gate is unchanged.
-func (a *API) deleteGraph(w http.ResponseWriter, r *http.Request) {
-	prepareReaderResponse(w)
-	novelID, ok := pathUUID(r, "id")
-	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid novel id")
-		return
-	}
-	result, status, err := a.ingest.DeleteGraph(r.Context(), novelID)
-	if err != nil {
-		log.Printf("delete graph: %v", err)
-		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(result)
-}
-
-// postChapter proxies chapter paste to ingest-api — see ingest.go. Unauthenticated on
-// ingest-api's side by design (only POST /novels is token-gated there); this route
-// exists so the browser only ever talks to reader-api, per vite.config.ts's invariant.
 func (a *API) postChapter(w http.ResponseWriter, r *http.Request) {
 	prepareReaderResponse(w)
 	novelID, ok := pathUUID(r, "id")
@@ -946,21 +802,13 @@ func (a *API) getGlossary(w http.ResponseWriter, r *http.Request) {
 	if requested != nil {
 		at = min(at, *requested)
 	}
-	knowledge, knowledgeErr := a.store.KnowledgeStatus(r.Context(), novelID, at, at)
-	if knowledgeErr != nil {
-		writeError(w, http.StatusInternalServerError, "could not load knowledge status")
-		return
-	}
 	terms, err := a.store.ListGlossary(r.Context(), novelID, at)
 	if err != nil {
 		log.Printf("list glossary: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load glossary")
 		return
 	}
-	if !a.knowledgeUnchanged(w, r, novelID, at, knowledge) {
-		return
-	}
-	writeJSON(w, http.StatusOK, GlossaryResponse{Knowledge: knowledge, NovelID: novelID, At: at, Terms: terms})
+	writeJSON(w, http.StatusOK, GlossaryResponse{NovelID: novelID, At: at, Terms: terms})
 }
 
 // getVocabulary is gated by the reader's stored position. Unlike the legacy glossary
@@ -1195,8 +1043,8 @@ func (a *API) getProviderHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	track := r.URL.Query().Get("track")
-	if track != "graph" && track != "events" && track != "translate" && track != "extract" {
-		writeError(w, http.StatusBadRequest, "track must be graph, events, translate, or extract")
+	if track != "translate" && track != "extract" {
+		writeError(w, http.StatusBadRequest, "track must be translate or extract")
 		return
 	}
 	result, status, err := a.ingest.ProviderHealth(r.Context(), novelID, track)
