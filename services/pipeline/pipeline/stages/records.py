@@ -11,6 +11,7 @@ from pipeline.jobs import model_for_stage
 from pipeline.llm.provider import AdmissionRejected, BatchRequest
 from pipeline.passages import source_passages
 from pipeline.records import build_rows, check_records, collect_names, parse_records, unresolved, validate_resolution
+from pipeline.records_generation import mark_record_processing, prepare_generation
 from pipeline.records_prompts import DISCOVERY_SYSTEM, RENDER_SYSTEM, RESOLVE_SYSTEM
 
 log = logging.getLogger(__name__)
@@ -46,6 +47,14 @@ class RecordsStage:
     name = "records"
 
     async def run(self, ctx: StageContext, state: PipelineState) -> None:
+        # Generation identity is an input to the whole records extraction, not merely
+        # publication: pin it before discovery, candidate selection, and who's-who.
+        await prepare_generation(ctx, state)
+        if not await mark_record_processing(ctx, state):
+            # An enrichment pointer can be redelivered after its run was already
+            # published. Leave records empty so DISPLAY_SCAN may still run, but avoid
+            # spending completion calls or attempting to mutate the frozen run.
+            return
         passages = source_passages(state.envelope.raw_text)
         by_id = {p["id"]: p["text"] for p in passages}
         source_hash = state.envelope.source_meta.raw_hash
@@ -64,7 +73,9 @@ class RecordsStage:
         parsed["served_provider"] = served_provider
         parsed["served_model"] = served_model
         parsed["source_hash"] = source_hash
-        candidates = await self._candidates(ctx, state.envelope.chapter_index, names)
+        candidates = await self._candidates(
+            ctx, state.envelope.chapter_index, names, state.record_generation_id
+        )
         resolution = unresolved(names, "no names to resolve") if not names else await self._resolve(ctx, state, names, candidates)
         parsed["resolution"] = resolution
         parsed["rows"] = build_rows(parsed["records"], resolution)
@@ -75,15 +86,19 @@ class RecordsStage:
         log.info("records prepared chapter=%s kept=%s dropped=%s unresolved=%s", state.envelope.chapter_index,
                  parsed["checks"]["kept"], len(parsed["checks"]["dropped"]), len(resolution.get("references", [])))
 
-    async def _candidates(self, ctx: StageContext, chapter: int, names: list[dict]) -> list[dict]:
-        gen = await (await ctx.db.execute("SELECT active_record_generation FROM novel WHERE id=%s", (ctx.novel.id,))).fetchone()
-        if not gen or not gen[0]:
+    async def _candidates(self, ctx: StageContext, chapter: int, names: list[dict],
+                          generation_id: str | None) -> list[dict]:
+        # Candidate discovery is fenced to the generation selected before who's-who.
+        # Never reread novel.active_record_generation here: a rebuild can switch it
+        # between preparation and this query, and mixing candidates would corrupt the
+        # chapter's authoritative resolution.
+        if not generation_id:
             return []
         rows = await (await ctx.db.execute("""SELECT DISTINCT e.id::text,e.canonical,e.kind
              FROM entity e JOIN alias a ON a.entity_id=e.id
             WHERE e.novel_id=%s AND e.record_generation_id=%s AND e.first_seen_chapter < %s
               AND EXISTS (SELECT 1 FROM record_run r WHERE r.generation_id=%s AND r.status='published' AND r.chapter_index < %s)
-            ORDER BY e.canonical,e.id LIMIT 256""", (ctx.novel.id, gen[0], chapter, gen[0], chapter))).fetchall()
+            ORDER BY e.canonical,e.id LIMIT 256""", (ctx.novel.id, generation_id, chapter, generation_id, chapter))).fetchall()
         all_candidates = [{"id": str(r[0]), "canonical": r[1], "kind": r[2]} for r in rows]
         surfaces = {n["name"] for n in names}
         glossary = await (await ctx.db.execute("SELECT source_term,target_term FROM glossary WHERE novel_id=%s AND locked_at_chapter<=%s AND NOT deleted ORDER BY source_term", (ctx.novel.id, chapter))).fetchall()

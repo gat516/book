@@ -28,7 +28,7 @@ class _AliasRows:
 class _AliasDB:
     async def execute(self, query, params):
         assert "FROM alias" in query
-        assert params == ("novel",)
+        assert params == ("novel", 7)
         return _AliasRows()
 
 

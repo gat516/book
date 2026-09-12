@@ -14,7 +14,6 @@ import signal
 import time
 from contextlib import suppress
 
-import httpx
 import psycopg
 import redis.asyncio as aredis
 from minio import Minio
@@ -83,10 +82,6 @@ class TranslationPublished(Exception):
     """Validated prose is durable; hand remaining work back as low-priority enrichment."""
 
 
-class EmbeddingDimensionMismatch(RuntimeError):
-    """Embedding configuration drift is fatal and must stop the worker process."""
-
-
 NOVEL_CHECK_SECONDS = 2
 TRANSLATE_STAGE = "translate"
 # Partial translation text, so a reader watching an in-progress chapter sees it arrive
@@ -150,10 +145,6 @@ class Worker:
         self.cache = LLMCache(self.redis)
         self.db: psycopg.AsyncConnection | None = None
         self.stopping = asyncio.Event()
-        # Embedding readiness belongs to chapter work, not worker startup (§0, §5.4).
-        # A hosted-provider repair can run without touching this local dependency, and
-        # the probe is shared by all chapters once the local embedding service answers.
-        self._embeddings_ready = False
         # Consecutive admission deferrals across chapters. A rate limit is a property of
         # the account, not the chapter, so backing off per-chapter would just round-robin
         # the same saturated quota. Reset by any completed chapter.
@@ -179,6 +170,13 @@ class Worker:
             # requeueing an output that was already committed at the boundary.
             if work in done:
                 return await work
+            # request_stop() may set the event immediately before the work coroutine
+            # completes its watcher cleanup. Give that cleanup a short bounded grace
+            # window before treating the signal as cancellation; this preserves the
+            # completed-work boundary without weakening cancellation of live work.
+            await asyncio.wait({work}, timeout=0.01)
+            if work.done():
+                return await work
             work.cancel()
             return await work
         finally:
@@ -186,42 +184,6 @@ class Worker:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(work, stop, return_exceptions=True)
-
-    async def _ensure_embeddings(self) -> None:
-        """Probe embeddings once, when a chapter is actually about to run.
-
-        Embeddings are intentionally local even when completions are hosted (§5.4), but
-        that local dependency must not gate worker startup or repair control. A failed
-        transport is admission backpressure for the chapter claim; a reachable service
-        returning the wrong vector width is configuration drift and remains fatal.
-        """
-        if self._embeddings_ready:
-            return
-        try:
-            [vec] = await self.embed_provider.embed(["dimension probe"])
-        except AdmissionRejected as exc:
-            # Ollama already maps transport failures to AdmissionRejected. Replace its
-            # provider-specific message with the safe, stable worker category while
-            # preserving the provider-selected delay and exact-hint bit.
-            rejected = AdmissionRejected(
-                "embed_unavailable",
-                retry_after_s=exc.retry_after_s,
-                exact_hint=exc.exact_hint,
-            )
-            rejected.category = "embed_unavailable"
-            raise rejected from exc
-        except (httpx.TransportError, TimeoutError, ConnectionError, OSError) as exc:
-            # Keep this boundary defensive for providers/test doubles that do not use the
-            # shared transient_as_backpressure adapter.
-            rejected = AdmissionRejected("embed_unavailable", retry_after_s=5.0)
-            rejected.category = "embed_unavailable"
-            raise rejected from exc
-        if len(vec) != self.cfg.embed_dim:
-            raise EmbeddingDimensionMismatch(
-                f"embed model {self.cfg.embed_model!r} returned {len(vec)} dims, "
-                f"but EMBED_DIM={self.cfg.embed_dim} (must match chunk/entity.embedding, see 0004)"
-            )
-        self._embeddings_ready = True
 
     async def start(self) -> None:
         if self.stopping.is_set():
@@ -325,11 +287,6 @@ class Worker:
                     getattr(exc, "category", "rate_limited"), delay, exc.retry_after_s,
                     self._deferrals,
                 )
-            except EmbeddingDimensionMismatch:
-                # This is configuration drift against migration 0004, not chapter
-                # backpressure. Let it terminate the worker loudly instead of allowing
-                # the reaper to retry every claim against the same bad dimension.
-                raise
             except ChapterFailed:
                 # The outcome is recorded on the chapter row, so this job is not lost and
                 # must not be resurrected: drop the claim outright. Leaving it made failed
@@ -363,10 +320,9 @@ class Worker:
 
     async def _handle_claim(self, raw: str) -> None:
         msg = QueueMessage.model_validate_json(raw)
-        # This is the first point at which ordinary chapter work is about to begin.
-        # Keep hosted-provider repair/background work independent of local Ollama health
-        # and let AdmissionRejected return this claim to pending without chapter retries.
-        await self._ensure_embeddings()
+        # Embeddings are an optional retrieval index. They must never gate the durable
+        # translation/records/display path: records_publish() stores NULL for a failed
+        # or unavailable vector and retrieval simply excludes that row (§0 append-only).
         work = asyncio.create_task(self._handle(raw))
         owner = asyncio.create_task(self._watch_novel(msg.novel_id))
         try:
@@ -498,7 +454,10 @@ class Worker:
             await self._clear_preview(msg.novel_id, msg.chapter_index)
             return
         raw_hash, raw_uri, source_meta, _status, readable, translated_uri = chapter
-        if _status == "done" and not msg.retranslate:
+        # A durable translation can legitimately carry a later enrichment pointer. The
+        # enrichment flag explicitly bypasses this stale-pointer guard; only an ordinary
+        # duplicate or retranslate pointer is safe to drop.
+        if _status == "done" and not msg.retranslate and not msg.enrichment:
             log.info("chapter %s/%s already done; dropping stale pointer", msg.novel_id, msg.chapter_index)
             return
 
@@ -533,7 +492,9 @@ class Worker:
             language_profile=language_profile_for(source_lang),
             provider=provider,
             batch_manager=batch_manager,
-            embed_provider=provider if self.cfg.llm_provider == "gateway" else self.embed_provider,
+            # Embeddings are an independent retrieval backend. Even gateway completion
+            # routing must not replace an explicitly selected EMBED_PROVIDER.
+            embed_provider=self.embed_provider,
             db=self.db,
             objects=self.minio,
             cfg=self.cfg,
@@ -545,6 +506,7 @@ class Worker:
             model_override=model_override,
         )
         state = PipelineState(envelope=envelope)
+        stage_name = ""
         if readable or msg.enrichment:
             # Count this attempt. `readable` alone was not enough: a pre-TRANSLATE retry
             # never takes that branch, so enrichment_attempts stayed 0 forever and the
@@ -558,6 +520,7 @@ class Worker:
 
         try:
             for stage in DEFAULT_STAGES:
+                stage_name = stage.name
                 # Publish the stage name and its own start time atomically. The claim's
                 # original timestamp remains the total-chapter clock; conflating the two
                 # made the UI attribute every earlier stage's minutes to the current one.
@@ -620,6 +583,16 @@ class Worker:
             # It is intentionally after translation so an untranslated chapter can become
             # readable early and enrichment is retried as a low-priority queue message.
             if state.records is not None:
+                stage_name = "publish"
+                await self.redis.eval(
+                    PUBLISH_STAGE,
+                    2,
+                    PROCESSING_STAGE,
+                    PROCESSING_STAGE_STARTED,
+                    raw,
+                    stage_name,
+                    str(time.time()),
+                )
                 await publish_records(ctx, state)
         except TranslationPublished:
             raise
@@ -632,17 +605,20 @@ class Worker:
             if await self._fetch_one("SELECT 1 FROM novel WHERE id=%s", (msg.novel_id,)) is None:
                 raise NovelDeleted(msg.novel_id) from exc
             async with self.db.transaction():
-                await record_failure(self.db, msg.novel_id, msg.chapter_index, stage.name, exc)
-                if stage.name == "records":
+                await record_failure(self.db, msg.novel_id, msg.chapter_index, stage_name, exc)
+                if stage_name in {"records", "publish"}:
                     # The run row is the reader-facing progress surface for this chapter.
-                    # Without this it stays 'processing' forever and a failed extraction is
-                    # indistinguishable from a slow one. Only the bounded category from
+                    # Without this it stays 'processing' forever and a failed extraction or
+                    # publication is indistinguishable from a slow one. Only the bounded category from
                     # failures.py is stored -- never the exception text (§0, migration 0046).
-                    await self.db.execute(
-                        "UPDATE record_run SET status='failed',"
-                        "diagnostics=jsonb_build_object('failure',%s::text) "
-                        "WHERE novel_id=%s AND chapter_index=%s AND status='processing'",
-                        (error_code(exc), msg.novel_id, msg.chapter_index))
+                    run_generation = state.record_generation_id
+                    if run_generation:
+                        await self.db.execute(
+                            "UPDATE record_run SET status='failed',"
+                            "diagnostics=jsonb_build_object('failure',%s::text) "
+                            "WHERE novel_id=%s AND generation_id=%s AND chapter_index=%s "
+                            "AND status='processing'",
+                            (error_code(exc), msg.novel_id, run_generation, msg.chapter_index))
                 await self._set_status(msg, "name_repair_error" if msg.retranslate else "error")
                 # Schedule a retry for ANY recorded failure. This used to be guarded by
                 # `if readable`, which silently made every pre-TRANSLATE failure terminal:

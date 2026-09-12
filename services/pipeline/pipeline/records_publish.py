@@ -11,69 +11,25 @@ import hashlib
 import json
 import logging
 import uuid
+import asyncio
+from collections.abc import Sequence
 from typing import Any
 
 from pgvector.psycopg import register_vector_async
 from psycopg.types.json import Jsonb
 
 from pipeline.context import PipelineState, StageContext
-from pipeline.jobs import model_for_stage
 from pipeline.passages import source_passages
 from pipeline.records import deterministic_entity_id
+from pipeline.records_generation import verify_generation
 
 log = logging.getLogger(__name__)
 
-CHECKS_VERSION = "records-checks-v1"
 PARSER_VERSION = "records-parser-v1"
 
 
 def _uuid(value: str) -> str:
     return str(uuid.UUID(value))
-
-
-async def _generation(ctx: StageContext, *, source_hash: str) -> tuple[str, dict[str, Any]]:
-    """Lock and return the active generation, replacing an uncommitted seed when needed."""
-    db = ctx.db
-    await db.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"records:{ctx.novel.id}",))
-    row = await (await db.execute(
-        """SELECT n.active_record_generation::text,g.id::text,g.extraction_model,
-                  g.prompt_version,g.checks_version,g.source_lang,g.target_lang,g.state
-             FROM novel n LEFT JOIN record_generation g ON g.id=n.active_record_generation
-            WHERE n.id=%s FOR UPDATE""", (ctx.novel.id,))).fetchone()
-    if row is None:
-        raise RuntimeError("novel disappeared while publishing records")
-    active, gid, model, prompt, checks, source_lang, target_lang, state = row
-    requested_model = model_for_stage("extract", ctx.cfg, ctx.model_override)
-    mismatch = (not gid or state == "retired" or
-                (model and model != requested_model) or
-                (prompt and prompt != ctx.cfg.prompt_version) or
-                (checks and checks != CHECKS_VERSION) or
-                source_lang != ctx.novel.source_lang or target_lang != ctx.novel.target_lang)
-    # A blank generation is the migration's seed. It is safe to pin it to the first
-    # actual request; once a run exists, every changed input receives a new generation.
-    if gid and not mismatch:
-        used = await (await db.execute(
-            "SELECT 1 FROM record_run WHERE generation_id=%s AND status IN ('published','processing','failed') LIMIT 1",
-            (gid,))).fetchone()
-        mismatch = bool(used and (model != requested_model or prompt != ctx.cfg.prompt_version or checks != CHECKS_VERSION))
-    if not gid or mismatch:
-        new = await (await db.execute(
-            """INSERT INTO record_generation
-              (novel_id,ontology,prompt_version,checks_version,extraction_model,rendering_model,source_lang,target_lang,state)
-             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'active') RETURNING id::text""",
-            (ctx.novel.id, Jsonb(ctx.novel.ontology), ctx.cfg.prompt_version, CHECKS_VERSION,
-             requested_model, None, ctx.novel.source_lang, ctx.novel.target_lang))).fetchone()
-        gid = str(new[0])
-        await db.execute("UPDATE novel SET active_record_generation=%s WHERE id=%s", (gid, ctx.novel.id))
-        log.info("activated records generation novel=%s generation=%s", ctx.novel.id, gid)
-    else:
-        # Pin the effective model/config on the seed before its first run.
-        await db.execute("""UPDATE record_generation SET extraction_model=%s,prompt_version=%s,
-                           checks_version=%s,source_lang=%s,target_lang=%s
-                         WHERE id=%s AND extraction_model=''""",
-                         (requested_model, ctx.cfg.prompt_version, CHECKS_VERSION,
-                          ctx.novel.source_lang, ctx.novel.target_lang, gid))
-    return str(gid), {"requested_model": requested_model}
 
 
 def _run_id(generation_id: str, chapter: int) -> str:
@@ -88,6 +44,62 @@ def _ref_id(run_id: str, index: int) -> str:
     return str(uuid.uuid5(uuid.UUID(run_id), f"reference:{index}"))
 
 
+def _display_binding_id(alias_id: str | None, display_text: str, span: Any,
+                        renderings: list[Any], resolutions: dict[str, str],
+                        entity_ids: dict[str, str]) -> str | None:
+    """Bind a display span only through the chapter's authoritative resolution.
+
+    DISPLAY_SCAN supplies coordinates and (for translated text) a source/display term
+    alignment. Neither spelling nor a UUID appearing elsewhere in the chapter is enough:
+    glossary-only mentions and cross-bound entities remain unbound (§0.3).
+    """
+    bound = str(alias_id) if alias_id else ""
+    if not bound:
+        return None
+    display_term = display_text[span.char_start:span.char_end]
+    proposal_ids = {
+        resolutions.get(rendering.source_term)
+        for rendering in renderings
+        if rendering.char_start == span.char_start and rendering.char_end == span.char_end
+        and rendering.display_term == display_term
+    }
+    if not proposal_ids:
+        # Same-language display spans have no alignment ledger; SCAN's source surface is
+        # the only candidate, but it still must be present in this chapter's resolution.
+        proposal_ids = {resolutions.get(display_term)}
+    proposal_ids.discard(None)
+    if len(proposal_ids) != 1:
+        return None
+    proposal_id = next(iter(proposal_ids))
+    durable = entity_ids.get(proposal_id)
+    return durable if durable == bound else None
+
+
+async def _embedding_rows(ctx: StageContext, chunks: Sequence[Any]) -> list[list[float] | None]:
+    """Best-effort chunk embeddings; never make publication depend on retrieval.
+
+    Translation, records, and display-scan are durable chapter work. Chunk vectors are
+    only a derived semantic-retrieval index, so an unavailable provider or a model width
+    mismatch leaves the chunk row present with ``embedding IS NULL``. This also avoids
+    poisoning a pgvector column with a vector from a changed model (§0 append-only).
+    """
+    if not chunks:
+        return []
+    try:
+        vectors = await ctx.embed_provider.embed([chunk.text for chunk in chunks])
+        if len(vectors) != len(chunks):
+            raise ValueError(f"embedding provider returned {len(vectors)} vectors for {len(chunks)} chunks")
+        expected = ctx.cfg.embed_dim
+        if any(not isinstance(vector, (list, tuple)) or len(vector) != expected for vector in vectors):
+            raise ValueError(f"embedding provider returned a vector with unexpected width (expected {expected})")
+        return [list(vector) for vector in vectors]
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — retrieval-only degradation
+        log.warning("chunk embeddings unavailable; publishing chunks without vectors: %s", type(exc).__name__)
+        return [None] * len(chunks)
+
+
 async def publish_records(ctx: StageContext, state: PipelineState) -> None:
     """Publish one complete chapter run and derived target-language chunks atomically."""
     result = state.records
@@ -95,14 +107,16 @@ async def publish_records(ctx: StageContext, state: PipelineState) -> None:
         raise RuntimeError("records stage produced no result")
     source_hash = state.envelope.source_meta.raw_hash
     passages = source_passages(state.envelope.raw_text)
-    # Embeddings are derived chapter data. They are computed before opening the
-    # publication transaction so a provider failure cannot leave a half-published run.
+    # Embeddings are derived chapter data. Compute them before opening the publication
+    # transaction, but degrade to NULL vectors if semantic retrieval is unavailable.
     target_chunks = state.chunks
-    embeddings = await ctx.embed_provider.embed([c.text for c in target_chunks]) if target_chunks else []
+    embeddings = await _embedding_rows(ctx, target_chunks)
     await register_vector_async(ctx.db)
 
     async with ctx.db.transaction():
-        generation_id, config = await _generation(ctx, source_hash=source_hash)
+        config = await verify_generation(ctx, state)
+        generation_id = state.record_generation_id
+        assert generation_id is not None
         chapter = state.envelope.chapter_index
         run_id = _run_id(generation_id, chapter)
         existing = await (await ctx.db.execute(
@@ -229,14 +243,18 @@ async def publish_records(ctx: StageContext, state: PipelineState) -> None:
         # decides identity, so a span binds only when the authoritative resolution
         # already owns that surface. Anything else is published unbound (§0.3).
         await ctx.db.execute("DELETE FROM record_mention_binding WHERE run_id=%s", (run_id,))
-        entity_ids = {str(e["id"]) for e in (result.get("resolution") or {}).get("entities", [])}
+        display_text = state.translation or state.envelope.raw_text
+        resolution_map = (result.get("resolution") or {}).get("name_map") or {}
         for span in getattr(state, "display_spans", []) or []:
-            bound = str(span.alias_id) if span.alias_id else ""
+            bound = _display_binding_id(
+                span.alias_id, display_text, span, getattr(state, "term_renderings", []) or [],
+                resolution_map, entity_ids,
+            )
             await ctx.db.execute(
                 """INSERT INTO record_mention_binding
                    (novel_id,generation_id,run_id,entity_id,source_chapter,char_start,char_end)
                    VALUES (%s,%s,%s,%s,%s,%s,%s)""",
-                (ctx.novel.id, generation_id, run_id, bound if bound in entity_ids else None,
+                (ctx.novel.id, generation_id, run_id, bound,
                  chapter, span.char_start, span.char_end))
 
         await ctx.db.execute("DELETE FROM chunk WHERE novel_id=%s AND chapter_index=%s", (ctx.novel.id, chapter))
