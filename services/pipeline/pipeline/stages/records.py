@@ -94,7 +94,7 @@ class RecordsStage:
         # chapter's authoritative resolution.
         if not generation_id:
             return []
-        rows = await (await ctx.db.execute("""SELECT DISTINCT e.id::text,e.canonical,e.kind
+        rows = await (await ctx.db.execute("""SELECT DISTINCT e.id,e.canonical,e.kind
              FROM entity e JOIN alias a ON a.entity_id=e.id
             WHERE e.novel_id=%s AND e.record_generation_id=%s AND e.first_seen_chapter < %s
               AND EXISTS (SELECT 1 FROM record_run r WHERE r.generation_id=%s AND r.status='published' AND r.chapter_index < %s)

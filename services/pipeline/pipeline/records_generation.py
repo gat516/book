@@ -115,7 +115,7 @@ async def prepare_generation(ctx: StageContext, state: PipelineState) -> Generat
                       g.source_lang,g.target_lang
                  FROM novel n LEFT JOIN record_generation g
                    ON g.id=n.active_record_generation
-                WHERE n.id=%s FOR UPDATE""",
+                WHERE n.id=%s FOR UPDATE OF n""",
             (ctx.novel.id,),
         )).fetchone()
         if row is None:
