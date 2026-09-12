@@ -428,6 +428,41 @@ func TestUnpublishedRunIsInvisible(t *testing.T) {
 	}
 }
 
+// A published extraction with no accepted rows has completed all the rendering work it
+// can possibly have. An empty record_rendering table must not leave the UI polling it
+// forever as if an English-rendering job were still running.
+func TestPublishedEmptyRunHasReadyRenderingStatus(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	fixture := seedIntegrationFixture(t, admin)
+	setProgress(t, admin, fixture.novelID, 1)
+	if _, err := admin.Exec(context.Background(),
+		`DELETE FROM record_row WHERE novel_id=$1 AND source_chapter=1`, fixture.novelID); err != nil {
+		t.Fatalf("remove chapter 1 records: %v", err)
+	}
+
+	rows, err := store.ListRecords(context.Background(), fixture.novelID, 1, 1)
+	if err != nil {
+		t.Fatalf("chapter 1 rows: %v", err)
+	}
+	if len(rows.Rows) != 0 || rows.Status.ExtractionStatus != "ready" || rows.Status.RenderingStatus != "ready" {
+		t.Fatalf("empty published run status = %+v rows=%d", rows.Status, len(rows.Rows))
+	}
+}
+
+func TestPublishedRowsWithoutRenderingsStayPending(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	fixture := seedIntegrationFixture(t, admin)
+	setProgress(t, admin, fixture.novelID, 1)
+
+	rows, err := store.ListRecords(context.Background(), fixture.novelID, 1, 1)
+	if err != nil {
+		t.Fatalf("chapter 1 rows: %v", err)
+	}
+	if len(rows.Rows) == 0 || rows.Status.ExtractionStatus != "ready" || rows.Status.RenderingStatus != "pending" {
+		t.Fatalf("unrendered published row status = %+v rows=%d", rows.Status, len(rows.Rows))
+	}
+}
+
 // RLS is the second lock: with no GUCs set, the reader role sees nothing at all, and a
 // query for another novel returns nothing even inside a valid reader transaction.
 func TestRLSAloneFailsClosedAndDoesNotLeakSettings(t *testing.T) {

@@ -86,13 +86,20 @@ SELECT g.id::text,
                           AND c.chapter_index <= $2
                           AND ($3::int IS NULL OR c.chapter_index = $3::int)
                     ) THEN 'failed' ELSE 'pending' END),
-  COALESCE((SELECT CASE WHEN bool_or(rr.status='failed') THEN 'failed'
-                        WHEN bool_and(rr.status='ready') THEN 'ready'
-                        ELSE 'pending' END
-              FROM record_rendering rr
-              JOIN record_row w ON w.id=rr.row_id
-             WHERE w.novel_id=$1 AND w.generation_id=g.id AND w.source_chapter <= $2
-               AND ($3::int IS NULL OR w.source_chapter = $3::int)), 'ready'),
+  CASE WHEN NOT EXISTS (
+              SELECT 1 FROM record_row w0
+              JOIN record_run r0 ON r0.id=w0.run_id AND r0.status='published'
+             WHERE w0.novel_id=$1 AND w0.generation_id=g.id AND w0.source_chapter <= $2
+               AND ($3::int IS NULL OR w0.source_chapter = $3::int)
+       ) THEN 'ready'
+       ELSE COALESCE((SELECT CASE WHEN bool_or(rr.status='failed') THEN 'failed'
+                                  WHEN bool_and(rr.status='ready') THEN 'ready'
+                                  ELSE 'pending' END
+                        FROM record_rendering rr
+                        JOIN record_row w ON w.id=rr.row_id
+                       WHERE w.novel_id=$1 AND w.generation_id=g.id AND w.source_chapter <= $2
+                         AND ($3::int IS NULL OR w.source_chapter = $3::int)), 'pending')
+       END,
   COALESCE((SELECT max(r.publication_version) FROM record_run r
              WHERE r.novel_id=$1 AND r.generation_id=g.id AND r.chapter_index <= $2), 0),
   COALESCE((SELECT sum(r.warning_count) FROM record_run r
