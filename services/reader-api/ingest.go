@@ -25,6 +25,9 @@ type IngestClient interface {
 	// extraction, retry only its rendering, or rebuild the novel into a fresh
 	// generation. chapter is "" for the novel-wide rebuild.
 	RecordsAction(ctx context.Context, novelID, chapter, action string) (json.RawMessage, int, error)
+	RecordsRebuildStatus(ctx context.Context, novelID string) (json.RawMessage, int, error)
+	DiscardRecordsRebuild(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
+	ReviewRecord(ctx context.Context, novelID, chapter string, body json.RawMessage) (json.RawMessage, int, error)
 	CreateNovel(ctx context.Context, body json.RawMessage) (json.RawMessage, int, error)
 	DeleteNovel(ctx context.Context, novelID string) (json.RawMessage, int, error)
 	PasteChapter(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
@@ -58,6 +61,18 @@ func (c *ingestHTTPClient) RecordsAction(ctx context.Context, novelID, chapter, 
 		return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/records/rebuild", nil, true)
 	}
 	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/chapter/"+chapter+"/records/"+action, nil, true)
+}
+
+func (c *ingestHTTPClient) RecordsRebuildStatus(ctx context.Context, novelID string) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodGet, "/novels/"+novelID+"/records/rebuild/status", nil, true)
+}
+
+func (c *ingestHTTPClient) DiscardRecordsRebuild(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/records/rebuild/discard", body, true)
+}
+
+func (c *ingestHTTPClient) ReviewRecord(ctx context.Context, novelID, chapter string, body json.RawMessage) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodPatch, "/novels/"+novelID+"/chapter/"+chapter+"/records/review", body, true)
 }
 
 type ingestHTTPClient struct {

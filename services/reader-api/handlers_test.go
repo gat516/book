@@ -33,6 +33,8 @@ type fakeStore struct {
 	recordsErr      error
 	inspector       RecordsInspectorResponse
 	inspectorErr    error
+	reviews         RecordReviewResponse
+	reviewsErr      error
 	chapter         ChapterView
 	chapterErr      error
 	novels          []NovelSummary
@@ -77,6 +79,20 @@ type fakeIngestClient struct {
 func (f *fakeIngestClient) RecordsAction(_ context.Context, _, chapter, action string) (json.RawMessage, int, error) {
 	f.lastBody = json.RawMessage(`{"chapter":"` + chapter + `","action":"` + action + `"}`)
 	return json.RawMessage(`{"ok":true}`), 200, nil
+}
+
+func (f *fakeIngestClient) RecordsRebuildStatus(_ context.Context, _ string) (json.RawMessage, int, error) {
+	return f.response, f.status, f.err
+}
+
+func (f *fakeIngestClient) DiscardRecordsRebuild(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
+}
+
+func (f *fakeIngestClient) ReviewRecord(_ context.Context, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
 }
 
 func (f *fakeIngestClient) QueueControl(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
@@ -238,6 +254,17 @@ func (f *fakeStore) ListRecordsInspector(_ context.Context, _ string, chapter, a
 	out := f.inspector
 	out.At = at
 	return out, f.inspectorErr
+}
+
+func (f *fakeStore) ListRecordReviews(_ context.Context, _ string, chapter, at int) (RecordReviewResponse, error) {
+	f.lastChapter = chapter
+	f.lastAt = at
+	if chapter > at {
+		return RecordReviewResponse{}, ErrNotFound
+	}
+	out := f.reviews
+	out.At = at
+	return out, f.reviewsErr
 }
 
 func (f *fakeStore) ListNovels(context.Context) ([]NovelSummary, error) {
@@ -1070,7 +1097,9 @@ func TestDeleteGlossaryRequiresPrincipalAndProxiesBody(t *testing.T) {
 }
 
 func TestRecordsStatusUsesStoredProgress(t *testing.T) {
-	api := &API{store: readyFake()}
+	store := readyFake()
+	store.inspector.Parsed = 7
+	api := &API{store: store}
 	for _, tc := range []struct {
 		chapter string
 		status  int
@@ -1080,5 +1109,46 @@ func TestRecordsStatusUsesStoredProgress(t *testing.T) {
 		if response.Code != tc.status {
 			t.Fatalf("chapter=%s status=%d body=%s", tc.chapter, response.Code, response.Body.String())
 		}
+		if tc.status == http.StatusOK && !strings.Contains(response.Body.String(), `"parsed":7`) {
+			t.Fatalf("chapter=%s returned rows payload instead of inspector: %s", tc.chapter, response.Body.String())
+		}
+	}
+}
+
+func TestRecordReviewIsGatedAndActorIsServerAssigned(t *testing.T) {
+	store := readyFake()
+	store.reviews = RecordReviewResponse{NovelID: testNovelID, ChapterIndex: 2, Items: []RecordReviewItemView{}}
+	ingest := &fakeIngestClient{response: json.RawMessage(`{"decision":"accepted"}`), status: http.StatusOK}
+	api := &API{store: store, ingest: ingest}
+	if response := request(t, api, http.MethodGet,
+		"/novels/"+testNovelID+"/chapter/2/records/review", "", "reader-a"); response.Code != http.StatusOK {
+		t.Fatalf("review GET status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := request(t, api, http.MethodPatch,
+		"/novels/"+testNovelID+"/chapter/2/records/review", `{"row_id":"`+testEntityID+`","decision":"accepted","reason":"looks right","request_id":"req-1","actor":"spoof"}`, "reader-a"); response.Code != http.StatusOK {
+		t.Fatalf("review PATCH status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(string(ingest.lastBody), `"actor":"reader-a"`) || strings.Contains(string(ingest.lastBody), `"actor":"spoof"`) {
+		t.Fatalf("review actor was not overwritten: %s", ingest.lastBody)
+	}
+}
+
+func TestDiscardRecordRebuildProxiesBoundedAction(t *testing.T) {
+	ingest := &fakeIngestClient{response: json.RawMessage(`{"discarded":true}`), status: http.StatusOK}
+	api := &API{store: readyFake(), ingest: ingest}
+	response := request(t, api, http.MethodPost,
+		"/novels/"+testNovelID+"/records/rebuild/discard", `{"generation_id":"33333333-3333-4333-8333-333333333333"}`, "")
+	if response.Code != http.StatusOK || string(ingest.lastBody) == "" {
+		t.Fatalf("discard status=%d body=%s forwarded=%s", response.Code, response.Body.String(), ingest.lastBody)
+	}
+}
+
+func TestRecordsRebuildStatusProxiesMetadata(t *testing.T) {
+	ingest := &fakeIngestClient{response: json.RawMessage(`{"discardable":true,"missing_chapters":2}`), status: http.StatusOK}
+	api := &API{store: readyFake(), ingest: ingest}
+	response := request(t, api, http.MethodGet,
+		"/novels/"+testNovelID+"/records/rebuild/status", "", "")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"discardable":true`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }

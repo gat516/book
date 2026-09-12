@@ -274,6 +274,48 @@ func TestSpoilerGateEndToEnd(t *testing.T) {
 	}
 }
 
+func TestRecordReviewRejectHidesRowsAndProjectionCanRestoreThem(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	fixture := seedIntegrationFixture(t, admin)
+	setProgress(t, admin, fixture.novelID, 3)
+	ctx := context.Background()
+	var generation, rowID string
+	if err := admin.QueryRow(ctx, `SELECT active_record_generation::text FROM novel WHERE id=$1`, fixture.novelID).Scan(&generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT id::text FROM record_row WHERE novel_id=$1 AND generation_id=$2 AND source_chapter=1`, fixture.novelID, generation).Scan(&rowID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO record_review_decision
+		(novel_id,generation_id,row_id,source_chapter,decision,actor,reason,request_id,request_fingerprint)
+		VALUES ($1,$2,$3,1,'rejected','reviewer','bad extraction','review-reject','fixture')`, fixture.novelID, generation, rowID); err != nil {
+		t.Fatalf("reject row: %v", err)
+	}
+	rows, err := store.ListRecords(ctx, fixture.novelID, 1, 3)
+	if err != nil {
+		t.Fatalf("ordinary records: %v", err)
+	}
+	if len(rows.Rows) != 0 {
+		t.Fatalf("rejected row leaked through ordinary records: %+v", rows.Rows)
+	}
+	review, err := store.ListRecordReviews(ctx, fixture.novelID, 1, 3)
+	if err != nil {
+		t.Fatalf("review projection: %v", err)
+	}
+	if len(review.Items) != 1 || review.Items[0].Decision == nil || review.Items[0].Decision.Decision != "rejected" {
+		t.Fatalf("rejected row missing from review projection: %+v", review.Items)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO record_review_decision
+		(novel_id,generation_id,row_id,source_chapter,decision,actor,reason,request_id,request_fingerprint)
+		VALUES ($1,$2,$3,1,'accepted','reviewer','restored','review-accept','fixture-2')`, fixture.novelID, generation, rowID); err != nil {
+		t.Fatalf("accept row: %v", err)
+	}
+	rows, err = store.ListRecords(ctx, fixture.novelID, 1, 3)
+	if err != nil || len(rows.Rows) != 1 {
+		t.Fatalf("accepted row not restored: rows=%d err=%v", len(rows.Rows), err)
+	}
+}
+
 // DISPLAY_SCAN's mention_span is only a presentation coordinate. Identity must come
 // from the active generation's published who's-who binding; the old graph binding path
 // is gone. This also proves the binding cannot widen the chapter gate by itself.

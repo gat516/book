@@ -119,7 +119,8 @@ curl "localhost:8081/novels/<novel-id>/chapter/3/records/inspector" -H 'X-Reader
 
 `status` reports `extraction_status` (`pending`, `processing`, `ready`, `failed`),
 `rendering_status` (`pending`, `ready`, `failed`), a bounded `failure_detail`, a warning
-count, and an opaque `version`. The version is derived only from runs at or below the
+count, and durable provider retry metadata (`retry_attempts`, `retry_max_attempts`,
+`retry_at`, `retry_category`) when admission is backing off. The version is derived only from runs at or below the
 reader's own chapter, so publishing chapter 40 never invalidates a chapter-3 reader's
 cache token.
 
@@ -132,13 +133,27 @@ internal token, so the browser never holds it:
 
 - `POST /novels/{id}/chapter/{n}/records/retry` — re-run a failed chapter. Published runs
   are untouched.
-- `POST /novels/{id}/chapter/{n}/records/render-retry` — re-run only the English
-  rendering; source records and evidence stay as they are.
+- `POST /novels/{id}/chapter/{n}/records/render-retry` — retry rendering by opening a
+  fresh generation and re-enriching saved chapters in order. Published runs, including
+  their child renderings, stay frozen; the chapter in the path identifies the operator
+  request but the safe repair is generation-wide.
 - `POST /novels/{id}/records/rebuild` — open a new generation and re-enrich every saved
   chapter in order. Published extraction content is immutable, so a prompt, ontology or
   model change is a new generation rather than an edit. The new generation becomes active
   immediately and starts empty: readers see pending knowledge while it fills, instead of a
   mix of two generations' identity decisions.
+- `GET /novels/{id}/records/rebuild/status` — reload-safe operational metadata (active and
+  predecessor generation ids, eligible/published/missing counts, and `discardable`). It
+  contains no chapter text and is not spoiler-gated.
+- `POST /novels/{id}/records/rebuild/discard` — body `{"generation_id":"..."}` restores
+  that rebuild's exact predecessor while it is unfinished. Published replacement runs
+  remain immutable history; stale or complete generations are rejected.
+- `GET /novels/{id}/chapter/{n}/records/review` — spoiler-gated review items. Unreviewed
+  rows remain visible; rejected rows are excluded from ordinary records/entity/Ask-AI
+  reads but remain in this review projection so they can be restored.
+- `PATCH /novels/{id}/chapter/{n}/records/review` — body
+  `{"row_id":"...","decision":"accepted|rejected","reason":"...","request_id":"..."}`.
+  The server supplies the audit actor and request IDs make retries idempotent.
 
 Failure classes stay a bounded vocabulary: `pipeline/failures.py` classifies an exception
 at the moment it is raised and stores only the class, so freeform provider text or source

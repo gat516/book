@@ -35,11 +35,17 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/timeline", a.getTimeline)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}", a.getChapter)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}/rows", a.getRecords)
-	mux.HandleFunc("GET /novels/{id}/chapter/{n}/records/status", a.getRecords)
+	// The status/inspector response is the diagnostics surface consumed by the web
+	// operator panel; rows remains the reader-facing record payload.
+	mux.HandleFunc("GET /novels/{id}/chapter/{n}/records/status", a.getRecordsInspector)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}/records/inspector", a.getRecordsInspector)
 	mux.HandleFunc("POST /novels/{id}/chapter/{n}/records/retry", a.postRecordsAction)
 	mux.HandleFunc("POST /novels/{id}/chapter/{n}/records/render-retry", a.postRecordsAction)
 	mux.HandleFunc("POST /novels/{id}/records/rebuild", a.postRecordsAction)
+	mux.HandleFunc("GET /novels/{id}/records/rebuild/status", a.getRecordsRebuildStatus)
+	mux.HandleFunc("POST /novels/{id}/records/rebuild/discard", a.discardRecordRebuild)
+	mux.HandleFunc("GET /novels/{id}/chapter/{n}/records/review", a.getRecordReviews)
+	mux.HandleFunc("PATCH /novels/{id}/chapter/{n}/records/review", a.patchRecordReview)
 	mux.HandleFunc("GET /novels/{id}/chapters", a.getChapters)
 	mux.HandleFunc("GET /novels/{id}/progress", a.getProgress)
 	mux.HandleFunc("GET /novels/{id}/pipeline", a.getPipelineStatus)

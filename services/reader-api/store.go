@@ -51,6 +51,7 @@ type ReaderStore interface {
 	ListNameReviews(context.Context, string, *int) ([]CharacterNameReview, error)
 	ListRecords(context.Context, string, int, int) (RecordsResponse, error)
 	ListRecordsInspector(context.Context, string, int, int) (RecordsInspectorResponse, error)
+	ListRecordReviews(context.Context, string, int, int) (RecordReviewResponse, error)
 }
 
 func (s *Store) ListNameReviews(ctx context.Context, novelID string, chapter *int) ([]CharacterNameReview, error) {
@@ -317,6 +318,9 @@ func (s *Store) ListChapters(ctx context.Context, novelID string, limit, offset 
 // codes to reader-facing causes. It never reads error_type or any freeform diagnostic;
 // chapter lists remain metadata-only and ungated.
 func chapterFailureCategory(code string) string {
+	if code == "provider_retry_exhausted" {
+		return code
+	}
 	switch code {
 	case "provider_http_401", "provider_http_403":
 		return "credential_rejected"

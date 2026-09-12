@@ -95,8 +95,10 @@ async def test_retrieval_is_gated_by_rls_and_effective_chapter() -> None:
             stale = await _seed_run(admin, novel_id=novel_id, generation=retired,
                                     chapter=219, status="published", version=1)
 
-            await _seed_row(admin, novel_id=novel_id, generation=generation, run_id=visible,
-                            chapter=220, index=0, content="hero drew the blade", entity_id=hero_id)
+            visible_row = await _seed_row(
+                admin, novel_id=novel_id, generation=generation, run_id=visible,
+                chapter=220, index=0, content="hero drew the blade", entity_id=hero_id,
+            )
             await _seed_row(admin, novel_id=novel_id, generation=generation, run_id=future,
                             chapter=500, index=0, content="future revelation", entity_id=hero_id)
             await _seed_row(admin, novel_id=novel_id, generation=generation, run_id=unpublished,
@@ -120,6 +122,24 @@ async def test_retrieval_is_gated_by_rls_and_effective_chapter() -> None:
                 assert "unpublished draft" not in rendered
                 assert "superseded extraction" not in rendered
                 assert "other novel" not in rendered
+
+                # Human rejection is an append-only overlay, but it must behave like a
+                # structural deletion on every ordinary read path, including Ask-AI.
+                await admin.execute(
+                    """INSERT INTO record_review_decision
+                         (novel_id,generation_id,row_id,source_chapter,decision,actor,
+                          reason,request_id,request_fingerprint)
+                       VALUES (%s,%s,%s,220,'rejected','test','unsupported',%s,'test')""",
+                    (novel_id, generation, visible_row, f"reject-{visible_row}"),
+                )
+                async with reader.transaction():
+                    await reader.execute("SELECT set_config('app.novel_id', %s, true)", (novel_id,))
+                    await reader.execute("SELECT set_config('app.current_chapter', '220', true)")
+                    rejected = await retrieve(
+                        reader, novel_id, 220, [1.0] + [0.0] * 767,
+                        question="hero", max_chunks=8, max_entities=8, max_records=64,
+                    )
+                assert "hero drew the blade" not in "\n".join(source.text for source in rejected)
 
                 # RLS alone, with no GUCs set, returns nothing at all.
                 async with reader.transaction():

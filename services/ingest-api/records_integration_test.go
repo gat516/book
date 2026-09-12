@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -44,6 +45,78 @@ func TestRebuildRecordsQueuesEnrichmentAndCreatesValidGeneration(t *testing.T) {
 	}
 	if state != "active" || prompt == "" || checks == "" || sourceLang != "zh" || targetLang != "en" {
 		t.Fatalf("invalid generation metadata: state=%q prompt=%q checks=%q langs=%q/%q", state, prompt, checks, sourceLang, targetLang)
+	}
+	rebuildStatus, err := store.recordsRebuildStatus(context.Background(), novelID)
+	if err != nil {
+		t.Fatalf("rebuild status: %v", err)
+	}
+	if rebuildStatus.ActiveGenerationID == nil || *rebuildStatus.ActiveGenerationID != generation ||
+		rebuildStatus.PredecessorGenerationID == nil || !rebuildStatus.Discardable {
+		t.Fatalf("unexpected rebuild status: %+v", rebuildStatus)
+	}
+	if _, _, err := store.rebuildRecords(context.Background(), novelID); !errors.Is(err, ErrRecordsRebuildActive) {
+		t.Fatalf("empty eligible replacement was not fenced: %v", err)
+	}
+	for _, msg := range recorder.messages {
+		if msg.RecordGenerationID != generation {
+			t.Errorf("chapter %d queued for generation %q, want %q", msg.ChapterIndex, msg.RecordGenerationID, generation)
+		}
+	}
+}
+
+func TestDiscardMidRebuildRestoresPredecessorAndSequentialRebuildsRemainPossible(t *testing.T) {
+	store := integrationStore(t)
+	novelID := seedNovelForChapters(t, store)
+	insertTestChapter(t, store, novelID, 1, "discard-1")
+	insertTestChapter(t, store, novelID, 2, "discard-2")
+	if _, err := store.db.Exec(context.Background(),
+		`UPDATE chapter SET status='done',translation_ready=true WHERE novel_id=$1`, novelID); err != nil {
+		t.Fatalf("make chapters readable: %v", err)
+	}
+	recorder := &recordsEnqueueRecorder{}
+	store.redis = redis.NewClient(&redis.Options{Addr: "unused:0"})
+	store.redis.AddHook(recorder)
+	t.Cleanup(func() { _ = store.redis.Close() })
+
+	first, _, err := store.rebuildRecords(context.Background(), novelID)
+	if err != nil {
+		t.Fatalf("first rebuild: %v", err)
+	}
+	// One published chapter is enough to prove discard preserves immutable partial work;
+	// chapter two remains unfinished, so the replacement is still safely discardable.
+	if _, err := store.db.Exec(context.Background(), `INSERT INTO record_run
+		(novel_id,generation_id,chapter_index,source_hash,request_identity,status)
+		VALUES ($1,$2,1,'discard-1','test','published')`, novelID, first); err != nil {
+		t.Fatalf("seed partial published run: %v", err)
+	}
+	if err := store.discardRecordsRebuild(context.Background(), novelID, first); err != nil {
+		t.Fatalf("discard partial rebuild: %v", err)
+	}
+	var active, state string
+	if err := store.db.QueryRow(context.Background(),
+		`SELECT n.active_record_generation::text,g.state FROM novel n JOIN record_generation g ON g.id=$1 WHERE n.id=$2`, first, novelID).
+		Scan(&active, &state); err != nil {
+		t.Fatalf("read discarded generation: %v", err)
+	}
+	if active == first || state != "retired" {
+		t.Fatalf("discard did not retire replacement: active=%s state=%s", active, state)
+	}
+
+	second, _, err := store.rebuildRecords(context.Background(), novelID)
+	if err != nil {
+		t.Fatalf("sequential rebuild: %v", err)
+	}
+	if second == first {
+		t.Fatal("sequential rebuild reused discarded generation")
+	}
+	if _, err := store.db.Exec(context.Background(), `INSERT INTO record_run
+		(novel_id,generation_id,chapter_index,source_hash,request_identity,status)
+		VALUES ($1,$2,1,'discard-1','test','published'),
+		       ($1,$2,2,'discard-2','test','published')`, novelID, second); err != nil {
+		t.Fatalf("seed completed replacement: %v", err)
+	}
+	if _, _, err := store.rebuildRecords(context.Background(), novelID); err != nil {
+		t.Fatalf("rebuild after completed replacement: %v", err)
 	}
 }
 
