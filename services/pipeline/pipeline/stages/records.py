@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import xml.etree.ElementTree as ET
 
 from pipeline.context import PipelineState, StageContext
@@ -15,6 +16,18 @@ from pipeline.records_generation import mark_record_processing, prepare_generati
 from pipeline.records_prompts import DISCOVERY_SYSTEM, RENDER_SYSTEM, RESOLVE_SYSTEM
 
 log = logging.getLogger(__name__)
+
+
+def _decode_rendering(text: str) -> dict:
+    """Decode the rendering object, tolerating only an unambiguous JSON fence."""
+    candidate = text.strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", candidate, re.I | re.S)
+    if fenced:
+        candidate = fenced.group(1)
+    decoded = json.loads(candidate)
+    if not isinstance(decoded, dict):
+        raise ValueError("rendering response is not an object")
+    return decoded
 
 
 async def _complete(ctx: StageContext, *, stage: str, prompt: str, system: str, key: str,
@@ -155,9 +168,7 @@ class RecordsStage:
             reply, provider, model = await _complete(ctx, stage="records", prompt=render_prompt,
                                                      system=RENDER_SYSTEM, key=_key("render", state.envelope.source_meta.raw_hash, payload, ctx,
                                                                                    prompt=render_prompt, system=RENDER_SYSTEM), max_output_tokens=ctx.cfg.hosted_graph_output_tokens)
-            decoded = json.loads(reply)
-            if not isinstance(decoded, dict):
-                raise ValueError("rendering response is not an object")
+            decoded = _decode_rendering(reply)
             return {key: {"value": str(decoded[key]), "provider": provider, "served_model": model, "status": "ready"}
                     for key in values if key in decoded and isinstance(decoded[key], (str, int, float))} | {
                         key: {"value": None, "provider": provider, "served_model": model, "status": "failed", "error": "field omitted"}

@@ -1,11 +1,14 @@
 """Regression coverage for the production records LLM contract."""
 
+import json
 from types import SimpleNamespace
+
+import pytest
 
 from fixtures import make_config
 
 from pipeline.records import check_records, parse_records
-from pipeline.stages.records import _discovery_prompt, _key
+from pipeline.stages.records import _decode_rendering, _discovery_prompt, _key
 from pipeline.records_prompts import DISCOVERY_SYSTEM
 from pipeline.records_publish import _warning_count
 
@@ -53,6 +56,14 @@ def test_parse_records_rejects_empty_compact_record():
     parsed = parse_records('<STATE evidence="p0_hash"/>', {"p0_hash"})
     assert parsed["counts"] == {"records": 1, "usable": 0}
     assert "contains no non-empty fields" in parsed["records"][0]["issues"]
+
+
+def test_decode_rendering_accepts_json_fence_but_not_surrounding_prose():
+    assert _decode_rendering('```json\n{"0.what":"gave medicine"}\n```') == {
+        "0.what": "gave medicine"
+    }
+    with pytest.raises(json.JSONDecodeError):
+        _decode_rendering('Here is the result: {"0.what":"gave medicine"}')
 
 
 def test_records_cache_key_changes_when_system_or_prompt_changes():
