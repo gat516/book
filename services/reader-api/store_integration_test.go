@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -270,6 +271,100 @@ func TestSpoilerGateEndToEnd(t *testing.T) {
 	}
 	if _, err := store.GetEntity(ctx, fixture.novelID, fixture.futureID, 1); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("future entity must be not found, got %v", err)
+	}
+}
+
+// DISPLAY_SCAN's mention_span is only a presentation coordinate. Identity must come
+// from the active generation's published who's-who binding; the old graph binding path
+// is gone. This also proves the binding cannot widen the chapter gate by itself.
+func TestMentionSpanUsesPublishedRecordBindingAndChapterGate(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	fixture := seedIntegrationFixture(t, admin)
+	setProgress(t, admin, fixture.novelID, 1)
+	ctx := context.Background()
+	var generation, runID string
+	if err := admin.QueryRow(ctx,
+		`SELECT n.active_record_generation::text,r.id::text
+		   FROM novel n JOIN record_run r ON r.novel_id=n.id AND r.generation_id=n.active_record_generation
+		  WHERE n.id=$1 AND r.chapter_index=1`, fixture.novelID,
+	).Scan(&generation, &runID); err != nil {
+		t.Fatalf("published generation/run: %v", err)
+	}
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO mention_span (novel_id,chapter_index,entity_id,char_start,char_end)
+		 VALUES ($1,1,NULL,4,8),($1,2,NULL,4,8)`, fixture.novelID); err != nil {
+		t.Fatalf("mention spans: %v", err)
+	}
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO record_mention_binding
+		   (novel_id,generation_id,run_id,entity_id,source_chapter,char_start,char_end)
+		 VALUES ($1,$2,$3,$4,1,4,8)`, fixture.novelID, generation, runID, fixture.heroID); err != nil {
+		t.Fatalf("mention binding: %v", err)
+	}
+	var got []SpanView
+	if err := store.withReaderTx(ctx, fixture.novelID, 1, func(tx pgx.Tx) error {
+		var err error
+		got, err = chapterSpansInTx(ctx, tx, fixture.novelID, 1, generation)
+		return err
+	}); err != nil {
+		t.Fatalf("chapter spans: %v", err)
+	}
+	if len(got) != 1 || got[0].EntityID == nil || *got[0].EntityID != fixture.heroID {
+		t.Fatalf("bound span = %+v", got)
+	}
+	var future []SpanView
+	if err := store.withReaderTx(ctx, fixture.novelID, 1, func(tx pgx.Tx) error {
+		var err error
+		future, err = chapterSpansInTx(ctx, tx, fixture.novelID, 2, generation)
+		return err
+	}); err != nil {
+		t.Fatalf("future chapter spans: %v", err)
+	}
+	if len(future) != 0 {
+		t.Fatalf("future span leaked through RLS: %+v", future)
+	}
+}
+
+// The glossary endpoint must survive the legacy graph retirement. In particular it
+// must not depend on glossary_binding, which 0089 drops, and an entity id is only
+// attached once that generation-local identity is visible at the reader's chapter.
+func TestGlossaryUsesRecordsIdentityWithoutLegacyBinding(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	fixture := seedIntegrationFixture(t, admin)
+	setProgress(t, admin, fixture.novelID, 1)
+	ctx := context.Background()
+	for _, term := range []struct {
+		source, target, entity string
+		chapter                int
+	}{
+		{"hero-term", "Hero Term", fixture.heroID, 1},
+		{"future-term", "Future Term", fixture.futureID, 1},
+		{"unseen-term", "Unseen Term", "", 3},
+	} {
+		var entity any
+		if term.entity != "" {
+			entity = term.entity
+		}
+		if _, err := admin.Exec(ctx,
+			`INSERT INTO glossary (novel_id,source_term,target_term,entity_id,version,locked_at_chapter)
+			 VALUES ($1,$2,$3,$4,1,$5)`, fixture.novelID, term.source, term.target, entity, term.chapter); err != nil {
+			t.Fatalf("glossary %s: %v", term.source, err)
+		}
+	}
+	terms, err := store.ListGlossary(ctx, fixture.novelID, 1)
+	if err != nil {
+		t.Fatalf("list glossary after legacy retirement: %v", err)
+	}
+	if len(terms) != 2 {
+		t.Fatalf("visible terms = %+v, want two chapter-1 locks", terms)
+	}
+	for _, term := range terms {
+		if term.SourceTerm == "hero-term" && (term.EntityID == nil || *term.EntityID != fixture.heroID) {
+			t.Fatalf("hero entity was not attached: %+v", term)
+		}
+		if term.SourceTerm == "future-term" && term.EntityID != nil {
+			t.Fatalf("future entity leaked through glossary: %+v", term)
+		}
 	}
 }
 

@@ -408,6 +408,7 @@ func (s *Store) PipelineStatus(ctx context.Context, novelID string) (PipelineSta
 		}
 		status.InFlight = append(status.InFlight, item)
 	}
+
 	return status, nil
 }
 
@@ -560,17 +561,18 @@ func (s *Store) withReaderTx(
 }
 
 func (s *Store) ListGlossary(ctx context.Context, novelID string, at int) ([]GlossaryTermView, error) {
-	// A seed term can be linked to an entity discovered later. Only expose that ID
-	// once the entity is authorized too; LEFT JOIN preserves the visible seed (§0.3).
+	// Glossary bindings belonged to the retired graph/revision path (0089). The
+	// append-only glossary row is the terminology authority now; its entity_id is
+	// optional for bootstrap terms and is only returned after the generation-scoped
+	// entity itself passes the chapter gate.
 	terms := []GlossaryTermView{}
 	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
 			`SELECT g.source_term, g.target_term, g.version, g.locked_at_chapter, e.id::text
-			 FROM glossary g
-			 LEFT JOIN glossary_binding gb ON gb.novel_id=g.novel_id AND gb.source_term=g.source_term
-             LEFT JOIN entity e ON e.id = COALESCE(gb.entity_id,g.entity_id) AND e.novel_id = g.novel_id
-			   AND e.first_seen_chapter <= $2
-			 WHERE g.novel_id = $1 AND g.locked_at_chapter <= $2 AND NOT g.deleted
+				 FROM glossary g
+				 LEFT JOIN entity e ON e.id = g.entity_id AND e.novel_id = g.novel_id
+				   AND e.first_seen_chapter <= $2
+				 WHERE g.novel_id = $1 AND g.locked_at_chapter <= $2 AND NOT g.deleted
 			 ORDER BY g.source_term`, novelID, at)
 		if err != nil {
 			return err
@@ -659,22 +661,27 @@ func chapterRecordsInTx(ctx context.Context, tx pgx.Tx, novelID string, n, at in
 	return err
 }
 
-func chapterSpansInTx(ctx context.Context, tx pgx.Tx, novelID string, chapter int) ([]SpanView, error) {
+// chapterSpansInTx serves DISPLAY_SCAN's mention_span rows for the chapter, resolved
+// against the active record_generation's mention bindings for entity identity. The two
+// tables are populated independently (DISPLAY_SCAN vs. RECORDS' who's-who pass), so a
+// generation with no binding for a span — including "no generation yet" (generation=="")
+// — just leaves that span's entity_id unresolved rather than dropping the span.
+func chapterSpansInTx(ctx context.Context, tx pgx.Tx, novelID string, chapter int, generation string) ([]SpanView, error) {
+	var genArg any
+	if generation != "" {
+		genArg = generation
+	}
 	rows, err := tx.Query(ctx,
-		`SELECT d.id::text, e.id::text,d.char_start,d.char_end,b.known_from_chapter,d.mention_id::text, COALESCE((SELECT jsonb_build_object('id',v.id,'chapter',v.chapter_index,'quote',v.quote,'source_hash',v.source_hash) FROM graph_evidence v WHERE v.id=COALESCE(b.evidence_id,d.evidence_id)),'null'::jsonb)
-             FROM display_mention d
-             LEFT JOIN LATERAL (SELECT entity_id,known_from_chapter,evidence_id FROM mention_binding
-               WHERE revision_id=d.revision_id AND mention_id=d.mention_id
-               AND known_from_chapter<=reader_chapter() ORDER BY known_from_chapter DESC LIMIT 1) b ON true
+		`SELECT m.id::text, e.id::text, m.char_start, m.char_end
+             FROM mention_span m
+             LEFT JOIN record_mention_binding b
+               ON b.novel_id=m.novel_id AND b.generation_id=$3
+               AND b.source_chapter=m.chapter_index
+               AND b.char_start=m.char_start AND b.char_end=m.char_end
              LEFT JOIN entity e ON e.id=b.entity_id
-             WHERE d.novel_id=$1 AND d.chapter_index=$2
-             UNION ALL
-             SELECT 'legacy:'||m.id::text,e.id::text,m.char_start,m.char_end,NULL::int,NULL::text,'null'::jsonb
-             FROM mention_span m LEFT JOIN entity e ON e.id=m.entity_id
              WHERE m.novel_id=$1 AND m.chapter_index=$2
-               AND NOT EXISTS(SELECT 1 FROM display_mention d WHERE d.novel_id=$1 AND d.chapter_index=$2)
-             ORDER BY 3`,
-		novelID, chapter)
+             ORDER BY m.char_start`,
+		novelID, chapter, genArg)
 	if err != nil {
 		return nil, err
 	}
@@ -682,7 +689,7 @@ func chapterSpansInTx(ctx context.Context, tx pgx.Tx, novelID string, chapter in
 	spans := []SpanView{}
 	for rows.Next() {
 		var span SpanView
-		if err := rows.Scan(&span.MentionID, &span.EntityID, &span.CharStart, &span.CharEnd, &span.KnownFromChapter, &span.SourceMentionID, &span.Evidence); err != nil {
+		if err := rows.Scan(&span.MentionID, &span.EntityID, &span.CharStart, &span.CharEnd); err != nil {
 			return nil, err
 		}
 		spans = append(spans, span)
@@ -744,7 +751,7 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n, at int) (Chap
 		if err := chapterRecordsInTx(ctx, tx, novelID, n, at, &view); err != nil {
 			return err
 		}
-		spans, err := chapterSpansInTx(ctx, tx, novelID, n)
+		spans, err := chapterSpansInTx(ctx, tx, novelID, n, view.RecordsStatus.GenerationID)
 		if err != nil {
 			return err
 		}
