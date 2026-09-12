@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -92,6 +93,10 @@ func (s *Store) retryRecords(ctx context.Context, novelID string, chapter int) e
 		}
 		return fmt.Errorf("find novel: %w", err)
 	}
+	if _, err = tx.Exec(ctx, `UPDATE chapter SET enrichment_discarded=false
+		WHERE novel_id=$1 AND chapter_index=$2`, novelID, chapter); err != nil {
+		return fmt.Errorf("resume discarded chapter: %w", err)
+	}
 	if _, err = tx.Exec(ctx,
 		"DELETE FROM record_run WHERE novel_id=$1 AND generation_id=$2 AND chapter_index=$3 AND status<>'published'",
 		novelID, generation, chapter); err != nil {
@@ -101,6 +106,60 @@ func (s *Store) retryRecords(ctx context.Context, novelID string, chapter int) e
 		return fmt.Errorf("commit records retry: %w", err)
 	}
 	return s.enqueue(ctx, QueueMessage{NovelID: novelID, ChapterIndex: chapter, Priority: true, Enrichment: true, RecordGenerationID: generation})
+}
+
+// discardChapterEnrichment stops one graph attempt without touching published knowledge.
+// The durable flag fences an in-flight worker at its next stage boundary; removing the
+// queued pointer handles work that has not been claimed yet. Retry explicitly clears the
+// flag and starts a fresh attempt.
+func (s *Store) discardChapterEnrichment(ctx context.Context, novelID string, chapter int) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin chapter discard: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err = lockRecordsNovel(ctx, tx, novelID); err != nil {
+		return fmt.Errorf("lock chapter discard: %w", err)
+	}
+	var generation string
+	if err = tx.QueryRow(ctx, `SELECT active_record_generation::text FROM novel WHERE id=$1 FOR UPDATE`, novelID).Scan(&generation); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return pgx.ErrNoRows
+		}
+		return fmt.Errorf("find active generation: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE chapter SET enrichment_discarded=true,
+		enrichment_retry_at=NULL,enrichment_retry_generation_id=NULL,enrichment_attempts=0,
+		provider_retry_at=NULL,provider_retry_generation_id=NULL,provider_retry_attempts=0,
+		provider_retry_category=NULL
+		WHERE novel_id=$1 AND chapter_index=$2`, novelID, chapter); err != nil {
+		return fmt.Errorf("mark chapter discarded: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM record_run
+		WHERE novel_id=$1 AND generation_id=$2 AND chapter_index=$3 AND status <> 'published'`, novelID, generation, chapter); err != nil {
+		return fmt.Errorf("clear discarded run: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit chapter discard: %w", err)
+	}
+	return s.removeQueuedChapter(ctx, novelID, chapter)
+}
+
+func (s *Store) removeQueuedChapter(ctx context.Context, novelID string, chapter int) error {
+	entries, err := s.redis.LRange(ctx, pendingQueue, 0, -1).Result()
+	if err != nil {
+		return fmt.Errorf("list pending chapter work: %w", err)
+	}
+	for _, raw := range entries {
+		var msg QueueMessage
+		if json.Unmarshal([]byte(raw), &msg) != nil || msg.NovelID != novelID || msg.ChapterIndex != chapter {
+			continue
+		}
+		if err := s.redis.LRem(ctx, pendingQueue, 0, raw).Err(); err != nil {
+			return fmt.Errorf("remove pending chapter work: %w", err)
+		}
+	}
+	return nil
 }
 
 // retryRendering cannot delete child rows from an already-published run: the publication
@@ -300,6 +359,16 @@ func (a *API) recordsRetry(w http.ResponseWriter, r *http.Request) {
 	}
 	err = a.store.retryRecords(r.Context(), r.PathValue("id"), chapter)
 	a.writeRecordsAction(w, "retry", map[string]any{"retried": true, "chapter_index": chapter}, err)
+}
+
+func (a *API) recordsDiscardChapter(w http.ResponseWriter, r *http.Request) {
+	chapter, err := strconv.Atoi(r.PathValue("n"))
+	if err != nil || chapter < 0 {
+		writeErr(w, http.StatusBadRequest, "invalid chapter")
+		return
+	}
+	err = a.store.discardChapterEnrichment(r.Context(), r.PathValue("id"), chapter)
+	a.writeRecordsAction(w, "discard", map[string]any{"discarded": true, "chapter_index": chapter}, err)
 }
 
 func (a *API) recordsRenderRetry(w http.ResponseWriter, r *http.Request) {

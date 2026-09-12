@@ -115,6 +115,9 @@ export function getWiki(novelId: string, at: number): Promise<WikiResponse> {
 export function retryRecords(novelId: string, chapter: number): Promise<{ status: string; run_id?: string }> {
   return request(`/novels/${novelId}/chapter/${chapter}/records/retry`, { method: "POST" });
 }
+export function discardRecordsChapter(novelId: string, chapter: number): Promise<{ discarded: boolean; chapter_index: number }> {
+  return request(`/novels/${novelId}/chapter/${chapter}/records/discard`, { method: "POST" });
+}
 export function retryRecordRendering(novelId: string, chapter: number): Promise<{ status: string }> {
   return request(`/novels/${novelId}/chapter/${chapter}/records/render-retry`, { method: "POST" });
 }

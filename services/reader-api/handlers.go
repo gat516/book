@@ -40,6 +40,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}/records/status", a.getRecordsInspector)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}/records/inspector", a.getRecordsInspector)
 	mux.HandleFunc("POST /novels/{id}/chapter/{n}/records/retry", a.postRecordsAction)
+	mux.HandleFunc("POST /novels/{id}/chapter/{n}/records/discard", a.postRecordsAction)
 	mux.HandleFunc("POST /novels/{id}/chapter/{n}/records/render-retry", a.postRecordsAction)
 	mux.HandleFunc("POST /novels/{id}/records/rebuild", a.postRecordsAction)
 	mux.HandleFunc("GET /novels/{id}/records/rebuild/status", a.getRecordsRebuildStatus)

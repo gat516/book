@@ -74,6 +74,10 @@ class ChapterFailed(Exception):
     """
 
 
+class ChapterDiscarded(Exception):
+    """Operator discarded this chapter's graph attempt; do not retry automatically."""
+
+
 class NovelDeleted(Exception):
     """The chapter's owner disappeared; cancel work without retry or failure history."""
 
@@ -282,6 +286,8 @@ class Worker:
                     "provider admission deferred durably category=%s retry_after_s=%.1f",
                     getattr(exc, "category", "rate_limited"), exc.retry_after_s,
                 )
+            except ChapterDiscarded:
+                log.info("chapter graph attempt discarded; dropping claim")
             except ChapterFailed:
                 # The outcome is recorded on the chapter row, so this job is not lost and
                 # must not be resurrected: drop the claim outright. Leaving it made failed
@@ -440,7 +446,7 @@ class Worker:
         assert self.db is not None
 
         chapter = await self._fetch_one(
-            "SELECT raw_hash, raw_uri, source_meta, status, translation_ready, translated_uri FROM chapter"
+            "SELECT raw_hash, raw_uri, source_meta, status, translation_ready, translated_uri, enrichment_discarded FROM chapter"
             " WHERE novel_id = %s AND chapter_index = %s",
             (msg.novel_id, msg.chapter_index),
         )
@@ -448,7 +454,13 @@ class Worker:
             log.warning("no chapter row for %s/%s; dropping", msg.novel_id, msg.chapter_index)
             await self._clear_preview(msg.novel_id, msg.chapter_index)
             return
-        raw_hash, raw_uri, source_meta, _status, readable, translated_uri = chapter
+        raw_hash, raw_uri, source_meta, _status, readable, translated_uri = chapter[:6]
+        # Keep lightweight worker fakes and older deployments compatible while the
+        # forward migration rolls out; real rows always include the durable flag.
+        discarded = bool(chapter[6]) if len(chapter) > 6 else False
+        if msg.enrichment and discarded:
+            log.info("chapter %s/%s graph work was discarded; dropping pointer", msg.novel_id, msg.chapter_index)
+            return
         # A durable translation can legitimately carry a later enrichment pointer. The
         # enrichment flag explicitly bypasses this stale-pointer guard; only an ordinary
         # duplicate or retranslate pointer is safe to drop.
@@ -533,6 +545,13 @@ class Worker:
         stage_name = ""
         try:
             for stage in DEFAULT_STAGES:
+                if msg.enrichment and stage.name in {"records", "display_scan"}:
+                    discarded_row = await self._fetch_one(
+                        "SELECT enrichment_discarded FROM chapter WHERE novel_id=%s AND chapter_index=%s",
+                        (msg.novel_id, msg.chapter_index),
+                    )
+                    if discarded_row and discarded_row[0]:
+                        raise ChapterDiscarded()
                 stage_name = stage.name
                 # Publish the stage name and its own start time atomically. The claim's
                 # original timestamp remains the total-chapter clock; conflating the two
@@ -599,6 +618,13 @@ class Worker:
             # It is intentionally after translation so an untranslated chapter can become
             # readable early and enrichment is retried as a low-priority queue message.
             if state.records is not None:
+                if msg.enrichment:
+                    discarded_row = await self._fetch_one(
+                        "SELECT enrichment_discarded FROM chapter WHERE novel_id=%s AND chapter_index=%s",
+                        (msg.novel_id, msg.chapter_index),
+                    )
+                    if discarded_row and discarded_row[0]:
+                        raise ChapterDiscarded()
                 stage_name = "publish"
                 await self.redis.eval(
                     PUBLISH_STAGE,

@@ -51,6 +51,7 @@ func main() {
 	// Records maintenance. Internal-token gated like every other write; reader-api
 	// proxies these on the operator's behalf.
 	mux.Handle("POST /novels/{id}/chapter/{n}/records/retry", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsRetry)))
+	mux.Handle("POST /novels/{id}/chapter/{n}/records/discard", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsDiscardChapter)))
 	mux.Handle("POST /novels/{id}/chapter/{n}/records/render-retry", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsRenderRetry)))
 	mux.Handle("POST /novels/{id}/records/rebuild", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsRebuild)))
 	mux.Handle("GET /novels/{id}/records/rebuild/status", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsRebuildStatus)))

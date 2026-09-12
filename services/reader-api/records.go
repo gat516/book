@@ -556,6 +556,8 @@ func (a *API) postRecordsAction(w http.ResponseWriter, r *http.Request) {
 		action = "rebuild"
 	case strings.HasSuffix(r.URL.Path, "/render-retry"):
 		action = "render-retry"
+	case strings.HasSuffix(r.URL.Path, "/discard"):
+		action = "discard"
 	default:
 		action = "retry"
 	}
