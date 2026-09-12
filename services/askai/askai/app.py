@@ -29,6 +29,11 @@ PROVIDER_FAILURE_CATEGORIES = frozenset({
     "credential_missing", "credential_rejected", "model_not_available",
     "rate_limited", "quota_exhausted", "model_server_error",
 })
+EMBEDDING_FAILURE_CATEGORIES = frozenset({
+    "credential_missing", "credential_rejected", "model_not_available",
+    "rate_limited", "quota_exhausted", "model_server_error", "unavailable",
+    "dimension_mismatch",
+})
 _QUOTA_LONG_DELAY_SECONDS = 3600.0
 _RETRY_DELAY = re.compile(
     r"(?:retry\s+in|\"?retryDelay\"?\s*[:=])\s*\"?"
@@ -47,6 +52,16 @@ class ProviderFailure(Exception):
     def __init__(self, category: str) -> None:
         if category not in PROVIDER_FAILURE_CATEGORIES:
             raise ValueError(f"unsupported provider failure category: {category}")
+        super().__init__(category)
+        self.category = category
+
+
+class EmbeddingUnavailable(Exception):
+    """Semantic retrieval is unavailable; completion/readiness remains healthy."""
+
+    def __init__(self, category: str = "unavailable") -> None:
+        if category not in EMBEDDING_FAILURE_CATEGORIES:
+            category = "unavailable"
         super().__init__(category)
         self.category = category
 
@@ -156,17 +171,17 @@ class Service:
     def __init__(self, config: Config, provider: LLMProvider, embed_provider: LLMProvider | None = None) -> None:
         self.config = config
         self.provider = provider
-        # Embedding is a SEPARATE backend from completion (pipeline/llm/__init__.py's
-        # embed_provider_from_env: "always Ollama nomic-embed-text, §5.4") — Anthropic
-        # has no embeddings endpoint, and reusing a chat-only Ollama model for /api/embed
-        # 501s. Defaults to `provider` only so tests that pass one fake for both keep
-        # working; app_from_env always wires two distinct providers.
+        # Embedding is a SEPARATE backend from completion (EMBED_PROVIDER). Defaults to
+        # `provider` only so tests that pass one fake for both keep working; app_from_env
+        # always wires two distinct providers.
         self.embed_provider = embed_provider or provider
+        self.embedding_ready = False
         self.pool = AsyncConnectionPool(config.database_url, open=False, kwargs={"row_factory": tuple_row}, configure=self._configure_connection)
         # Per-novel completion provider cache (PLAN.md Phase N4), mirroring
         # pipeline/worker.py's _provider_cache: a provider wraps a live httpx/SDK client,
         # so this is built once per novel and reused, not reconstructed per question.
         self._provider_cache: dict[str, LLMProvider] = {}
+        self._embed_provider_cache: dict[str, LLMProvider] = {}
 
     async def _configure_connection(self, conn) -> None:
         await conn.execute("SET ROLE rls_reader")
@@ -175,22 +190,23 @@ class Service:
     async def start(self) -> None:
         if not self.config.internal_token or not self.config.model:
             raise RuntimeError("ASKAI_INTERNAL_TOKEN and LLM_MODEL_ASK (or LLM_MODEL_EXTRACT) are required")
-        # Startup may overlap a Book benchmark/translation reservation. Keep readiness
-        # pending instead of treating temporary admission backpressure as a crash.
-        while True:
-            try:
-                dimensions = await self.embed_provider.embed(["embedding dimension check"], cls=Class.INTERACTIVE)
-                break
-            except AdmissionRejected as exc:
-                await asyncio.sleep(max(exc.retry_after_s, 0.25))
-        if len(dimensions) != 1 or len(dimensions[0]) != self.config.embed_dim:
-            raise RuntimeError("embedding dimension does not match EMBED_DIM")
+        # Embeddings are retrieval-only. A temporary outage must not wedge Ask AI startup;
+        # each request retries the provider and returns a bounded semantic-retrieval error.
+        try:
+            dimensions = await self.embed_provider.embed(["embedding dimension check"], cls=Class.INTERACTIVE)
+            self.embedding_ready = len(dimensions) == 1 and len(dimensions[0]) == self.config.embed_dim
+            if not self.embedding_ready:
+                log.warning("embedding provider returned unexpected startup dimension")
+        except Exception as exc:  # noqa: BLE001 — readiness is independent of retrieval
+            self.embedding_ready = False
+            log.warning("semantic retrieval unavailable at startup: %s", type(exc).__name__)
         await self.pool.open()
 
     async def close(self) -> None:
         await self.pool.close()
         candidates = {id(self.provider): self.provider, id(self.embed_provider): self.embed_provider}
         candidates.update({id(p): p for p in self._provider_cache.values()})
+        candidates.update({id(p): p for p in self._embed_provider_cache.values()})
         for candidate in candidates.values():
             close = getattr(candidate, "aclose", None)
             if close:
@@ -250,9 +266,24 @@ class Service:
                     backend=self.config.gateway_backend, embed_model=self.config.embed_model,
                     max_output_tokens=self.config.gateway_max_output_tokens)
                 self._provider_cache[request.novel_id] = gateway_provider
-        vectors = await (gateway_provider or self.embed_provider).embed([request.question], cls=Class.INTERACTIVE)
-        if len(vectors) != 1 or len(vectors[0]) != self.config.embed_dim:
-            raise RuntimeError("embedding provider returned an unexpected dimension")
+        embedding_provider = self.embed_provider
+        if self.config.embed_provider == "gateway":
+            embedding_provider = self._embed_provider_cache.get(request.novel_id)
+            if embedding_provider is None:
+                embedding_provider = GatewayProvider(address=self.config.gateway_addr, tenant=request.novel_id,
+                    provider=self.config.gateway_provider, model=self.config.model,
+                    backend=self.config.gateway_backend, embed_model=self.config.embed_model,
+                    max_output_tokens=self.config.gateway_max_output_tokens)
+                self._embed_provider_cache[request.novel_id] = embedding_provider
+        try:
+            vectors = await embedding_provider.embed([request.question], cls=Class.INTERACTIVE)
+            if len(vectors) != 1 or len(vectors[0]) != self.config.embed_dim:
+                raise EmbeddingUnavailable("dimension_mismatch")
+            self.embedding_ready = True
+        except EmbeddingUnavailable:
+            raise
+        except Exception as exc:  # noqa: BLE001 — retrieval-only failure boundary
+            raise EmbeddingUnavailable(_provider_failure_category(exc) or "unavailable") from exc
         async with self.pool.connection() as conn:
             async with conn.transaction():
                 await conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
@@ -295,6 +326,14 @@ def create_app(service: Service) -> FastAPI:
             raise HTTPException(status_code=401, detail="invalid internal authorization")
         try:
             return await service.ask(request)
+        except EmbeddingUnavailable as exc:
+            status = 429 if exc.category in {"rate_limited", "quota_exhausted"} else (
+                503 if exc.category == "model_server_error" else 502
+            )
+            return JSONResponse(
+                status_code=status,
+                content={"error": "semantic retrieval unavailable", "category": exc.category},
+            )
         except ProviderFailure as exc:
             return _provider_failure_response(exc.category)
         except (httpx.HTTPStatusError, ValueError, RuntimeError) as exc:
@@ -312,13 +351,16 @@ def create_app(service: Service) -> FastAPI:
 
 
 def app_from_env() -> FastAPI:
-    from novel_llm import AnthropicProvider, DeepSeekProvider, GatewayProvider, GroqProvider, OllamaProvider
+    from novel_llm import AnthropicProvider, DeepSeekProvider, GeminiProvider, GatewayProvider, GroqProvider, OllamaProvider, OpenRouterProvider, UnavailableEmbeddingProvider
     cfg = load_config()
     match cfg.llm_provider:
         case "ollama":
             provider: LLMProvider = OllamaProvider(host=cfg.ollama_host, model=cfg.model)
         case "deepseek":
             provider = DeepSeekProvider(model=cfg.model, base_url=cfg.deepseek_base_url, api_key=cfg.deepseek_api_key)
+        case "gemini":
+            provider = GeminiProvider(model=cfg.model, base_url=cfg.gemini_base_url,
+                                      api_key=cfg.gemini_api_key or None)
         case "groq":
             provider = GroqProvider(model=cfg.model, base_url=cfg.groq_base_url, api_key=cfg.groq_api_key)
         case "gateway":
@@ -327,8 +369,29 @@ def app_from_env() -> FastAPI:
                 max_output_tokens=cfg.gateway_max_output_tokens)
         case _:
             provider = AnthropicProvider(model=cfg.model)
-    # Always Ollama for embeddings, regardless of LLM_PROVIDER — see Service's docstring.
-    embed_provider = provider if cfg.llm_provider == "gateway" else OllamaProvider(host=cfg.ollama_host, model=cfg.embed_model)
+    match cfg.embed_provider:
+        case "ollama":
+            embed_provider = OllamaProvider(host=cfg.ollama_host, model=cfg.embed_model)
+        case "gemini":
+            try:
+                embed_provider = GeminiProvider(model=cfg.embed_model, embed_model=cfg.embed_model,
+                    embed_dim=cfg.embed_dim, base_url=cfg.gemini_base_url,
+                    embed_base_url=cfg.gemini_embed_base_url, api_key=cfg.gemini_api_key or None)
+            except RuntimeError:
+                embed_provider = UnavailableEmbeddingProvider()
+        case "openrouter":
+            try:
+                embed_provider = OpenRouterProvider(model=cfg.embed_model, embed_model=cfg.embed_model,
+                    embed_dim=cfg.embed_dim, base_url=cfg.openrouter_base_url,
+                    api_key=cfg.openrouter_api_key or None)
+            except RuntimeError:
+                embed_provider = UnavailableEmbeddingProvider()
+        case "gateway":
+            embed_provider = GatewayProvider(address=cfg.gateway_addr, tenant="default",
+                provider=cfg.gateway_provider, model=cfg.model, backend=cfg.gateway_backend,
+                embed_model=cfg.embed_model, max_output_tokens=cfg.gateway_max_output_tokens)
+        case other:
+            raise ValueError(f"unknown EMBED_PROVIDER: {other!r}")
     return create_app(Service(cfg, provider, embed_provider))
 
 

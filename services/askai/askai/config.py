@@ -17,6 +17,7 @@ class Config:
     max_records: int = 64
     max_context_chars: int = 48_000
     embed_model: str = "nomic-embed-text"
+    embed_provider: str = "ollama"
     # Process-wide provider defaults (PLAN.md Phase N4) — the fallback for a novel with
     # no novel_provider_config row. Mirrors pipeline/config.py's fields of the same name.
     llm_provider: str = "anthropic"
@@ -29,6 +30,11 @@ class Config:
     gateway_backend: str = "local_gpu"
     gateway_provider: str = "ollama"
     gateway_max_output_tokens: int = 8192
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    gemini_api_key: str = ""
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    gemini_embed_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
 
 
 def load_config() -> Config:
@@ -40,6 +46,7 @@ def load_config() -> Config:
         host=os.getenv("ASKAI_HOST", "0.0.0.0"),
         port=int(os.getenv("ASKAI_PORT", "8082")),
         embed_model=os.getenv("EMBED_MODEL", "nomic-embed-text"),
+        embed_provider=os.getenv("EMBED_PROVIDER", "ollama"),
         max_records=int(os.getenv("ASKAI_MAX_RECORDS", "64")),
         llm_provider=os.getenv("LLM_PROVIDER", "anthropic"),
         ollama_host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
@@ -51,4 +58,9 @@ def load_config() -> Config:
         gateway_backend=os.getenv("LLM_GATEWAY_BACKEND", "local_gpu"),
         gateway_provider=os.getenv("LLM_GATEWAY_PROVIDER", "ollama"),
         gateway_max_output_tokens=int(os.getenv("LLM_GATEWAY_MAX_OUTPUT_TOKENS", "8192")),
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
+        openrouter_base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+        gemini_base_url=os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
+        gemini_embed_base_url=os.getenv("GEMINI_EMBED_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"),
     )

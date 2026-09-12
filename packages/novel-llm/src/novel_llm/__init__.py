@@ -7,6 +7,7 @@ from novel_llm.gemini import GeminiProvider
 from novel_llm.groq import GroqProvider
 from novel_llm.hosted import HostedProvider
 from novel_llm.ollama import OllamaProvider
+from novel_llm.openrouter import OpenRouterProvider
 from novel_llm.provider import (
     AdmissionRejected,
     BatchRequest,
@@ -27,6 +28,7 @@ from novel_llm.provider import (
     TruncatedOutputError,
     UnsupportedSchema,
     UnsupportedSchemaError,
+    UnavailableEmbeddingProvider,
 )
 
 __all__ = [
@@ -44,6 +46,7 @@ __all__ = [
     "LLMProvider",
     "RequestTokenCounting",
     "OllamaProvider",
+    "OpenRouterProvider",
     "OutputTruncated",
     "PinnedModelChanged",
     "ProviderError",
@@ -56,4 +59,5 @@ __all__ = [
     "TruncatedOutputError",
     "UnsupportedSchema",
     "UnsupportedSchemaError",
+    "UnavailableEmbeddingProvider",
 ]

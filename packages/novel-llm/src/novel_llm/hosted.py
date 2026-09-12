@@ -17,6 +17,8 @@ import re
 from collections.abc import Mapping
 from typing import Any, Literal
 
+import httpx
+
 from novel_llm.provider import (
     AdmissionRejected,
     Class,
@@ -489,6 +491,29 @@ class HostedProvider(SequentialBatchMixin):
 
     async def embed(self, texts: list[str], *, cls: Class = Class.BATCH) -> list[list[float]]:
         raise NotImplementedError("Hosted completion providers do not provide embeddings")
+
+    async def _embedding_request(self, url: str, payload: dict,
+                                 *, headers: dict[str, str] | None = None) -> dict:
+        """POST one provider-native embedding request through the provider seam.
+
+        Hosted chat calls use LiteLLM, but embedding APIs are not uniform: OpenRouter
+        speaks OpenAI ``/embeddings`` while Gemini exposes ``:batchEmbedContents``.
+        Keep transport/error normalization here so both adapters retain the same
+        AdmissionRejected contract without exposing provider SDKs to pipeline code.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                body = response.json()
+        except BaseException as exc:
+            if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+                raise
+            self._raise_normalized(exc, schema=False)
+            raise AssertionError("_raise_normalized always raises")
+        if not isinstance(body, dict):
+            raise RuntimeError("embedding provider returned a non-object response")
+        return body
 
     async def aclose(self) -> None:
         # LiteLLM owns its HTTP client lifecycle. Keep a uniform async lifecycle hook.

@@ -27,7 +27,7 @@ async def retrieve(conn: AsyncConnection, novel_id: str, at: int, embedding: lis
     vector = vector_literal(embedding)
     async with conn.cursor() as cur:
         await cur.execute("""SELECT id, chapter_index, text FROM chunk
-          WHERE novel_id=%s AND chapter_index<=%s
+          WHERE novel_id=%s AND chapter_index<=%s AND embedding IS NOT NULL
           ORDER BY embedding <=> %s::vector, id LIMIT %s""", (novel_id, at, vector, max_chunks))
         chunks = [Source("chunk", row[0], row[1], row[2]) for row in await cur.fetchall()]
         # Active generation and published run are explicit here as well as in RLS.

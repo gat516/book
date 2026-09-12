@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from fixtures import make_config
-from novel_llm import DeepSeekProvider, GroqProvider, OllamaProvider
+from novel_llm import (DeepSeekProvider, GeminiProvider, GroqProvider, OllamaProvider,
+                       OpenRouterProvider, UnavailableEmbeddingProvider)
 import pytest
 
 from pipeline.config import names_runtime, resolve_runtime
-from pipeline.llm import provider_from_env
+from pipeline.llm import embed_provider_from_env, provider_from_env
 from pipeline.provider_config import (
     ProviderConfigRow,
     build_names_provider,
@@ -30,6 +31,27 @@ def test_groq_case_constructs_a_groq_provider():
     cfg = make_config(llm_provider="groq", groq_api_key="k",
                       llm_model_extract="openai/gpt-oss-120b")
     assert isinstance(provider_from_env(cfg), GroqProvider)
+
+
+def test_embedding_provider_is_independent_from_completion_provider():
+    cfg = make_config(llm_provider="anthropic", embed_provider="gemini",
+                      gemini_api_key="k", embed_model="gemini-embedding-001", embed_dim=768)
+    provider = embed_provider_from_env(cfg)
+    assert isinstance(provider, GeminiProvider)
+    assert provider._embed_model == "gemini-embedding-001"
+
+
+def test_openrouter_embedding_provider_uses_vector_schema_dimensions():
+    cfg = make_config(embed_provider="openrouter", openrouter_api_key="k", embed_dim=768)
+    provider = embed_provider_from_env(cfg)
+    assert isinstance(provider, OpenRouterProvider)
+    assert provider._embed_dim == 768
+
+
+def test_missing_hosted_embedding_key_keeps_worker_startable(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    cfg = make_config(embed_provider="openrouter", openrouter_api_key="")
+    assert isinstance(embed_provider_from_env(cfg), UnavailableEmbeddingProvider)
 
 
 def test_names_provider_is_none_for_hosted_providers():

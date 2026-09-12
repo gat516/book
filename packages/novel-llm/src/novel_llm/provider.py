@@ -125,6 +125,17 @@ class PinnedModelChanged(ProviderError):
     category = "model_changed"
 
 
+class UnavailableEmbeddingProvider:
+    """Retrieval-only fallback used when an optional embedding credential is absent."""
+
+    async def embed(self, texts: list[str], *, cls: Class = Class.BATCH) -> list[list[float]]:
+        del texts, cls
+        raise RuntimeError("embedding provider credential is unavailable")
+
+    async def aclose(self) -> None:
+        return None
+
+
 # Descriptive aliases kept for callers that use the shorter error names.
 RequestBudgetError = RequestBudgetExceeded
 RequestTooLarge = RequestBudgetExceeded

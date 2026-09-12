@@ -2,8 +2,8 @@
 
 All LLM calls go through the ``LLMProvider`` protocol; no stage imports a provider SDK
 directly. Backends are chosen from config here so switching Anthropic ↔ Ollama is one
-env var (``LLM_PROVIDER``). The embedding backend is separate (§5.4): embeddings always
-run through Ollama's ``nomic-embed-text`` regardless of the completion backend.
+env var (``LLM_PROVIDER``). The embedding backend is separate (§5.4): ``EMBED_PROVIDER``
+defaults to Ollama but can explicitly select a hosted embeddings API.
 
 One provider instance is constructed with a *default* model (``llm_model_extract``), but
 stages that need a different model (translate wants ``llm_model_translate``) MUST pass it
@@ -27,6 +27,8 @@ from novel_llm import (
     GroqProvider,
     LLMProvider,
     OllamaProvider,
+    OpenRouterProvider,
+    UnavailableEmbeddingProvider,
 )
 
 
@@ -70,15 +72,36 @@ def provider_from_env(cfg: Config, *, tenant: str = "default") -> LLMProvider:
 
 
 def embed_provider_from_env(cfg: Config, *, tenant: str = "default") -> LLMProvider:
-    """Return the embedding backend — always Ollama ``nomic-embed-text`` (§5.4)."""
-    if cfg.llm_provider == "gateway":
-        return GatewayProvider(address=cfg.gateway_addr, tenant=tenant,
-            provider=cfg.gateway_provider, model=cfg.llm_model_extract,
-            backend=cfg.gateway_backend, embed_model=cfg.embed_model,
-            max_output_tokens=cfg.gateway_max_output_tokens)
-    return OllamaProvider(
-        host=cfg.ollama_host, model=cfg.embed_model, timeout=cfg.ollama_timeout_seconds
-    )
+    """Return the independent retrieval embedding backend."""
+    try:
+        match cfg.embed_provider:
+            case "ollama":
+                return OllamaProvider(host=cfg.ollama_host, model=cfg.embed_model,
+                                      timeout=cfg.ollama_timeout_seconds)
+            case "openrouter":
+                return OpenRouterProvider(
+                    model=cfg.embed_model, embed_model=cfg.embed_model, embed_dim=cfg.embed_dim,
+                    base_url=cfg.openrouter_base_url, api_key=cfg.openrouter_api_key or None,
+                )
+            case "gemini":
+                return GeminiProvider(
+                    model=cfg.embed_model, embed_model=cfg.embed_model, embed_dim=cfg.embed_dim,
+                    base_url=cfg.gemini_base_url, embed_base_url=cfg.gemini_embed_base_url,
+                    api_key=cfg.gemini_api_key or None,
+                )
+            case "gateway":
+                return GatewayProvider(address=cfg.gateway_addr, tenant=tenant,
+                    provider=cfg.gateway_provider, model=cfg.llm_model_extract,
+                    backend=cfg.gateway_backend, embed_model=cfg.embed_model,
+                    max_output_tokens=cfg.gateway_max_output_tokens)
+            case other:
+                raise ValueError(f"unknown EMBED_PROVIDER: {other!r}")
+    except RuntimeError:
+        # Missing hosted embedding credentials are retrieval-only degradation; worker
+        # startup and chapter publication remain available with NULL vectors.
+        if cfg.embed_provider in {"gemini", "openrouter"}:
+            return UnavailableEmbeddingProvider()  # type: ignore[return-value]
+        raise
 
 
 __all__ = [

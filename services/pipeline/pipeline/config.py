@@ -102,10 +102,17 @@ class Config:
     gateway_backend: str = "local_gpu"
     gateway_provider: str = "ollama"
     gateway_max_output_tokens: int = 8192
+    # Embeddings are an independent, retrieval-only backend. Keep Ollama as the
+    # backwards-compatible default; hosted options are explicit because changing the
+    # model changes the vector space and requires a re-embed.
+    embed_provider: str = "ollama"
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
     # Gemini speaks the OpenAI chat dialect through Google's compatibility endpoint,
     # so it needs only a key and a base -- no SDK, same shape as deepseek above.
     gemini_api_key: str = ""
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    gemini_embed_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     groq_api_key: str = ""
     groq_base_url: str = "https://api.groq.com/openai/v1"
     # Two distinct budgets, not one. graph_ollama_first_token_seconds bounds PREFILL —
@@ -243,8 +250,12 @@ class Config:
             gateway_backend=_getenv("LLM_GATEWAY_BACKEND", "local_gpu"),
             gateway_provider=_getenv("LLM_GATEWAY_PROVIDER", "ollama"),
             gateway_max_output_tokens=int(_getenv("LLM_GATEWAY_MAX_OUTPUT_TOKENS", "8192")),
+            embed_provider=_getenv("EMBED_PROVIDER", "ollama"),
+            openrouter_api_key=_getenv("OPENROUTER_API_KEY", ""),
+            openrouter_base_url=_getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
             gemini_api_key=_getenv("GEMINI_API_KEY", ""),
             gemini_base_url=_getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
+            gemini_embed_base_url=_getenv("GEMINI_EMBED_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"),
             glossary_min_proposals=int(_getenv("GLOSSARY_MIN_PROPOSALS", "2")),
             prompt_version=_getenv("PROMPT_VERSION", "1"),
             config_version=_getenv("CONFIG_VERSION", "1"),
