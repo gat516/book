@@ -38,6 +38,10 @@ class QueueMessage(BaseModel):
 
     novel_id: str
     chapter_index: int
+    # Rebuild/retry pointers pin the records generation they were created for. A
+    # discarded rebuild must not repopulate a later active generation; ordinary ingest
+    # pointers leave this unset and are fenced when RECORDS prepares its generation.
+    record_generation_id: str | None = None
     priority: bool = False
     enrichment: bool = False
     # Re-run translation even when a readable version already exists. The old object

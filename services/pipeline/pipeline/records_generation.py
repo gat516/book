@@ -121,6 +121,11 @@ async def prepare_generation(ctx: StageContext, state: PipelineState) -> Generat
         if row is None:
             raise GenerationFenceError("novel disappeared while preparing records generation")
         gid, generation_state, ontology, model, prompt, checks, source_lang, target_lang = row
+        expected = getattr(state, "expected_record_generation_id", None)
+        if expected and (not gid or str(gid) != expected):
+            raise GenerationFenceError(
+                "queued records pointer belongs to a retired generation; discard the stale work"
+            )
         if not gid:
             new = await (await ctx.db.execute(
                 """INSERT INTO record_generation

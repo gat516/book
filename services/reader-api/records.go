@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -28,15 +29,62 @@ func recordsStatusFor(ctx context.Context, tx pgx.Tx, novelID string, chapter *i
 	var version int64
 	var warnings int
 	var detail *string
+	var retryAttempts, enrichmentAttempts int
+	var retryAt *time.Time
+	var retryCategory *string
 	err := tx.QueryRow(ctx, `
 SELECT g.id::text,
-  COALESCE((SELECT CASE WHEN bool_or(r.status='failed') THEN 'failed'
+  COALESCE((SELECT CASE WHEN EXISTS (
+                          SELECT 1
+                            FROM chapter c
+                           WHERE c.novel_id=$1
+                             AND ((c.enrichment_retry_at IS NOT NULL AND c.enrichment_attempts < 5)
+                               OR (c.provider_retry_at IS NOT NULL AND c.provider_retry_attempts < 5))
+                             AND c.chapter_index <= $2
+                             AND ($3::int IS NULL OR c.chapter_index = $3::int)
+                        ) THEN 'processing'
+                        WHEN bool_or(r.status='failed') THEN 'failed'
+                        WHEN EXISTS (
+                          SELECT 1
+                            FROM chapter c
+                            JOIN chapter_failure cf
+                              ON cf.novel_id=c.novel_id AND cf.chapter_index=c.chapter_index
+                           WHERE c.novel_id=$1
+                             AND ((c.provider_retry_attempts >= 5 AND c.provider_retry_at IS NULL
+                                   AND cf.error_code='provider_retry_exhausted')
+                               OR (c.enrichment_attempts >= 5 AND c.enrichment_retry_at IS NULL
+                                   AND cf.error_code <> 'provider_retry_exhausted'))
+                             AND c.chapter_index <= $2
+                             AND ($3::int IS NULL OR c.chapter_index = $3::int)
+                        ) THEN 'failed'
                         WHEN bool_or(r.status='processing') THEN 'processing'
                         WHEN count(*) > 0 AND bool_and(r.status='published') THEN 'ready'
                         ELSE 'pending' END
               FROM record_run r
              WHERE r.novel_id=$1 AND r.generation_id=g.id AND r.chapter_index <= $2
-               AND ($3::int IS NULL OR r.chapter_index = $3::int)), 'pending'),
+               AND ($3::int IS NULL OR r.chapter_index = $3::int)),
+             CASE WHEN EXISTS (
+                       SELECT 1
+                         FROM chapter c
+                        WHERE c.novel_id=$1
+                          AND ((c.enrichment_retry_at IS NOT NULL AND c.enrichment_attempts < 5)
+                            OR (c.provider_retry_at IS NOT NULL AND c.provider_retry_attempts < 5))
+                          AND c.chapter_index <= $2
+                          AND ($3::int IS NULL OR c.chapter_index = $3::int)
+                    ) THEN 'processing'
+                    WHEN EXISTS (
+                       SELECT 1
+                         FROM chapter c
+                         JOIN chapter_failure cf
+                           ON cf.novel_id=c.novel_id AND cf.chapter_index=c.chapter_index
+                        WHERE c.novel_id=$1
+                          AND ((c.provider_retry_attempts >= 5 AND c.provider_retry_at IS NULL
+                                AND cf.error_code='provider_retry_exhausted')
+                            OR (c.enrichment_attempts >= 5 AND c.enrichment_retry_at IS NULL
+                                AND cf.error_code <> 'provider_retry_exhausted'))
+                          AND c.chapter_index <= $2
+                          AND ($3::int IS NULL OR c.chapter_index = $3::int)
+                    ) THEN 'failed' ELSE 'pending' END),
   COALESCE((SELECT CASE WHEN bool_or(rr.status='failed') THEN 'failed'
                         WHEN bool_and(rr.status='ready') THEN 'ready'
                         ELSE 'pending' END
@@ -49,13 +97,38 @@ SELECT g.id::text,
   COALESCE((SELECT sum(r.warning_count) FROM record_run r
              WHERE r.novel_id=$1 AND r.generation_id=g.id AND r.chapter_index <= $2
                AND ($3::int IS NULL OR r.chapter_index = $3::int)), 0),
-  (SELECT r.diagnostics->>'failure' FROM record_run r
+  COALESCE((SELECT r.diagnostics->>'failure' FROM record_run r
     WHERE r.novel_id=$1 AND r.generation_id=g.id AND r.status='failed' AND r.chapter_index <= $2
       AND ($3::int IS NULL OR r.chapter_index = $3::int)
-    ORDER BY r.chapter_index LIMIT 1)
+    ORDER BY r.chapter_index DESC LIMIT 1),
+  (SELECT cf.error_code FROM chapter c
+     JOIN chapter_failure cf
+       ON cf.novel_id=c.novel_id AND cf.chapter_index=c.chapter_index
+    WHERE c.novel_id=$1
+      AND ((c.provider_retry_attempts >= 5 AND c.provider_retry_at IS NULL
+            AND cf.error_code='provider_retry_exhausted')
+        OR (c.enrichment_attempts >= 5 AND c.enrichment_retry_at IS NULL
+            AND cf.error_code <> 'provider_retry_exhausted'))
+      AND c.chapter_index <= $2
+      AND ($3::int IS NULL OR c.chapter_index = $3::int)
+	    ORDER BY c.chapter_index, cf.occurred_at DESC, cf.id DESC LIMIT 1)),
+  COALESCE((SELECT max(GREATEST(c.provider_retry_attempts,c.enrichment_attempts)) FROM chapter c
+    WHERE c.novel_id=$1 AND c.chapter_index <= $2
+      AND ($3::int IS NULL OR c.chapter_index=$3::int)),0),
+  (SELECT min(retry_at) FROM (SELECT c.provider_retry_at AS retry_at FROM chapter c
+	    WHERE c.novel_id=$1 AND ($3::int IS NULL OR c.chapter_index=$3::int)
+	    UNION ALL SELECT c.enrichment_retry_at FROM chapter c
+	    WHERE c.novel_id=$1 AND ($3::int IS NULL OR c.chapter_index=$3::int)) retries),
+  (SELECT c.provider_retry_category FROM chapter c
+    WHERE c.novel_id=$1 AND ($3::int IS NULL OR c.chapter_index=$3::int)
+    ORDER BY c.chapter_index LIMIT 1),
+  COALESCE((SELECT c.enrichment_attempts FROM chapter c
+    WHERE c.novel_id=$1 AND ($3::int IS NULL OR c.chapter_index=$3::int)
+    ORDER BY c.chapter_index LIMIT 1),0)
   FROM novel n JOIN record_generation g ON g.id=n.active_record_generation
  WHERE n.id=$1`, novelID, at, chapter).
-		Scan(&generation, &extraction, &rendering, &version, &warnings, &detail)
+		Scan(&generation, &extraction, &rendering, &version, &warnings, &detail,
+			&retryAttempts, &retryAt, &retryCategory, &enrichmentAttempts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// No active generation yet: the novel exists, its knowledge does not.
 		return "", RecordsStatus{Version: "none:0", ExtractionStatus: "pending", RenderingStatus: "pending"}, nil
@@ -66,6 +139,15 @@ SELECT g.id::text,
 	if extraction != "ready" && rendering == "ready" {
 		rendering = "pending"
 	}
+	if enrichmentAttempts > retryAttempts {
+		retryAttempts = enrichmentAttempts
+	}
+	// A failed run with a future durable retry is not terminal: the worker will retry
+	// it without a user action. Provider exhaustion has no retry_at and remains failed.
+	if extraction == "failed" && retryAt != nil && retryAt.After(time.Now()) &&
+		(detail == nil || *detail != "provider_retry_exhausted") {
+		extraction = "pending"
+	}
 	return generation, RecordsStatus{
 		GenerationID:     generation,
 		Version:          fmt.Sprintf("%s:%d", generation, version),
@@ -73,6 +155,10 @@ SELECT g.id::text,
 		RenderingStatus:  rendering,
 		WarningCount:     warnings,
 		FailureDetail:    detail,
+		RetryAttempts:    retryAttempts,
+		RetryMaxAttempts: 5,
+		RetryAt:          retryAt,
+		RetryCategory:    retryCategory,
 	}, nil
 }
 

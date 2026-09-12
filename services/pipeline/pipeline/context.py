@@ -155,5 +155,6 @@ class PipelineState:
     records: dict[str, Any] | None = None
     # Generation pin selected before RECORDS candidate lookup. Publication must verify
     # this exact id/config remains active; it may never silently switch generations.
+    expected_record_generation_id: str | None = None
     record_generation_id: str | None = None
     record_generation_config: dict[str, Any] | None = None

@@ -15,7 +15,14 @@ import redis.asyncio as redis
 from fixtures import make_novel, delete_novel, make_config
 from pipeline import queue
 from pipeline.failures import record_failure, error_code
-from pipeline.worker import Worker, ChapterFailed, NovelDeleted, TranslationPublished
+from pipeline.worker import (
+    MAX_ENRICHMENT_ATTEMPTS,
+    MAX_PROVIDER_RETRY_ATTEMPTS,
+    Worker,
+    ChapterFailed,
+    NovelDeleted,
+    TranslationPublished,
+)
 
 
 async def keep_novel_alive(novel_id):
@@ -43,6 +50,121 @@ def message(n, novel="a", priority=False):
     if priority:
         value["priority"] = True
     return json.dumps(value)
+
+
+def test_retry_limit_is_five():
+    assert MAX_ENRICHMENT_ATTEMPTS == 5
+    assert MAX_PROVIDER_RETRY_ATTEMPTS == 5
+
+
+@pytest.mark.asyncio
+async def test_provider_rejection_persists_exponential_wait_without_sleep():
+    from novel_llm import AdmissionRejected
+
+    class Cursor:
+        def __init__(self, row):
+            self.row = row
+        async def fetchone(self):
+            return self.row
+
+    class DB:
+        def __init__(self, attempts=0):
+            self.calls = []
+            self.attempts = attempts
+        def transaction(self): return self
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return None
+        async def execute(self, sql, params=()):
+            self.calls.append((sql, params))
+            if "SELECT provider_retry_attempts" in sql:
+                return Cursor((self.attempts, False))
+            if "UPDATE chapter SET provider_retry_attempts=%s" in sql:
+                self.attempts = params[0]
+            return Cursor(None)
+
+    worker = Worker.__new__(Worker)
+    worker.db = DB()
+    msg = type("Message", (), {"novel_id": "novel", "chapter_index": 1})()
+    await worker._record_provider_rejection(msg, AdmissionRejected(retry_after_s=1))
+    update = next(params for sql, params in worker.db.calls if "provider_retry_at=now()" in sql)
+    assert update[1] == 60.0
+
+
+@pytest.mark.asyncio
+async def test_provider_retry_after_is_never_shortened_and_success_resets_streak():
+    from novel_llm import AdmissionRejected
+
+    class Cursor:
+        async def fetchone(self): return (1, False)
+
+    class DB:
+        def __init__(self): self.calls = []
+        def transaction(self): return self
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return None
+        async def execute(self, sql, params=()):
+            self.calls.append((sql, params))
+            return Cursor()
+
+    worker = Worker.__new__(Worker)
+    worker.db = DB()
+    msg = type("Message", (), {"novel_id": "novel", "chapter_index": 1})()
+    await worker._record_provider_rejection(msg, AdmissionRejected(retry_after_s=300))
+    update = next(params for sql, params in worker.db.calls if "provider_retry_at=now()" in sql)
+    assert update[1] == 300
+    await worker._reset_provider_retry(msg)
+    assert any("provider_retry_attempts=0" in sql for sql, _ in worker.db.calls)
+
+
+@pytest.mark.asyncio
+async def test_retry_sweep_orders_both_due_states_and_enqueues_deduped_messages():
+    class Cursor:
+        async def fetchall(self): return [("novel", 3, "error", "generation")]
+
+    class DB:
+        def __init__(self): self.sql = ""; self.params = ()
+        async def execute(self, sql, params=()):
+            self.sql, self.params = sql, params
+            return Cursor()
+
+    class Redis:
+        def __init__(self): self.calls = []
+        async def eval(self, *args): self.calls.append(args); return 0
+
+    worker = Worker.__new__(Worker)
+    worker.db = DB()
+    worker.redis = Redis()
+    await worker._retry_enrichment()
+    assert "provider_retry_at <= now()" in worker.db.sql
+    assert "ORDER BY LEAST" in worker.db.sql
+    assert worker.db.params == (MAX_ENRICHMENT_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS)
+    assert len(worker.redis.calls) == 1
+    assert '"enrichment":true' in worker.redis.calls[0][-1]
+    assert '"record_generation_id":"generation"' in worker.redis.calls[0][-1]
+
+
+@pytest.mark.asyncio
+async def test_provider_rejection_fifth_attempt_is_terminal():
+    from novel_llm import AdmissionRejected
+
+    class Cursor:
+        async def fetchone(self): return (4, False)
+
+    class DB:
+        def __init__(self): self.calls = []
+        def transaction(self): return self
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return None
+        async def execute(self, sql, params=()):
+            self.calls.append((sql, params))
+            return Cursor()
+
+    worker = Worker.__new__(Worker)
+    worker.db = DB()
+    msg = type("Message", (), {"novel_id": "novel", "chapter_index": 1})()
+    await worker._record_provider_rejection(msg, AdmissionRejected(retry_after_s=1))
+    assert any("provider_retry_at=NULL" in sql for sql, _ in worker.db.calls)
+    assert any("INSERT INTO chapter_failure" in sql for sql, _ in worker.db.calls)
 
 
 async def call(client, script, *args):
@@ -370,8 +492,27 @@ async def test_completed_pointer_does_not_repeat_any_model_work():
 async def test_runtime_reservation_requeues_without_losing_chapter(scheduled):
     from novel_llm import AdmissionRejected
     client,keys=scheduled
+
+    class Cursor:
+        async def fetchone(self):
+            return (0, False)
+
+    class DB:
+        def __init__(self):
+            self.calls = []
+        def transaction(self):
+            return self
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def execute(self, sql, params=()):
+            self.calls.append((sql, params))
+            return Cursor()
+
     worker=Worker.__new__(Worker)
     worker.redis=client
+    worker.db=DB()
     worker.stopping=asyncio.Event()
     worker.cfg=SimpleNamespace(queue_timeout=1,visibility_timeout=300)
     worker._watch_novel=keep_novel_alive
@@ -382,9 +523,13 @@ async def test_runtime_reservation_requeues_without_losing_chapter(scheduled):
     worker._handle=handle
     await client.lpush(keys[0],message(2),message(3))
     await worker._loop()
-    assert set(await client.lrange(keys[0],0,-1))=={message(2),message(3)}
+    # Admission backpressure is persisted in Postgres and the claim is released;
+    # no Redis pointer is retained until the due-retry sweep re-enqueues it.
+    assert await client.lrange(keys[0],0,-1)==[message(3)]
     assert await client.llen(keys[1])==0
     assert await client.hlen(keys[4])==0
+    update = next(params for sql, params in worker.db.calls if "provider_retry_at=now()" in sql)
+    assert update[1] == 60.0
 
 
 async def test_embed_unavailable_does_not_block_chapter_claim(scheduled, monkeypatch):

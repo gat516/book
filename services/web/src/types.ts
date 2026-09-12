@@ -18,6 +18,10 @@ export interface RecordsStatus {
   rendering_status: "pending" | "ready" | "failed" | string;
   warning_count: number;
   failure_detail?: string | null;
+  retry_attempts?: number;
+  retry_max_attempts?: number;
+  retry_at?: string | null;
+  retry_category?: string | null;
 }
 export interface RecordEvidence {
   passage_id: string;
@@ -51,6 +55,45 @@ export interface RecordView {
 }
 export interface RecordsResponse { novel_id: string; chapter_index: number; at: number; status: RecordsStatus; rows: RecordView[]; }
 export interface RecordsInspectorResponse { novel_id: string; chapter_index: number; status: RecordsStatus; parsed: number; retained: number; dropped: number; unresolved: number; rendering_failures: number; drops: Array<{ original_index: number; reasons: string[] }>; }
+export interface RecordReviewDecision {
+  decision: "accepted" | "rejected" | string;
+  actor: string;
+  reason: string;
+  request_id: string;
+  created_at: string;
+}
+export interface RecordReviewItem { row: RecordView; decision?: RecordReviewDecision | null; }
+export interface RecordReviewResponse {
+  novel_id: string;
+  chapter_index: number;
+  at: number;
+  status: RecordsStatus;
+  items: RecordReviewItem[];
+}
+export interface RecordReviewRequest {
+  row_id: string;
+  decision: "accepted" | "rejected";
+  reason: string;
+  request_id: string;
+}
+export interface RecordReviewResult {
+  row_id: string;
+  generation_id?: string;
+  chapter?: number;
+  chapter_index?: number;
+  decision: string;
+}
+export interface RecordsRebuildStatus {
+  novel_id: string;
+  active_generation_id: string | null;
+  active_state: string;
+  predecessor_generation_id: string | null;
+  has_predecessor: boolean;
+  eligible_chapters: number;
+  published_chapters: number;
+  missing_chapters: number;
+  discardable: boolean;
+}
 export interface WikiResponse { novel_id: string; at?: number; status: RecordsStatus; entities: EntitySummary[]; rows?: RecordView[]; }
 
 export interface NovelListResponse {
@@ -304,6 +347,7 @@ export interface ProviderHealth {
     | "credential_rejected"
     | "rate_limited"
     | "quota_exhausted"
+    | "provider_retry_exhausted"
     | "model_not_available"
     | "model_server_error"
     | "unknown";

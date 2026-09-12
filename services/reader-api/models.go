@@ -6,12 +6,16 @@ import (
 )
 
 type RecordsStatus struct {
-	GenerationID     string  `json:"generation_id"`
-	Version          string  `json:"version"`
-	ExtractionStatus string  `json:"extraction_status"`
-	RenderingStatus  string  `json:"rendering_status"`
-	WarningCount     int     `json:"warning_count"`
-	FailureDetail    *string `json:"failure_detail,omitempty"`
+	GenerationID     string     `json:"generation_id"`
+	Version          string     `json:"version"`
+	ExtractionStatus string     `json:"extraction_status"`
+	RenderingStatus  string     `json:"rendering_status"`
+	WarningCount     int        `json:"warning_count"`
+	FailureDetail    *string    `json:"failure_detail,omitempty"`
+	RetryAttempts    int        `json:"retry_attempts,omitempty"`
+	RetryMaxAttempts int        `json:"retry_max_attempts,omitempty"`
+	RetryAt          *time.Time `json:"retry_at,omitempty"`
+	RetryCategory    *string    `json:"retry_category,omitempty"`
 }
 
 type RecordParticipantView struct {
@@ -126,6 +130,27 @@ type RecordsInspectorResponse struct {
 	Unresolved        int              `json:"unresolved"`
 	RenderingFailures int              `json:"rendering_failures"`
 	Drops             []RecordDropView `json:"drops"`
+}
+
+type RecordReviewDecisionView struct {
+	Decision  string    `json:"decision"`
+	Actor     string    `json:"actor"`
+	Reason    string    `json:"reason"`
+	RequestID string    `json:"request_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type RecordReviewItemView struct {
+	Row      RecordView                `json:"row"`
+	Decision *RecordReviewDecisionView `json:"decision,omitempty"`
+}
+
+type RecordReviewResponse struct {
+	NovelID      string                 `json:"novel_id"`
+	ChapterIndex int                    `json:"chapter_index"`
+	At           int                    `json:"at"`
+	Status       RecordsStatus          `json:"status"`
+	Items        []RecordReviewItemView `json:"items"`
 }
 
 type RecordDropView struct {

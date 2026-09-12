@@ -36,7 +36,12 @@ type SourceMeta struct {
 type QueueMessage struct {
 	NovelID      string `json:"novel_id"`
 	ChapterIndex int    `json:"chapter_index"`
-	Priority     bool   `json:"priority,omitempty"`
+	// RecordGenerationID fences enrichment work from a discarded rebuild. An omitted
+	// value means the worker should use the novel's current generation (the legacy
+	// translation queue contract); rebuild/retry pointers carry the generation they
+	// were created for so a stale Redis item cannot repopulate a retired generation.
+	RecordGenerationID string `json:"record_generation_id,omitempty"`
+	Priority           bool   `json:"priority,omitempty"`
 	// Enrichment keeps an already-readable chapter out of the translation-critical
 	// queue. The pipeline uses this to reuse durable prose while rebuilding records.
 	Enrichment  bool `json:"enrichment,omitempty"`

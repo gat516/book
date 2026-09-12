@@ -9,6 +9,10 @@ from pipeline.batch import BatchRequestFailed
 
 
 def error_code(exc: Exception) -> str:
+    category = getattr(exc, "category", None)
+    if category in {"provider_retry_exhausted", "rate_limited", "quota_exhausted",
+                    "model_server_error", "unreachable"}:
+        return "model_unreachable" if category == "unreachable" else category
     if isinstance(exc, httpx.TimeoutException):
         return "provider_timeout"
     if isinstance(exc, httpx.TransportError):
