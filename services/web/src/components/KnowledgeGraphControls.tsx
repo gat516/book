@@ -31,8 +31,13 @@ export function KnowledgeGraphControls({ novelId }: { novelId: string }) {
     finally { setBusy(false); }
   }
 
+  const eligible = status?.eligible_chapters ?? 0;
+  const published = status?.published_chapters ?? 0;
   return <section className="chapter-knowledge-graph" aria-label="Knowledge graph controls">
-    <div><strong>Knowledge graph</strong> <span>{status ? graphCoverageLabel(status) : "Loading graph status…"}</span></div>
+    <div className="graph-build-status" role="status" aria-live="polite">
+      <strong>Knowledge graph</strong> <span>{status ? graphCoverageLabel(status) : "Loading graph status…"}</span>
+      {status && <><progress max={Math.max(eligible, 1)} value={published} aria-label={`Knowledge graph progress: ${published} of ${eligible} chapters`} /><small>{published} of {eligible} eligible chapters extracted</small></>}
+    </div>
     <button type="button" disabled={busy} onClick={() => void rebuild()}>{busy ? "Starting graph…" : "Start / rebuild graph"}</button>
     {status?.has_predecessor && status.discardable && !confirmDiscard && <button type="button" disabled={busy} onClick={() => setConfirmDiscard(true)}>Discard unfinished graph</button>}
     {confirmDiscard && <span role="alert"><small>Discard only the unfinished replacement; published generations remain immutable.</small> <button type="button" disabled={busy} onClick={() => void discard()}>Confirm discard</button> <button type="button" disabled={busy} onClick={() => setConfirmDiscard(false)}>Keep graph</button></span>}
