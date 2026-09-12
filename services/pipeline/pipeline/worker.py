@@ -728,8 +728,8 @@ class Worker:
             # character-name gate no longer blocks translation, so a chapter still parked
             # at that status is stranded exactly the way pre-TRANSLATE failures were before
             # 0033. It was excluded then precisely because it WAS a live human gate.
-            "WHERE (enrichment_retry_at <= now() AND enrichment_attempts < %s) "
-            "OR (provider_retry_at <= now() AND provider_retry_attempts < %s) "
+            "WHERE NOT c.enrichment_discarded AND ((enrichment_retry_at <= now() AND enrichment_attempts < %s) "
+            "OR (provider_retry_at <= now() AND provider_retry_attempts < %s)) "
             "ORDER BY LEAST(COALESCE(enrichment_retry_at, 'infinity'::timestamptz), "
             "COALESCE(provider_retry_at, 'infinity'::timestamptz)) LIMIT 20",
             (MAX_ENRICHMENT_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS),
