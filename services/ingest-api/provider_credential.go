@@ -71,7 +71,12 @@ func (s *Store) UpsertProviderCredential(ctx context.Context, in ProviderCredent
 	if in.APIKeyCipher != nil {
 		cipherArg, nonceArg = in.APIKeyCipher, in.APIKeyNonce
 	}
-	_, err := s.db.Exec(ctx,
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin provider_credential upsert: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	_, err = tx.Exec(ctx,
 		`INSERT INTO provider_credential (provider, base_url, api_key_cipher, api_key_nonce, updated_at)
 		 VALUES ($1, $2, $3, $4, now())
 		 ON CONFLICT (provider) DO UPDATE SET
@@ -87,18 +92,37 @@ func (s *Store) UpsertProviderCredential(ctx context.Context, in ProviderCredent
 	if err != nil {
 		return fmt.Errorf("upsert provider_credential: %w", err)
 	}
-	return nil
+	if err := releaseProviderDeferrals(ctx, tx, novelsUsingProvider, in.Provider); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
+// novelsUsingProvider selects chapters of every novel whose effective provider may be $1:
+// those naming it, plus those with no config row, whose provider is the pipeline's env
+// default (not knowable here). Over-selecting only costs a prompt retry that would hit
+// the same cooldown again; under-selecting strands a book behind a replaced key.
+const novelsUsingProvider = `novel_id IN (
+	SELECT n.id FROM novel n LEFT JOIN novel_provider_config c ON c.novel_id = n.id
+	WHERE c.novel_id IS NULL OR c.provider = $1)`
+
 func (s *Store) DeleteProviderCredential(ctx context.Context, provider string) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM provider_credential WHERE provider = $1`, provider)
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin provider_credential delete: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `DELETE FROM provider_credential WHERE provider = $1`, provider)
 	if err != nil {
 		return fmt.Errorf("delete provider_credential: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrProviderCredentialNotFound
 	}
-	return nil
+	if err := releaseProviderDeferrals(ctx, tx, novelsUsingProvider, provider); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // GetProviderCredential returns one provider's stored base URL and decrypted key. Unlike

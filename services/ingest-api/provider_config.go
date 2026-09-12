@@ -98,7 +98,12 @@ func (s *Store) UpsertProviderConfig(ctx context.Context, novelID string, cfg Pr
 	if cfg.BaseURL != "" {
 		baseURLArg = cfg.BaseURL
 	}
-	_, err := s.db.Exec(ctx,
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin provider config upsert: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	_, err = tx.Exec(ctx,
 		`INSERT INTO novel_provider_config (novel_id, provider, model, translate_model, extract_model, base_url, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, now())
 		 ON CONFLICT (novel_id) DO UPDATE SET
@@ -112,6 +117,28 @@ func (s *Store) UpsertProviderConfig(ctx context.Context, novelID string, cfg Pr
 	)
 	if err != nil {
 		return fmt.Errorf("upsert novel_provider_config: %w", err)
+	}
+	if err := releaseProviderDeferrals(ctx, tx, `novel_id = $1`, novelID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// releaseProviderDeferrals makes provider backoff recorded against the previous provider
+// due now, for the chapters selected by where. The backoff on a chapter row (its
+// provider_retry_at, and an exhausted streak) is evidence about the provider that
+// rejected it -- typically "this key is out of quota for 26 minutes". Once the novel
+// points at a different provider or credential, that evidence is about nothing, and
+// honoring it would leave the book idle behind a limit it no longer uses. The worker's
+// due-retry sweep re-enqueues these rows; an in-flight claim notices the change itself
+// (pipeline/worker.py _watch_novel). Discarded chapters stay discarded: the sweep
+// excludes them. The generation pin is kept so a rebuild's pointer stays fenced.
+func releaseProviderDeferrals(ctx context.Context, tx pgx.Tx, where string, args ...any) error {
+	_, err := tx.Exec(ctx,
+		`UPDATE chapter SET provider_retry_at = now(), provider_retry_attempts = 0
+		 WHERE provider_retry_category IS NOT NULL AND `+where, args...)
+	if err != nil {
+		return fmt.Errorf("release provider deferrals: %w", err)
 	}
 	return nil
 }

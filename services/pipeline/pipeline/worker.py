@@ -28,6 +28,7 @@ from pipeline.llm.provider import AdmissionRejected, LLMProvider
 from pipeline.provider_config import (
     build_names_provider,
     build_provider,
+    ProviderConfigRow,
     build_resolve_provider,
     resolve_provider_config,
 )
@@ -82,6 +83,15 @@ class NovelDeleted(Exception):
     """The chapter's owner disappeared; cancel work without retry or failure history."""
 
 
+class ProviderConfigChanged(Exception):
+    """The novel's provider/model/credential changed under an in-flight claim.
+
+    The work is not wrong, only aimed at a provider the user no longer wants (commonly one
+    that is out of quota). Return the claim to pending so the next attempt resolves the
+    new provider; nothing is recorded as a failure.
+    """
+
+
 class TranslationPublished(Exception):
     """Validated prose is durable; hand remaining work back as low-priority enrichment."""
 
@@ -93,6 +103,7 @@ class ProviderRetryExhausted(Exception):
 
 
 NOVEL_CHECK_SECONDS = 2
+_UNRESOLVED = object()  # sentinel: no config resolved yet (None means "process default")
 TRANSLATE_STAGE = "translate"
 # Partial translation text, so a reader watching an in-progress chapter sees it arrive
 # rather than staring at a spinner for minutes. Keyed per chapter and short-lived: it is a
@@ -153,6 +164,9 @@ class Worker:
             str,
             tuple[LLMProvider, BatchManager, str, LLMProvider | None, LLMProvider | None, str | None],
         ] = {}
+        # The resolved config each cached provider was built from; a mismatch rebuilds it
+        # (_provider_for_novel) and cancels an in-flight claim using it (_watch_novel).
+        self._provider_rows: dict[str, ProviderConfigRow | None] = {}
         self.textproc = textproc_from_config(
             cfg.textproc_backend, cfg.textproc_grpc_addr, cfg.textproc_timeout_seconds
         )
@@ -286,6 +300,12 @@ class Worker:
                     "provider admission deferred durably category=%s retry_after_s=%.1f",
                     getattr(exc, "category", "rate_limited"), exc.retry_after_s,
                 )
+            except ProviderConfigChanged:
+                msg = QueueMessage.model_validate_json(raw)
+                await self._clear_preview(msg.novel_id, msg.chapter_index)
+                disposition = "retry"
+                log.info("provider config changed; returning chapter %s/%s to pending",
+                         msg.novel_id, msg.chapter_index)
             except ChapterDiscarded:
                 log.info("chapter graph attempt discarded; dropping claim")
             except ChapterFailed:
@@ -325,7 +345,7 @@ class Worker:
         # translation/records/display path: records_publish() stores NULL for a failed
         # or unavailable vector and retrieval simply excludes that row (§0 append-only).
         work = asyncio.create_task(self._handle(raw))
-        owner = asyncio.create_task(self._watch_novel(msg.novel_id))
+        owner = asyncio.create_task(self._watch_novel(msg.novel_id, msg))
         try:
             done, _ = await asyncio.wait((work, owner), return_when=asyncio.FIRST_COMPLETED)
             if owner in done:
@@ -339,10 +359,18 @@ class Worker:
                     task.cancel()
             await asyncio.gather(work, owner, return_exceptions=True)
 
-    async def _watch_novel(self, novel_id: str) -> None:
+    async def _watch_novel(self, novel_id: str, msg: QueueMessage | None = None) -> None:
         # Use a separate autocommit connection: the stage connection may be busy or
-        # inside a transaction. Only a committed deletion is a cancellation signal.
-        # Checking Postgres also works if best-effort Redis cleanup failed (§0, §6.3).
+        # inside a transaction. Only committed state is a cancellation signal. Checking
+        # Postgres also works if best-effort Redis cleanup failed (§0, §6.3).
+        #
+        # Deletion is not the only committed change that should stop live work. A stage
+        # can run for many minutes (or, before CooldownProvider stopped sleeping on
+        # quota, park for half an hour), and the stage-boundary checks in _handle cannot
+        # see a change made in between. So the same poll also cancels on:
+        #   - a discarded graph attempt or a rolled-back rebuild generation -> drop claim
+        #   - a changed provider config/credential                          -> requeue
+        polls = 0
         while True:
             try:
                 async with await psycopg.AsyncConnection.connect(
@@ -351,16 +379,48 @@ class Worker:
                     while True:
                         async with asyncio.timeout(5):
                             row = await (await monitor.execute(
-                                "SELECT 1 FROM novel WHERE id=%s", (novel_id,)
+                                "SELECT n.active_record_generation::text, c.enrichment_discarded "
+                                "FROM novel n LEFT JOIN chapter c ON c.novel_id=n.id "
+                                "AND c.chapter_index=%s WHERE n.id=%s",
+                                (msg.chapter_index if msg else -1, novel_id),
                             )).fetchone()
                         if row is None:
                             raise NovelDeleted(novel_id)
+                        if msg is not None:
+                            active_generation, discarded = row
+                            if msg.enrichment and discarded:
+                                raise ChapterDiscarded()
+                            if (msg.record_generation_id
+                                    and active_generation != msg.record_generation_id):
+                                raise ChapterDiscarded()
+                            # Skip the first poll: _handle refreshes a cached provider
+                            # moments after the claim, and comparing before that would
+                            # requeue a claim that is about to use the new config anyway.
+                            if polls and await self._provider_config_changed(monitor, novel_id):
+                                raise ProviderConfigChanged(novel_id)
+                        polls += 1
                         await asyncio.sleep(NOVEL_CHECK_SECONDS)
             except (psycopg.Error, TimeoutError):
                 # A database outage is not evidence of deletion. Keep the claim and
                 # heartbeat intact and reconnect without interrupting live inference.
                 log.warning("could not check novel existence; retrying", exc_info=True)
                 await asyncio.sleep(NOVEL_CHECK_SECONDS)
+
+    async def _provider_config_changed(self, conn, novel_id: str) -> bool:
+        """True when novel_id's resolved provider differs from the one its claim is using."""
+        if self.cfg.llm_provider == "gateway":
+            return False
+        seen = getattr(self, "_provider_rows", {}).get(novel_id, _UNRESOLVED)
+        if seen is _UNRESOLVED:
+            return False
+        try:
+            current = await resolve_provider_config(conn, novel_id, self.cfg.llm_provider)
+        except psycopg.Error:
+            raise
+        except Exception:  # noqa: BLE001 — e.g. an undecryptable key: let the call itself fail
+            log.warning("could not resolve provider config for %s", novel_id, exc_info=True)
+            return False
+        return current != seen
 
     async def _idle(self, seconds: float) -> None:
         with suppress(asyncio.TimeoutError):
@@ -684,19 +744,26 @@ class Worker:
                 enrichment_attempts = int(retry_row[0]) if retry_row else 0
                 next_attempt = enrichment_attempts + 1
                 retry_generation = state.record_generation_id or msg.record_generation_id
+                # An operator's graph retry (records.go retryRecords: priority+enrichment)
+                # is the retry. If it fails, the operator is watching and decides what
+                # happens next; quietly scheduling another attempt behind their back put an
+                # automatic countdown on a chapter they had just taken over by hand.
+                # Automatic scheduling stays for work nobody explicitly asked to re-run.
+                manual_graph_retry = bool(msg.priority and msg.enrichment)
+                schedule = not manual_graph_retry and next_attempt < MAX_ENRICHMENT_ATTEMPTS
                 await self.db.execute(
                     "UPDATE chapter SET enrichment_attempts=%s,"
-                    "enrichment_retry_at = CASE WHEN %s < %s "
+                    "enrichment_retry_at = CASE WHEN %s "
                     "THEN now() + (%s * interval '1 second') ELSE NULL END,"
-                    "enrichment_retry_generation_id=CASE WHEN %s < %s THEN %s::uuid ELSE NULL END,"
+                    "enrichment_retry_generation_id=CASE WHEN %s THEN %s::uuid ELSE NULL END,"
                     "provider_retry_attempts=0,provider_retry_at=NULL,"
                     "provider_retry_category=NULL,provider_retry_generation_id=NULL "
                     "WHERE novel_id=%s AND chapter_index=%s AND enrichment_attempts < %s",
                     (next_attempt,
-                     next_attempt, MAX_ENRICHMENT_ATTEMPTS,
+                     schedule,
                      min(GENERIC_RETRY_BASE_SECONDS * (2 ** max(next_attempt - 1, 0)),
                          GENERIC_RETRY_CAP_SECONDS),
-                     next_attempt, MAX_ENRICHMENT_ATTEMPTS, retry_generation,
+                     schedule, retry_generation,
                      msg.novel_id, msg.chapter_index, MAX_ENRICHMENT_ATTEMPTS))
             # Re-raise as ChapterFailed so the drain loop knows the outcome was recorded
             # and the claim can be dropped rather than left for the reaper to retry.
@@ -753,8 +820,11 @@ class Worker:
             )).fetchone()
             if row is None:
                 return
-            attempt = int(row[0]) + 1
-            if attempt >= MAX_PROVIDER_RETRY_ATTEMPTS:
+            # A shared cooldown rejection never reached the provider: it only relays a
+            # deadline another call already earned, so it does not spend an attempt.
+            shared = bool(getattr(exc, "shared_cooldown", False))
+            attempt = int(row[0]) + (0 if shared else 1)
+            if not shared and attempt >= MAX_PROVIDER_RETRY_ATTEMPTS:
                 await self.db.execute(
                     "UPDATE chapter SET provider_retry_attempts=%s,provider_retry_at=NULL,"
                     "provider_retry_category=%s,provider_retry_generation_id=NULL,"
@@ -767,7 +837,7 @@ class Worker:
                     ProviderRetryExhausted(),
                 )
                 return
-            delay = max(
+            delay = max(float(exc.retry_after_s), 0.0) if shared else max(
                 PROVIDER_RETRY_BASE_SECONDS * (2 ** (attempt - 1)),
                 max(float(exc.retry_after_s), 0.0),
             )
@@ -816,10 +886,10 @@ class Worker:
         gets the process-wide default; the cache holds that too, so this is still one
         lookup per novel rather than one per chapter.
         """
-        cached = self._provider_cache.get(novel_id)
-        if cached is not None:
-            return cached
         if self.cfg.llm_provider == "gateway":
+            cached = self._provider_cache.get(novel_id)
+            if cached is not None:
+                return cached
             provider = provider_from_env(self.cfg, tenant=novel_id)
             # The gateway owns its own admission and deadlines; a second direct-to-Ollama
             # client would bypass exactly the scheduling it exists to provide (§14).
@@ -829,6 +899,15 @@ class Worker:
         # Merges the novel's own row over the account-wide credential (migration 0035),
         # so one key in Settings serves every book while a book may still override it.
         row = await resolve_provider_config(self.db, novel_id, self.cfg.llm_provider)
+        # Memoized per resolved config, not per process: re-resolving is two indexed reads
+        # per chapter, while the old process-lifetime cache kept serving a provider the
+        # user had already switched away from until someone restarted the worker.
+        cached = self._provider_cache.get(novel_id)
+        if cached is not None and self._provider_rows.get(novel_id, _UNRESOLVED) == row:
+            return cached
+        if cached is not None:
+            log.info("provider config changed for novel %s; rebuilding its provider", novel_id)
+        self._provider_rows[novel_id] = row
         if row is None:
             result = (
                 self._default_provider,

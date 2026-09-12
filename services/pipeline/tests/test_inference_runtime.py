@@ -134,3 +134,39 @@ async def test_owned_redis_is_closed_when_credential_is_unavailable():
     assert isinstance(wrapped, ResourceClosingProvider)
     await wrapped.aclose()
     assert provider.closed and redis.closed
+
+
+async def test_long_shared_cooldown_rejects_instead_of_holding_the_caller():
+    from pipeline.llm.provider import AdmissionRejected
+
+    class Provider:
+        _api_key = "secret"
+        _base_url = "https://api.example"
+        calls = 0
+
+        async def complete(self, **kwargs):
+            Provider.calls += 1
+            return "ok"
+
+    redis = Redis()
+    redis.get = lambda key: asyncio.sleep(0, result=redis.values.get(key))
+    wrapped = coordinated_provider(Provider(), redis, provider_id="groq")
+    await wrapped._cooldown.note(1560, "quota_exhausted")
+    with pytest.raises(AdmissionRejected) as rejected:
+        await asyncio.wait_for(wrapped.complete(), 1)
+    assert rejected.value.shared_cooldown is True
+    assert rejected.value.category == "quota_exhausted"
+    assert 1500 < rejected.value.retry_after_s <= 1560
+    assert Provider.calls == 0
+
+
+async def test_short_shared_cooldown_is_still_waited_inline():
+    class Provider:
+        async def complete(self, **kwargs):
+            return "ok"
+
+    cooldown = HostedCooldown(Redis(), provider="groq", base_url="https://x", credential="k",
+                              poll_seconds=.01)
+    wrapped = CooldownProvider(Provider(), cooldown, max_inline_wait_s=1)
+    await cooldown.note(.05)
+    assert await asyncio.wait_for(wrapped.complete(), 1) == "ok"

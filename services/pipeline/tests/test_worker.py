@@ -25,7 +25,7 @@ from pipeline.worker import (
 )
 
 
-async def keep_novel_alive(novel_id):
+async def keep_novel_alive(novel_id, msg=None):
     await asyncio.Event().wait()
 
 
@@ -881,3 +881,163 @@ async def test_enrichment_retries_are_deduplicated_and_yield_to_reading(schedule
     await call(client, queue.RELEASE, message(4), "100", "done")
     assert await call(client, queue.CLAIM, "101") == retry
     assert await call(client, queue.ENQUEUE_ENRICHMENT, "a", 2, retry) == 0
+
+
+@pytest.mark.asyncio
+async def test_shared_cooldown_deferral_does_not_spend_a_provider_attempt():
+    from novel_llm import AdmissionRejected
+
+    class Cursor:
+        async def fetchone(self): return (2, False)
+
+    class DB:
+        def __init__(self): self.calls = []
+        def transaction(self): return NullTransaction()
+        async def execute(self, sql, params=None):
+            self.calls.append((sql, params))
+            return Cursor()
+
+    class NullTransaction:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *exc): return False
+
+    worker = Worker.__new__(Worker)
+    worker.db = DB()
+    msg = type("Message", (), {"novel_id": "novel", "chapter_index": 1})()
+    exc = AdmissionRejected(retry_after_s=1092, category="quota_exhausted")
+    exc.shared_cooldown = True
+    await worker._record_provider_rejection(msg, exc)
+    update = next(params for sql, params in worker.db.calls if "provider_retry_at=now()" in sql)
+    assert update[0] == 2  # unchanged streak
+    assert update[1] == 1092  # exactly the remaining cooldown, no exponential backoff
+
+
+@pytest.mark.asyncio
+async def test_provider_cache_rebuilds_when_novel_config_changes(monkeypatch):
+    import pipeline.worker as module
+    from pipeline.provider_config import ProviderConfigRow
+
+    rows = [ProviderConfigRow(provider="groq", model=None, translate_model=None,
+                              extract_model=None, base_url=None, api_key="k")]
+    async def resolve(db, novel_id, default):
+        return rows[-1]
+    built = []
+    def build(row, cfg):
+        built.append(row.provider)
+        return object()
+    monkeypatch.setattr(module, "resolve_provider_config", resolve)
+    monkeypatch.setattr(module, "build_provider", build)
+    monkeypatch.setattr(module, "coordinated_provider", lambda provider, *a, **k: provider)
+    monkeypatch.setattr(module, "build_names_provider", lambda *a, **k: None)
+    monkeypatch.setattr(module, "build_resolve_provider", lambda *a, **k: None)
+    worker = Worker.__new__(Worker)
+    worker.cfg = make_config()
+    worker.db = worker.redis = None
+    worker._provider_cache, worker._provider_rows = {}, {}
+
+    first = await worker._provider_for_novel("novel")
+    assert await worker._provider_for_novel("novel") is first
+    assert not await worker._provider_config_changed(None, "novel")
+    rows.append(ProviderConfigRow(provider="ollama", model=None, translate_model=None,
+                                  extract_model=None, base_url="http://127.0.0.1:11435",
+                                  api_key=None))
+    assert await worker._provider_config_changed(None, "novel")
+    second = await worker._provider_for_novel("novel")
+    assert second is not first and second[2] == "ollama"
+    assert built == ["groq", "ollama"]
+
+
+@pytest.mark.asyncio
+async def test_provider_change_returns_in_flight_claim_to_pending(scheduled):
+    import pipeline.worker as module
+
+    client, keys = scheduled
+    worker = Worker.__new__(Worker)
+    worker.redis = client
+    worker.stopping = asyncio.Event()
+    worker.cfg = make_config()
+    cancelled = asyncio.Event()
+
+    async def handle(raw):
+        try:
+            await asyncio.Event().wait()  # a provider call parked on the old provider
+        finally:
+            cancelled.set()
+
+    async def watch(novel_id, msg=None):
+        await asyncio.sleep(0.01)
+        raise module.ProviderConfigChanged(novel_id)
+
+    worker._handle = handle
+    worker._watch_novel = watch
+    await client.lpush(keys[0], message(1))
+    run = asyncio.create_task(worker._loop())
+    try:
+        await asyncio.wait_for(cancelled.wait(), 5)
+        for _ in range(100):
+            if await client.lrange(keys[0], 0, -1):
+                break
+            await asyncio.sleep(0.01)
+        worker.request_stop()
+        await asyncio.wait_for(run, 5)
+    finally:
+        run.cancel()
+        await asyncio.gather(run, return_exceptions=True)
+    assert message(1) in await client.lrange(keys[0], 0, -1) + await client.lrange(keys[1], 0, -1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("priority,scheduled_retry", [(True, False), (False, True)])
+async def test_failed_manual_graph_retry_does_not_schedule_an_automatic_one(
+    priority, scheduled_retry, monkeypatch
+):
+    import pipeline.worker as module
+
+    class Cursor:
+        async def fetchone(self): return (0,)
+
+    class DB:
+        def __init__(self): self.calls = []
+        def transaction(self): return NullTransaction()
+        async def execute(self, sql, params=None):
+            self.calls.append((sql, params))
+            return Cursor()
+
+    class NullTransaction:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *exc): return False
+
+    class Boom:
+        name = "records"
+        async def run(self, ctx, state):
+            raise RuntimeError("stage broke")
+
+    async def fetch_one(sql, params):
+        if "FROM chapter" in sql:
+            return ("hash", "raw/1", {}, "error", True, None, False)
+        if "active_record_generation" in sql:
+            return ("generation",)
+        return ("zh", "en", {})
+
+    async def record_failure(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(module, "DEFAULT_STAGES", [Boom()])
+    monkeypatch.setattr(module, "record_failure", record_failure)
+    worker = Worker.__new__(Worker)
+    worker.db = DB()
+    worker.cfg = make_config()
+    worker.redis = AsyncMock()
+    worker.minio = worker.cache = worker.textproc = worker.embed_provider = None
+    worker._fetch_one = fetch_one
+    worker._get_object = lambda key: "原文"
+    worker._set_status = AsyncMock()
+    worker._reset_provider_retry = AsyncMock()
+    worker._provider_for_novel = AsyncMock(return_value=(None, None, "ollama", None, None, None))
+    raw = json.dumps({"novel_id": "novel", "chapter_index": 1, "enrichment": True,
+                      "priority": priority, "record_generation_id": "generation"})
+    with pytest.raises(module.ChapterFailed):
+        await worker._handle(raw)
+    sql, params = next((sql, params) for sql, params in worker.db.calls
+                       if "enrichment_retry_at = CASE" in sql)
+    assert params[1] is scheduled_retry

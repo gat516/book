@@ -1,4 +1,5 @@
 """Read-only local inference preflight. Never loads a model or generates tokens."""
+from contextlib import suppress
 from pathlib import Path
 import asyncio
 import hashlib
@@ -65,6 +66,11 @@ def credential_fingerprint(provider: str, base_url: str, credential: str) -> str
     return hashlib.sha256(f"{provider}\x1f{stable_url}\x1f{credential}".encode()).hexdigest()[:32]
 
 
+# A cooldown this short is cheaper to sleep through than to round-trip through the durable
+# retry schedule; anything longer releases the chapter claim (see CooldownProvider._admit).
+MAX_INLINE_COOLDOWN_SECONDS = 60.0
+
+
 class HostedCooldown:
     """Optional Redis-backed cooldown shared by processes using one hosted key.
 
@@ -83,17 +89,26 @@ class HostedCooldown:
         self.base_url = base_url
         self.poll_seconds = poll_seconds
         self._local_until = 0.0
+        self._local_category = "rate_limited"
         # Keep only the one-way fingerprint.  In particular, a long-lived cooldown
         # object must not retain the provider credential after deriving its key.
         self._key = "llm:cooldown:" + credential_fingerprint(provider, base_url, credential)
 
-    async def note(self, retry_after_s: float) -> None:
-        """Publish a server supplied cooldown, retaining the longer existing value."""
+    async def note(self, retry_after_s: float, category: str | None = None) -> None:
+        """Publish a server supplied cooldown, retaining the longer existing value.
+
+        The value stored under the key is the bounded admission category, so a caller that
+        declines to wait out the cooldown can report why (quota vs. rate limit) without
+        having made a provider call of its own.
+        """
         delay = max(0.0, float(retry_after_s))
         if not delay:
             return
+        value = category or "rate_limited"
         local_until = time.monotonic() + delay
-        self._local_until = max(self._local_until, local_until)
+        if local_until > self._local_until:
+            self._local_until = local_until
+            self._local_category = value
         if self.redis is None:
             return
         ttl_ms = max(1, math.ceil(delay * 1000))
@@ -103,13 +118,13 @@ class HostedCooldown:
         script = (
             "local current = redis.call('PTTL', KEYS[1]); "
             "if current < tonumber(ARGV[1]) then "
-            "redis.call('SET', KEYS[1], '1', 'PX', ARGV[1]); return 1; "
+            "redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[1]); return 1; "
             "end; return 0"
         )
         eval_method = getattr(self.redis, "eval", None)
         if eval_method is not None:
             try:
-                await eval_method(script, 1, self._key, str(ttl_ms))
+                await eval_method(script, 1, self._key, str(ttl_ms), value)
                 return
             except (TypeError, NotImplementedError):
                 pass
@@ -119,7 +134,7 @@ class HostedCooldown:
         # followed by PTTL is a safe fallback for those clients.
         set_method = getattr(self.redis, "set")
         try:
-            created = await set_method(self._key, "1", px=ttl_ms, nx=True)
+            created = await set_method(self._key, value, px=ttl_ms, nx=True)
         except TypeError:
             created = False
         except Exception:
@@ -129,9 +144,28 @@ class HostedCooldown:
         if created is False:
             try:
                 if await self._pttl() < ttl_ms:
-                    await set_method(self._key, "1", px=ttl_ms)
+                    await set_method(self._key, value, px=ttl_ms)
             except Exception:
                 return
+
+    async def remaining(self) -> tuple[float, str]:
+        """Return (seconds left, admission category) without waiting."""
+        try:
+            remaining_ms = await self._pttl()
+        except Exception:
+            remaining_ms = 0
+        local = max(0.0, self._local_until - time.monotonic())
+        if remaining_ms / 1000 >= local and remaining_ms > 0:
+            category = None
+            getter = getattr(self.redis, "get", None)
+            if getter is not None:
+                with suppress(Exception):
+                    category = await getter(self._key)
+            if isinstance(category, bytes):
+                category = category.decode()
+            # Keys written before the category was stored hold '1'.
+            return remaining_ms / 1000, category if category and category != "1" else "rate_limited"
+        return local, self._local_category
 
     async def _pttl(self) -> int:
         if self.redis is None:
@@ -164,32 +198,53 @@ class HostedCooldown:
 class CooldownProvider:
     """Provider seam that coordinates hosted complete/batch admissions via Redis."""
 
-    def __init__(self, provider, cooldown: HostedCooldown, *, owns_redis: bool = False):
+    def __init__(self, provider, cooldown: HostedCooldown, *, owns_redis: bool = False,
+                 max_inline_wait_s: float = MAX_INLINE_COOLDOWN_SECONDS):
         self._provider = provider
         self._cooldown = cooldown
         self._owns_redis = owns_redis
+        self._max_inline_wait_s = max_inline_wait_s
 
     def __getattr__(self, name):
         return getattr(self._provider, name)
 
-    async def complete(self, *args, **kwargs):
+    async def _admit(self) -> None:
+        """Wait out a short shared cooldown; reject a long one instead of sleeping on it.
+
+        Sleeping through a quota cooldown (Groq hands out ~26 minutes) held the chapter's
+        queue claim the whole time: the worker served nothing else, the UI showed the
+        chapter as merely queued, and a provider switch made meanwhile could not reach the
+        parked call. A rejection travels the worker's durable-deferral path instead, which
+        releases the claim and schedules the retry on the chapter row.
+        """
+        remaining, category = await self._cooldown.remaining()
+        if remaining > self._max_inline_wait_s:
+            from pipeline.llm.provider import AdmissionRejected
+            exc = AdmissionRejected("shared provider cooldown", retry_after_s=remaining,
+                                    exact_hint=True, category=category)
+            # Not a fresh provider response: the worker must not count it as an attempt.
+            exc.shared_cooldown = True
+            raise exc
         await self._cooldown.wait()
+
+    async def complete(self, *args, **kwargs):
+        await self._admit()
         try:
             return await self._provider.complete(*args, **kwargs)
         except Exception as exc:
             from pipeline.llm.provider import AdmissionRejected
             if isinstance(exc, AdmissionRejected):
-                await self._cooldown.note(exc.retry_after_s)
+                await self._cooldown.note(exc.retry_after_s, getattr(exc, "category", None))
             raise
 
     async def batch_submit(self, requests):
-        await self._cooldown.wait()
+        await self._admit()
         try:
             return await self._provider.batch_submit(requests)
         except Exception as exc:
             from pipeline.llm.provider import AdmissionRejected
             if isinstance(exc, AdmissionRejected):
-                await self._cooldown.note(exc.retry_after_s)
+                await self._cooldown.note(exc.retry_after_s, getattr(exc, "category", None))
             raise
 
     async def batch_poll(self, batch_id):
