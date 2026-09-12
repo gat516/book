@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, getChapter, getRecords, putProgress } from "../api";
+import { ApiError, getChapter, getRecords, putProgress, retryRecords } from "../api";
 import type { ChapterResponse, EntityView } from "../types";
 import { HoverCard } from "./HoverCard";
 import { EntityInspector } from "./EntityInspector";
@@ -9,6 +9,9 @@ import { RecordList } from "./RecordList";
 import { TermList } from "./TermList";
 import type { RecordsResponse } from "../types";
 import { uniqueChapterRenderings } from "../recordPresentation";
+import { ChapterKnowledgeWorkspace } from "./ChapterKnowledgeWorkspace";
+import { recordPollInterval, recordsTerminal } from "../recordPolling";
+import { RecordStatusBanner } from "./RecordStatusBanner";
 
 interface Props {
   novelId: string;
@@ -24,12 +27,6 @@ interface Props {
   onOpenRepair?: () => void;
 }
 
-// Record extraction can take minutes on a local model. Pending means the worker has not
-// published a run yet, so check slowly; once processing starts, tighter checks make the
-// transition to linked spans feel live without hammering the API.
-const RECORD_PENDING_POLL_MS = 20000;
-const RECORD_PROCESSING_POLL_MS = 8000;
-
 export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapterLoaded, onNoChapter }: Props) {
   const [chapter, setChapter] = useState<ChapterResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +34,8 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
   const [selected, setSelected] = useState<{ id: string | null; mention: string } | null>(null);
   const [records, setRecords] = useState<RecordsResponse | null>(null);
   const [recordsError, setRecordsError] = useState<string | null>(null);
+  const [retryingRecords, setRetryingRecords] = useState(false);
+  const [showRecordDiagnostics, setShowRecordDiagnostics] = useState(false);
 
   // Both hover and click views share only the exact novel/chapter/clearance cache.
   // The server's `at` becomes known on load; changing it discards earlier entity data.
@@ -47,7 +46,23 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
     setHovered(null);
     setRecords(null);
     setRecordsError(null);
+    setRetryingRecords(false);
+    setShowRecordDiagnostics(false);
   }, [novelId, chapterIndex, clickableEntities]);
+
+  async function retryChapterRecords() {
+    setRetryingRecords(true);
+    setRecordsError(null);
+    try {
+      await retryRecords(novelId, chapterIndex);
+      const latest = await getRecords(novelId, chapterIndex);
+      setRecords(latest);
+    } catch (reason) {
+      setRecordsError(errorMessage(reason));
+    } finally {
+      setRetryingRecords(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -126,7 +141,11 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
       setRecordsError(null);
       const extractionBecameReady = recordStatus.status.extraction_status === "ready" && previous?.extraction_status !== "ready";
       const renderingBecameReady = recordStatus.status.rendering_status === "ready" && previous?.rendering_status !== "ready";
-      if (!extractionBecameReady && !renderingBecameReady) return;
+      const recordsVersionChanged = !!previous && (
+        recordStatus.status.generation_id !== previous.generation_id ||
+        recordStatus.status.version !== previous.version
+      );
+      if (!extractionBecameReady && !renderingBecameReady && !recordsVersionChanged) return;
       // Close old cards immediately; late responses cannot repopulate the new cache.
       cache.clear(); setSelected(null); setHovered(null);
       setChapter(previous => previous ? {...previous, spans: previous.spans.map(span => ({...span, entity_id: null}))} : previous);
@@ -172,13 +191,21 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
           void getRecords(novelId, chapterIndex).then(setRecords).catch((reason) => setRecordsError(errorMessage(reason)));
         }}>Retry</button>
       </p>}
-      {records?.status.extraction_status === "processing" && <p role="status">Extracting chapter records…</p>}
-      {records?.status.extraction_status === "failed" && <p role="status">Record extraction failed. The chapter is still readable{records.status.failure_detail ? ` (${records.status.failure_detail})` : ""}.</p>}
+      {records && <RecordStatusBanner status={records.status} busy={retryingRecords} onRetry={() => void retryChapterRecords()} />}
       {chapter.translation_warning?.code === "locked_terms_missing" && <p role="status" className="reader-translation-warning">
         This chapter is readable, but {chapter.translation_warning.term_count} locked name{chapter.translation_warning.term_count === 1 ? " was" : "s were"} not preserved exactly.
       </p>}
       {records && <RecordList rows={records.rows} status={records.status} title="Facts and records learned here" onEntity={(id, surface) => setSelected({id, mention: surface})} />}
       <TermList renderings={uniqueChapterRenderings(chapter.spans)} title="Terms used here" />
+      <details className="chapter-record-diagnostics" onToggle={(event) => setShowRecordDiagnostics(event.currentTarget.open)}>
+        <summary>Record diagnostics and review</summary>
+        {showRecordDiagnostics && <ChapterKnowledgeWorkspace
+          novelId={novelId}
+          chapter={chapterIndex}
+          at={chapter.at}
+          renderings={uniqueChapterRenderings(chapter.spans)}
+        />}
+      </details>
       {clickableEntities && chapter.spans.length === 0 && <p className="reader-entity-hint">
         No named mentions are available for this chapter yet. Cards do not require facts or a glossary entry.
       </p>}
@@ -232,22 +259,6 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
       />}
     </div>
   );
-}
-
-function recordsTerminal(records: RecordsResponse | null): boolean {
-  if (!records) return false;
-  if (records.status.extraction_status === "failed") return true;
-  const extractionDone = records.status.extraction_status === "ready" || records.status.extraction_status === "failed";
-  const renderingDone = records.status.rendering_status === "ready" || records.status.rendering_status === "failed";
-  return extractionDone && renderingDone;
-}
-
-function recordPollInterval(records: RecordsResponse | null): number {
-  if (!records) return RECORD_PENDING_POLL_MS;
-  return records.status.extraction_status === "processing" ||
-    (records.status.extraction_status === "ready" && records.status.rendering_status === "pending")
-    ? RECORD_PROCESSING_POLL_MS
-    : RECORD_PENDING_POLL_MS;
 }
 
 function errorMessage(reason: unknown): string {

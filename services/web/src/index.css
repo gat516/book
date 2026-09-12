@@ -108,6 +108,22 @@ body {
 .knowledge-gate-action { display: flex; flex-direction: column; gap: .5rem; }
 .knowledge-gate-action label { display: flex; align-items: center; gap: .4rem; }
 
+.reader-records-status { margin: .55rem 0; padding: .55rem .7rem; background: #f4f1e7; border-radius: 5px; }
+.reader-records-status-error { background: #f8e5e2; color: #7c3029; }
+.reader-records-status button { margin-left: .65rem; }
+.record-review-panel { margin-top: 1rem; padding: .8rem; border: 1px solid #d8d0bf; border-radius: 6px; background: #fcfbf7; }
+.record-review-panel > h3 { margin-top: 0; }
+.record-review-item { margin: .8rem 0; padding: .65rem; border: 1px solid #e1dccf; border-radius: 5px; }
+.record-review-item.record-review-rejected { border-color: #d9aaa4; background: #fff7f5; }
+.record-review-item.record-review-accepted { border-color: #b8d2b8; }
+.record-review-item .record-list { border: 0; padding: 0; }
+.record-review-item label { display: flex; flex-direction: column; gap: .3rem; margin-top: .6rem; font-weight: 600; }
+.record-review-item textarea { min-height: 3.5rem; padding: .45rem; font: inherit; font-weight: 400; }
+.record-review-actions { display: flex; gap: .5rem; margin-top: .5rem; }
+.record-review-decision { font-size: .9rem; }
+.rebuild-discard { margin-top: .7rem; padding-top: .7rem; border-top: 1px solid #ddd4c2; }
+.rebuild-discard p { margin-top: 0; }
+
 .mention {
   position: relative;
   background: #fff3b0;
@@ -157,6 +173,15 @@ body {
 .term-source { color: #555; }
 .term-target { font-weight: 600; }
 .term-list small { color: #666; }
+.term-empty { color: #666; margin: 0; }
+.chapter-record-diagnostics { margin-top: 1rem; white-space: normal; }
+.chapter-record-diagnostics > summary { cursor: pointer; font-weight: 650; }
+.chapter-terms-review { margin-top: 1rem; padding-top: .75rem; border-top: 1px solid #e3dfd3; }
+.chapter-terms-list { display: grid; gap: .65rem; }
+.chapter-term-row { padding: .65rem .75rem; background: #faf8f2; border-radius: 6px; }
+.chapter-term-row small { color: #666; }
+.chapter-term-row label { display: grid; gap: .25rem; margin-top: .4rem; }
+.chapter-term-row input { box-sizing: border-box; max-width: 100%; padding: .35rem; }
 
 .hover-card-rendering {
   display: grid;

@@ -30,6 +30,10 @@ import type {
   TimelineResponse,
   RecordsResponse,
   RecordsInspectorResponse,
+  RecordReviewRequest,
+  RecordReviewResponse,
+  RecordReviewResult,
+  RecordsRebuildStatus,
   WikiResponse,
 } from "./types";
 
@@ -116,6 +120,24 @@ export function retryRecordRendering(novelId: string, chapter: number): Promise<
 }
 export function rebuildRecords(novelId: string): Promise<{ generation_id: string; status: string }> {
   return request(`/novels/${novelId}/records/rebuild`, { method: "POST" });
+}
+export function getRecordsRebuildStatus(novelId: string): Promise<RecordsRebuildStatus> {
+  return request(`/novels/${novelId}/records/rebuild/status`);
+}
+export function discardRecordsRebuild(novelId: string, generationId: string): Promise<{ discarded: boolean; generation_id: string }> {
+  return request(`/novels/${novelId}/records/rebuild/discard`, {
+    method: "POST",
+    body: JSON.stringify({ generation_id: generationId }),
+  });
+}
+export function getRecordReviews(novelId: string, chapter: number): Promise<RecordReviewResponse> {
+  return request(`/novels/${novelId}/chapter/${chapter}/records/review`);
+}
+export function patchRecordReview(novelId: string, chapter: number, body: RecordReviewRequest): Promise<RecordReviewResult> {
+  return request(`/novels/${novelId}/chapter/${chapter}/records/review`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
 }
 
 export function listChapters(novelId: string, limit: number, offset: number): Promise<ChapterListResponse> {

@@ -7,11 +7,10 @@ interface Props {
 
 /** The terminology decisions attached to DISPLAY_SCAN mention spans. */
 export function TermList({ renderings, title = "Terms" }: Props) {
-  if (!renderings.length) return null;
   return (
     <section className="term-list" aria-label={title}>
       <h3>{title}</h3>
-      <ul>
+      {renderings.length ? <ul>
         {renderings.map((rendering) => (
           <li key={`${rendering.source_term}:${rendering.target_term ?? ""}`}>
             <span className="term-source">{rendering.source_term}</span>
@@ -22,7 +21,7 @@ export function TermList({ renderings, title = "Terms" }: Props) {
             {rendering.status === "locked" && <small> · confirmed</small>}
           </li>
         ))}
-      </ul>
+      </ul> : <p className="term-empty">No terminology decisions are recorded here yet.</p>}
     </section>
   );
 }
