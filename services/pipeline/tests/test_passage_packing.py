@@ -21,7 +21,6 @@ def test_packer_accounts_for_schema_and_output_headroom_without_truncating():
     batches = pack_passages(
         ROWS,
         instructions="从原文抽取，不得推测。",
-        vocabulary={"relations": ["trusts"]},
         schema=schema,
         context_tokens=330,
         output_tokens=20,

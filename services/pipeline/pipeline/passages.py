@@ -20,7 +20,7 @@ class PassagePackingError(ValueError):
 
 
 class FixedOverheadTooLarge(PassagePackingError):
-    """Instructions/schema/vocabulary/output headroom consume the whole context."""
+    """Instructions, schema, source, and output headroom consume the whole context."""
 
     def __init__(self, *, context_tokens: int, output_tokens: int,
                  overhead_tokens: int, components: dict[str, int]):
@@ -94,7 +94,6 @@ def pack_passages(
     instructions: str = "",
     system: str = "",
     input_fields: dict | None = None,
-    vocabulary=None,
     schema: dict | None = None,
     context_tokens: int,
     output_tokens: int,
@@ -106,7 +105,7 @@ def pack_passages(
 ) -> list[PassageBatch]:
     """Pack complete existing passages under context and admission token budgets.
 
-    ``system``/``instructions``, vocabulary, schema and source are measured separately.
+    ``system``/``instructions``, schema and source are measured separately.
     ``input_fields`` lets callers account for stable non-passage input fields (for
     example a case id or ontology) in the exact serialized request. Native
     schema transport counts the schema once as wire overhead; prompt transport counts
@@ -144,17 +143,15 @@ def pack_passages(
     # latter for adapters without that seam.
     raw_instruction_text = system + instructions
     instruction_text = raw_instruction_text
-    vocabulary_text = _serialized(vocabulary)
     schema_text = _serialized(schema)
     if schema_transport in {"prompt", "duplicated"} and schema_text:
         instruction_text += "\nOUTPUT JSON SCHEMA:\n" + schema_text
     components = {
         "instructions": measure(instruction_text),
-        "vocabulary": measure(vocabulary_text),
         "schema": measure(schema_text),
     }
     wire_schema = components["schema"] if schema_transport in {"native", "duplicated"} else 0
-    overhead = components["instructions"] + components["vocabulary"] + wire_schema
+    overhead = components["instructions"] + wire_schema
     total_budget = context_tokens if request_tokens is None else min(context_tokens, request_tokens)
     if request_counter is not None:
         empty_payload = dict(input_fields or {})
@@ -180,7 +177,7 @@ def pack_passages(
                                    if request_counter is not None else overhead + prompt_tokens)
         return PassageBatch(tuple(rows_for_batch), measured_request_tokens, source_tokens, overhead,
                             output_tokens, measured_request_tokens + output_tokens,
-                            len((instruction_text + vocabulary_text + source_text +
+                            len((instruction_text + source_text +
                                  (schema_text if wire_schema else "")).encode()))
 
     for row in rows:
@@ -302,7 +299,7 @@ class PassageContract:
                 if 'char_start' in m else m for m in result['mentions']]
         return result
 
-    def schema(self, stage: str, internal_schema, ontology: dict, vocabulary: dict | None = None,
+    def schema(self, stage: str, internal_schema, ontology: dict,
               limits: dict | None = None) -> dict:
         """Build the wire JSON schema for ``stage``.
 
@@ -330,12 +327,8 @@ class PassageContract:
                          'passage_id':dict(type='string',enum=ids),
                          'occurrence_index':dict(type='integer',minimum=0)})
             citations=dict(type='array',minItems=1,maxItems=2,items=dict(type='string',enum=ids))
-            # Keep vocabulary terms open on the wire.  An admitted term and a new
-            # candidate share the same primitive type; combining a closed enum with a
-            # regex in ``anyOf`` creates an overlapping union that strict hosted schema
-            # adapters must widen (and can silently lose).  ``knowledge.py`` supplies
-            # the admitted names and durability glosses as prompt guidance, while
-            # vocabulary.valid_name()/validate_proposals enforce the naming rule locally.
+            # Record names remain open strings on the wire. Local validation enforces
+            # their syntax without reviving the retired fact-vocabulary subsystem.
             term=dict(type='string')
             name=dict(type='object',additionalProperties=False,required=['surface','kind','passage_id'],properties={
                 'surface':dict(type='string',minLength=1,maxLength=80),'kind':dict(type='string',enum=ontology['kinds']),

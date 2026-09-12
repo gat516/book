@@ -316,7 +316,7 @@ COPIED_SENTENCE_CHARS = 200
 
 
 def validate_proposals(source: str, mentions: list[dict], candidates: list[dict] | dict[str, list[dict]],
-                       proposals: Proposals, ontology: dict, vocabulary: dict | None = None) -> tuple[list[dict], list[dict]]:
+                       proposals: Proposals, ontology: dict) -> tuple[list[dict], list[dict]]:
     """Structural checks and review-flag heuristics (B.2). Never durability/support proof.
 
     `mentions` must already be restricted to independently *verified* occurrences
@@ -370,13 +370,9 @@ def validate_proposals(source: str, mentions: list[dict], candidates: list[dict]
             # lost -- it may still surface as an occurrence's free-text summary.
             why = 'quantified or indefinite subject cannot anchor a durable assertion'
         elif c.type == 'fact':
-            row = (vocabulary or {}).get(('attribute', c.attribute)) if vocabulary else None
             syntactic = bool(re.fullmatch(r'^[a-z][a-z0-9_]{1,39}$', c.attribute))
-            compatible = (len(c.mention_ids) == 1 and c.mention_ids[0] in offered and
-                          (row is None or offered[c.mention_ids[0]]['kind'] in (row.get('kinds') or [])))
-            if row and row.get('status') in {'banned','retired'}:
-                why = 'vocabulary term is banned or retired'
-            elif len(c.mention_ids) != 1 or not syntactic or not compatible:
+            compatible = len(c.mention_ids) == 1 and c.mention_ids[0] in offered
+            if len(c.mention_ids) != 1 or not syntactic or not compatible:
                 why = 'invalid attribute or entity kind'
             elif transient_predicate(c.value):
                 # B.2.3: demote deterministically rather than reject. Same subject,
@@ -388,15 +384,9 @@ def validate_proposals(source: str, mentions: list[dict], candidates: list[dict]
                 # statement; a human, not sentence length, decides.
                 flags.append('long_verbatim_value')
         elif c.type == 'relationship':
-            row = (vocabulary or {}).get(('relation', c.attribute)) if vocabulary else None
             syntactic = bool(re.fullmatch(r'^[a-z][a-z0-9_]{1,39}$', c.attribute))
-            compatible = (len(c.mention_ids) == 2 and all(mid in offered for mid in c.mention_ids) and
-                          (row is None or
-                           (offered[c.mention_ids[0]]['kind'] in (row.get('kinds') or []) and
-                            offered[c.mention_ids[1]]['kind'] in (row.get('dst_kinds') or []))))
-            if row and row.get('status') in {'banned','retired'}:
-                why = 'vocabulary term is banned or retired'
-            elif len(c.mention_ids) != 2 or not syntactic or not compatible:
+            compatible = len(c.mention_ids) == 2 and all(mid in offered for mid in c.mention_ids)
+            if len(c.mention_ids) != 2 or not syntactic or not compatible:
                 why = 'invalid relationship'
         elif c.type == 'event':
             if len(c.mention_ids) > 8:
