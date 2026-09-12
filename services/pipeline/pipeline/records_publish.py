@@ -100,6 +100,12 @@ async def _embedding_rows(ctx: StageContext, chunks: Sequence[Any]) -> list[list
         return [None] * len(chunks)
 
 
+async def _executemany(db, sql: str, rows) -> None:
+    """psycopg's AsyncConnection has execute() but no executemany(); only a cursor does."""
+    async with db.cursor() as cur:
+        await cur.executemany(sql, rows)
+
+
 async def publish_records(ctx: StageContext, state: PipelineState) -> None:
     """Publish one complete chapter run and derived target-language chunks atomically."""
     result = state.records
@@ -137,7 +143,7 @@ async def publish_records(ctx: StageContext, state: PipelineState) -> None:
              config["requested_model"], result.get("served_model")))
 
         await ctx.db.execute("DELETE FROM record_passage WHERE run_id=%s", (run_id,))
-        await ctx.db.executemany(
+        await _executemany(ctx.db,
             """INSERT INTO record_passage (novel_id,generation_id,run_id,chapter_index,passage_id,text,char_start,char_end,ordinal,source_hash)
                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             [(ctx.novel.id, generation_id, run_id, chapter, p["id"], p["text"],
@@ -153,7 +159,7 @@ async def publish_records(ctx: StageContext, state: PipelineState) -> None:
             if not candidate:
                 entity_rows.append((eid, ctx.novel.id, generation_id, entity["kind"], entity["canonical"], chapter))
         if entity_rows:
-            await ctx.db.executemany(
+            await _executemany(ctx.db,
                 """INSERT INTO entity (id,novel_id,record_generation_id,kind,canonical,first_seen_chapter)
                    VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING""", entity_rows)
         # Aliases are chapter-indexed and immutable. Existing aliases in a generation
@@ -163,7 +169,7 @@ async def publish_records(ctx: StageContext, state: PipelineState) -> None:
             eid = entity_ids[entity["id"]]
             alias_rows.extend((eid, surface, ctx.novel.source_lang, chapter) for surface in entity.get("names", []))
         if alias_rows:
-            await ctx.db.executemany(
+            await _executemany(ctx.db,
                 "INSERT INTO alias (entity_id,surface,lang,first_seen_chapter) VALUES (%s,%s,%s,%s) ON CONFLICT (entity_id,surface,lang) DO NOTHING",
                 alias_rows)
 
@@ -259,7 +265,7 @@ async def publish_records(ctx: StageContext, state: PipelineState) -> None:
 
         await ctx.db.execute("DELETE FROM chunk WHERE novel_id=%s AND chapter_index=%s", (ctx.novel.id, chapter))
         if target_chunks:
-            await ctx.db.executemany("INSERT INTO chunk (novel_id,chapter_index,text,embedding) VALUES (%s,%s,%s,%s)", [(ctx.novel.id,chapter,c.text,e) for c,e in zip(target_chunks,embeddings)])
+            await _executemany(ctx.db, "INSERT INTO chunk (novel_id,chapter_index,text,embedding) VALUES (%s,%s,%s,%s)", [(ctx.novel.id,chapter,c.text,e) for c,e in zip(target_chunks,embeddings)])
         warning_count = len(result.get("problems", [])) + len(result.get("checks", {}).get("dropped", [])) + len((result.get("resolution") or {}).get("problems", []))
         await ctx.db.execute("""UPDATE record_run SET status='published',warning_count=%s,diagnostics=%s,
                     publication_version=COALESCE((SELECT max(publication_version)+1 FROM record_run WHERE novel_id=%s AND generation_id=%s),1),published_at=now()
