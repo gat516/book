@@ -2,7 +2,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from pipeline.records_generation import GenerationFenceError, mark_record_processing, verify_generation
+from pipeline.records_generation import (
+    CHECKS_VERSION,
+    GenerationFenceError,
+    _requested,
+    mark_record_processing,
+    verify_generation,
+)
+from pipeline.records_prompts import PROMPT_CONTRACT_VERSION
 from pipeline.stages.records import RecordsStage
 
 
@@ -122,6 +129,12 @@ def _verify_ctx(db):
         cfg=SimpleNamespace(prompt_version="prompt", llm_model_extract="extract-model"),
         model_override=None,
     )
+
+
+def test_generation_identity_includes_code_prompt_and_checks_contracts():
+    requested = _requested(_verify_ctx(None))
+    assert requested.prompt_version == f"prompt:{PROMPT_CONTRACT_VERSION}"
+    assert requested.checks_version == CHECKS_VERSION == "records-checks-v2"
 
 
 @pytest.mark.asyncio

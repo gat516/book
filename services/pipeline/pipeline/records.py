@@ -82,8 +82,21 @@ def parse_records(text: str, passages: dict[str, str] | set[str]) -> dict[str, A
             continue
         rtype = (element.get("type") or "").strip().upper()
         evidence = [p.strip() for p in re.split(r"[,;、，\s]+", element.get("evidence") or "") if p.strip()]
-        fields = {child.tag: (child.text or "").strip() for child in element}
         issues: list[str] = []
+        fields: dict[str, str] = {}
+        for child in element:
+            # Named tags are the canonical wire shape (<character>凌峰</character>).
+            # Accept <field name="character"> as an equally unambiguous shape, but
+            # never guess what repeated bare <field> nodes mean: doing so can pair a
+            # model-generated label with the wrong value and publish a false record.
+            field = (child.get("name") or "").strip() if child.tag == "field" else child.tag
+            if not field:
+                issues.append("generic <field> is missing a name attribute")
+                continue
+            if field in fields:
+                issues.append(f"duplicate field {field!r}")
+                continue
+            fields[field] = (child.text or "").strip()
         if rtype not in RECORD_TYPES:
             issues.append(f"unknown record type {rtype or '(none)'}")
         else:
@@ -95,18 +108,29 @@ def parse_records(text: str, passages: dict[str, str] | set[str]) -> dict[str, A
         if not evidence: issues.append("cites no passage")
         records.append({"index": len(records), "position": position, "type": rtype,
                         "evidence_ids": evidence, "fields": fields, "issues": issues,
-                        "usable": rtype in RECORD_TYPES and bool(evidence) and not unknown})
+                        "usable": rtype in RECORD_TYPES and bool(evidence) and not issues})
     return {"document": document, "records": records, "problems": problems,
             "counts": {"records": len(records), "usable": sum(r["usable"] for r in records)}}
 
 
 def check_records(records: list[dict[str, Any]], passages: dict[str, str]) -> dict[str, Any]:
     dropped: list[dict[str, Any]] = []
+    ordered_passages = list(passages)
+    passage_positions = {passage_id: index for index, passage_id in enumerate(ordered_passages)}
     for record in records:
         if not record["usable"]: continue
         cited = [p for p in record["evidence_ids"] if p in passages]
-        window = {f"p{int(p[1:]) + d:03d}" for p in cited for d in range(-CHECK_WINDOW, CHECK_WINDOW + 1) if p.startswith("p") and p[1:].isdigit()} & set(passages)
-        window_text = "".join(passages[p] for p in sorted(window))
+        # Passage IDs are content-scoped (for example p147_a3596019ae7e), not ordinal
+        # p001 labels. Build the local context window from the offered passage order so
+        # the cited passage is always checked and adjacent context remains available.
+        window_indexes = {
+            position + delta
+            for passage_id in cited
+            for position in [passage_positions[passage_id]]
+            for delta in range(-CHECK_WINDOW, CHECK_WINDOW + 1)
+            if 0 <= position + delta < len(ordered_passages)
+        }
+        window_text = "".join(passages[ordered_passages[index]] for index in sorted(window_indexes))
         failures: list[str] = []
         for field in ACTOR_FIELDS.get(record["type"], ()):
             for name in split_names(record["fields"].get(field, "")):

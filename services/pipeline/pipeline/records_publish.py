@@ -106,6 +106,13 @@ async def _executemany(db, sql: str, rows) -> None:
         await cur.executemany(sql, rows)
 
 
+def _warning_count(result: dict) -> int:
+    """Count every persisted drop plus non-record resolution diagnostics once."""
+    rejected_records = sum(not record.get("usable") for record in result.get("records", []))
+    return (len(result.get("problems", [])) + rejected_records
+            + len((result.get("resolution") or {}).get("problems", [])))
+
+
 async def publish_records(ctx: StageContext, state: PipelineState) -> None:
     """Publish one complete chapter run and derived target-language chunks atomically."""
     result = state.records
@@ -266,7 +273,10 @@ async def publish_records(ctx: StageContext, state: PipelineState) -> None:
         await ctx.db.execute("DELETE FROM chunk WHERE novel_id=%s AND chapter_index=%s", (ctx.novel.id, chapter))
         if target_chunks:
             await _executemany(ctx.db, "INSERT INTO chunk (novel_id,chapter_index,text,embedding) VALUES (%s,%s,%s,%s)", [(ctx.novel.id,chapter,c.text,e) for c,e in zip(target_chunks,embeddings)])
-        warning_count = len(result.get("problems", [])) + len(result.get("checks", {}).get("dropped", [])) + len((result.get("resolution") or {}).get("problems", []))
+        # Each unusable candidate becomes one record_drop row, whether parsing rejected
+        # it or deterministic grounding did. Counting only check_records() drops hid the
+        # nine parser-level failures that motivated this contract repair.
+        warning_count = _warning_count(result)
         await ctx.db.execute("""UPDATE record_run SET status='published',warning_count=%s,diagnostics=%s,
                     publication_version=COALESCE((SELECT max(publication_version)+1 FROM record_run WHERE novel_id=%s AND generation_id=%s),1),published_at=now()
                     WHERE id=%s""", (warning_count, Jsonb({"warnings": warning_count}), ctx.novel.id, generation_id, run_id))

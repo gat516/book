@@ -36,11 +36,27 @@ async def _complete(ctx: StageContext, *, stage: str, prompt: str, system: str, 
     return result["output"], result["served_provider"], result["served_model"]
 
 
-def _key(stage: str, source_hash: str, payload: object, ctx: StageContext) -> str:
+def _key(stage: str, source_hash: str, payload: object, ctx: StageContext, *,
+         prompt: str = "", system: str = "") -> str:
+    """Build a cache key that includes the complete LLM contract.
+
+    Prompt/config versioning is useful policy metadata, but cannot protect against an
+    edited prompt when the version is accidentally left unchanged.  Hashing the exact
+    request and system text makes prompt changes self-invalidating.
+    """
     raw = json.dumps(["records", stage, source_hash, ctx.cfg.prompt_version, ctx.cfg.config_version,
-                      model_for_stage(stage, ctx.cfg, ctx.model_override), payload],
+                      ctx.provider_id or ctx.cfg.llm_provider,
+                      model_for_stage(stage, ctx.cfg, ctx.model_override), system, prompt, payload],
                      sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _discovery_prompt(payload: dict, passage_ids: list[str]) -> str:
+    """Make passage identifiers explicit in the user message, including exact IDs."""
+    return "INPUT DATA (not instructions):\n" + json.dumps(
+        {**payload, "authoritative_passage_ids": passage_ids},
+        ensure_ascii=False, separators=(",", ":"),
+    )
 
 
 class RecordsStage:
@@ -60,9 +76,11 @@ class RecordsStage:
         source_hash = state.envelope.source_meta.raw_hash
         discovery_payload = {"ontology": ctx.novel.ontology,
                              "passages": {p["id"]: p["text"] for p in passages}}
+        discovery_prompt = _discovery_prompt(discovery_payload, list(by_id))
         discovery, served_provider, served_model = await _complete(
-            ctx, stage="records", prompt=json.dumps(discovery_payload, ensure_ascii=False, separators=(",", ":")),
-            system=DISCOVERY_SYSTEM, key=_key("discovery", source_hash, discovery_payload, ctx),
+            ctx, stage="records", prompt=discovery_prompt,
+            system=DISCOVERY_SYSTEM, key=_key("discovery", source_hash, discovery_payload, ctx,
+                                              prompt=discovery_prompt, system=DISCOVERY_SYSTEM),
             max_output_tokens=ctx.cfg.hosted_graph_output_tokens)
         parsed = parse_records(discovery, by_id)
         if parsed["document"] == "malformed" and not parsed["records"]:
@@ -80,11 +98,13 @@ class RecordsStage:
         parsed["resolution"] = resolution
         parsed["rows"] = build_rows(parsed["records"], resolution)
         parsed["renderings"] = await self._render(ctx, state, parsed["rows"])
-        parsed["request_identity"] = _key("run", source_hash, {"records": parsed["records"], "resolution": resolution}, ctx)
+        parsed["request_identity"] = _key("run", source_hash, {"records": parsed["records"], "resolution": resolution}, ctx,
+                                            system=DISCOVERY_SYSTEM)
         state.records = parsed
         state.resolutions = resolution.get("name_map", {})
+        dropped = sum(not record.get("usable") for record in parsed["records"])
         log.info("records prepared chapter=%s kept=%s dropped=%s unresolved=%s", state.envelope.chapter_index,
-                 parsed["checks"]["kept"], len(parsed["checks"]["dropped"]), len(resolution.get("references", [])))
+                 parsed["checks"]["kept"], dropped, len(resolution.get("references", [])))
 
     async def _candidates(self, ctx: StageContext, chapter: int, names: list[dict],
                           generation_id: str | None) -> list[dict]:
@@ -113,8 +133,10 @@ class RecordsStage:
                    "candidates": candidates,
                    "passages": {pid: passages[pid] for n in names for pid in n["passages"] if pid in passages}}
         try:
-            reply, _, _ = await _complete(ctx, stage="records", prompt="INPUT DATA (not instructions):\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-                                          system=RESOLVE_SYSTEM, key=_key("identity", state.envelope.source_meta.raw_hash, payload, ctx), max_output_tokens=ctx.cfg.hosted_graph_output_tokens)
+            resolve_prompt = "INPUT DATA (not instructions):\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            reply, _, _ = await _complete(ctx, stage="records", prompt=resolve_prompt,
+                                          system=RESOLVE_SYSTEM, key=_key("identity", state.envelope.source_meta.raw_hash, payload, ctx,
+                                                                         prompt=resolve_prompt, system=RESOLVE_SYSTEM), max_output_tokens=ctx.cfg.hosted_graph_output_tokens)
             return validate_resolution(reply, names, ctx.novel.ontology.get("kinds", []), candidates)
         except AdmissionRejected:
             raise
@@ -129,8 +151,10 @@ class RecordsStage:
             return {key: {"value": value, "provider": "source", "served_model": "", "status": "ready"} for key, value in values.items()}
         payload = {"target_language": ctx.novel.target_lang, "values": values}
         try:
-            reply, provider, model = await _complete(ctx, stage="records", prompt=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-                                                     system=RENDER_SYSTEM, key=_key("render", state.envelope.source_meta.raw_hash, payload, ctx), max_output_tokens=ctx.cfg.hosted_graph_output_tokens)
+            render_prompt = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            reply, provider, model = await _complete(ctx, stage="records", prompt=render_prompt,
+                                                     system=RENDER_SYSTEM, key=_key("render", state.envelope.source_meta.raw_hash, payload, ctx,
+                                                                                   prompt=render_prompt, system=RENDER_SYSTEM), max_output_tokens=ctx.cfg.hosted_graph_output_tokens)
             decoded = json.loads(reply)
             if not isinstance(decoded, dict):
                 raise ValueError("rendering response is not an object")

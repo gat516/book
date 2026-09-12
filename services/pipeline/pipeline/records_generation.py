@@ -15,8 +15,9 @@ from psycopg.types.json import Jsonb
 
 from pipeline.context import PipelineState, StageContext
 from pipeline.jobs import model_for_stage
+from pipeline.records_prompts import PROMPT_CONTRACT_VERSION
 
-CHECKS_VERSION = "records-checks-v1"
+CHECKS_VERSION = "records-checks-v2"
 
 
 class GenerationFenceError(RuntimeError):
@@ -37,7 +38,7 @@ def _requested(ctx: StageContext) -> GenerationPin:
     return GenerationPin(
         id="",
         requested_model=model_for_stage("extract", ctx.cfg, ctx.model_override),
-        prompt_version=ctx.cfg.prompt_version,
+        prompt_version=f"{ctx.cfg.prompt_version}:{PROMPT_CONTRACT_VERSION}",
         checks_version=CHECKS_VERSION,
         source_lang=ctx.novel.source_lang,
         target_lang=ctx.novel.target_lang,
