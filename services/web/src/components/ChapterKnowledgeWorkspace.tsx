@@ -71,12 +71,18 @@ export function ChapterKnowledgeWorkspace({ novelId, chapter, at, renderings = [
     {notice && <p role="status">{notice}</p>}
     {!records || !inspector ? <p role="status">Loading record diagnostics…</p> : <>
       <dl className="records-inspector-summary">
-        <div><dt>Parsed</dt><dd>{inspector.parsed}</dd></div>
-        <div><dt>Retained</dt><dd>{inspector.retained}</dd></div>
-        <div><dt>Dropped</dt><dd>{inspector.dropped}</dd></div>
-        <div><dt>Unresolved references</dt><dd>{inspector.unresolved}</dd></div>
+        <div><dt>Discovered candidates</dt><dd>{inspector.counts?.discovered ?? inspector.parsed}</dd></div>
+        <div><dt>Selected claims</dt><dd>{inspector.counts?.selected ?? inspector.retained}</dd></div>
+        <div><dt>Omitted</dt><dd>{inspector.counts?.omitted ?? 0}</dd></div>
+        <div><dt>Consolidated</dt><dd>{inspector.counts?.consolidated ?? 0}</dd></div>
+        <div><dt>Rejected assertions</dt><dd>{inspector.counts?.rejected ?? inspector.dropped}</dd></div>
+        <div><dt>Unrepresented</dt><dd>{inspector.counts?.unrepresented ?? inspector.unresolved}</dd></div>
+        <div><dt>Published outputs</dt><dd>{inspector.counts?.published ?? inspector.retained}</dd></div>
         <div><dt>Rendering failures</dt><dd>{inspector.rendering_failures}</dd></div>
       </dl>
+      {inspector.selection_outcome === "all_rejected" && <p className="glossary-note">All selected assertions were rejected during validation.</p>}
+      {inspector.selection_outcome === "empty" && <p className="glossary-note">{(inspector.counts?.discovered ?? inspector.parsed) > 0 ? "Selection intentionally retained no claims." : "No candidates were discovered for this chapter."}</p>}
+      {inspector.stages && <p className="glossary-note">Stages: {Object.entries(inspector.stages).map(([name, value]) => `${name}: ${value}`).join(" · ")}</p>}
       {inspector.rendering_failures > 0 && <p className="glossary-note">
         {inspector.rendering_failures} record{inspector.rendering_failures === 1 ? "" : "s"} could not be rendered into English; the source records are still shown. Re-rendering rebuilds the whole book's graph: Knowledge graph › Advanced › Rebuild graph from scratch.
       </p>}

@@ -18,10 +18,11 @@ interface Props {
   // rounding: `at` is always the server-supplied ChapterResponse.at, already spoiler-safe.
   cache: Map<string, EntityView>;
   onRenderingChanged?: (rendering: TermRenderingView) => void;
+  onEntity?: (id: string, surface: string) => void;
   onClose: () => void;
 }
 
-export function HoverCard({ novelId, entityId, rendering, status, mention, at, cache, onRenderingChanged, onClose }: Props) {
+export function HoverCard({ novelId, entityId, rendering, status, mention, at, cache, onRenderingChanged, onEntity, onClose }: Props) {
   const [entity, setEntity] = useState<EntityView | null>(entityId ? cache.get(entityId) ?? null : null);
   const [spanRendering, setSpanRendering] = useState<TermRenderingView | null>(rendering ?? null);
   const [error, setError] = useState<string | null>(null);
@@ -153,7 +154,7 @@ export function HoverCard({ novelId, entityId, rendering, status, mention, at, c
             rendering={item} displayed={mention} saving={saving === item.source_term}
             onChoose={chooseRendering} onLeave={onClose} />)}
           {notice && <p className="hover-card-notice" role="status">{notice}</p>}
-          <RecordList rows={entity.records ?? []} title="Facts and records" />
+          <RecordList rows={entity.records ?? []} title="Facts and records" onEntity={onEntity} />
           <TermList renderings={entity.renderings} title="Terms" />
         </>
       )}

@@ -223,6 +223,7 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
                 mention={piece.text}
                 at={chapter.at}
                 cache={cache}
+                onEntity={(id, surface) => { setHovered(null); setSelected({ id, mention: surface }); }}
                 onRenderingChanged={(updatedRendering) => setChapter((current) => current ? {
                   ...current,
                   spans: current.spans.map((span) => {

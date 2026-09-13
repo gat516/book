@@ -23,7 +23,22 @@ type RecordsStatus struct {
 	// one. Chapters publish in order (who's-who resolves against earlier chapters), so a
 	// retry of this chapter cannot succeed until that one is done. Single-chapter only;
 	// it can only name an earlier chapter, so it reveals nothing past the reader's gate.
-	WaitingOnChapter *int `json:"waiting_on_chapter,omitempty"`
+	WaitingOnChapter *int              `json:"waiting_on_chapter,omitempty"`
+	Stages           map[string]string `json:"stages,omitempty"`
+	SelectionOutcome string            `json:"selection_outcome,omitempty"`
+	Counts           *KnowledgeCounts  `json:"counts,omitempty"`
+}
+
+// KnowledgeCounts keeps selection accounting separate from published outputs. An
+// all-rejected chapter is distinct from a valid chapter with no candidates.
+type KnowledgeCounts struct {
+	Discovered    int `json:"discovered"`
+	Selected      int `json:"selected"`
+	Omitted       int `json:"omitted"`
+	Consolidated  int `json:"consolidated"`
+	Rejected      int `json:"rejected"`
+	Unrepresented int `json:"unrepresented"`
+	Published     int `json:"published"`
 }
 
 type RecordParticipantView struct {
@@ -34,11 +49,13 @@ type RecordParticipantView struct {
 }
 type RecordEvidenceView struct {
 	PassageID string  `json:"passage_id"`
+	RunID     string  `json:"run_id,omitempty"`
 	Quote     *string `json:"quote,omitempty"`
 	Text      string  `json:"text"`
 	CharStart int     `json:"char_start"`
 	CharEnd   int     `json:"char_end"`
 	Ordinal   int     `json:"ordinal"`
+	Chapter   int     `json:"chapter,omitempty"`
 }
 type RecordValueView struct {
 	Field        string `json:"field"`
@@ -47,15 +64,29 @@ type RecordValueView struct {
 	RenderStatus string `json:"render_status"`
 }
 type RecordView struct {
-	ID                string                  `json:"id"`
-	Type              string                  `json:"type"`
-	OriginalIndex     int                     `json:"original_index"`
-	SourceChapter     int                     `json:"source_chapter"`
-	ValidFromChapter  *int                    `json:"valid_from_chapter,omitempty"`
-	TemporalQualifier *string                 `json:"temporal_qualifier,omitempty"`
-	Values            []RecordValueView       `json:"values"`
-	Participants      []RecordParticipantView `json:"participants"`
-	Evidence          []RecordEvidenceView    `json:"evidence"`
+	ID                   string                  `json:"id"`
+	RunID                string                  `json:"run_id,omitempty"`
+	Type                 string                  `json:"type"`
+	OriginalIndex        int                     `json:"original_index"`
+	SourceChapter        int                     `json:"source_chapter"`
+	ValidFromChapter     *int                    `json:"valid_from_chapter,omitempty"`
+	TemporalQualifier    *string                 `json:"temporal_qualifier,omitempty"`
+	Values               []RecordValueView       `json:"values"`
+	Participants         []RecordParticipantView `json:"participants"`
+	Evidence             []RecordEvidenceView    `json:"evidence"`
+	Polarity             *string                 `json:"polarity,omitempty"`
+	Attribution          *string                 `json:"attribution,omitempty"`
+	SourceValue          *string                 `json:"source_value,omitempty"`
+	Condition            *string                 `json:"condition,omitempty"`
+	SubjectRef           *string                 `json:"subject_ref,omitempty"`
+	SrcRef               *string                 `json:"src_ref,omitempty"`
+	DstRef               *string                 `json:"dst_ref,omitempty"`
+	Relation             *string                 `json:"relation,omitempty"`
+	Action               *string                 `json:"action,omitempty"`
+	Arguments            json.RawMessage         `json:"arguments,omitempty"`
+	Conditions           json.RawMessage         `json:"conditions,omitempty"`
+	LiteralArguments     json.RawMessage         `json:"literal_arguments,omitempty"`
+	UnresolvedReferences []string                `json:"unresolved_references,omitempty"`
 }
 type RecordsResponse struct {
 	NovelID      string `json:"novel_id"`
@@ -128,16 +159,19 @@ type TimelineResponse struct {
 // RecordsInspectorResponse is the operator view of one chapter's extraction: what the
 // checks kept, what they rejected and why, and what identity stayed unresolved.
 type RecordsInspectorResponse struct {
-	NovelID           string           `json:"novel_id"`
-	ChapterIndex      int              `json:"chapter_index"`
-	At                int              `json:"at"`
-	Status            RecordsStatus    `json:"status"`
-	Parsed            int              `json:"parsed"`
-	Retained          int              `json:"retained"`
-	Dropped           int              `json:"dropped"`
-	Unresolved        int              `json:"unresolved"`
-	RenderingFailures int              `json:"rendering_failures"`
-	Drops             []RecordDropView `json:"drops"`
+	NovelID           string            `json:"novel_id"`
+	ChapterIndex      int               `json:"chapter_index"`
+	At                int               `json:"at"`
+	Status            RecordsStatus     `json:"status"`
+	Parsed            int               `json:"parsed"`
+	Retained          int               `json:"retained"`
+	Dropped           int               `json:"dropped"`
+	Unresolved        int               `json:"unresolved"`
+	RenderingFailures int               `json:"rendering_failures"`
+	Drops             []RecordDropView  `json:"drops"`
+	Counts            *KnowledgeCounts  `json:"counts,omitempty"`
+	SelectionOutcome  string            `json:"selection_outcome,omitempty"`
+	Stages            map[string]string `json:"stages,omitempty"`
 }
 
 type RecordReviewDecisionView struct {

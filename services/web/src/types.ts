@@ -28,6 +28,18 @@ export interface RecordsStatus {
   // Earliest earlier chapter still unextracted. Chapters publish in order, so retrying
   // this one cannot succeed until that chapter is done. Single-chapter status only.
   waiting_on_chapter?: number | null;
+  stages?: Record<string, string>;
+  selection_outcome?: "empty" | "selected" | "all_rejected" | string;
+  counts?: KnowledgeCounts;
+}
+export interface KnowledgeCounts {
+  discovered: number;
+  selected: number;
+  omitted: number;
+  consolidated: number;
+  rejected: number;
+  unrepresented: number;
+  published: number;
 }
 export interface RecordEvidence {
   passage_id: string;
@@ -50,6 +62,7 @@ export interface RecordParticipant {
 export interface RecordValue { field: string; source: string; rendered?: string | null; render_status?: string; }
 export interface RecordView {
   id: string;
+  run_id?: string;
   type: RecordType;
   original_index?: number;
   source_chapter: number;
@@ -58,9 +71,22 @@ export interface RecordView {
   values: RecordValue[];
   participants: RecordParticipant[];
   evidence: RecordEvidence[];
+  polarity?: string | null;
+  attribution?: string | null;
+  source_value?: string | null;
+  condition?: string | null;
+  subject_ref?: string | null;
+  src_ref?: string | null;
+  dst_ref?: string | null;
+  relation?: string | null;
+  action?: string | null;
+  arguments?: unknown;
+  conditions?: unknown;
+  literal_arguments?: unknown;
+  unresolved_references?: string[];
 }
 export interface RecordsResponse { novel_id: string; chapter_index: number; at: number; status: RecordsStatus; rows: RecordView[]; }
-export interface RecordsInspectorResponse { novel_id: string; chapter_index: number; status: RecordsStatus; parsed: number; retained: number; dropped: number; unresolved: number; rendering_failures: number; drops: Array<{ original_index: number; reasons: string[] }>; }
+export interface RecordsInspectorResponse { novel_id: string; chapter_index: number; status: RecordsStatus; parsed: number; retained: number; dropped: number; unresolved: number; rendering_failures: number; drops: Array<{ original_index: number; reasons: string[] }>; counts?: KnowledgeCounts; selection_outcome?: string; stages?: Record<string, string>; }
 export interface RecordReviewDecision {
   decision: "accepted" | "rejected" | string;
   actor: string;

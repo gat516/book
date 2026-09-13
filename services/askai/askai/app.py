@@ -275,15 +275,22 @@ class Service:
                     backend=self.config.gateway_backend, embed_model=self.config.embed_model,
                     max_output_tokens=self.config.gateway_max_output_tokens)
                 self._embed_provider_cache[request.novel_id] = embedding_provider
+        # Native fact-first assertions do not depend on embeddings.  Keep semantic
+        # retrieval opportunistic so a provider outage still permits spoiler-gated
+        # answers from published native outputs.
+        vectors = None
         try:
             vectors = await embedding_provider.embed([request.question], cls=Class.INTERACTIVE)
             if len(vectors) != 1 or len(vectors[0]) != self.config.embed_dim:
                 raise EmbeddingUnavailable("dimension_mismatch")
             self.embedding_ready = True
         except EmbeddingUnavailable:
-            raise
+            self.embedding_ready = False
+            vectors = None
         except Exception as exc:  # noqa: BLE001 — retrieval-only failure boundary
-            raise EmbeddingUnavailable(_provider_failure_category(exc) or "unavailable") from exc
+            self.embedding_ready = False
+            vectors = None
+            log.warning("semantic retrieval unavailable for ask: %s", type(exc).__name__)
         async with self.pool.connection() as conn:
             async with conn.transaction():
                 await conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
@@ -291,7 +298,12 @@ class Service:
                 await conn.execute("SELECT set_config('app.current_chapter', %s, true)", (str(request.at),))
                 records = await self._records_status(conn, request.novel_id, request.at)
                 provider = gateway_provider or await self._provider_for_novel(conn, request.novel_id)
-                sources = await retrieve(conn, request.novel_id, request.at, vectors[0], question=request.question, max_chunks=self.config.max_chunks, max_entities=self.config.max_entities, max_records=self.config.max_records)
+                sources = await retrieve(conn, request.novel_id, request.at,
+                                         vectors[0] if vectors else None,
+                                         question=request.question,
+                                         max_chunks=self.config.max_chunks,
+                                         max_entities=self.config.max_entities,
+                                         max_records=self.config.max_records)
         context, used = build_context(sources, self.config.max_context_chars)
         if not used:
             return AskResponse(answer=INSUFFICIENT, at=request.at, retrieved_sources=[], served_by=None, records=records)

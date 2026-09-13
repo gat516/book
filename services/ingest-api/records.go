@@ -26,11 +26,11 @@ var (
 	// ErrRecordsOutOfOrder refuses a chapter retry that the worker's generation fence
 	// would reject anyway ("earlier records are unpublished"): failing here is immediate
 	// and says why, instead of queueing an attempt that is certain to fail.
-	ErrRecordsOutOfOrder = errors.New("an earlier chapter has not been extracted yet")
-	ErrRecordsReviewInvalid   = errors.New("invalid records review request")
-	ErrRecordsReviewConflict  = errors.New("records review request conflicts with an existing decision")
-	ErrRecordsReviewNotFound  = errors.New("record is not available for review")
-	ErrRecordsReviewStale     = errors.New("record review is stale; reload before reviewing")
+	ErrRecordsOutOfOrder     = errors.New("an earlier chapter has not been extracted yet")
+	ErrRecordsReviewInvalid  = errors.New("invalid records review request")
+	ErrRecordsReviewConflict = errors.New("records review request conflicts with an existing decision")
+	ErrRecordsReviewNotFound = errors.New("record is not available for review")
+	ErrRecordsReviewStale    = errors.New("record review is stale; reload before reviewing")
 )
 
 const recordsAdvisoryLockSQL = "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))"
@@ -131,6 +131,12 @@ func (s *Store) retryRecords(ctx context.Context, novelID string, chapter int) e
 		novelID, generation, chapter); err != nil {
 		return fmt.Errorf("clear failed run: %w", err)
 	}
+	// Fact-first checkpoints are resumable: retain discovery/selection/normalization
+	// artifacts and only reopen the failed run for the worker to continue from its
+	// durable stage boundary.
+	if _, err = tx.Exec(ctx, `UPDATE fact_first_run SET status='processing', published_at=NULL WHERE novel_id=$1 AND generation_id=$2 AND chapter_index=$3 AND status<>'published'`, novelID, generation, chapter); err != nil {
+		return fmt.Errorf("resume failed fact-first run: %w", err)
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit records retry: %w", err)
 	}
@@ -167,6 +173,9 @@ func (s *Store) discardChapterEnrichment(ctx context.Context, novelID string, ch
 	if _, err = tx.Exec(ctx, `DELETE FROM record_run
 		WHERE novel_id=$1 AND generation_id=$2 AND chapter_index=$3 AND status <> 'published'`, novelID, generation, chapter); err != nil {
 		return fmt.Errorf("clear discarded run: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM fact_first_run WHERE novel_id=$1 AND generation_id=$2 AND chapter_index=$3 AND status <> 'published'`, novelID, generation, chapter); err != nil {
+		return fmt.Errorf("clear discarded fact-first run: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit chapter discard: %w", err)
@@ -230,6 +239,9 @@ func (s *Store) stopRecordsBuild(ctx context.Context, novelID string) (int, erro
 		"DELETE FROM record_run WHERE novel_id=$1 AND generation_id=$2 AND status<>'published'",
 		novelID, generation); err != nil {
 		return 0, fmt.Errorf("clear unfinished runs: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM fact_first_run WHERE novel_id=$1 AND generation_id=$2 AND status<>'published'`, novelID, generation); err != nil {
+		return 0, fmt.Errorf("clear unfinished fact-first runs: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("commit records stop: %w", err)
@@ -305,6 +317,11 @@ func (s *Store) extractRecords(ctx context.Context, novelID string) (int, error)
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return 0, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE fact_first_run SET status='processing', published_at=NULL
+		WHERE novel_id=$1 AND generation_id=$2 AND status<>'published'
+		  AND NOT (chapter_index = ANY($3))`, novelID, generation, busy); err != nil {
+		return 0, fmt.Errorf("resume unfinished fact-first runs: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("commit records extract: %w", err)
@@ -520,6 +537,11 @@ func (s *Store) discardRecordsRebuild(ctx context.Context, novelID, expectedGene
 	if _, err = tx.Exec(ctx, `UPDATE record_generation SET state='retired',retired_at=now()
 		WHERE id=$1 AND novel_id=$2`, active, novelID); err != nil {
 		return fmt.Errorf("retire unfinished replacement: %w", err)
+	}
+	// A discarded replacement must not leave resumable fact-first checkpoints behind.
+	// Published rows are immutable and remain attached to the retired generation for audit.
+	if _, err = tx.Exec(ctx, `DELETE FROM fact_first_run WHERE novel_id=$1 AND generation_id=$2 AND status<>'published'`, novelID, active); err != nil {
+		return fmt.Errorf("clear discarded fact-first generation: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit records discard: %w", err)
