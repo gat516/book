@@ -1,9 +1,11 @@
+import { useKnowledgeRevision } from "../knowledgeUpdates";
 import { useEffect, useState } from "react";
 import { getTimeline } from "../api";
 import type { TimelineResponse } from "../types";
 import { RecordList } from "./RecordList";
 
 export function TimelineView({ novelId, at, onClose }: { novelId: string; at: number; onClose: () => void }) {
+  const revision = useKnowledgeRevision(novelId);
   const [timeline, setTimeline] = useState<TimelineResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -14,7 +16,7 @@ export function TimelineView({ novelId, at, onClose }: { novelId: string; at: nu
     getTimeline(novelId, at).then((value) => { if (!cancelled) setTimeline(value); })
       .catch((reason) => { if (!cancelled) setError(String(reason)); });
     return () => { cancelled = true; };
-  }, [novelId, at]);
+  }, [novelId, at, revision]);
 
   return <section className="timeline-view" aria-labelledby="timeline-heading">
     <div className="timeline-heading">

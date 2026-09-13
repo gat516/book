@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
-import { discardRecordsRebuild, extractRecords, getRecordsRebuildStatus, rebuildRecords, stopRecordsBuild } from "../api";
-import type { RecordsRebuildStatus } from "../types";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { discardRecordsRebuild, extractRecords, getRecordsRebuildStatus, rebuildRecords, stopRecordsBuild, retryRecords, discardRecordsChapter } from "../api";
+import { notifyKnowledgeUpdated, useKnowledgeRevision } from "../knowledgeUpdates";
+import type { RecordsStatus, RecordsRebuildStatus } from "../types";
 import { usePolling } from "../usePolling";
 import { graphCoverageLabel } from "../knowledgeLabels";
 
-// The book's one graph control. Extraction is book-wide and chronological (who's-who
-// resolves each chapter against the ones published before it), so a per-chapter start or
-// discard button only offered a second, conflicting way to drive the same queue. The
-// chapter view shows status; this is where work is started and stopped.
-export function KnowledgeGraphControls({ novelId }: { novelId: string }) {
+// Book and chapter extraction share the same chronological knowledge store.
+export function KnowledgeGraphControls({ novelId, chapter, chapterStatus }: { novelId: string; chapter?: number; chapterStatus?: RecordsStatus }) {
+  const revision = useKnowledgeRevision(novelId);
+  const previousStatus = useRef("");
   const [status, setStatus] = useState<RecordsRebuildStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -18,15 +18,22 @@ export function KnowledgeGraphControls({ novelId }: { novelId: string }) {
   const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    try { setStatus(await getRecordsRebuildStatus(novelId)); setError(null); }
+    try {
+      const next = await getRecordsRebuildStatus(novelId);
+      const signature = JSON.stringify(next);
+      const changed = previousStatus.current !== "" && previousStatus.current !== signature;
+      previousStatus.current = signature;
+      setStatus(next); setError(null);
+      if (changed) notifyKnowledgeUpdated(novelId);
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   }, [novelId]);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load, revision]);
   usePolling(load, 8000, !!status?.running && error === null);
 
   async function act(run: () => Promise<string | null>) {
     setBusy(true); setError(null); setNotice(null);
-    try { setNotice(await run()); setConfirm(null); await load(); }
+    try { setNotice(await run()); notifyKnowledgeUpdated(novelId); setConfirm(null); await load(); }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   }
@@ -43,7 +50,7 @@ export function KnowledgeGraphControls({ novelId }: { novelId: string }) {
   const rebuild = () => act(async () => { await rebuildRecords(novelId); return null; });
   const discard = () => act(async () => {
     if (status?.active_generation_id) await discardRecordsRebuild(novelId, status.active_generation_id);
-    return "Rebuild discarded; the previous graph is back.";
+    return "Replacement cancelled; the previous facts, relationships, and events are restored.";
   });
 
   const eligible = status?.eligible_chapters ?? 0;
@@ -51,30 +58,41 @@ export function KnowledgeGraphControls({ novelId }: { novelId: string }) {
   const complete = !!status?.active_generation_id && eligible > 0 && status.missing_chapters === 0;
   return <section className="chapter-knowledge-graph" aria-label="Knowledge graph controls">
     <div className="graph-build-status" role="status" aria-live="polite">
-      <strong>Knowledge graph</strong> <span>{status ? graphCoverageLabel(status) : "Loading graph status…"}</span>
+      <strong>Book knowledge</strong> <span>{status ? graphCoverageLabel(status) : "Loading knowledge status…"}</span>
       {status && <><progress max={Math.max(eligible, 1)} value={published} aria-label={`Knowledge graph progress: ${published} of ${eligible} chapters`} /><small>{published} of {eligible} chapters extracted{status.running ? " · extracting…" : ""}</small></>}
     </div>
+    <p>Facts, relationships, and events power the reader’s cards and timeline, as well as AskAI.</p>
+    {chapter !== undefined && <div className="knowledge-actions">
+      <strong>Chapter {chapter}</strong>
+      {chapterStatus?.extraction_status === "processing"
+        ? <button disabled={busy} onClick={() => void act(async () => { await discardRecordsChapter(novelId, chapter); return "Chapter extraction stopped. You can resume it here."; })}>Stop this chapter</button>
+        : <button disabled={busy || !chapterStatus || chapterStatus.extraction_status === "ready"}
+            onClick={() => void act(async () => { await retryRecords(novelId, chapter); return "Chapter extraction queued. Earlier chapters must finish first."; })}>
+            {chapterStatus?.extraction_status === "ready" ? "Chapter facts extracted" : chapterStatus?.extraction_status === "failed" ? "Retry this chapter" : "Extract facts for this chapter"}
+          </button>}
+    </div>}
+    <p>Extract unfinished chapters in order. Previously extracted facts are kept.</p>
     {status?.running
       ? <button type="button" disabled={busy} onClick={() => void stop()}>{busy ? "Stopping…" : "Stop extracting"}</button>
       : <button type="button" disabled={busy || !status || complete} onClick={() => void extract()}>
-          {busy ? "Starting…" : complete ? "All chapters extracted" : "Extract facts for all chapters"}
+          {busy ? "Starting…" : complete ? "All chapters extracted" : "Extract missing chapter facts"}
         </button>}
     <details className="graph-advanced">
-      <summary>Advanced</summary>
-      {confirm === null && <button type="button" disabled={busy || !status?.active_generation_id} onClick={() => setConfirm("rebuild")}>Rebuild graph from scratch…</button>}
-      {status?.has_predecessor && status.discardable && confirm === null && <button type="button" disabled={busy} onClick={() => setConfirm("discard")}>Discard unfinished rebuild…</button>}
+      <summary>Replace existing facts…</summary>
+      {confirm === null && <button type="button" disabled={busy || !status?.active_generation_id} onClick={() => setConfirm("rebuild")}>Re-extract all chapters…</button>}
+      {status?.has_predecessor && status.discardable && confirm === null && <button type="button" disabled={busy} onClick={() => setConfirm("discard")}>Cancel replacement…</button>}
       {confirm === "rebuild" && <span role="alert" className="graph-confirm">
-        <small>Start a new graph and re-extract every chapter, including ones already done. Use this after changing the model or extraction settings. The current graph keeps serving until you discard the rebuild or it finishes.</small>
-        <button type="button" className="btn-danger" disabled={busy} onClick={() => void rebuild()}>Confirm rebuild</button>
+        <small>Replace the book’s facts, relationships, events, and identity links by extracting every chapter again. Existing knowledge disappears from reader views immediately; new results appear as chapters finish. Saved chapter text is unchanged. Use this after changing the model or extraction settings.</small>
+        <button type="button" className="btn-danger" disabled={busy} onClick={() => void rebuild()}>Replace and re-extract all chapters</button>
         <button type="button" disabled={busy} onClick={() => setConfirm(null)}>Cancel</button>
       </span>}
       {confirm === "discard" && <span role="alert" className="graph-confirm">
-        <small>Throw away the unfinished rebuild and return to the previous graph.</small>
-        <button type="button" className="btn-danger" disabled={busy} onClick={() => void discard()}>Confirm discard</button>
+        <small>Cancel this replacement and restore the previous facts, relationships, events, and cards.</small>
+        <button type="button" className="btn-danger" disabled={busy} onClick={() => void discard()}>Restore previous knowledge</button>
         <button type="button" disabled={busy} onClick={() => setConfirm(null)}>Cancel</button>
       </span>}
     </details>
     {notice && <small role="status" className="graph-notice">{notice}</small>}
-    {error && <p role="alert" className="graph-error">Graph controls unavailable: {error} <button type="button" onClick={() => void load()}>Retry status</button></p>}
+    {error && <p role="alert" className="graph-error">Knowledge controls unavailable: {error} <button type="button" onClick={() => void load()}>Retry status</button></p>}
   </section>;
 }

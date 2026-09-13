@@ -9,7 +9,7 @@ type Tone = "live" | "warn" | "bad" | "quiet";
 // Where the reader goes to act on a paused or failed chapter. Extraction is started from
 // the book-wide graph controls, so the chapter bar names that button rather than offering
 // one of its own.
-const RESUME_HINT = "Extract facts for all chapters resumes it.";
+const RESUME_HINT = "Use the chapter extraction control or extract missing chapter facts to resume.";
 
 interface State {
   tone: Tone;

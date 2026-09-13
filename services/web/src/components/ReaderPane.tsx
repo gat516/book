@@ -1,3 +1,4 @@
+import { useKnowledgeRevision } from "../knowledgeUpdates";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, getChapter, getRecords, putProgress } from "../api";
 import type { ChapterResponse, EntityView } from "../types";
@@ -6,7 +7,6 @@ import { EntityInspector } from "./EntityInspector";
 import { usePolling } from "../usePolling";
 import { applyRenderingChoices, lastMentionPerEntity, segment } from "../readerSegments";
 import { RecordList } from "./RecordList";
-import { TermList } from "./TermList";
 import type { RecordsResponse } from "../types";
 import { uniqueChapterRenderings } from "../recordPresentation";
 import { ChapterKnowledgeWorkspace } from "./ChapterKnowledgeWorkspace";
@@ -27,6 +27,7 @@ interface Props {
 }
 
 export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapterLoaded, onNoChapter }: Props) {
+  const knowledgeRevision = useKnowledgeRevision(novelId);
   const [chapter, setChapter] = useState<ChapterResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hovered, setHovered] = useState<number | null>(null);
@@ -110,9 +111,25 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [novelId, chapterIndex]);
 
+  useEffect(() => {
+    if (knowledgeRevision === 0) return;
+    let cancelled = false;
+    cache.clear(); setSelected(null); setHovered(null); setRecords(null);
+    setChapter(previous => previous ? { ...previous, spans: previous.spans.map(span => ({ ...span, entity_id: null })) } : previous);
+    Promise.all([getChapter(novelId, chapterIndex), getRecords(novelId, chapterIndex)])
+      .then(([nextChapter, nextRecords]) => {
+        if (cancelled) return;
+        setChapter(nextChapter); setRecords(nextRecords); setRecordsError(null);
+        onChapterLoaded(nextChapter);
+      }).catch(reason => { if (!cancelled) setRecordsError(errorMessage(reason)); });
+    return () => { cancelled = true; };
+    // The revision invalidates knowledge; cache changes must not reload prose.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [novelId, chapterIndex, knowledgeRevision]);
+
   const generation = useRef(0);
   const polling = useRef(false);
-  useEffect(() => { generation.current++; }, [novelId, chapterIndex]);
+  useEffect(() => { generation.current++; }, [novelId, chapterIndex, knowledgeRevision]);
   usePolling(() => {
     if (!chapter || polling.current) return;
     const current = generation.current;
@@ -176,19 +193,12 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
       </p>}
       {/* Unguarded: the bar reports "still loading" itself, so the chapter always has a
           knowledge status rather than showing nothing until one arrives. */}
-      {/* Status only: starting and stopping extraction is book-wide (the graph controls
-          below), since chapters are extracted in order and one button per chapter was a
-          second, conflicting way to drive the same queue. */}
       <RecordStatusBanner status={records?.status ?? null} />
-      {/* The book-wide graph status lived only in the chapter index, so while actually
-          reading there was no way to see build coverage or stop a run. It renders here too
-          -- the two views are mutually exclusive, so only one instance ever polls. */}
-      <KnowledgeGraphControls novelId={novelId} />
+      <KnowledgeGraphControls novelId={novelId} chapter={chapterIndex} chapterStatus={records?.status} />
       {chapter.translation_warning?.code === "locked_terms_missing" && <p role="status" className="reader-translation-warning">
         This chapter is readable, but {chapter.translation_warning.term_count} locked name{chapter.translation_warning.term_count === 1 ? " was" : "s were"} not preserved exactly.
       </p>}
-      {records && <RecordList rows={records.rows} status={records.status} title="Facts and records learned here" onEntity={(id, surface) => setSelected({id, mention: surface})} />}
-      <TermList renderings={uniqueChapterRenderings(chapter.spans)} title="Terms used here" />
+      {records && <RecordList rows={records.rows} status={records.status} title="Facts, relationships, and events learned here" onEntity={(id, surface) => setSelected({id, mention: surface})} />}
       <details className="chapter-record-diagnostics" onToggle={(event) => setShowRecordDiagnostics(event.currentTarget.open)}>
         <summary>{chapterKnowledgeReviewLabel(chapterIndex)}</summary>
         {showRecordDiagnostics && <ChapterKnowledgeWorkspace

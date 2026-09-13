@@ -1,5 +1,6 @@
+import { notifyKnowledgeUpdated, useKnowledgeRevision } from "../knowledgeUpdates";
 import { useCallback, useEffect, useState } from "react";
-import { getRecords, getRecordsInspector, getRecordReviews, retryRecords } from "../api";
+import { discardRecordsChapter, getRecords, getRecordsInspector, getRecordReviews, retryRecords } from "../api";
 import type { RecordReviewResponse, RecordsInspectorResponse, RecordsResponse } from "../types";
 import { RecordList } from "./RecordList";
 import { ChapterTermsReview } from "./ChapterTermsReview";
@@ -9,19 +10,15 @@ import { usePolling } from "../usePolling";
 import { RecordStatusBanner } from "./RecordStatusBanner";
 import { RecordReviewPanel } from "./RecordReviewPanel";
 
-/**
- * A read-only extraction inspector. Record publication is immutable; the only action
- * here retries this chapter's failed run. Re-rendering published records needs a new
- * generation for the whole book, so that lives in the book's graph controls (Advanced),
- * not in one chapter's panel. Glossary and name decisions remain in their dedicated views.
- */
+// Chapter extraction controls and optional detailed knowledge/term review.
 export function ChapterKnowledgeWorkspace({ novelId, chapter, at, renderings = [] }: { novelId: string; chapter: number; at: number; renderings?: import("../types").TermRenderingView[] }) {
+  const revision = useKnowledgeRevision(novelId);
   const [records, setRecords] = useState<RecordsResponse | null>(null);
   const [inspector, setInspector] = useState<RecordsInspectorResponse | null>(null);
   const [reviews, setReviews] = useState<RecordReviewResponse | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [busy, setBusy] = useState<"retry" | null>(null);
+  const [busy, setBusy] = useState<"retry" | "stop" | null>(null);
 
   const refresh = useCallback(async () => {
     setError("");
@@ -39,7 +36,7 @@ export function ChapterKnowledgeWorkspace({ novelId, chapter, at, renderings = [
     }
   }, [novelId, chapter]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { void refresh(); }, [refresh, revision]);
 
   usePolling(refresh, recordPollInterval(records), records !== null && !error && !recordsTerminal(records));
 
@@ -50,12 +47,24 @@ export function ChapterKnowledgeWorkspace({ novelId, chapter, at, renderings = [
     try {
       await retryRecords(novelId, chapter);
       setNotice("Extraction retry queued. This panel will update when the worker reports progress.");
+      notifyKnowledgeUpdated(novelId);
       await refresh();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(null);
     }
+  }
+
+  async function stopChapter() {
+    setBusy("stop"); setError(""); setNotice("");
+    try {
+      await discardRecordsChapter(novelId, chapter);
+      setNotice("Chapter extraction paused. Use Extract facts for this chapter to resume it.");
+      notifyKnowledgeUpdated(novelId);
+      await refresh();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setBusy(null); }
   }
 
   const status = records?.status;
@@ -84,11 +93,15 @@ export function ChapterKnowledgeWorkspace({ novelId, chapter, at, renderings = [
       {inspector.selection_outcome === "empty" && <p className="glossary-note">{(inspector.counts?.discovered ?? inspector.parsed) > 0 ? "Selection intentionally retained no claims." : "No candidates were discovered for this chapter."}</p>}
       {inspector.stages && <p className="glossary-note">Stages: {Object.entries(inspector.stages).map(([name, value]) => `${name}: ${value}`).join(" · ")}</p>}
       {inspector.rendering_failures > 0 && <p className="glossary-note">
-        {inspector.rendering_failures} record{inspector.rendering_failures === 1 ? "" : "s"} could not be rendered into English; the source records are still shown. Re-rendering rebuilds the whole book's graph: Knowledge graph › Advanced › Rebuild graph from scratch.
+        {inspector.rendering_failures} record{inspector.rendering_failures === 1 ? "" : "s"} could not be rendered into English; the source records are still shown. To replace these renderings, use Book knowledge → Replace existing facts → Re-extract all chapters. This replaces knowledge for the whole book.
       </p>}
+      <div className="knowledge-actions">
+        {(status?.extraction_status === "pending" || status?.extraction_status === "failed") && <button type="button" disabled={busy !== null} onClick={() => void retry()}>{busy === "retry" ? "Queuing…" : status.extraction_status === "failed" ? "Retry chapter extraction" : "Extract facts for this chapter"}</button>}
+        {status?.extraction_status === "processing" && <button type="button" disabled={busy !== null} onClick={() => void stopChapter()}>{busy === "stop" ? "Pausing…" : "Pause chapter extraction"}</button>}
+      </div>
       {inspector.drops.length > 0 && <details><summary>Dropped records ({inspector.drops.length})</summary><ul className="chapter-knowledge-list">{inspector.drops.map(drop => <li key={drop.original_index}><strong>Record {drop.original_index}</strong><small>{drop.reasons.join("; ")}</small></li>)}</ul></details>}
       {inspector.dropped > 0 && status?.extraction_status !== "failed" && <p className="glossary-note">Dropped records are immutable diagnostics. A new generation is required to change extraction checks; nothing was discarded from the published history.</p>}
-      <RecordList rows={records.rows} status={records.status} title="Facts and records" />
+      <RecordList rows={records.rows} status={records.status} title="Facts, relationships, and events" />
       <RecordStatusBanner status={records.status} busy={busy === "retry"} onRetry={() => void retry()} />
       {reviews && <RecordReviewPanel novelId={novelId} chapter={chapter} items={reviews.items} onReviewed={refresh} />}
       <NameReviewPanel novelId={novelId} chapter={chapter} onApproved={() => void refresh()} />
