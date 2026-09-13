@@ -9,15 +9,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 import hashlib
+import json
 import uuid
 
 from psycopg.types.json import Jsonb
 
 from pipeline.context import PipelineState, StageContext
 from pipeline.jobs import model_for_stage
-from pipeline.records_prompts import PROMPT_CONTRACT_VERSION
+from pipeline.records_prompts import PROMPT_CONTRACT_VERSION, RESOLVE_SYSTEM, RENDER_SYSTEM
+from pipeline.fact_first import DISCOVERY_ATOMIC_SYSTEM, NORMALIZATION_ASSERTION_SYSTEM
+from pipeline.benchmark_selection import SELECTION_SYSTEM, NORMALIZATION_SELECTION_SYSTEM
 
-CHECKS_VERSION = "records-checks-v2"
+CHECKS_VERSION = "fact-first-checks-v1"
 
 
 class GenerationFenceError(RuntimeError):
@@ -35,10 +38,24 @@ class GenerationPin:
 
 
 def _requested(ctx: StageContext) -> GenerationPin:
+    # §0: a provider, prompt, or budget change opens a new immutable extraction
+    # generation, even if an operator forgot to bump the descriptive version.
+    contract = {
+        "baseline": "96ff9cf", "variants": ["atomic", "compact", "assertion"],
+        "systems": [DISCOVERY_ATOMIC_SYSTEM, SELECTION_SYSTEM,
+                    NORMALIZATION_ASSERTION_SYSTEM, NORMALIZATION_SELECTION_SYSTEM,
+                    RESOLVE_SYSTEM, RENDER_SYSTEM],
+        "provider": ctx.provider_id or ctx.cfg.llm_provider,
+        "max_output_tokens": ctx.cfg.hosted_graph_output_tokens,
+        "reasoning_effort": "low",
+    }
+    fingerprint = hashlib.sha256(json.dumps(
+        contract, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode()).hexdigest()
     return GenerationPin(
         id="",
         requested_model=model_for_stage("extract", ctx.cfg, ctx.model_override),
-        prompt_version=f"{ctx.cfg.prompt_version}:{PROMPT_CONTRACT_VERSION}",
+        prompt_version=f"{ctx.cfg.prompt_version}:{PROMPT_CONTRACT_VERSION}:{fingerprint}",
         checks_version=CHECKS_VERSION,
         source_lang=ctx.novel.source_lang,
         target_lang=ctx.novel.target_lang,

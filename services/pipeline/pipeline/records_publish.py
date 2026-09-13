@@ -22,6 +22,7 @@ from pipeline.context import PipelineState, StageContext
 from pipeline.passages import source_passages
 from pipeline.records import deterministic_entity_id
 from pipeline.records_generation import verify_generation
+from pipeline.mentions import MentionScanRequest, Alias, scan_mentions, whole_name
 
 log = logging.getLogger(__name__)
 
@@ -118,6 +119,9 @@ async def publish_records(ctx: StageContext, state: PipelineState) -> None:
     result = state.records
     if not result:
         raise RuntimeError("records stage produced no result")
+    if "fact_first" in result:
+        await publish_fact_first(ctx, state, result["fact_first"])
+        return
     source_hash = state.envelope.source_meta.raw_hash
     passages = source_passages(state.envelope.raw_text)
     # Embeddings are derived chapter data. Compute them before opening the publication
@@ -157,6 +161,7 @@ async def publish_records(ctx: StageContext, state: PipelineState) -> None:
               p["char_start"], p["char_end"], i, source_hash) for i, p in enumerate(passages)])
 
         resolution = result.get("resolution") or {}
+        proposal_map = resolution.get("proposal_map") or {}
         entity_ids: dict[str, str] = {}
         entity_rows = []
         for entity in resolution.get("entities", []):
@@ -281,3 +286,208 @@ async def publish_records(ctx: StageContext, state: PipelineState) -> None:
                     publication_version=COALESCE((SELECT max(publication_version)+1 FROM record_run WHERE novel_id=%s AND generation_id=%s),1),published_at=now()
                     WHERE id=%s""", (warning_count, Jsonb({"warnings": warning_count}), ctx.novel.id, generation_id, run_id))
     log.info("published records novel=%s chapter=%s rows=%s", ctx.novel.id, state.envelope.chapter_index, len(row_ids))
+
+
+async def publish_fact_first(ctx: StageContext, state: PipelineState, result: dict[str, Any]) -> None:
+    """Publish validated fact-first rows without coercing them into typed records."""
+    run_id = result.get("fact_first_run_id")
+    if not run_id:
+        raise ValueError("fact-first result has no durable run id")
+    async with ctx.db.transaction():
+        await verify_generation(ctx, state)
+        existing = await (await ctx.db.execute(
+            "SELECT status,source_hash FROM fact_first_run WHERE id=%s FOR UPDATE", (run_id,))).fetchone()
+        if not existing or existing[1] != state.envelope.source_meta.raw_hash:
+            raise RuntimeError("fact-first run input changed inside an immutable generation")
+        if existing[0] == "published":
+            return
+        generation_id = state.record_generation_id
+        chapter = state.envelope.chapter_index
+        resolution = result.get("resolution") or {}
+        proposal_map = {str(k): str(v) for k, v in (resolution.get("proposal_map") or {}).items()}
+        resolver_entity_ids: dict[str, str] = {}
+        entity_rows = []
+        for entity in resolution.get("entities", []):
+            proposal = str(entity.get("id", ""))
+            candidate = entity.get("candidate_entity_id")
+            durable = _uuid(candidate) if candidate else deterministic_entity_id(run_id, proposal)
+            resolver_entity_ids[proposal] = durable
+            if not candidate:
+                entity_rows.append((durable, ctx.novel.id, generation_id, entity.get("kind", "unknown"),
+                                    entity.get("canonical", ""), chapter))
+        # Bind normalized proposal IDs structurally. The resolver may choose different
+        # local labels; proposal_map is the only accepted bridge between the two.
+        if entity_rows:
+            await _executemany(ctx.db,
+                """INSERT INTO entity (id,novel_id,record_generation_id,kind,canonical,first_seen_chapter)
+                   VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING""", entity_rows)
+        aliases = [(resolver_entity_ids[str(entity.get("id", ""))], name, ctx.novel.source_lang,
+                    chapter, generation_id)
+                   for entity in resolution.get("entities", [])
+                   for name in entity.get("names", []) if str(entity.get("id", "")) in resolver_entity_ids]
+        if aliases:
+            await _executemany(ctx.db,
+                """INSERT INTO alias(entity_id,surface,lang,first_seen_chapter,record_generation_id)
+                   VALUES (%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""", aliases)
+        for proposal in result.get("accepted", {}).get("entities", result.get("entities", [])):
+            await ctx.db.execute(
+                """INSERT INTO fact_first_entity_proposal
+                   (run_id,proposal_id,source_name,aliases,kind,english_name,passage_ids,payload)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
+                (run_id, proposal.get("local_id", ""), proposal.get("canonical_source", ""),
+                 Jsonb(proposal.get("source_aliases", [])), proposal.get("kind"),
+                 proposal.get("english_name"), Jsonb(proposal.get("evidence_ids", [])), Jsonb(proposal)))
+        proposal_entity_ids = {
+            proposal_id: resolver_entity_ids[resolver_id]
+            for proposal_id, resolver_id in proposal_map.items()
+            if resolver_id in resolver_entity_ids
+        }
+        for proposal, durable in proposal_entity_ids.items():
+            await ctx.db.execute(
+                "UPDATE fact_first_entity_proposal SET persistent_entity_id=%s,resolution_status='resolved' WHERE run_id=%s AND proposal_id=%s",
+                (durable, run_id, proposal))
+        # DISPLAY_SCAN is deliberately rerun after identity publication for newly
+        # introduced aliases: the pre-publication scan cannot see aliases that did not
+        # exist in the database yet. It still only emits cards for the authoritative
+        # who's-who bindings, never for a spelling match without one.
+        display_text = state.translation or state.envelope.raw_text
+        resolution_map = resolution.get("name_map") or {}
+        scan_aliases = [Alias(alias_id=str(entity.get("id", "")), surface=name)
+                        for entity in resolution.get("entities", [])
+                        for name in entity.get("names", [])]
+        spans = list(getattr(state, "display_spans", []) or [])
+        if not spans and display_text == state.envelope.raw_text and scan_aliases:
+            spans = [span for span in scan_mentions(MentionScanRequest(
+                text=display_text, aliases=scan_aliases, lang=ctx.novel.source_lang)).spans
+                     if whole_name(display_text, span, ctx.novel.source_lang)]
+        # DISPLAY_SCAN may already have written these derived rows before identity
+        # publication. Replace the chapter slice once so hovercards never duplicate.
+        await ctx.db.execute("DELETE FROM mention_span WHERE novel_id=%s AND chapter_index=%s",
+                             (ctx.novel.id, chapter))
+        await ctx.db.execute("DELETE FROM record_mention_binding WHERE run_id=%s",
+                             (_run_id(str(generation_id), chapter),))
+        for span in spans:
+            local = str(getattr(span, "alias_id", ""))
+            display_term = display_text[span.char_start:span.char_end]
+            aligned = [rendering for rendering in (getattr(state, "term_renderings", []) or [])
+                       if rendering.char_start == span.char_start
+                       and rendering.char_end == span.char_end
+                       and rendering.display_term == display_term]
+            proposal_ids = {resolution_map.get(rendering.source_term) for rendering in aligned}
+            proposal_ids.discard(None)
+            if len(proposal_ids) == 1:
+                local = next(iter(proposal_ids))
+            # DISPLAY_SCAN can carry an already durable UUID. Keep it only when the
+            # current who's-who result authorizes that same UUID; alignment above still
+            # wins for every span, including spans emitted before identity publication.
+            durable = resolver_entity_ids.get(resolution_map.get(local, local))
+            if durable is None and local in resolver_entity_ids.values():
+                durable = local
+            await ctx.db.execute(
+                """INSERT INTO mention_span(novel_id,chapter_index,entity_id,char_start,char_end)
+                   VALUES (%s,%s,%s,%s,%s)""",
+                (ctx.novel.id, chapter, durable, span.char_start, span.char_end))
+            if durable is None:
+                continue
+            await ctx.db.execute(
+                """INSERT INTO record_mention_binding
+                   (novel_id,generation_id,run_id,entity_id,source_chapter,char_start,char_end)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                (ctx.novel.id, generation_id, _run_id(str(generation_id), chapter), durable,
+                 chapter, span.char_start, span.char_end))
+        for ref in result.get("unresolved_references", result.get("references", [])):
+            await ctx.db.execute(
+                """INSERT INTO fact_first_reference
+                   (run_id,reference_id,assertion_id,surface,refers_to,candidate_proposal_id,reason,claim_id,payload)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
+                (run_id, ref.get("local_id", ""), None, ref.get("surface", ""),
+                 ref.get("refers_to"), ref.get("candidate_id"), ref.get("reason"),
+                 ref.get("claim_id"), Jsonb(ref)))
+        for account in (result.get("assertion_accounting") or {}).get("assertions", []):
+            outcome = account.get("outcome", "omitted")
+            status = account.get("status", outcome)
+            await ctx.db.execute(
+                """INSERT INTO fact_first_assertion
+                   (run_id,assertion_id,candidate_id,statement,outcome,status,reason,payload)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
+                (run_id, account.get("assertion_id", ""), account.get("claim_id", ""),
+                 account.get("statement", ""), outcome, status,
+                 account.get("reason", ""), Jsonb(account)))
+        for ref in result.get("unresolved_references", result.get("references", [])):
+            assertion_id = ref.get("assertion_id")
+            if assertion_id:
+                await ctx.db.execute(
+                    "UPDATE fact_first_reference SET assertion_id=%s WHERE run_id=%s AND reference_id=%s",
+                    (assertion_id, run_id, ref.get("local_id", "")))
+        evidence = lambda row: Jsonb(row.get("evidence", row.get("evidence_ids", [])))
+        for index, row in enumerate(result.get("accepted", {}).get("facts", []), 1):
+            await ctx.db.execute(
+                """INSERT INTO fact_first_fact
+                   (run_id,local_id,assertion_id,subject_ref,attribute,value,source_value,polarity,attribution,condition,temporal,source_chapter,valid_from_chapter,evidence,payload)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,%s,%s)""",
+                (run_id, f"f{index}", row.get("assertion_id"), row.get("subject_id", ""),
+                 row.get("attribute", ""), row.get("value", ""), row.get("source_span"),
+                 row.get("polarity"), row.get("attribution"), row.get("condition"), row.get("temporal"),
+                 state.envelope.chapter_index, evidence(row), Jsonb(row)))
+        for index, row in enumerate(result.get("accepted", {}).get("relations", []), 1):
+            await ctx.db.execute(
+                """INSERT INTO fact_first_relation
+                   (run_id,local_id,assertion_id,src_ref,dst_ref,relation,source_value,polarity,attribution,condition,temporal,source_chapter,valid_from_chapter,evidence,payload)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,%s,%s)""",
+                (run_id, f"r{index}", row.get("assertion_id"), row.get("src_id", ""), row.get("dst_id", ""),
+                 row.get("relation", ""), row.get("source_span"), row.get("polarity"), row.get("attribution"),
+                 row.get("condition"), row.get("temporal"), state.envelope.chapter_index, evidence(row), Jsonb(row)))
+        for index, row in enumerate(result.get("accepted", {}).get("events", []), 1):
+            await ctx.db.execute(
+                """INSERT INTO fact_first_event
+                   (run_id,local_id,assertion_id,action,arguments,source_value,polarity,attribution,condition,temporal,source_chapter,valid_from_chapter,evidence,payload)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,%s,%s)""",
+                (run_id, f"e{index}", row.get("assertion_id"), row.get("action", ""), Jsonb(row.get("arguments", [])),
+                 row.get("source_span"), row.get("polarity"), row.get("attribution"), row.get("condition"),
+                 row.get("temporal"), state.envelope.chapter_index, evidence(row), Jsonb(row)))
+        for output_id, rendering in (result.get("renderings") or {}).items():
+            if not isinstance(rendering, dict):
+                continue
+            await ctx.db.execute(
+                """INSERT INTO fact_first_rendering
+                   (run_id,assertion_id,output_kind,output_id,target_value,provider,served_model,status,error_detail)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
+                (run_id, rendering.get("assertion_id"), rendering.get("output_kind", "native_assertion"),
+                 str(output_id), rendering.get("target_value"),
+                 rendering.get("provider"), rendering.get("served_model"),
+                 rendering.get("status", "failed"), rendering.get("error_detail")))
+        # Chunk vectors are optional retrieval data. Persist readable chunks even when
+        # embeddings are disabled or unavailable; fact-first publication must never
+        # depend on an embedding provider.
+        await ctx.db.execute("DELETE FROM chunk WHERE novel_id=%s AND chapter_index=%s",
+                             (ctx.novel.id, chapter))
+        chunks = list(getattr(state, "chunks", []) or [])
+        if chunks:
+            async with ctx.db.cursor() as cur:
+                await cur.executemany(
+                    "INSERT INTO chunk(novel_id,chapter_index,text,embedding) VALUES (%s,%s,%s,NULL)",
+                    [(ctx.novel.id, chapter, chunk.text) for chunk in chunks])
+        # The existing reader status surface is keyed by record_run. Keep it in lock
+        # step with the native run after all fact-first rows are durable; otherwise the
+        # next chronological chapter remains fenced behind a permanently processing
+        # companion row.
+        companion = _run_id(str(generation_id), chapter)
+        await ctx.db.execute(
+            """UPDATE record_run SET status='published',served_model=%s,
+                 publication_version=COALESCE((SELECT max(publication_version)+1 FROM record_run
+                   WHERE novel_id=%s AND generation_id=%s),1),published_at=now()
+                WHERE id=%s AND status <> 'published'""",
+            (result.get("served_model"), ctx.novel.id,
+             generation_id, companion))
+        await ctx.db.execute(
+            """UPDATE fact_first_run SET status='published',published_at=now(),served_model=%s,
+               diagnostics=jsonb_set(COALESCE(diagnostics,'{}'::jsonb), '{stages}',
+                 COALESCE(diagnostics->'stages','{}'::jsonb) || %s::jsonb, true) || %s::jsonb
+               WHERE id=%s""",
+            (result.get("served_model"), Jsonb({"publication": "completed"}), Jsonb({"resolution": resolution, "published_counts": {
+                "facts": len(result.get("accepted", {}).get("facts", [])),
+                "relations": len(result.get("accepted", {}).get("relations", [])),
+                "events": len(result.get("accepted", {}).get("events", [])),
+                "rejected": len(result.get("rejected", [])),
+            }}), run_id))
+    log.info("published fact-first novel=%s chapter=%s", ctx.novel.id, state.envelope.chapter_index)

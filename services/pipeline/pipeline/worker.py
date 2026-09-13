@@ -307,6 +307,26 @@ class Worker:
                 log.info("provider config changed; returning chapter %s/%s to pending",
                          msg.novel_id, msg.chapter_index)
             except ChapterDiscarded:
+                # Stop/Discard is terminal until the explicit Retry control. Close any
+                # fact-first prefix that already checkpointed successfully so status
+                # cannot look like an in-flight run after the Redis claim is dropped.
+                msg = QueueMessage.model_validate_json(raw)
+                await self.db.execute(
+                    """UPDATE fact_first_run SET status='discarded',
+                       diagnostics=diagnostics || jsonb_build_object('lifecycle','discarded')
+                       WHERE novel_id=%s AND chapter_index=%s AND status='processing'
+                         AND generation_id=COALESCE(%s::uuid,
+                             (SELECT active_record_generation FROM novel WHERE id=%s))""",
+                    (msg.novel_id, msg.chapter_index, msg.record_generation_id, msg.novel_id),
+                )
+                await self.db.execute(
+                    """UPDATE record_run SET status='failed',
+                       diagnostics=diagnostics || jsonb_build_object('lifecycle','discarded')
+                       WHERE novel_id=%s AND chapter_index=%s AND status='processing'
+                         AND generation_id=COALESCE(%s::uuid,
+                             (SELECT active_record_generation FROM novel WHERE id=%s))""",
+                    (msg.novel_id, msg.chapter_index, msg.record_generation_id, msg.novel_id),
+                )
                 log.info("chapter graph attempt discarded; dropping claim")
             except ChapterFailed:
                 # The outcome is recorded on the chapter row, so this job is not lost and
@@ -695,8 +715,20 @@ class Worker:
                     stage_name,
                     str(time.time()),
                 )
+                await self.db.execute(
+                    """UPDATE fact_first_run SET diagnostics=jsonb_set(
+                       COALESCE(diagnostics,'{}'::jsonb), '{stages}',
+                       COALESCE(diagnostics->'stages','{}'::jsonb) || '{\"publication\":\"processing\"}'::jsonb, true)
+                       WHERE novel_id=%s AND generation_id=%s AND chapter_index=%s
+                         AND status='processing'""",
+                    (msg.novel_id, state.record_generation_id, msg.chapter_index),
+                )
                 await publish_records(ctx, state)
         except TranslationPublished:
+            raise
+        except ChapterDiscarded:
+            # §0: an operator stop is terminal until an explicit retry. In particular,
+            # do not turn a discard racing publication into a scheduled failure.
             raise
         except AdmissionRejected as exc:
             # The outer loop requeues without turning capacity pressure into a job error.
@@ -722,10 +754,25 @@ class Worker:
                     if run_generation:
                         await self.db.execute(
                             "UPDATE record_run SET status='failed',"
-                            "diagnostics=jsonb_build_object('failure',%s::text) "
+                            "diagnostics=diagnostics || jsonb_build_object('failure',%s::text) "
                             "WHERE novel_id=%s AND generation_id=%s AND chapter_index=%s "
                             "AND status='processing'",
                             (error_code(exc), msg.novel_id, run_generation, msg.chapter_index))
+                        await self.db.execute(
+                            "UPDATE fact_first_run SET status='failed',"
+                            "diagnostics=diagnostics || jsonb_build_object('failure',%s::text) "
+                            "WHERE novel_id=%s AND generation_id=%s AND chapter_index=%s "
+                            "AND status='processing'",
+                            (error_code(exc), msg.novel_id, run_generation, msg.chapter_index))
+                        if stage_name == "publish":
+                            await self.db.execute(
+                                """UPDATE fact_first_run SET diagnostics=jsonb_set(
+                                   COALESCE(diagnostics,'{}'::jsonb), '{stages}',
+                                   COALESCE(diagnostics->'stages','{}'::jsonb) || '{\"publication\":\"failed\"}'::jsonb, true)
+                                   WHERE novel_id=%s AND generation_id=%s AND chapter_index=%s
+                                     AND status <> 'published'""",
+                                (msg.novel_id, run_generation, msg.chapter_index),
+                            )
                 await self._set_status(msg, "name_repair_error" if msg.retranslate else "error")
                 # Schedule a retry for ANY recorded failure. This used to be guarded by
                 # `if readable`, which silently made every pre-TRANSLATE failure terminal:
@@ -758,7 +805,8 @@ class Worker:
                     "enrichment_retry_generation_id=CASE WHEN %s THEN %s::uuid ELSE NULL END,"
                     "provider_retry_attempts=0,provider_retry_at=NULL,"
                     "provider_retry_category=NULL,provider_retry_generation_id=NULL "
-                    "WHERE novel_id=%s AND chapter_index=%s AND enrichment_attempts < %s",
+                    "WHERE novel_id=%s AND chapter_index=%s AND enrichment_attempts < %s "
+                    "AND NOT enrichment_discarded",
                     (next_attempt,
                      schedule,
                      min(GENERIC_RETRY_BASE_SECONDS * (2 ** max(next_attempt - 1, 0)),
@@ -814,11 +862,13 @@ class Worker:
         category = failure_category(exc)
         async with self.db.transaction():
             row = await (await self.db.execute(
-                "SELECT provider_retry_attempts,translation_ready FROM chapter "
+                "SELECT provider_retry_attempts,translation_ready,enrichment_discarded FROM chapter "
                 "WHERE novel_id=%s AND chapter_index=%s FOR UPDATE",
                 (msg.novel_id, msg.chapter_index),
             )).fetchone()
             if row is None:
+                return
+            if row[2]:
                 return
             # A shared cooldown rejection never reached the provider: it only relays a
             # deadline another call already earned, so it does not spend an attempt.
@@ -836,6 +886,14 @@ class Worker:
                     self.db, msg.novel_id, msg.chapter_index, "provider",
                     ProviderRetryExhausted(),
                 )
+                for table in ("record_run", "fact_first_run"):
+                    await self.db.execute(
+                        f"UPDATE {table} SET status='failed', "
+                        "diagnostics=diagnostics || jsonb_build_object('failure','provider_retry_exhausted') "
+                        "WHERE novel_id=%s AND chapter_index=%s AND status='processing' "
+                        "AND generation_id=(SELECT active_record_generation FROM novel WHERE id=%s)",
+                        (msg.novel_id, msg.chapter_index, msg.novel_id),
+                    )
                 return
             delay = max(float(exc.retry_after_s), 0.0) if shared else max(
                 PROVIDER_RETRY_BASE_SECONDS * (2 ** (attempt - 1)),

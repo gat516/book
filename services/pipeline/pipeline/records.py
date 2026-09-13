@@ -245,7 +245,12 @@ def validate_resolution(text: str, names: list[dict[str, Any]], kinds: list[str]
     for n in names:
         if n["id"] not in assigned:
             rid=f"r{len(refs)+1}"; assigned[n["id"]]=rid; refs.append({"id":rid,"surface":n["name"],"refers_to":"unknown","candidate_entity_id":None,"reason":"not placed"})
-    return {"entities":entities,"references":refs,"name_map":{by_id[k]["name"]:v for k,v in assigned.items()},"problems":problems}
+    return {"entities":entities,"references":refs,
+            # Structural proposal identity is keyed by the resolver input ID (for
+            # fact-first this is the normalized local proposal ID), never by an
+            # English rendering or a spelling lookup.
+            "proposal_map": dict(assigned),
+            "name_map":{by_id[k]["name"]:v for k,v in assigned.items()},"problems":problems}
 
 
 def deterministic_entity_id(scope_id: str, proposal_id: str) -> str:

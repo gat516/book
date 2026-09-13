@@ -1,6 +1,9 @@
 """Stable prompts for production record discovery and identity resolution."""
 
-PROMPT_CONTRACT_VERSION = "typed-records-v3"
+# The production extraction contract is pinned to the fact-first experiment.  Keep
+# this version separate from the retired typed-record prompt so a live generation can
+# never silently mix the two semantics.
+PROMPT_CONTRACT_VERSION = "fact-first-v1"
 
 DISCOVERY_SYSTEM = """Read the supplied chapter passages and emit only explicit source-grounded typed records as XML.
 Use exactly these record types and child tags (the child element names are mandatory; never use a generic
