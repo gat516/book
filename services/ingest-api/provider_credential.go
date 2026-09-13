@@ -11,9 +11,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Provider credentials shared by every novel (migration 0035). A novel_provider_config
-// row still chooses provider and model per book, and may carry its own key as an
-// override; this is the fallback a book uses when it has none of its own.
+// Provider credentials shared by every novel (migrations 0035, 0080). A
+// novel_provider_config row chooses provider, models, and any per-book endpoint; the
+// provider's account key lives only here.
 
 var ErrProviderCredentialNotFound = errors.New("provider credential not found")
 
@@ -169,15 +169,20 @@ func (a *API) listProviderCredentials(w http.ResponseWriter, r *http.Request) {
 func (a *API) putProviderCredential(w http.ResponseWriter, r *http.Request) {
 	provider := r.PathValue("provider")
 	switch provider {
-	case "anthropic", "deepseek", "gemini", "groq", "ollama":
+	case "anthropic", "custom", "deepseek", "gemini", "groq", "ollama":
 	default:
-		writeErr(w, http.StatusBadRequest, "provider must be one of anthropic, deepseek, gemini, groq, ollama")
+		writeErr(w, http.StatusBadRequest, "provider must be one of anthropic, custom, deepseek, gemini, groq, ollama")
 		return
 	}
 	var req providerCredentialReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
+	}
+	if provider != "ollama" {
+		// Hosted provider endpoints are fixed by their adapters. Custom API endpoints are
+		// per-book so two books can target different compatible servers with one account.
+		req.BaseURL = ""
 	}
 	in := ProviderCredentialInput{Provider: provider, BaseURL: req.BaseURL}
 	if req.APIKey != "" {

@@ -2,6 +2,7 @@
 
 from novel_llm.anthropic import AnthropicProvider
 from novel_llm.deepseek import DeepSeekProvider
+from novel_llm.custom import CustomProvider
 from novel_llm.gateway import GatewayProvider
 from novel_llm.gemini import GeminiProvider
 from novel_llm.groq import GroqProvider
@@ -38,6 +39,7 @@ __all__ = [
     "BatchResult",
     "Class",
     "Completion",
+    "CustomProvider",
     "DeepSeekProvider",
     "GatewayProvider",
     "GeminiProvider",

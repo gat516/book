@@ -32,6 +32,7 @@ func TestHostedProviderHealthUsesProviderModelEndpointsAndHeaders(t *testing.T) 
 		{provider: "anthropic", path: "/v1/models", header: "x-api-key", want: "ok"},
 		{provider: "deepseek", path: "/models", header: "Authorization", want: "ok"},
 		{provider: "groq", path: "/openai/v1/models", header: "Authorization", want: "ok"},
+		{provider: "custom", path: "/v1/models", header: "Authorization", want: "ok"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.provider, func(t *testing.T) {
@@ -42,7 +43,7 @@ func TestHostedProviderHealthUsesProviderModelEndpointsAndHeaders(t *testing.T) 
 				if got := r.Header.Get(tt.header); got == "" {
 					t.Fatalf("missing %s header", tt.header)
 				}
-				if (tt.provider == "deepseek" || tt.provider == "groq") && r.Header.Get("Authorization") != "Bearer secret" {
+				if (tt.provider == "custom" || tt.provider == "deepseek" || tt.provider == "groq") && r.Header.Get("Authorization") != "Bearer secret" {
 					t.Fatalf("authorization header was not bearer encoded")
 				}
 				w.WriteHeader(http.StatusOK)
@@ -50,7 +51,11 @@ func TestHostedProviderHealthUsesProviderModelEndpointsAndHeaders(t *testing.T) 
 			}))
 			defer server.Close()
 
-			if got := probeHostedProvider(context.Background(), tt.provider, server.URL, "secret"); got != tt.want {
+			base := server.URL
+			if tt.provider == "custom" {
+				base += "/v1"
+			}
+			if got := probeHostedProvider(context.Background(), tt.provider, base, "secret"); got != tt.want {
 				t.Fatalf("category = %q, want %q", got, tt.want)
 			}
 		})
@@ -127,6 +132,7 @@ func TestProviderHealthModelCatalogAcceptsPresentAndRejectsMissingModels(t *test
 		{provider: "anthropic", body: `{"data":[{"id":"claude-haiku-4-5"}]}`, present: "claude-haiku-4-5"},
 		{provider: "deepseek", body: `{"data":[{"id":"deepseek-v4-flash"}]}`, present: "deepseek-v4-flash"},
 		{provider: "groq", body: `{"data":[{"id":"openai/gpt-oss-120b"}]}`, present: "openai/gpt-oss-120b"},
+		{provider: "custom", body: `{"data":[{"id":"custom-model"}]}`, present: "custom-model"},
 	} {
 		t.Run(test.provider, func(t *testing.T) {
 			server := providerHealthTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

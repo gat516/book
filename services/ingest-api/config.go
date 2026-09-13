@@ -41,8 +41,8 @@ type Config struct {
 	// tunnel to a GPU host; model discovery must use the same endpoint as the pipeline.
 	OllamaHost string
 	// ProviderHealthAllowedHosts is the explicit SSRF boundary for hosted provider
-	// catalog probes. Official provider hosts are included by default; custom account or
-	// novel endpoints require an operator entry in PROVIDER_HEALTH_ALLOWED_HOSTS.
+	// catalog probes. Official provider hosts are included by default; custom novel
+	// endpoints require an operator entry in PROVIDER_HEALTH_ALLOWED_HOSTS.
 	ProviderHealthAllowedHosts map[string]bool
 }
 
@@ -92,14 +92,6 @@ func loadConfig() Config {
 			cfg.ProviderHealthAllowedHosts[host] = true
 		}
 	}
-	// An explicitly configured process provider base is an operator choice and is
-	// therefore admitted without duplicating it in the allowlist environment variable.
-	for _, raw := range []string{os.Getenv("ANTHROPIC_BASE_URL"), os.Getenv("DEEPSEEK_BASE_URL"), os.Getenv("GEMINI_BASE_URL")} {
-		if parsed, err := url.Parse(raw); err == nil && parsed.Hostname() != "" {
-			cfg.ProviderHealthAllowedHosts[strings.ToLower(parsed.Hostname())] = true
-		}
-	}
-
 	if raw := os.Getenv("INGEST_PROVIDER_CONFIG_KEY"); raw != "" {
 		decoded, err := base64.StdEncoding.DecodeString(raw)
 		if err != nil {

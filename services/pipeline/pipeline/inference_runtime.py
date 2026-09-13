@@ -285,7 +285,7 @@ class ResourceClosingProvider:
 def coordinated_provider(provider, redis, *, provider_id: str, base_url: str = "",
                           credential: str = "", owns_redis: bool = False):
     """Wrap a hosted provider when a shared Redis coordinator can be formed."""
-    if redis is None or provider_id not in {"anthropic", "deepseek", "gemini", "groq"}:
+    if redis is None or provider_id not in {"anthropic", "custom", "deepseek", "gemini", "groq"}:
         return provider
     base_url = getattr(provider, "_base_url", None) or base_url
     credential = getattr(provider, "_api_key", None) or credential

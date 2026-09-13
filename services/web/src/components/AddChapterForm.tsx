@@ -46,17 +46,46 @@ export function AddChapterForm({ novelId, nextChapterIndex, onAdded, onCancel }:
   return (
     <div className="add-chapter-form">
       <h2>Add a chapter</h2>
-      <fieldset>
-        <legend>Method</legend>
-        <label>
-          <input type="radio" checked={method === "paste"} onChange={() => setMethod("paste")} /> Paste text
+      <fieldset className="add-chapter-method-selector">
+        <legend>How would you like to add this chapter?</legend>
+        <label className="add-chapter-method-option" htmlFor="add-chapter-method-paste">
+          <input
+            id="add-chapter-method-paste"
+            name="chapter-input-method"
+            type="radio"
+            checked={method === "paste"}
+            onChange={() => setMethod("paste")}
+          />
+          <span>
+            <strong>Paste original text</strong>
+            <span className="add-chapter-method-description">Add the chapter text yourself for machine translation.</span>
+          </span>
         </label>
-        <label>
-          <input type="radio" checked={method === "scrape"} onChange={() => setMethod("scrape")} /> Scrape from URL
+        <label className="add-chapter-method-option" htmlFor="add-chapter-method-scrape">
+          <input
+            id="add-chapter-method-scrape"
+            name="chapter-input-method"
+            type="radio"
+            checked={method === "scrape"}
+            onChange={() => setMethod("scrape")}
+          />
+          <span>
+            <strong>Import from webpage</strong>
+            <span className="add-chapter-method-description">Fetch chapters from a supported novel site.</span>
+          </span>
         </label>
-        <label>
-          <input type="radio" checked={method === "bootstrap"} onChange={() => setMethod("bootstrap")} /> I already
-          have a translation
+        <label className="add-chapter-method-option" htmlFor="add-chapter-method-bootstrap">
+          <input
+            id="add-chapter-method-bootstrap"
+            name="chapter-input-method"
+            type="radio"
+            checked={method === "bootstrap"}
+            onChange={() => setMethod("bootstrap")}
+          />
+          <span>
+            <strong>Paste original + existing translation</strong>
+            <span className="add-chapter-method-description">Use a translation you already have and optionally lock its terms.</span>
+          </span>
         </label>
       </fieldset>
 
@@ -81,18 +110,24 @@ export function AddChapterForm({ novelId, nextChapterIndex, onAdded, onCancel }:
             />
           </label>
           <label>
-            Source chapter URL (optional)
-            <input type="url" value={sourceURL} onChange={(e) => setSourceURL(e.target.value)} />
-          </label>
-          <label>
-            Chapter text
+            Original text
             <textarea rows={10} value={rawText} onChange={(e) => setRawText(e.target.value)} required />
           </label>
+          <details className="add-chapter-source-details">
+            <summary>Source details</summary>
+            <label>
+              Original webpage
+              <span className="add-chapter-field-description">
+                Saved for reference and to help find later chapters; the page is not imported.
+              </span>
+              <input type="url" value={sourceURL} onChange={(e) => setSourceURL(e.target.value)} />
+            </label>
+          </details>
           <div className="add-chapter-form-actions">
             <button type="button" onClick={onCancel} disabled={pending}>
               Cancel
             </button>
-            <button type="submit" disabled={pending || !rawText.trim()}>
+            <button type="submit" className="btn-primary" disabled={pending || !rawText.trim()}>
               {pending ? "Adding…" : "Add chapter"}
             </button>
           </div>

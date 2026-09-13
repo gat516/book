@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from fixtures import make_config
-from novel_llm import (DeepSeekProvider, GeminiProvider, GroqProvider, OllamaProvider,
-                       OpenRouterProvider, UnavailableEmbeddingProvider)
+from novel_llm import (CustomProvider, DeepSeekProvider, GeminiProvider, GroqProvider,
+                       OllamaProvider, OpenRouterProvider, UnavailableEmbeddingProvider)
 import pytest
 
 from pipeline.config import names_runtime, resolve_runtime
 from pipeline.llm import embed_provider_from_env, provider_from_env
 from pipeline.provider_config import (
     ProviderConfigRow,
+    build_provider,
     build_names_provider,
     build_resolve_provider,
 )
@@ -31,6 +32,39 @@ def test_groq_case_constructs_a_groq_provider():
     cfg = make_config(llm_provider="groq", groq_api_key="k",
                       llm_model_extract="openai/gpt-oss-120b")
     assert isinstance(provider_from_env(cfg), GroqProvider)
+
+
+@pytest.mark.parametrize(("provider_id", "expected_base"), [
+    ("anthropic", None),
+    ("deepseek", "https://api.deepseek.com"),
+    ("gemini", "https://generativelanguage.googleapis.com/v1beta/openai"),
+    ("groq", "https://api.groq.com/openai/v1"),
+])
+def test_named_book_provider_ignores_a_stale_custom_base_url(provider_id, expected_base):
+    row = ProviderConfigRow(
+        provider=provider_id,
+        model="model-a",
+        translate_model=None,
+        extract_model=None,
+        base_url="https://wrong.example/v1",
+        api_key="secret",
+    )
+    provider = build_provider(row, make_config())
+    assert provider._base_url == expected_base
+
+
+def test_custom_book_provider_keeps_its_explicit_openai_compatible_base_url():
+    row = ProviderConfigRow(
+        provider="custom",
+        model="model-a",
+        translate_model=None,
+        extract_model=None,
+        base_url="https://models.example/v1",
+        api_key="secret",
+    )
+    provider = build_provider(row, make_config())
+    assert isinstance(provider, CustomProvider)
+    assert provider._base_url == "https://models.example/v1"
 
 
 def test_embedding_provider_is_independent_from_completion_provider():

@@ -61,6 +61,19 @@ related list by a known source name, but this does not bind graph identities.
 
 Run `npm test` for mention segmentation tests and `npm run build` for the production check.
 
+## Hosted model endpoints
+
+Anthropic, DeepSeek, Gemini, and Groq use the providers' built-in official API endpoints.
+Account settings therefore ask only for the provider key, while each book chooses its
+translation and knowledge model. A stale Base URL saved by an older client is ignored.
+
+For another service, choose **Custom API (OpenAI-compatible)** in the book's model
+settings, enter its exact model IDs, and enter the API base URL including its version path
+(for example, `https://models.example.com/v1`). Its encrypted key is saved once under
+**Account settings → Provider keys**. Custom model health checks call the endpoint's
+`/models` route and require its hostname in `PROVIDER_HEALTH_ALLOWED_HOSTS`; this is the
+server-side SSRF boundary, not a restriction enforced by the browser.
+
 ## Per-book Ollama models over Tailscale
 
 **Book Settings → Model provider** can use one Ollama server for two different jobs:

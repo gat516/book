@@ -77,10 +77,6 @@ export function BootstrapChapterForm({ novelId, chapterIndex, onChapterIndexChan
         />
       </label>
       <label>
-        Source chapter URL (optional)
-        <input type="url" value={sourceURL} onChange={(e) => setSourceURL(e.target.value)} />
-      </label>
-      <label>
         Original text
         <textarea rows={8} value={rawText} onChange={(e) => setRawText(e.target.value)} required />
       </label>
@@ -120,8 +116,18 @@ export function BootstrapChapterForm({ novelId, chapterIndex, onChapterIndexChan
           Add term
         </button>
       </fieldset>
+      <details className="add-chapter-source-details">
+        <summary>Source details</summary>
+        <label>
+          Original webpage
+          <span className="add-chapter-field-description">
+            Saved for reference and to help find later chapters; the page is not imported.
+          </span>
+          <input type="url" value={sourceURL} onChange={(e) => setSourceURL(e.target.value)} />
+        </label>
+      </details>
       <div className="bootstrap-chapter-form-actions">
-        <button type="submit" disabled={pending || !rawText.trim() || !translatedText.trim()}>
+        <button type="submit" className="btn-primary" disabled={pending || !rawText.trim() || !translatedText.trim()}>
           {pending ? "Adding…" : "Add chapter"}
         </button>
       </div>

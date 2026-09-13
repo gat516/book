@@ -8,6 +8,7 @@ export interface NovelSummary {
   target_lang: string;
   genre: string | null;
   created_at: string;
+  current_chapter?: number;
 }
 
 export type RecordType = "EVENT" | "SPEECH" | "STATE" | "RELATION" | "PROMISE" | "ABILITY" | "WORLD" | "IDENTITY" | string;
@@ -615,7 +616,7 @@ export interface Progress {
 }
 
 
-export type ProviderName = "anthropic" | "deepseek" | "gemini" | "groq" | "ollama";
+export type ProviderName = "anthropic" | "custom" | "deepseek" | "gemini" | "groq" | "ollama";
 
 // Write shape. Carries no secret: a book names a provider, and the key for that provider
 // is entered once in Settings (ProviderCredentialView) rather than per book (0080).

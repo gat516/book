@@ -250,12 +250,13 @@ type ScrapeJobView struct {
 }
 
 type NovelSummary struct {
-	ID         string    `json:"id"`
-	Title      string    `json:"title"`
-	SourceLang string    `json:"source_lang"`
-	TargetLang string    `json:"target_lang"`
-	Genre      *string   `json:"genre"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID             string    `json:"id"`
+	Title          string    `json:"title"`
+	SourceLang     string    `json:"source_lang"`
+	TargetLang     string    `json:"target_lang"`
+	Genre          *string   `json:"genre"`
+	CreatedAt      time.Time `json:"created_at"`
+	CurrentChapter int       `json:"current_chapter,omitempty"`
 }
 
 type NovelListResponse struct {

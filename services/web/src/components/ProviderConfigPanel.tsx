@@ -13,14 +13,15 @@ import { ProviderHealth } from "./ProviderHealth";
 
 interface Props {
   novelId: string;
+  defaultOpen?: boolean;
 }
 
-const PROVIDERS: ProviderName[] = ["gemini", "groq", "deepseek", "anthropic", "ollama"];
+const PROVIDERS: ProviderName[] = ["gemini", "groq", "deepseek", "anthropic", "ollama", "custom"];
 
 // Per-novel provider settings for a novel that already exists. Previously this could only
 // be set at creation time, which meant a novel whose provider turned out to be a bad fit
 // had to be deleted and re-made -- taking its chapters with it.
-export function ProviderConfigPanel({ novelId }: Props) {
+export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
   const [current, setCurrent] = useState<ProviderConfigView | null>(null);
   const [loading, setLoading] = useState(true);
   const [provider, setProvider] = useState<ProviderName>("gemini");
@@ -39,7 +40,7 @@ export function ProviderConfigPanel({ novelId }: Props) {
   // place a key can live, so this set is the whole answer to "can this book actually call
   // the provider it names" -- not a fallback behind a per-book key, as it once was.
   const [accountKeyProviders, setAccountKeyProviders] = useState<Set<string>>(new Set());
-	const [ollamaStatus, setOllamaStatus] = useState<"checking" | "connected" | "unreachable" | null>(null);
+  const [ollamaStatus, setOllamaStatus] = useState<"checking" | "connected" | "unreachable" | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -49,8 +50,8 @@ export function ProviderConfigPanel({ novelId }: Props) {
       setCurrent(config);
       if (config) {
         setProvider(config.provider);
-      setTranslationModel(config.translate_model ?? config.model ?? "");
-      setExtractionModel(config.extract_model ?? config.model ?? "");
+        setTranslationModel(config.translate_model ?? config.model ?? "");
+        setExtractionModel(config.extract_model ?? config.model ?? "");
         setCustom(
           !!(config.translate_model ?? config.model) && !MODEL_OPTIONS[config.provider].some((m) => m.id === (config.translate_model ?? config.model)),
         );
@@ -58,18 +59,18 @@ export function ProviderConfigPanel({ novelId }: Props) {
           !!(config.extract_model ?? config.model) && !MODEL_OPTIONS[config.provider].some((m) => m.id === (config.extract_model ?? config.model)),
         );
         setBaseURL(config.base_url ?? "");
-		if (config.provider === "ollama") {
-			setOllamaStatus("checking");
-			try {
-				const models = await listOllamaModels(novelId);
-				setAvailableModels(models);
-				setOllamaStatus("connected");
-			} catch {
-				setOllamaStatus("unreachable");
-			}
-		} else {
-			setOllamaStatus(null);
-		}
+        if (config.provider === "ollama") {
+          setOllamaStatus("checking");
+          try {
+            const models = await listOllamaModels(novelId);
+            setAvailableModels(models);
+            setOllamaStatus("connected");
+          } catch {
+            setOllamaStatus("unreachable");
+          }
+        } else {
+          setOllamaStatus(null);
+        }
       }
     } catch (err) {
       setError(String(err));
@@ -101,8 +102,9 @@ export function ProviderConfigPanel({ novelId }: Props) {
     // time. Always reset to the new provider's default.
     setTranslationModel(DEFAULT_MODEL[next] ?? "");
     setExtractionModel(DEFAULT_MODEL[next] ?? "");
-    setCustom(false);
-    setExtractionCustom(false);
+    setCustom(next === "custom");
+    setExtractionCustom(next === "custom");
+    setBaseURL("");
   }
 
   function chooseModel(value: string) {
@@ -170,14 +172,14 @@ export function ProviderConfigPanel({ novelId }: Props) {
 
   async function loadOllamaModels() {
     setError(null);
-	setAvailableModels([]);
-		setOllamaStatus("checking");
+    setAvailableModels([]);
+    setOllamaStatus("checking");
     try {
       const models = await listOllamaModels(novelId);
       setAvailableModels(models);
-		setOllamaStatus("connected");
+      setOllamaStatus("connected");
     } catch (err) {
-		setOllamaStatus("unreachable");
+      setOllamaStatus("unreachable");
       setError(String(err));
     }
   }
@@ -190,22 +192,35 @@ export function ProviderConfigPanel({ novelId }: Props) {
   // book's -- while hiding the account key that would actually be used.
   const accountKey = accountKeyProviders.has(provider);
   const missingKey = needsKey && !accountKey;
+  const incompleteCustom = provider === "custom" && (
+    !baseURL.trim() || !translationModel.trim() || !extractionModel.trim()
+  );
   const ollamaURLDirty =
     provider === "ollama" &&
     baseURL.trim() !== (current?.provider === "ollama" ? current.base_url ?? "" : "");
 
   return (
-    <details className="reader-settings" id="provider-config">
-      <summary>Model provider</summary>
+    <details className="reader-settings settings-section" id="provider-config" open={defaultOpen || undefined}>
+      <summary>Translation and knowledge models</summary>
       {loading ? (
         <p>Loading…</p>
       ) : (
         <form onSubmit={submit}>
-          <p>
-            {current
-              ? `This novel uses ${PROVIDER_LABELS[current.provider]}. Translation: ${current.translate_model ?? current.model ?? "server default"}; extraction: ${current.extract_model ?? current.model ?? "server default"}.${current.provider === "ollama" ? ` Endpoint: ${current.base_url || "Book server default"}.` : ""}`
-              : "This novel has no provider of its own and uses the server default."}
-          </p>
+          {current ? (
+            <div className="provider-current">
+              <strong>Current configuration</strong>
+              <dl>
+                <div><dt>Provider</dt><dd>{PROVIDER_LABELS[current.provider]}</dd></div>
+                <div><dt>Translation</dt><dd>{current.translate_model ?? current.model ?? "Server default"}</dd></div>
+                <div><dt>Knowledge</dt><dd>{current.extract_model ?? current.model ?? "Server default"}</dd></div>
+                {(current.provider === "ollama" || current.provider === "custom") && (
+                  <div><dt>Endpoint</dt><dd>{current.base_url || "Book server default"}</dd></div>
+                )}
+              </dl>
+            </div>
+          ) : (
+            <p>This book has no provider of its own and uses the server default.</p>
+          )}
           <div className="provider-health-stack" aria-label="Provider health">
             <ProviderHealth novelId={novelId} track="translate" compact />
             <ProviderHealth novelId={novelId} track="extract" compact />
@@ -222,47 +237,39 @@ export function ProviderConfigPanel({ novelId }: Props) {
             </select>
           </label>
 
-          <label>
-            Translation model{" "}
-            <select value={custom ? CUSTOM_MODEL : translationModel} onChange={(e) => chooseModel(e.target.value)}>
-              {MODEL_OPTIONS[provider].map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-              <option value={CUSTOM_MODEL}>Other…</option>
-            </select>
-          </label>
-          {custom && (
+          {provider !== "custom" && (
             <label>
-              Model name{" "}
-              <input
-                value={translationModel}
-                onChange={(e) => setTranslationModel(e.target.value)}
-                placeholder="exact model id"
-              />
+              Translation model
+              <select value={custom ? CUSTOM_MODEL : translationModel} onChange={(e) => chooseModel(e.target.value)}>
+                {MODEL_OPTIONS[provider].map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+                <option value={CUSTOM_MODEL}>Other…</option>
+              </select>
+            </label>
+          )}
+          {(custom || provider === "custom") && (
+            <label>
+              Translation model name
+              <input value={translationModel} onChange={(e) => setTranslationModel(e.target.value)} placeholder="Exact model ID" required={provider === "custom"} />
             </label>
           )}
           {!custom && selectedNote && <p className="novel-create-form-hint">{selectedNote}</p>}
-          <label>
-            Extraction model{" "}
-            <select value={extractionCustom ? CUSTOM_MODEL : extractionModel} onChange={(e) => chooseExtractionModel(e.target.value)}>
-              {MODEL_OPTIONS[provider].map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-              <option value={CUSTOM_MODEL}>Other…</option>
-            </select>
-          </label>
-          {extractionCustom && (
+          {provider !== "custom" && (
             <label>
-              Extraction model name{" "}
-              <input
-                value={extractionModel}
-                onChange={(e) => setExtractionModel(e.target.value)}
-                placeholder="exact model id"
-              />
+              Knowledge model
+              <select value={extractionCustom ? CUSTOM_MODEL : extractionModel} onChange={(e) => chooseExtractionModel(e.target.value)}>
+                {MODEL_OPTIONS[provider].map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+                <option value={CUSTOM_MODEL}>Other…</option>
+              </select>
+            </label>
+          )}
+          {(extractionCustom || provider === "custom") && (
+            <label>
+              Knowledge model name
+              <input value={extractionModel} onChange={(e) => setExtractionModel(e.target.value)} placeholder="Exact model ID" required={provider === "custom"} />
             </label>
           )}
           {MODEL_LIST_IS_ADVISORY[provider] && (
@@ -272,25 +279,27 @@ export function ProviderConfigPanel({ novelId }: Props) {
             </p>
           )}
 
-          <label>
-            Base URL{" "}
-            {provider === "ollama" && (
-              <span className="novel-create-form-hint">(blank = Book server's Ollama)</span>
-            )}{" "}
-            <input
-              value={baseURL}
-              onChange={(e) => {
-                setBaseURL(e.target.value);
-                if (provider === "ollama") {
-                  // A result from the previously saved URL no longer describes the
-                  // server shown in the input.
-                  setAvailableModels([]);
-                  setOllamaStatus(null);
-                }
-              }}
-              placeholder="provider default"
-            />
-          </label>
+          {(provider === "ollama" || provider === "custom") && (
+            <label>
+              {provider === "custom" ? "API base URL" : "Ollama URL"}
+              <span className="novel-create-form-hint">
+                {provider === "custom" ? "Include the API version path, such as /v1." : "Blank uses the book server's Ollama."}
+              </span>
+              <input
+                type="url"
+                value={baseURL}
+                onChange={(e) => {
+                  setBaseURL(e.target.value);
+                  if (provider === "ollama") {
+                    setAvailableModels([]);
+                    setOllamaStatus(null);
+                  }
+                }}
+                placeholder={provider === "custom" ? "https://models.example.com/v1" : "http://localhost:11434"}
+                required={provider === "custom"}
+              />
+            </label>
+          )}
 
           {provider === "ollama" && (
             <>
@@ -311,9 +320,9 @@ export function ProviderConfigPanel({ novelId }: Props) {
               {availableModels.length > 0 && (
                 <p className="novel-create-form-hint">Available: {availableModels.join(", ")}</p>
               )}
-			  {ollamaStatus === "checking" && <p className="novel-create-form-hint">Checking Ollama connection…</p>}
-			  {ollamaStatus === "connected" && <p role="status" className="novel-create-form-hint">Ollama connected — {availableModels.length} model(s) available.</p>}
-			  {ollamaStatus === "unreachable" && <p role="alert" className="chapter-list-error">Ollama server could not be reached. Check its URL, Tailscale connection, and server allowlist.</p>}
+              {ollamaStatus === "checking" && <p className="novel-create-form-hint">Checking Ollama connection…</p>}
+              {ollamaStatus === "connected" && <p role="status" className="novel-create-form-hint">Ollama connected — {availableModels.length} model(s) available.</p>}
+              {ollamaStatus === "unreachable" && <p role="alert" className="chapter-list-error">Ollama server could not be reached. Check its URL, Tailscale connection, and server allowlist.</p>}
             </>
           )}
 
@@ -325,7 +334,7 @@ export function ProviderConfigPanel({ novelId }: Props) {
             </p>
           )}
 
-          <button type="submit" disabled={pending || missingKey}>
+          <button type="submit" className="btn-primary" disabled={pending || missingKey || incompleteCustom}>
             {pending ? "Saving…" : "Save provider"}
           </button>
           {missingKey && (

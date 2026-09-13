@@ -221,6 +221,37 @@ func setProgress(t *testing.T, admin *pgxpool.Pool, novelID string, chapter int)
 	}
 }
 
+func TestListNovelsScopesProgressToReader(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	fixture := seedIntegrationFixture(t, admin)
+	setProgress(t, admin, fixture.novelID, 2)
+
+	novels, err := store.ListNovels(context.Background(), "reader-a")
+	if err != nil {
+		t.Fatalf("list novels: %v", err)
+	}
+	progress := make(map[string]int, len(novels))
+	for _, novel := range novels {
+		progress[novel.ID] = novel.CurrentChapter
+	}
+	if progress[fixture.novelID] != 2 {
+		t.Fatalf("reader progress = %d, want 2", progress[fixture.novelID])
+	}
+	if progress[fixture.otherNovelID] != 0 {
+		t.Fatalf("unread book progress = %d, want 0", progress[fixture.otherNovelID])
+	}
+
+	withoutReader, err := store.ListNovels(context.Background(), "")
+	if err != nil {
+		t.Fatalf("list novels without reader: %v", err)
+	}
+	for _, novel := range withoutReader {
+		if novel.CurrentChapter != 0 {
+			t.Fatalf("anonymous list exposed progress for %s: %d", novel.ID, novel.CurrentChapter)
+		}
+	}
+}
+
 // A reader at chapter 1 sees chapter 1 and nothing later, on every records surface.
 func TestSpoilerGateEndToEnd(t *testing.T) {
 	store, admin := integrationDatabase(t)

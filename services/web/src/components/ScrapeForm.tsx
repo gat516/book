@@ -129,7 +129,7 @@ export function ScrapeForm({ novelId, onDone }: Props) {
             translated
           </label>
         </fieldset>
-        <button type="submit" disabled={pending || !startURL.trim()}>
+        <button type="submit" className="btn-primary" disabled={pending || !startURL.trim()}>
           {pending ? "Starting…" : "Start scrape"}
         </button>
       </form>

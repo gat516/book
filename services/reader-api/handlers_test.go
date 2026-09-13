@@ -266,7 +266,8 @@ func (f *fakeStore) ListRecordReviews(_ context.Context, _ string, chapter, at i
 	return out, f.reviewsErr
 }
 
-func (f *fakeStore) ListNovels(context.Context) ([]NovelSummary, error) {
+func (f *fakeStore) ListNovels(_ context.Context, reader string) ([]NovelSummary, error) {
+	f.lastReader = reader
 	return f.novels, f.novelsErr
 }
 
@@ -762,6 +763,28 @@ func TestGetNovelsRequiresNoPrincipal(t *testing.T) {
 	}
 	if len(body.Novels) != 1 || body.Novels[0].ID != testNovelID {
 		t.Fatalf("response = %#v", body)
+	}
+	if store.lastReader != "" {
+		t.Fatalf("reader = %q, want empty", store.lastReader)
+	}
+}
+
+func TestGetNovelsIncludesRequestingReaderProgress(t *testing.T) {
+	store := readyFake()
+	store.novels[0].CurrentChapter = 5
+	response := request(t, &API{store: store}, http.MethodGet, "/novels", "", "reader-a")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	var body NovelListResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Novels) != 1 || body.Novels[0].CurrentChapter != 5 {
+		t.Fatalf("response = %#v", body)
+	}
+	if store.lastReader != "reader-a" {
+		t.Fatalf("reader = %q, want reader-a", store.lastReader)
 	}
 }
 

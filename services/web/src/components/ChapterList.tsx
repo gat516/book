@@ -69,7 +69,7 @@ export function ChapterList({ novelId, currentChapter, onOpen, onClose, onAdd }:
   return (
     <div className="chapter-list">
       <div className="chapter-list-header">
-        <h2>All chapters</h2>
+        <h2>Chapters</h2>
         {onClose && <button onClick={onClose}>← Back to reading</button>}
       </div>
 
@@ -79,7 +79,7 @@ export function ChapterList({ novelId, currentChapter, onOpen, onClose, onAdd }:
 
       <div className="chapter-list-summary">
         <span>{page ? `${total} chapter(s)` : "Loading chapters…"}</span>
-        <button onClick={onAdd}>+ Add chapter</button>
+        <button className="btn-primary" onClick={onAdd}>Add chapter</button>
       </div>
 
       {pageCount > 0 && (
@@ -139,7 +139,12 @@ export function ChapterList({ novelId, currentChapter, onOpen, onClose, onAdd }:
                     key={chapter.chapter_index}
                     className={chapter.chapter_index === currentChapter ? "chapter-list-current" : undefined}
                   >
-                    <td>{chapter.chapter_index}</td>
+                    <td>
+                      {chapter.chapter_index}
+                      {chapter.chapter_index === currentChapter && (
+                        <span className="chapter-list-current-label">Current</span>
+                      )}
+                    </td>
                     <td>
                       {chapter.site_chapter_no ?? "—"}
                       {chapter.part > 1 && <span className="chapter-list-part"> · Part {chapter.part}</span>}

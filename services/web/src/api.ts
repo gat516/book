@@ -83,8 +83,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-// Ungated on the server (novel metadata has no source_chapter to gate on) — the
-// X-Reader-ID header sent by `request()` is simply ignored by reader-api for these.
+// Novel metadata is ungated, but the optional X-Reader-ID lets the list include this
+// reader's saved current chapter without fetching progress once per book.
 export function listNovels(): Promise<NovelListResponse> {
   return request(`/novels`);
 }

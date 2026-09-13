@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createNovel, listProviderCredentials } from "../api";
 import type { ProviderName } from "../types";
-import { CUSTOM_MODEL, DEFAULT_MODEL, MODEL_OPTIONS } from "../providers";
+import { CUSTOM_MODEL, DEFAULT_MODEL, MODEL_OPTIONS, PROVIDER_LABELS } from "../providers";
 
 interface Props {
   onCreated: (novelId: string) => void;
@@ -14,7 +14,7 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
   const [targetLang, setTargetLang] = useState("en");
   const [genre, setGenre] = useState("");
   // "" = use the server's process-wide provider, i.e. no per-novel override at all.
-  const [provider, setProvider] = useState("");
+  const [provider, setProvider] = useState<ProviderName | "">("");
   const [model, setModel] = useState("");
   const [customModel, setCustomModel] = useState(false);
   const [baseURL, setBaseURL] = useState("");
@@ -38,10 +38,11 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
       .catch(() => undefined);
   }, []);
 
-  function chooseProvider(next: string) {
+  function chooseProvider(next: ProviderName | "") {
     setProvider(next);
     setModel(DEFAULT_MODEL[next] ?? "");
-    setCustomModel(false);
+    setCustomModel(next === "custom");
+    setBaseURL("");
   }
 
   function chooseModel(value: string) {
@@ -62,7 +63,7 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
         genre: genre || undefined,
         provider_config: provider
           ? {
-              provider: provider as "anthropic" | "deepseek" | "gemini" | "groq" | "ollama",
+              provider,
               model: model.trim() || undefined,
               base_url: baseURL.trim() || undefined,
             }
@@ -82,9 +83,9 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
 
   return (
     <form className="novel-create-form" onSubmit={submit}>
-      <h1>New novel</h1>
+      <h1>New book</h1>
       <label>
-        Title
+        Book title
         <input value={title} onChange={(e) => setTitle(e.target.value)} required />
       </label>
       <label>
@@ -95,108 +96,128 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
         Target language
         <input value={targetLang} onChange={(e) => setTargetLang(e.target.value)} placeholder="en" />
       </label>
-      <label>
-        Genre <span className="novel-create-form-hint">(optional — selects a preset ontology)</span>
-        <input value={genre} onChange={(e) => setGenre(e.target.value)} placeholder="xianxia" />
-      </label>
-      <fieldset>
-        <legend>Translation model</legend>
-        <label>
-          Provider{" "}
-          <span className="novel-create-form-hint">(leave as default to use the server's)</span>
-          <select value={provider} onChange={(e) => chooseProvider(e.target.value)}>
-            <option value="">Server default</option>
-            <option value="deepseek">DeepSeek</option>
-            <option value="anthropic">Anthropic</option>
-            <option value="gemini">Gemini</option>
-            <option value="groq">Groq</option>
-            <option value="ollama">Ollama (local)</option>
-          </select>
-        </label>
-        {provider && (
-          <>
+
+      <details className="novel-create-form-advanced">
+        <summary>Advanced settings</summary>
+        <div className="novel-create-form-advanced-content">
+          <label>
+            Genre <span className="novel-create-form-hint">(optional — selects a preset ontology)</span>
+            <input value={genre} onChange={(e) => setGenre(e.target.value)} placeholder="xianxia" />
+          </label>
+          <fieldset>
+            <legend>Translation provider and model</legend>
             <label>
-              Model
-              <select
-                value={customModel ? CUSTOM_MODEL : model}
-                onChange={(e) => chooseModel(e.target.value)}
-              >
-                {(MODEL_OPTIONS[provider as ProviderName] ?? []).map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-                <option value={CUSTOM_MODEL}>Other…</option>
+              Translation provider{" "}
+              <span className="novel-create-form-hint">(leave as default to use the server's)</span>
+              <select value={provider} onChange={(e) => chooseProvider(e.target.value as ProviderName | "")}>
+                <option value="">Server default</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="gemini">Gemini</option>
+                <option value="groq">Groq</option>
+                <option value="ollama">Ollama (local)</option>
+                <option value="custom">Custom API (OpenAI-compatible)</option>
               </select>
             </label>
-            {customModel && (
-              <label>
-                Model name
-                <input
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder="exact model id"
-                />
-              </label>
+            {provider && (
+              <>
+                {provider !== "custom" && (
+                  <label>
+                    Model
+                    <select
+                      value={customModel ? CUSTOM_MODEL : model}
+                      onChange={(e) => chooseModel(e.target.value)}
+                    >
+                      {MODEL_OPTIONS[provider].map((option) => (
+                        <option key={option.id} value={option.id}>{option.label}</option>
+                      ))}
+                      <option value={CUSTOM_MODEL}>Other…</option>
+                    </select>
+                  </label>
+                )}
+                {(customModel || provider === "custom") && (
+                  <label>
+                    Model name
+                    <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Exact model ID" required={provider === "custom"} />
+                  </label>
+                )}
+                {provider !== "ollama" ? (
+                  accountKeyProviders.has(provider) ? (
+                    <p className="novel-create-form-hint">
+                      This book will use the {PROVIDER_LABELS[provider]} key from Account settings.
+                    </p>
+                  ) : (
+                    <p className="novel-create-form-hint">
+                      No {PROVIDER_LABELS[provider]} key is saved yet. The book can still be created — add the key
+                      under Account settings → Provider keys before its first chapter runs.
+                    </p>
+                  )
+                ) : (
+                  <label>
+                    Base URL <span className="novel-create-form-hint">(blank = server's OLLAMA_HOST)</span>
+                    <input
+                      value={baseURL}
+                      onChange={(e) => setBaseURL(e.target.value)}
+                      placeholder="http://localhost:11434"
+                    />
+                  </label>
+                )}
+                {provider === "custom" && (
+                  <label>
+                    API base URL
+                    <span className="novel-create-form-hint">Include the API version path, such as /v1.</span>
+                    <input
+                      type="url"
+                      value={baseURL}
+                      onChange={(e) => setBaseURL(e.target.value)}
+                      placeholder="https://models.example.com/v1"
+                      required
+                    />
+                  </label>
+                )}
+              </>
             )}
-            {provider !== "ollama" ? (
-              accountKeyProviders.has(provider) ? (
-                <p className="novel-create-form-hint">
-                  This book will use the {provider} key from Account settings.
-                </p>
-              ) : (
-                <p className="novel-create-form-hint">
-                  No {provider} key is saved yet. The book can still be created — add the key
-                  under Account settings → Provider keys before its first chapter runs.
-                </p>
-              )
-            ) : (
-              <label>
-                Host <span className="novel-create-form-hint">(blank = server's OLLAMA_HOST)</span>
-                <input
-                  value={baseURL}
-                  onChange={(e) => setBaseURL(e.target.value)}
-                  placeholder="http://localhost:11434"
-                />
-              </label>
-            )}
-          </>
-        )}
-      </fieldset>
+          </fieldset>
 
-      <fieldset>
-        <legend>How far ahead to work</legend>
-        <label>
-          Fetch ahead{" "}
-          <span className="novel-create-form-hint">chapters to download past where you are</span>
-          <input
-            type="number"
-            min={0}
-            value={ingestLookahead}
-            onChange={(e) => setIngestLookahead(e.target.value)}
-          />
-        </label>
-        <label>
-          Translate ahead{" "}
-          <span className="novel-create-form-hint">
-            chapters to translate past where you are — far costlier than fetching
-          </span>
-          <input
-            type="number"
-            min={0}
-            value={translateLookahead}
-            onChange={(e) => setTranslateLookahead(e.target.value)}
-          />
-        </label>
-        <p className="novel-create-form-hint">0 means unlimited. Both can be changed later.</p>
-      </fieldset>
+          <fieldset>
+            <legend>How far ahead to work</legend>
+            <label>
+              Fetch ahead{" "}
+              <span className="novel-create-form-hint">chapters to download past where you are</span>
+              <input
+                type="number"
+                min={0}
+                value={ingestLookahead}
+                onChange={(e) => setIngestLookahead(e.target.value)}
+              />
+            </label>
+            <label>
+              Translate ahead{" "}
+              <span className="novel-create-form-hint">
+                chapters to translate past where you are — far costlier than fetching
+              </span>
+              <input
+                type="number"
+                min={0}
+                value={translateLookahead}
+                onChange={(e) => setTranslateLookahead(e.target.value)}
+              />
+            </label>
+            <p className="novel-create-form-hint">0 means unlimited. Both can be changed later.</p>
+          </fieldset>
+        </div>
+      </details>
 
       <div className="novel-create-form-actions">
         <button type="button" onClick={onCancel} disabled={pending}>
           Cancel
         </button>
-        <button type="submit" disabled={pending || !title.trim()}>
-          {pending ? "Creating…" : "Create"}
+        <button
+          type="submit"
+          className="btn-primary"
+          disabled={pending || !title.trim() || (provider === "custom" && (!model.trim() || !baseURL.trim()))}
+        >
+          {pending ? "Creating…" : "Create book"}
         </button>
       </div>
       {error && <p className="novel-create-form-error">{error}</p>}

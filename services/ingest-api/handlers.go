@@ -54,7 +54,7 @@ type novelSettingsReq struct {
 }
 
 type providerConfigReq struct {
-	Provider       string `json:"provider"` // anthropic|deepseek|gemini|groq|ollama
+	Provider       string `json:"provider"` // anthropic|custom|deepseek|gemini|groq|ollama
 	Model          string `json:"model,omitempty"`
 	TranslateModel string `json:"translate_model,omitempty"`
 	ExtractModel   string `json:"extract_model,omitempty"`
@@ -163,14 +163,22 @@ func (a *API) createNovel(w http.ResponseWriter, r *http.Request) {
 // and the key for that provider comes from provider_credential (migration 0080).
 func (a *API) buildProviderConfigInput(req providerConfigReq) (ProviderConfigInput, error) {
 	switch req.Provider {
-	case "anthropic", "deepseek", "gemini", "groq", "ollama":
+	case "anthropic", "custom", "deepseek", "gemini", "groq", "ollama":
 	default:
-		return ProviderConfigInput{}, fmt.Errorf("provider must be one of anthropic, deepseek, gemini, groq, ollama")
+		return ProviderConfigInput{}, fmt.Errorf("provider must be one of anthropic, custom, deepseek, gemini, groq, ollama")
 	}
 	if req.Provider == "ollama" && req.BaseURL != "" {
 		if err := validateOllamaBaseURL(req.BaseURL, a.cfg.OllamaAllowedHosts); err != nil {
 			return ProviderConfigInput{}, err
 		}
+	} else if req.Provider == "custom" {
+		if err := validateCustomProviderBaseURL(req.BaseURL); err != nil {
+			return ProviderConfigInput{}, err
+		}
+	} else {
+		// Official hosted providers use their adapter's fixed endpoint. Keeping arbitrary
+		// URLs out of their rows makes "provider" describe the transport truthfully.
+		req.BaseURL = ""
 	}
 
 	// model is the legacy one-model field. Retain it for old clients, but when the new
@@ -182,6 +190,15 @@ func (a *API) buildProviderConfigInput(req providerConfigReq) (ProviderConfigInp
 		req.ExtractModel = req.Model
 	}
 	return ProviderConfigInput{Provider: req.Provider, Model: req.Model, TranslateModel: req.TranslateModel, ExtractModel: req.ExtractModel, BaseURL: req.BaseURL}, nil
+}
+
+func validateCustomProviderBaseURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" ||
+		u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("custom provider base_url must be an absolute http(s) URL without credentials, query, or fragment")
+	}
+	return nil
 }
 
 // getProviderConfig handles GET /novels/{id}/provider-config.

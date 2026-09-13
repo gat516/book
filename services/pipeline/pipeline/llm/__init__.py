@@ -50,17 +50,15 @@ def provider_from_env(cfg: Config, *, tenant: str = "default") -> LLMProvider:
         case "deepseek":
             return DeepSeekProvider(
                 model=cfg.llm_model_extract,
-                base_url=cfg.deepseek_base_url,
                 api_key=cfg.deepseek_api_key,
             )
         case "gemini":
             return GeminiProvider(
                 model=cfg.llm_model_extract,
-                base_url=cfg.gemini_base_url,
                 api_key=cfg.gemini_api_key or None,
             )
         case "groq":
-            return GroqProvider(model=cfg.llm_model_extract, base_url=cfg.groq_base_url,
+            return GroqProvider(model=cfg.llm_model_extract,
                                 api_key=cfg.groq_api_key or None)
         case "gateway":
             return GatewayProvider(address=cfg.gateway_addr, tenant=tenant,
@@ -86,7 +84,7 @@ def embed_provider_from_env(cfg: Config, *, tenant: str = "default") -> LLMProvi
             case "gemini":
                 return GeminiProvider(
                     model=cfg.embed_model, embed_model=cfg.embed_model, embed_dim=cfg.embed_dim,
-                    base_url=cfg.gemini_base_url, embed_base_url=cfg.gemini_embed_base_url,
+                    embed_base_url=cfg.gemini_embed_base_url,
                     api_key=cfg.gemini_api_key or None,
                 )
             case "gateway":

@@ -31,6 +31,24 @@ button:disabled {
   opacity: 0.55;
 }
 
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+.btn-primary {
+  border-color: #3f3421;
+  background: #3f3421;
+  color: #fff;
+  font-weight: 600;
+}
+.btn-primary:hover:not(:disabled) {
+  border-color: #211a10;
+  background: #211a10;
+}
+
 /* A destructive/confirming action, distinguished from the neutral buttons around it. */
 .btn-danger {
   border-color: #d9aaa4;
@@ -57,6 +75,27 @@ button:disabled {
   margin: 0.5rem 0;
 }
 
+.book-header {
+  margin-bottom: 1rem;
+}
+
+.book-header .app-nav-back {
+  display: inline-flex;
+  margin-bottom: 0.35rem;
+}
+
+.book-header h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: clamp(1.65rem, 5vw, 2.15rem);
+  line-height: 1.25;
+}
+
+.book-header p {
+  margin: 0.3rem 0 0;
+  color: #666;
+}
+
 /* View switches live in one flex row so spacing comes from a single gap rather than each
    button's own margins -- the borderless settings buttons had none, and ran together. */
 .app-nav {
@@ -65,6 +104,8 @@ button:disabled {
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #e4e0d8;
 }
 .app-nav .app-toggle-glossary { margin: 0; }
 .app-nav-back {
@@ -391,58 +432,242 @@ button:disabled {
   color: #b00020;
 }
 
-.novel-picker ul {
+.library-page,
+.novel-picker {
+  width: 100%;
+}
+
+.novel-picker-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.novel-picker-header h1 {
+  margin: 0;
+}
+
+.novel-picker-header p {
+  margin: 0.2rem 0 0;
+  color: #666;
+}
+
+.novel-picker-header-actions {
+  display: flex;
+  flex: none;
+  gap: 0.5rem;
+}
+
+.novel-picker-books {
   list-style: none;
+  display: grid;
+  gap: 0.65rem;
+  margin: 1rem 0 0;
   padding: 0;
 }
 
-.novel-picker li {
-  margin-bottom: 0.5rem;
+.novel-picker-book-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  border: 1px solid #ddd6c8;
+  border-radius: 9px;
+  background: #fff;
 }
 
-.novel-picker button,
-.novel-create-form button {
+.novel-picker-book {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: start;
+  gap: 0.2rem;
+  padding: 0.85rem 1rem;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.novel-picker-book:hover:not(:disabled) {
+  background: #faf8f2;
+}
+
+.novel-picker-book-title {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: #222;
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+.novel-picker-book-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.7rem;
+  color: #666;
+  font-size: 0.85rem;
+}
+
+.novel-picker-progress {
+  display: inline-flex;
+  margin-top: 0.25rem;
+  padding: 0.08rem 0.5rem;
+  border-radius: 999px;
+  background: #eceff3;
+  color: #586275;
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.novel-picker-progress-current {
+  background: #fff3b0;
+  color: #493900;
+}
+
+.novel-picker-book-menu {
+  display: flex;
+  align-items: center;
+  padding: 0.65rem;
+}
+
+.novel-picker-book-menu > summary {
+  list-style: none;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #666;
   cursor: pointer;
+  font-size: 0.85rem;
 }
 
-.novel-picker-delete {
-  color: #b00020;
+.novel-picker-book-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.novel-picker-book-menu > summary:hover,
+.novel-picker-book-menu[open] > summary {
+  border-color: #ddd;
+  background: #f5f5f5;
+  color: #222;
+}
+
+.novel-picker-book-menu > summary:focus-visible,
+.novel-create-form-advanced > summary:focus-visible,
+.add-chapter-source-details > summary:focus-visible {
+  outline: 2px solid #775600;
+  outline-offset: 2px;
+}
+
+.novel-picker-book-menu-panel {
+  position: absolute;
+  top: calc(100% - 0.25rem);
+  right: 0.65rem;
+  z-index: 5;
+  width: max-content;
+  max-width: min(22rem, calc(100vw - 3rem));
+  padding: 0.65rem;
+  border: 1px solid #d7d0c4;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 5px 18px rgb(0 0 0 / 14%);
+}
+
+.novel-picker-book-menu-actions {
+  display: grid;
+  min-width: 10rem;
+  gap: 0.35rem;
+}
+
+.novel-picker-book-menu-actions button {
+  width: 100%;
+  text-align: left;
 }
 
 .novel-picker-confirm {
-  display: inline-flex;
-  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
-  margin-left: 0.5rem;
   font-size: 0.9rem;
+}
+
+.novel-picker-confirm p {
+  flex-basis: 100%;
+  margin: 0;
 }
 
 .novel-picker-langs {
-  color: #666;
-  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
 }
 
-.novel-create-form {
+.novel-picker-loading {
+  color: #666;
+}
+
+.novel-create-form,
+.add-chapter-form {
   display: flex;
+  width: 100%;
+  max-width: 40rem;
+  box-sizing: border-box;
   flex-direction: column;
   gap: 0.75rem;
-  max-width: 400px;
 }
 
-.novel-create-form label {
+.novel-create-form > h1,
+.add-chapter-form > h2 {
+  margin-bottom: 0.25rem;
+}
+
+.novel-create-form label,
+.add-chapter-form form > label,
+.scrape-form label,
+.bootstrap-chapter-form > label {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  font-weight: 600;
 }
 
-.novel-create-form-hint {
+.novel-create-form input:not([type="radio"]):not([type="checkbox"]),
+.novel-create-form select,
+.add-chapter-form input:not([type="radio"]):not([type="checkbox"]),
+.add-chapter-form select,
+.add-chapter-form textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid #bbb;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.novel-create-form input:focus,
+.novel-create-form select:focus,
+.add-chapter-form input:focus,
+.add-chapter-form select:focus,
+.add-chapter-form textarea:focus {
+  border-color: #775600;
+  outline: 2px solid rgb(119 86 0 / 18%);
+  outline-offset: 1px;
+}
+
+.novel-create-form-hint,
+.add-chapter-field-description,
+.add-chapter-method-description {
   color: #666;
   font-weight: normal;
   font-size: 0.85rem;
 }
 
-.novel-create-form-actions {
+.novel-create-form-actions,
+.add-chapter-form-actions,
+.bootstrap-chapter-form-actions {
   display: flex;
+  justify-content: flex-end;
   gap: 0.5rem;
 }
 
@@ -451,52 +676,124 @@ button:disabled {
   color: #b00020;
 }
 
-.add-chapter-form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  max-width: 560px;
-}
-
-.add-chapter-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.add-chapter-form fieldset {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+.novel-create-form-advanced,
+.add-chapter-source-details {
   border: 1px solid #ddd;
-  border-radius: 4px;
+  border-radius: 7px;
+  background: #fafafa;
 }
 
-.add-chapter-form fieldset label {
-  flex-direction: row;
-  align-items: center;
-  gap: 0.5rem;
+.novel-create-form-advanced > summary,
+.add-chapter-source-details > summary {
+  padding: 0.65rem 0.75rem;
+  cursor: pointer;
+  font-weight: 600;
 }
 
-.add-chapter-form textarea {
-  font-family: inherit;
-}
-
-.add-chapter-form-actions {
+.novel-create-form-advanced-content {
   display: flex;
-  gap: 0.5rem;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0 0.75rem 0.75rem;
+}
+
+.novel-create-form fieldset,
+.add-chapter-form fieldset,
+.scrape-form fieldset,
+.bootstrap-chapter-form fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 7px;
+}
+
+.novel-create-form fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.add-chapter-form > form,
+.scrape-form > form,
+.bootstrap-chapter-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
 }
 
 .add-chapter-form-error {
   color: #b00020;
 }
 
+.add-chapter-form .add-chapter-method-selector {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+  border: 0;
+  padding: 0;
+}
+
+.add-chapter-method-selector legend {
+  margin-bottom: 0.45rem;
+  font-weight: 600;
+}
+
+.add-chapter-form .add-chapter-method-option {
+  display: flex;
+  align-items: start;
+  gap: 0.55rem;
+  padding: 0.7rem;
+  border: 1px solid #d7d0c4;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.add-chapter-method-option:has(input:checked) {
+  border-color: #9a7b16;
+  background: #fff9dc;
+  box-shadow: 0 0 0 1px #9a7b16;
+}
+
+.add-chapter-method-option input {
+  flex: none;
+  margin-top: 0.3rem;
+}
+
+.add-chapter-method-option > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.add-chapter-method-description {
+  display: block;
+  line-height: 1.4;
+}
+
+.add-chapter-source-details label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0 0.75rem 0.75rem;
+  font-weight: 600;
+}
+
+.add-chapter-field-description {
+  display: block;
+  line-height: 1.4;
+}
+
 .scrape-form,
 .scrape-status {
   display: flex;
+  width: 100%;
+  box-sizing: border-box;
   flex-direction: column;
   gap: 0.75rem;
-  max-width: 560px;
+  max-width: none;
 }
 
 .bootstrap-chapter-form {
@@ -511,7 +808,7 @@ button:disabled {
 
 .bootstrap-chapter-form fieldset {
   border: 1px solid #ddd;
-  border-radius: 4px;
+  border-radius: 7px;
 }
 
 .bootstrap-chapter-form-hint {
@@ -519,19 +816,8 @@ button:disabled {
   font-size: 0.9rem;
 }
 
-.bootstrap-chapter-form-actions {
-  display: flex;
-  gap: 0.5rem;
-}
-
 .bootstrap-chapter-form-error {
   color: #b00020;
-}
-
-.scrape-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
 }
 
 .scrape-form fieldset {
@@ -539,7 +825,7 @@ button:disabled {
   flex-direction: column;
   gap: 0.35rem;
   border: 1px solid #ddd;
-  border-radius: 4px;
+  border-radius: 7px;
 }
 
 .scrape-form fieldset label {
@@ -555,6 +841,36 @@ button:disabled {
 
 .scrape-form-error {
   color: #b00020;
+}
+
+@media (max-width: 620px) {
+  body {
+    margin-top: 1rem;
+  }
+
+  .novel-picker-header {
+    flex-direction: column;
+  }
+
+  .novel-picker-header-actions {
+    width: 100%;
+  }
+
+  .novel-picker-header-actions .btn-primary {
+    flex: 1;
+  }
+
+  .app-nav-settings-group {
+    width: 100%;
+    margin-left: 0;
+    padding-top: 0.4rem;
+    border-top: 1px solid #eee;
+  }
+
+  .add-chapter-form .add-chapter-method-selector {
+    grid-template-columns: 1fr;
+  }
+
 }
 
 .chapter-processing-hint {
@@ -613,9 +929,27 @@ button:disabled {
   border-bottom: 1px solid #eee;
 }
 
+.chapter-list th:first-child,
+.chapter-list td:first-child {
+  padding-left: 0.55rem;
+}
+
 .chapter-list-current td {
   font-weight: 600;
   background: #fff8dc;
+}
+
+.chapter-list-current td:first-child {
+  box-shadow: inset 3px 0 #9a7b16;
+}
+
+.chapter-list-current-label {
+  display: block;
+  color: #775600;
+  font-size: 0.7rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .chapter-list-count {
@@ -796,18 +1130,6 @@ button:disabled {
   padding: 0 0.2rem;
 }
 
-.novel-create-form fieldset {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-}
-
-.novel-create-form select {
-  padding: 0.3rem;
-}
-
 /* Glossary management stays usable before the first chapter is ready. */
 .glossary-add { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: end; margin: 1rem 0; }
 .glossary-add label { display: flex; flex-direction: column; gap: 0.3rem; flex: 1 1 12rem; }
@@ -846,10 +1168,192 @@ button:disabled {
 .queue-controls .queue-note { color: #586275; font-size: 0.8rem; }
 .queue-controls summary { cursor: pointer; }
 .queue-controls li { margin: 0.35rem 0; }
+.settings-view {
+  width: 100%;
+}
+
+.settings-page-header {
+  margin-bottom: 1.25rem;
+}
+
+.settings-page-header .app-back {
+  margin-bottom: 0.35rem;
+}
+
+.settings-page-header h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: clamp(1.65rem, 5vw, 2.15rem);
+  line-height: 1.25;
+}
+
+.settings-page-header p {
+  margin: 0.3rem 0 0;
+  color: #666;
+}
+
+.settings-section {
+  margin: 0 0 1rem;
+  padding: 1rem;
+  border: 1px solid #ddd6c8;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.settings-section h2,
+.settings-section-heading h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.settings-section-heading p {
+  margin: 0.2rem 0 0;
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 0.65rem;
+  cursor: pointer;
+}
+
+.settings-toggle > span {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.settings-toggle small,
+.settings-help {
+  color: #666;
+  font-size: 0.85rem;
+  font-weight: normal;
+}
+
+.settings-toggle input {
+  width: 1.1rem;
+  height: 1.1rem;
+  flex: none;
+}
+
+.settings-help {
+  margin: 0.65rem 0 0;
+}
+
+.settings-notice {
+  padding: 0.65rem 0.8rem;
+  border-left: 3px solid #4f7651;
+  background: #f1f8f3;
+  color: #315d35;
+}
+
+.settings-provider-list {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+}
+
+.settings-provider {
+  border: 1px solid #ddd;
+  border-radius: 7px;
+  background: #fafafa;
+}
+
+.settings-provider > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.settings-provider-content {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0 0.75rem 0.75rem;
+}
+
+.settings-provider-content label,
+.reader-settings form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  font-weight: 600;
+}
+
+.settings-provider-content input,
+.reader-settings input,
+.reader-settings select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid #bbb;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
 .reader-settings { margin: 0.75rem 0 1.25rem; font-size: 0.9rem; }
-.reader-settings summary { cursor: pointer; }
-.reader-settings label { display: block; margin-top: 0.5rem; }
+.reader-settings > summary { cursor: pointer; font-size: 1.05rem; font-weight: 650; }
+.reader-settings[open] > summary { margin-bottom: 0.85rem; padding-bottom: 0.65rem; border-bottom: 1px solid #e4e0d8; }
+.reader-settings form { display: grid; gap: 0.75rem; }
 .reader-settings p, .reader-entity-hint { color: #666; font-size: 0.85rem; }
+
+.provider-current {
+  padding: 0.75rem;
+  border-radius: 7px;
+  background: #f7f5ef;
+}
+
+.provider-current dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem 1rem;
+  margin: 0.55rem 0 0;
+}
+
+.provider-current dl div {
+  min-width: 0;
+}
+
+.provider-current dt {
+  color: #777;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.provider-current dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 620px) {
+  .settings-section {
+    padding: 0.8rem;
+  }
+
+  .settings-toggle {
+    align-items: start;
+  }
+
+  .provider-current dl {
+    grid-template-columns: 1fr;
+  }
+}
 .reader-translation-warning { color: #715a24; background: #fff8df; border-left: 3px solid #c7a54a; padding: .55rem .75rem; }
 .mention-button { border: 0; border-radius: 2px; font: inherit; color: inherit; display: inline; text-align: inherit; }
 .mention-button:hover { background: #ffe581; }

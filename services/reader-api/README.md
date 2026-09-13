@@ -77,9 +77,9 @@ curl -X POST localhost:8081/novels/<novel-id>/ask \
   -H 'X-Reader-ID: local-reader' \
   -d '{"question":"What did the protagonist learn?","at":3}'
 
-# Novel list/detail are ungated (no X-Reader-ID needed) — novel metadata has no
-# source_chapter to gate on.
-curl localhost:8081/novels
+# Novel list/detail are ungated — novel metadata has no source_chapter to gate on.
+# Supplying X-Reader-ID on the list adds that reader's saved current_chapter per book.
+curl localhost:8081/novels -H 'X-Reader-ID: local-reader'
 curl localhost:8081/novels/<novel-id>
 
 # Creation proxies to ingest-api (see ingest-api's README for the auth it requires there —

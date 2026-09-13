@@ -41,7 +41,7 @@ type ReaderStore interface {
 	PipelineStatus(context.Context, string) (PipelineStatusResponse, error)
 	TranslationPreview(context.Context, string, int) (string, bool, string, string, error)
 	TranslationHealth(context.Context, string) (TranslationHealth, error)
-	ListNovels(context.Context) ([]NovelSummary, error)
+	ListNovels(context.Context, string) ([]NovelSummary, error)
 	GetNovel(context.Context, string) (NovelSummary, error)
 	CreateScrapeJob(context.Context, string, string, string) (int64, error)
 	LatestScrapeJob(context.Context, string) (ScrapeJobView, error)
@@ -218,14 +218,17 @@ func (s *Store) AdvanceProgress(
 	return Progress{}, ErrChapterNotReady
 }
 
-// ListNovels and GetNovel are ungated: novel metadata (title/langs/genre/created_at) has
-// no source_chapter column to gate on, so gating it would be theater, not security. Both
-// query readerDB directly (no withReaderTx/SET LOCAL) since `novel` carries no RLS policy
-// (0002_rls.sql enables it only on fact/edge/event/chunk/entity/alias).
-func (s *Store) ListNovels(ctx context.Context) ([]NovelSummary, error) {
-	rows, err := s.readerDB.Query(ctx,
-		`SELECT id::text, title, source_lang, target_lang, genre, created_at
-		 FROM novel ORDER BY created_at DESC`)
+// Novel metadata itself is ungated because it has no source_chapter. The optional
+// progress join is scoped to the requesting reader: current_chapter is that reader's
+// server-authoritative knowledge boundary (§0.3), never a value inferred in the UI.
+// progressDB has the least-privilege grants needed for both novel and reader_progress.
+func (s *Store) ListNovels(ctx context.Context, readerID string) ([]NovelSummary, error) {
+	rows, err := s.progressDB.Query(ctx,
+		`SELECT n.id::text, n.title, n.source_lang, n.target_lang, n.genre, n.created_at,
+		        COALESCE(p.current_chapter, 0)
+		 FROM novel n
+		 LEFT JOIN reader_progress p ON p.novel_id = n.id AND p.reader_id = $1
+		 ORDER BY n.created_at DESC`, readerID)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +238,7 @@ func (s *Store) ListNovels(ctx context.Context) ([]NovelSummary, error) {
 		var novel NovelSummary
 		if err := rows.Scan(
 			&novel.ID, &novel.Title, &novel.SourceLang, &novel.TargetLang,
-			&novel.Genre, &novel.CreatedAt,
+			&novel.Genre, &novel.CreatedAt, &novel.CurrentChapter,
 		); err != nil {
 			return nil, err
 		}

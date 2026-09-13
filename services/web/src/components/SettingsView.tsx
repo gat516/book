@@ -9,7 +9,7 @@ interface Props {
   onClose: () => void;
 }
 
-const PROVIDERS: ProviderName[] = ["gemini", "groq", "deepseek", "anthropic", "ollama"];
+const PROVIDERS: ProviderName[] = ["gemini", "groq", "deepseek", "anthropic", "custom", "ollama"];
 
 // Account-wide settings: the provider keys every book draws on, plus reading preferences.
 // Keys live here rather than per book (migration 0035) because the common case is several
@@ -20,7 +20,7 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, { apiKey: string; baseURL: string }>>({});
+  const [drafts, setDrafts] = useState<Record<string, { apiKey: string }>>({});
   const [pending, setPending] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -41,10 +41,10 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
   }, [load]);
 
   function draft(provider: string) {
-    return drafts[provider] ?? { apiKey: "", baseURL: "" };
+    return drafts[provider] ?? { apiKey: "" };
   }
 
-  function setDraft(provider: string, patch: Partial<{ apiKey: string; baseURL: string }>) {
+  function setDraft(provider: string, patch: Partial<{ apiKey: string }>) {
     setDrafts((d) => ({ ...d, [provider]: { ...draft(provider), ...patch } }));
   }
 
@@ -55,10 +55,7 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
     try {
       const current = draft(provider);
       const response = await saveProviderCredential(provider, {
-        // Omitted rather than empty: the server keeps the stored key when this is absent,
-        // so editing a base URL alone cannot wipe the secret.
         api_key: current.apiKey.trim() || undefined,
-        base_url: current.baseURL.trim() || undefined,
       });
       setCredentials(response.credentials);
       setDraft(provider, { apiKey: "" });
@@ -89,80 +86,88 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
 
   return (
     <section className="settings-view">
-      <button className="app-back" onClick={onClose}>
-        ← Back
-      </button>
-      <h2>Settings</h2>
-
-      <h3>Provider keys</h3>
-      <p>
-        Entered once and shared by every book. Each book then picks which provider and model
-        to use in its own “Model provider” panel.
-      </p>
+      <header className="settings-page-header">
+        <button className="app-back" onClick={onClose}>← Back</button>
+        <h1>Account settings</h1>
+        <p>Preferences and provider credentials shared by every book.</p>
+      </header>
       {error && <p role="alert" className="chapter-list-error">{error}</p>}
-      {notice && <p role="status">{notice}</p>}
+      {notice && <p role="status" className="settings-notice">{notice}</p>}
 
-      {loading ? (
-        <p>Loading…</p>
-      ) : (
-        PROVIDERS.filter((p) => NEEDS_API_KEY[p]).map((provider) => {
-          const current = saved.get(provider);
-          const busy = pending === provider;
-          return (
-            <div key={provider} className="settings-provider">
-              <h4>
-                {PROVIDER_LABELS[provider]}{" "}
-                {current?.api_key_set ? <span>— key saved</span> : <span>— no key</span>}
-              </h4>
-              <label>
-                API key{" "}
-                <input
-                  type="password"
-                  autoComplete="off"
-                  value={draft(provider).apiKey}
-                  onChange={(e) => setDraft(provider, { apiKey: e.target.value })}
-                  placeholder={current?.api_key_set ? "leave blank to keep the saved key" : "paste a key"}
-                />
-              </label>
-              <label>
-                Base URL{" "}
-                <input
-                  value={draft(provider).baseURL || current?.base_url || ""}
-                  onChange={(e) => setDraft(provider, { baseURL: e.target.value })}
-                  placeholder="provider default"
-                />
-              </label>
-              <button onClick={() => save(provider)} disabled={busy}>
-                {busy ? "Saving…" : "Save"}
-              </button>
-              {current?.api_key_set && (
-                <button onClick={() => remove(provider)} disabled={busy}>
-                  Remove key
-                </button>
-              )}
-            </div>
-          );
-        })
-      )}
-      <p className="novel-create-form-hint">
-        Keys are encrypted before they are stored and are never sent back to this page —
-        it only ever learns whether one exists.
-      </p>
+      <section className="settings-section">
+        <h2>Reading</h2>
+        <label className="settings-toggle">
+          <span>
+            <strong>Show hover previews</strong>
+            <small>Preview linked names when the pointer rests over them.</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={!clickableEntities}
+            onChange={(event) => onChangeClickableEntities(!event.target.checked)}
+          />
+        </label>
+        <p className="settings-help">
+          Highlighted names remain clickable either way. This preference is saved only in this browser.
+        </p>
+      </section>
 
-      <h3>Reading</h3>
-      <label>
-        <input
-          type="checkbox"
-          checked={!clickableEntities}
-          onChange={(event) => onChangeClickableEntities(!event.target.checked)}
-        />{" "}
-        Show hover previews
-      </label>
-      <p>
-        Highlighted names are always clickable, even when no information is linked yet.
-        Enable previews to also see a card on hover. Saved in this browser, so it does not
-        follow you to another device.
-      </p>
+      <section className="settings-section">
+        <div className="settings-section-heading">
+          <div>
+            <h2>Provider keys</h2>
+            <p>Saved once, then available to every book that selects that provider.</p>
+          </div>
+        </div>
+        {loading ? (
+          <p>Loading providers…</p>
+        ) : (
+          <div className="settings-provider-list">
+            {PROVIDERS.filter((p) => NEEDS_API_KEY[p]).map((provider) => {
+              const current = saved.get(provider);
+              const busy = pending === provider;
+              return (
+                <details key={provider} className="settings-provider">
+                  <summary>
+                    <span>{PROVIDER_LABELS[provider]}</span>
+                    <span className={`status-pill ${current?.api_key_set ? "status-pill-live" : "status-pill-quiet"}`}>
+                      {current?.api_key_set ? "Key saved" : "No key"}
+                    </span>
+                  </summary>
+                  <div className="settings-provider-content">
+                    <label>
+                      API key
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={draft(provider).apiKey}
+                        onChange={(e) => setDraft(provider, { apiKey: e.target.value })}
+                        placeholder={current?.api_key_set ? "Leave blank to keep the saved key" : "Paste a key"}
+                      />
+                    </label>
+                    {provider === "custom" && (
+                      <p className="settings-help">Set the OpenAI-compatible endpoint separately in each book's settings.</p>
+                    )}
+                    <div className="settings-actions">
+                      {current?.api_key_set && (
+                        <button className="btn-danger" onClick={() => remove(provider)} disabled={busy}>
+                          Remove key
+                        </button>
+                      )}
+                      <button className="btn-primary" onClick={() => save(provider)} disabled={busy}>
+                        {busy ? "Saving…" : "Save provider"}
+                      </button>
+                    </div>
+                  </div>
+                </details>
+              );
+            })}
+          </div>
+        )}
+        <p className="settings-help">
+          Keys are encrypted before storage and never sent back to this page; it only learns whether one exists.
+        </p>
+      </section>
     </section>
   );
 }

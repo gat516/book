@@ -18,6 +18,7 @@ export const CUSTOM_MODEL = "__custom__";
 // fast: DeepSeek retired deepseek-chat/deepseek-reasoner on 2026-07-24, so anything
 // pinned to those names is already broken.
 export const MODEL_OPTIONS: Record<ProviderName, ModelOption[]> = {
+  custom: [],
   gemini: [
     { id: "gemini-3.7-flash", label: "Gemini 3.7 Flash", note: "Latest stable; strongest for multi-step and structured output" },
     { id: "gemini-3.6-flash", label: "Gemini 3.6 Flash", note: "Previous generation, still stable" },
@@ -53,10 +54,12 @@ export const DEFAULT_MODEL: Record<string, string> = {
   groq: MODEL_OPTIONS.groq[0].id,
   anthropic: MODEL_OPTIONS.anthropic[0].id,
   ollama: "",
+  custom: "",
 };
 
 export const PROVIDER_LABELS: Record<ProviderName, string> = {
   anthropic: "Anthropic",
+  custom: "Custom API",
   deepseek: "DeepSeek",
   gemini: "Gemini",
   groq: "Groq",
@@ -69,6 +72,7 @@ export const PROVIDER_LABELS: Record<ProviderName, string> = {
 // the form should not ask for one and "no key saved" is not a warning for it.
 export const NEEDS_API_KEY: Record<ProviderName, boolean> = {
   anthropic: true,
+  custom: true,
   deepseek: true,
   gemini: true,
   groq: true,
@@ -79,6 +83,7 @@ export const NEEDS_API_KEY: Record<ProviderName, boolean> = {
 // hint -- a model the machine doesn't have is a runtime failure, not a validation one.
 export const MODEL_LIST_IS_ADVISORY: Record<ProviderName, boolean> = {
   anthropic: false,
+  custom: false,
   deepseek: false,
   gemini: false,
   groq: false,

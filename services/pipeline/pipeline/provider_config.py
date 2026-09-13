@@ -1,11 +1,10 @@
 """Per-novel LLM provider resolution (PLAN.md Phase N4).
 
-``novel_provider_config`` (migration 0011) holds an operator's optional per-novel
-provider/model/API-key choice, written by ingest-api and encrypted there with
-AES-GCM (services/ingest-api/crypto.go). This module is the read side: decrypt with
-the SAME key bytes (``PROVIDER_CONFIG_ENCRYPTION_KEY``, base64, 32 bytes — coordinate
-any rotation with ingest-api's ``INGEST_PROVIDER_CONFIG_KEY``) and construct the
-matching ``LLMProvider``.
+``novel_provider_config`` holds an optional per-novel provider/model/endpoint choice;
+``provider_credential`` holds each account-wide encrypted key. This module is the read
+side: decrypt with the SAME key bytes (``PROVIDER_CONFIG_ENCRYPTION_KEY``, base64, 32
+bytes — coordinate any rotation with ingest-api's ``INGEST_PROVIDER_CONFIG_KEY``) and
+construct the matching ``LLMProvider``.
 
 A novel with no row here is not an error — it's the common case (zero-config backward
 compat): callers fall back to ``provider_from_env(cfg)``, the process-wide default.
@@ -19,7 +18,7 @@ from dataclasses import dataclass
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from novel_llm import AnthropicProvider, DeepSeekProvider, GeminiProvider, GroqProvider, LLMProvider, OllamaProvider
+from novel_llm import AnthropicProvider, CustomProvider, DeepSeekProvider, GeminiProvider, GroqProvider, LLMProvider, OllamaProvider
 from pipeline.config import Config, names_runtime, resolve_runtime
 
 
@@ -99,8 +98,9 @@ async def resolve_provider_config(db, novel_id: str, default_provider: str) -> P
     cannot carry its own key, so a key can never outlive the provider it was entered for
     and can never shadow the account key invisibly.
 
-    base_url still falls back per field -- a novel may point at its own Ollama host while
-    the account row supplies the default for every other book.
+    Only Ollama and the explicit custom provider accept a stored endpoint. Named hosted
+    providers always use the official endpoint built into their adapter, so choosing
+    "Gemini" or "DeepSeek" cannot silently route that credential to another host.
 
     The provider itself comes from the novel's row when it has one, else the process-wide
     default, so a novel that has never been configured still picks up a global key.
@@ -113,12 +113,15 @@ async def resolve_provider_config(db, novel_id: str, default_provider: str) -> P
     global_base_url, global_api_key = await load_provider_credential(db, provider)
     if row is None and global_api_key is None and global_base_url is None:
         return None
+    effective_base_url = None
+    if provider in {"custom", "ollama"}:
+        effective_base_url = (row.base_url if row is not None else None) or global_base_url
     return ProviderConfigRow(
         provider=provider,
         model=row.model if row is not None else None,
         translate_model=row.translate_model if row is not None else None,
         extract_model=row.extract_model if row is not None else None,
-        base_url=(row.base_url if row is not None else None) or global_base_url,
+        base_url=effective_base_url,
         api_key=global_api_key,
     )
 
@@ -138,19 +141,22 @@ def build_provider(row: ProviderConfigRow, cfg: Config) -> LLMProvider:
         case "gemini":
             return GeminiProvider(
                 model=row.extract_model or row.model or cfg.llm_model_extract,
-                base_url=row.base_url or cfg.gemini_base_url,
                 api_key=row.api_key,
             )
         case "deepseek":
             return DeepSeekProvider(
                 model=row.extract_model or row.model or cfg.llm_model_extract,
-                base_url=row.base_url or cfg.deepseek_base_url,
                 api_key=row.api_key,
             )
         case "groq":
             return GroqProvider(
                 model=row.extract_model or row.model or cfg.llm_model_extract,
-                base_url=row.base_url or cfg.groq_base_url,
+                api_key=row.api_key,
+            )
+        case "custom":
+            return CustomProvider(
+                model=row.extract_model or row.model or cfg.llm_model_extract,
+                base_url=row.base_url or "",
                 api_key=row.api_key,
             )
         case other:

@@ -6,7 +6,8 @@ boundary this repo already draws elsewhere), and the decrypt-and-build logic her
 dozen lines, not worth a shared package for. Keep the two in sync by hand if the
 encryption scheme ever changes.
 
-Decryption uses the SAME key bytes ingest-api encrypted with
+Provider choices/endpoints are per novel; encrypted keys are account-wide. Decryption
+uses the SAME key bytes ingest-api encrypted with
 (``PROVIDER_CONFIG_ENCRYPTION_KEY``, base64, 32 bytes — must match ingest-api's
 ``INGEST_PROVIDER_CONFIG_KEY`` exactly).
 """
@@ -19,8 +20,7 @@ from dataclasses import dataclass
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from novel_llm import AnthropicProvider, DeepSeekProvider, GeminiProvider, GroqProvider, LLMProvider, OllamaProvider
-from novel_llm.gemini import DEFAULT_BASE_URL as GEMINI_BASE_URL
+from novel_llm import AnthropicProvider, CustomProvider, DeepSeekProvider, GeminiProvider, GroqProvider, LLMProvider, OllamaProvider
 
 
 @dataclass(frozen=True)
@@ -50,7 +50,8 @@ async def load_provider_config(conn, novel_id: str) -> ProviderConfigRow | None:
     credential for whichever provider the novel names."""
     row = await (
         await conn.execute(
-            "SELECT provider, model, base_url FROM novel_provider_config WHERE novel_id = %s",
+            "SELECT provider, COALESCE(extract_model, model), base_url "
+            "FROM novel_provider_config WHERE novel_id = %s",
             (novel_id,),
         )
     ).fetchone()
@@ -93,37 +94,41 @@ async def resolve_provider_config(conn, novel_id: str, default_provider: str) ->
     global_base_url, global_api_key = await load_provider_credential(conn, provider)
     if row is None and global_api_key is None and global_base_url is None:
         return None
+    effective_base_url = None
+    if provider in {"custom", "ollama"}:
+        effective_base_url = (row.base_url if row is not None else None) or global_base_url
     return ProviderConfigRow(
         provider=provider,
         model=row.model if row is not None else None,
-        base_url=(row.base_url if row is not None else None) or global_base_url,
+        base_url=effective_base_url,
         api_key=global_api_key,
     )
 
 
-def build_provider(row: ProviderConfigRow, *, default_model: str, ollama_host: str,
-                   deepseek_base_url: str, groq_base_url: str = "https://api.groq.com/openai/v1") -> LLMProvider:
+def build_provider(row: ProviderConfigRow, *, default_model: str,
+                   ollama_host: str) -> LLMProvider:
     match row.provider:
         case "ollama":
             return OllamaProvider(host=row.base_url or ollama_host, model=row.model or default_model)
         case "anthropic":
             return AnthropicProvider(model=row.model or default_model, api_key=row.api_key)
         case "gemini":
-            # No gemini_base_url parameter here: the endpoint is a fixed Google URL, so the
-            # provider's own default stands in rather than widening this signature.
             return GeminiProvider(
                 model=row.model or default_model,
-                base_url=row.base_url or GEMINI_BASE_URL,
                 api_key=row.api_key,
             )
         case "deepseek":
             return DeepSeekProvider(
                 model=row.model or default_model,
-                base_url=row.base_url or deepseek_base_url,
                 api_key=row.api_key,
             )
         case "groq":
-            return GroqProvider(model=row.model or default_model,
-                                base_url=row.base_url or groq_base_url, api_key=row.api_key)
+            return GroqProvider(model=row.model or default_model, api_key=row.api_key)
+        case "custom":
+            return CustomProvider(
+                model=row.model or default_model,
+                base_url=row.base_url or "",
+                api_key=row.api_key,
+            )
         case other:
             raise ValueError(f"unknown provider in novel_provider_config: {other!r}")

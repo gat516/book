@@ -598,11 +598,13 @@ func (a *API) getProgress(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, progress)
 }
 
-// getNovels/getNovel are deliberately ungated — no X-Reader-ID, no gate() call. Novel
-// metadata is not spoiler content (see Store.ListNovels/GetNovel's comment).
+// getNovels/getNovel are deliberately ungated — no required X-Reader-ID and no gate()
+// call. When a valid reader ID is present, the list includes only that reader's saved
+// current chapter; without one it still returns the same public novel metadata.
 func (a *API) getNovels(w http.ResponseWriter, r *http.Request) {
 	prepareReaderResponse(w)
-	novels, err := a.store.ListNovels(r.Context())
+	reader, _ := readerID(r)
+	novels, err := a.store.ListNovels(r.Context(), reader)
 	if err != nil {
 		log.Printf("list novels: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not list novels")

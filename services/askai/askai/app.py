@@ -227,8 +227,6 @@ class Service:
                     row,
                     default_model=self.config.model,
                     ollama_host=self.config.ollama_host,
-                    deepseek_base_url=self.config.deepseek_base_url,
-                    groq_base_url=self.config.groq_base_url,
                 )
             except Exception as exc:  # provider SDKs use several exception classes here
                 category = _provider_failure_category(exc)
@@ -369,12 +367,11 @@ def app_from_env() -> FastAPI:
         case "ollama":
             provider: LLMProvider = OllamaProvider(host=cfg.ollama_host, model=cfg.model)
         case "deepseek":
-            provider = DeepSeekProvider(model=cfg.model, base_url=cfg.deepseek_base_url, api_key=cfg.deepseek_api_key)
+            provider = DeepSeekProvider(model=cfg.model, api_key=cfg.deepseek_api_key)
         case "gemini":
-            provider = GeminiProvider(model=cfg.model, base_url=cfg.gemini_base_url,
-                                      api_key=cfg.gemini_api_key or None)
+            provider = GeminiProvider(model=cfg.model, api_key=cfg.gemini_api_key or None)
         case "groq":
-            provider = GroqProvider(model=cfg.model, base_url=cfg.groq_base_url, api_key=cfg.groq_api_key)
+            provider = GroqProvider(model=cfg.model, api_key=cfg.groq_api_key)
         case "gateway":
             provider = GatewayProvider(address=cfg.gateway_addr, tenant="default", provider=cfg.gateway_provider,
                 model=cfg.model, backend=cfg.gateway_backend, embed_model=cfg.embed_model,
@@ -387,8 +384,8 @@ def app_from_env() -> FastAPI:
         case "gemini":
             try:
                 embed_provider = GeminiProvider(model=cfg.embed_model, embed_model=cfg.embed_model,
-                    embed_dim=cfg.embed_dim, base_url=cfg.gemini_base_url,
-                    embed_base_url=cfg.gemini_embed_base_url, api_key=cfg.gemini_api_key or None)
+                    embed_dim=cfg.embed_dim, embed_base_url=cfg.gemini_embed_base_url,
+                    api_key=cfg.gemini_api_key or None)
             except RuntimeError:
                 embed_provider = UnavailableEmbeddingProvider()
         case "openrouter":
