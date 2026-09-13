@@ -2,23 +2,27 @@
 // can be ingested from a URL instead of pasted chapter by chapter (PLAN.md Phase N5).
 //
 // Deliberately per-site, not generic (docs/PLAN.md's own Milestone 2 tradeoff: "one line
-// per site beats fighting a generic algorithm's edge cases"). Two sites are wired today
-// (freewebnovel.go, shuhaige.go); adding a third is adding one file, not touching the
-// walk loop.
+// per site beats fighting a generic algorithm's edge cases"). Each supported site adds
+// one adapter file and a host case without changing the walk loop.
 package main
 
 import "context"
 
-// Page is one fetched chapter page. Title is the site's own printed chapter label
+// Page is one fetched website page. Title is the site's own printed chapter label
 // (verbatim, e.g. "第4335章 北落邙山！(1/2)") — stored as inert metadata
 // (source_meta.site_chapter_no) and NEVER parsed for numbering; the internal
-// chapter_index is assigned sequentially as pages are walked, independent of whatever a
-// site's own chapter/part scheme looks like (instructions.md §3.1).
+// chapter_index is assigned sequentially after all pages belonging to one source chapter
+// are assembled, independent of the site's own chapter/part scheme (instructions.md §3.1).
 type Page struct {
 	Title     string
 	Text      string
 	SourceURL string // absolute URL fetched for this page; assigned by walk
-	NextURL   string // absolute URL of the next chapter; "" means "no next link found"
+	NextURL   string // absolute URL of the next page to fetch; "" means "no next link found"
+	// Continues is true when NextURL is another page of this same source chapter.
+	// Website pagination must never create a new internal chapter_index: the normalized
+	// ChapterEnvelope is one source chapter, independent of how a mirror lays it out
+	// (instructions.md §3.1).
+	Continues bool
 }
 
 // Site is the per-site adapter contract. Simpler than spec §3.2's generic
@@ -45,7 +49,9 @@ func siteFor(host string) Site {
 	case "freewebnovel.com", "www.freewebnovel.com":
 		return freewebnovelSite{}
 	case "m.shuhaige.net":
-		return shuhaigeSite{}
+		return shuhaigeSite{assembleContinuations: true}
+	case "novel543.com", "www.novel543.com":
+		return novel543Site{}
 	default:
 		return nil
 	}

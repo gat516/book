@@ -1,0 +1,189 @@
+[
+  {
+    "claim_id": "c1",
+    "subject_id": "e1",
+    "attribute": "right_arm_condition",
+    "value": "溃烂",
+    "evidence_ids": [
+      "p002"
+    ],
+    "evidence": [
+      {
+        "id": "p002",
+        "text": "黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂龇牙咧嘴，“快走快走！老子宁愿再打十场群架，也不想再继续呆这儿了！真特娘的要命！”",
+        "char_start": 14,
+        "char_end": 76
+      }
+    ]
+  },
+  {
+    "claim_id": "c3",
+    "subject_id": "e3",
+    "attribute": "location",
+    "value": "巢穴",
+    "evidence_ids": [
+      "p005"
+    ],
+    "evidence": [
+      {
+        "id": "p005",
+        "text": "不过似乎也得益于此，至少那些湮兽也被神血雨驱赶，只能退到巢穴躲避。",
+        "char_start": 131,
+        "char_end": 164
+      }
+    ]
+  },
+  {
+    "claim_id": "c5",
+    "subject_id": "e5",
+    "attribute": "observed_conflict",
+    "value": "两股势力交战",
+    "evidence_ids": [
+      "p012"
+    ],
+    "evidence": [
+      {
+        "id": "p012",
+        "text": "就在此时，阿采手中那眼球锁链忽然轻轻颤动起来，她目光一凝，沉声道：“君主大人，前方似乎有两股势力在交战！”",
+        "char_start": 324,
+        "char_end": 377
+      }
+    ]
+  },
+  {
+    "claim_id": "c6",
+    "subject_id": "e6",
+    "attribute": "opponent",
+    "value": "裁决学院",
+    "evidence_ids": [
+      "p014"
+    ],
+    "evidence": [
+      {
+        "id": "p014",
+        "text": "凌峰眸中阴阳鱼浮动，“我已察觉到了！是啸牙冒险团和裁决学院的人！我们没必要介入，绕过去！”",
+        "char_start": 385,
+        "char_end": 430
+      }
+    ]
+  },
+  {
+    "claim_id": "c6",
+    "subject_id": "e7",
+    "attribute": "opponent",
+    "value": "啸牙冒险团",
+    "evidence_ids": [
+      "p014"
+    ],
+    "evidence": [
+      {
+        "id": "p014",
+        "text": "凌峰眸中阴阳鱼浮动，“我已察觉到了！是啸牙冒险团和裁决学院的人！我们没必要介入，绕过去！”",
+        "char_start": 385,
+        "char_end": 430
+      }
+    ]
+  },
+  {
+    "claim_id": "c38",
+    "subject_id": "e21",
+    "attribute": "formation",
+    "value": "防御圈",
+    "evidence_ids": [
+      "p038"
+    ],
+    "evidence": [
+      {
+        "id": "p038",
+        "text": "阴山的古尸挡在最前，剩余七名噬梦团员背靠背组成防御圈。",
+        "char_start": 1178,
+        "char_end": 1205
+      }
+    ]
+  },
+  {
+    "claim_id": "c39",
+    "subject_id": "e22",
+    "attribute": "eye_chain_effect",
+    "value": "噩梦符文",
+    "evidence_ids": [
+      "p039"
+    ],
+    "evidence": [
+      {
+        "id": "p039",
+        "text": "阿采的眼球锁链如毒蛇昂首，十二枚瞳孔里同时亮起噩梦符文。",
+        "char_start": 1207,
+        "char_end": 1235
+      }
+    ]
+  },
+  {
+    "claim_id": "c41",
+    "subject_id": "e24",
+    "attribute": "formation",
+    "value": "防御阵型",
+    "evidence_ids": [
+      "p041"
+    ],
+    "evidence": [
+      {
+        "id": "p041",
+        "text": "裁决学院则是同样结成防御阵型，一面警惕地望着后方的啸牙冒险团，同时对前方的噬梦冒险团，亦是无比警戒。",
+        "char_start": 1251,
+        "char_end": 1301
+      }
+    ]
+  },
+  {
+    "claim_id": "c45",
+    "subject_id": "e26",
+    "attribute": "promise",
+    "value": "重谢",
+    "evidence_ids": [
+      "p045"
+    ],
+    "evidence": [
+      {
+        "id": "p045",
+        "text": "诺顿的声音传来，“击退啸牙之后，老夫还有重谢！”",
+        "char_start": 1376,
+        "char_end": 1400
+      }
+    ]
+  },
+  {
+    "claim_id": "c55",
+    "subject_id": "e31",
+    "attribute": "insult_target",
+    "value": "诺顿老鬼",
+    "evidence_ids": [
+      "p055"
+    ],
+    "evidence": [
+      {
+        "id": "p055",
+        "text": "“诺顿老鬼，看来你打错主意了！”",
+        "char_start": 1680,
+        "char_end": 1696
+      }
+    ]
+  },
+  {
+    "claim_id": "c56",
+    "subject_id": "e32",
+    "attribute": "offer",
+    "value": "消灭裁决学院交出梦魇神殿图纸加入麾下",
+    "evidence_ids": [
+      "p056"
+    ],
+    "evidence": [
+      {
+        "id": "p056",
+        "text": "莫雷裂开大嘴，露出满口尖锐的利齿，他阴仄仄的目光，扫向噬梦冒险团众人，“噬梦的，给你们一个机会，配合我们将这些裁决学院的废物解决掉，再乖乖交出梦魇神殿的图纸，我可以考虑将你们梦魇教派，收入麾下！”",
+        "char_start": 1698,
+        "char_end": 1796
+      }
+    ]
+  }
+]

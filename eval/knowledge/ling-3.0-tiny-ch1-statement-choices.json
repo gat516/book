@@ -1,0 +1,270 @@
+{
+  "experiment": "statement_choice_v1",
+  "graph_ready": false,
+  "status": "completed",
+  "model": "maternion/ling-3.0-tiny:8b",
+  "source_sha256": "63af5b6e2231d78cb119b3a528eb9c9aad5076202020b554f7becd9d12a5743c",
+  "reviewed_by": "Assistant source-text review; diagnostic only, not owner-approved ground truth",
+  "calls": [
+    {
+      "reverse": false,
+      "cases": [
+        "injury_cause",
+        "who_knows",
+        "group_leader"
+      ],
+      "raw": "{\"q1\": {\"a_evidence\": [\"p2\"], \"b_choice\": \"s1\"}, \"q2\": {\"a_evidence\": [\"p50\"], \"b_choice\": \"s2\"}, \"q3\": {\"a_evidence\": [\"p53\"], \"b_choice\": \"s3\"}}",
+      "served_model": "maternion/ling-3.0-tiny:8b",
+      "input_tokens": 3274,
+      "output_tokens": 66,
+      "results": [
+        {
+          "case": "injury_cause",
+          "selected_index": 0,
+          "correct": true,
+          "reviewed_evidence_match": true,
+          "statement": "神血雨的腐蚀导致黄少天右臂有些溃烂。",
+          "evidence": [
+            {
+              "id": "p2",
+              "char_start": 14,
+              "char_end": 76,
+              "text": "黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂龇牙咧嘴，“快走快走！老子宁愿再打十场群架，也不想再继续呆这儿了！真特娘的要命！”"
+            }
+          ]
+        },
+        {
+          "case": "who_knows",
+          "selected_index": 1,
+          "correct": true,
+          "reviewed_evidence_match": true,
+          "statement": "诺顿不知道凌峰是搬空威尔森家族宝库并杀死豪森的人。",
+          "evidence": [
+            {
+              "id": "p50",
+              "char_start": 1518,
+              "char_end": 1581,
+              "text": "只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。"
+            }
+          ]
+        },
+        {
+          "case": "group_leader",
+          "selected_index": 2,
+          "correct": true,
+          "reviewed_evidence_match": true,
+          "statement": "莫雷是啸牙冒险团团长。",
+          "evidence": [
+            {
+              "id": "p53",
+              "char_start": 1635,
+              "char_end": 1656,
+              "text": "此人，正是啸牙冒险团团长，“缝尸鬼”莫雷。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "reverse": false,
+      "cases": [
+        "initial_decision",
+        "abstain"
+      ],
+      "raw": "{\"q1\": {\"a_evidence\": [\"p14\", \"p15\", \"p16\"], \"b_choice\": \"s1\"}, \"q2\": {\"a_evidence\": [\"p33\", \"p34\", \"p35\"], \"b_choice\": \"s1\"}}",
+      "served_model": "maternion/ling-3.0-tiny:8b",
+      "input_tokens": 2824,
+      "output_tokens": 65,
+      "results": [
+        {
+          "case": "initial_decision",
+          "selected_index": 0,
+          "correct": true,
+          "reviewed_evidence_match": false,
+          "statement": "凌峰首次发现双方交战时决定绕开；后来对方冲来时决定迎战。",
+          "evidence": [
+            {
+              "id": "p14",
+              "char_start": 385,
+              "char_end": 430,
+              "text": "凌峰眸中阴阳鱼浮动，“我已察觉到了！是啸牙冒险团和裁决学院的人！我们没必要介入，绕过去！”"
+            },
+            {
+              "id": "p15",
+              "char_start": 432,
+              "char_end": 464,
+              "text": "凌峰当机立断，眼下最重要的就是尽快穿过这片荒原，没必要节外生枝。"
+            },
+            {
+              "id": "p16",
+              "char_start": 466,
+              "char_end": 472,
+              "text": "“走这边！”"
+            }
+          ]
+        },
+        {
+          "case": "abstain",
+          "selected_index": 0,
+          "correct": false,
+          "reviewed_evidence_match": true,
+          "statement": "姜梦月从胆怯变得勇敢，完成持久性格转变。",
+          "evidence": [
+            {
+              "id": "p33",
+              "char_start": 1030,
+              "char_end": 1076,
+              "text": "姜梦月捏紧拳头，正欲开口解释，却被凌峰按住了肩膀，“既然他们自己送上门，那就一并解决了！！”"
+            },
+            {
+              "id": "p34",
+              "char_start": 1078,
+              "char_end": 1111,
+              "text": "说话间，他掌心猩红杀气再度凝结，三米长的弑神枪虚影吞吐着毁灭波动。"
+            },
+            {
+              "id": "p35",
+              "char_start": 1113,
+              "char_end": 1137,
+              "text": "正好，试试自己新习得的这套枪法，到底有何等威能！"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "reverse": true,
+      "cases": [
+        "injury_cause",
+        "who_knows",
+        "group_leader"
+      ],
+      "raw": "{\"q1\": {\"a_evidence\": [\"p2\"], \"b_choice\": \"s3\"}, \"q2\": {\"a_evidence\": [\"p50\"], \"b_choice\": \"s1\"}, \"q3\": {\"a_evidence\": [\"p53\"], \"b_choice\": \"s1\"}}",
+      "served_model": "maternion/ling-3.0-tiny:8b",
+      "input_tokens": 3274,
+      "output_tokens": 66,
+      "results": [
+        {
+          "case": "injury_cause",
+          "selected_index": 0,
+          "correct": true,
+          "reviewed_evidence_match": true,
+          "statement": "神血雨的腐蚀导致黄少天右臂有些溃烂。",
+          "evidence": [
+            {
+              "id": "p2",
+              "char_start": 14,
+              "char_end": 76,
+              "text": "黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂龇牙咧嘴，“快走快走！老子宁愿再打十场群架，也不想再继续呆这儿了！真特娘的要命！”"
+            }
+          ]
+        },
+        {
+          "case": "who_knows",
+          "selected_index": 2,
+          "correct": false,
+          "reviewed_evidence_match": true,
+          "statement": "凌峰认出诺顿就是搬空威尔森家族宝库并杀死豪森的人。",
+          "evidence": [
+            {
+              "id": "p50",
+              "char_start": 1518,
+              "char_end": 1581,
+              "text": "只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。"
+            }
+          ]
+        },
+        {
+          "case": "group_leader",
+          "selected_index": 2,
+          "correct": true,
+          "reviewed_evidence_match": true,
+          "statement": "莫雷是啸牙冒险团团长。",
+          "evidence": [
+            {
+              "id": "p53",
+              "char_start": 1635,
+              "char_end": 1656,
+              "text": "此人，正是啸牙冒险团团长，“缝尸鬼”莫雷。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "reverse": true,
+      "cases": [
+        "initial_decision",
+        "abstain"
+      ],
+      "raw": "{\"q1\": {\"a_evidence\": [\"p14\", \"p15\", \"p16\"], \"b_choice\": \"s3\"}, \"q2\": {\"a_evidence\": [\"p33\", \"p34\", \"p35\"], \"b_choice\": \"s2\"}}",
+      "served_model": "maternion/ling-3.0-tiny:8b",
+      "input_tokens": 2824,
+      "output_tokens": 65,
+      "results": [
+        {
+          "case": "initial_decision",
+          "selected_index": 0,
+          "correct": true,
+          "reviewed_evidence_match": false,
+          "statement": "凌峰首次发现双方交战时决定绕开；后来对方冲来时决定迎战。",
+          "evidence": [
+            {
+              "id": "p14",
+              "char_start": 385,
+              "char_end": 430,
+              "text": "凌峰眸中阴阳鱼浮动，“我已察觉到了！是啸牙冒险团和裁决学院的人！我们没必要介入，绕过去！”"
+            },
+            {
+              "id": "p15",
+              "char_start": 432,
+              "char_end": 464,
+              "text": "凌峰当机立断，眼下最重要的就是尽快穿过这片荒原，没必要节外生枝。"
+            },
+            {
+              "id": "p16",
+              "char_start": 466,
+              "char_end": 472,
+              "text": "“走这边！”"
+            }
+          ]
+        },
+        {
+          "case": "abstain",
+          "selected_index": 1,
+          "correct": false,
+          "reviewed_evidence_match": true,
+          "statement": "姜梦月已经成为诺顿·威尔森的忠诚盟友。",
+          "evidence": [
+            {
+              "id": "p33",
+              "char_start": 1030,
+              "char_end": 1076,
+              "text": "姜梦月捏紧拳头，正欲开口解释，却被凌峰按住了肩膀，“既然他们自己送上门，那就一并解决了！！”"
+            },
+            {
+              "id": "p34",
+              "char_start": 1078,
+              "char_end": 1111,
+              "text": "说话间，他掌心猩红杀气再度凝结，三米长的弑神枪虚影吞吐着毁灭波动。"
+            },
+            {
+              "id": "p35",
+              "char_start": 1113,
+              "char_end": 1137,
+              "text": "正好，试试自己新习得的这套枪法，到底有何等威能！"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "seconds": 8.899,
+  "score": {
+    "expected_decisions": 10,
+    "valid_decisions": 10,
+    "correct": 7,
+    "correct_with_reviewed_evidence": 5,
+    "call_errors": 0
+  }
+}

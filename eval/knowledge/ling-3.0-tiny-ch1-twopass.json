@@ -1,0 +1,565 @@
+{
+  "experiment": "two_pass_story_facts_v2",
+  "input": {
+    "path": "/home/cj/projects/book/eval/knowledge/book-reviewed.json",
+    "chapter": 1,
+    "source_chars": 1796
+  },
+  "model": {
+    "requested": "maternion/ling-3.0-tiny:8b",
+    "analysis_served": "maternion/ling-3.0-tiny:8b",
+    "compiler_served": "maternion/ling-3.0-tiny:8b"
+  },
+  "usage": {
+    "analysis": {
+      "input_tokens": 2212,
+      "output_tokens": 1430
+    },
+    "compiler": {
+      "input_tokens": 3581,
+      "output_tokens": 4082
+    }
+  },
+  "analysis": "CANDIDATE, SUBJECT, POSSIBLE KIND, CLAIM, OTHER ENTITIES/ROLES, CERTAINTY, TEMPORAL READING, WHY IT MATTERS, EVIDENCE\nCANDIDATE_1, 黄少天, 角色状态变化, \"因神血雨腐蚀而右臂溃烂，表现出对环境的强烈抗拒与痛苦\", 黄少天, p2, \"黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂龇牙咧嘴\", \"p2\", \"直接描述黄少天的身体状态和情绪反应。\", p2\nCANDIDATE_2, 凌峰, 决策与领导力, \"当发现两股势力交战时，当机立断选择绕道而非介入，强调尽快穿过荒原\", 凌峰, p14, \"凌峰眸中阴阳鱼浮动，'我已察觉到了！'……凌峰当机立断，眼下最重要的就是尽快穿过这片荒原，没必要节外生枝。\" p14, \"凌峰在发现啸牙冒险团和裁决学院时选择绕开，体现了他的战略判断。\", p14\nCANDIDATE_3, 姜梦月, 角色发展与动机, \"在听到前方有战斗时闪过激动之色，并主动提出从西南方向前进以避开战斗，展现果断与主动性\", 姜梦月, p9, \"姜梦月眸中闪过一丝激动之色。\", \"p9\", \"姜梦月的情感反应与行动力。\", p9\nCANDIDATE_4, 诺顿·威尔森, 势力立场与动机, \"以噬梦的朋友为诱饵，威胁要征服啸牙冒险团，试图将凌峰拉入自己的阵营\", 诺顿·威尔森, p26, \"噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！\", \"p26\", \"诺顿试图将凌峰作为傀儡，揭示其政治手段。\", p26\nCANDIDATE_5, 黄少天, 角色立场与态度, \"对诺顿的拉拢明显抗拒，称其为老东西并表示不想上当，表现出对威尔森家族的不信任\", 黄少天, p48, \"凌峰心中暗自冷笑，严格来说，这还是凌峰第一次和这位威尔森家族族长正式照面。\", \"p48\", \"凌峰对诺顿的熟悉感与黄少天对诺顿的不信任。\", p48\nCANDIDATE_6, 凌峰, 秘密身份揭露, \"揭示自己曾伪装成诺顿潜入威尔森家族，且是造成诺顿与威尔森家族冲突的关键人物\", 凌峰, p50, \"只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。\", \"p50\", \"揭示凌峰的过去及其与诺顿·威尔森的敌对关系。\", p50\nCANDIDATE_7, 莫雷, 角色身份, \"作为啸牙冒险团团长，伪装成人类，揭露其真实身份为'缝尸鬼'，具有深渊龙蜥的背景\", 莫雷, p52, \"此人，正是啸牙冒险团团长，'缝尸鬼'莫雷。\", \"p52\", \"莫雷的真实身份与团队领导地位。\", p52\nCANDIDATE_8, 裁决学院, 势力目标与策略, \"派出侦查单位（五名天灾之城的一部分）参与交战，试图获取噬梦冒险团的传承和图纸\", 裁决学院, p23, \"是裁决学院的侦查单位！\", \"p23\", \"裁决学院作为敌对势力的行动与目标。\", p23\nCANDIDATE_9, 噬梦冒险团, 战斗阵型与战术, \"组成防御圈，背靠背防御，配合姜梦月使用球阵对抗啸牙冒险团的进攻\", 噬梦冒险团, p38, \"阴山的古尸挡在最前，剩余七名噬梦团员背靠背组成防御圈。\", \"p38\", \"噬梦冒险团的防御策略与协作能力。\", p38\nCANDIDATE_10, 阿采, 技能与装备, \"眼球锁链在战斗中主动使用，十二枚瞳孔亮起噩梦符文，显示其与噩梦相关的高阶能力\", 阿采, p39, \"阿采的眼球锁链如毒蛇昂首，十二枚瞳孔里同时亮起噩梦符文。\", \"p39\", \"阿采的独特装备和技能在战斗中的具体作用。\", p39\nCANDIDATE_11, 啸牙冒险团, 角色关系与冲突, \"作为诺顿阵营的入侵者，在凌峰与姜梦月的对峙中主动进攻，企图夺取恐惧神殿和图纸\", 啸牙冒险团, p31, \"三四十名骑乘深渊龙蜥的啸牙团员，朝他们奔袭而来。\", \"p31\", \"啸牙冒险团作为敌对势力的威胁和行动。\", p31\nCANDIDATE_12, 契约/合作, 潜在盟友关系, \"诺顿提出与噬梦冒险团合作，但黄少天对此明显抗拒，揭示合作意愿的矛盾\", 诺顿·威尔森, p44, \"诺顿的声音传来，'击退啸牙之后，老夫还有重谢！'；'妈的，谁跟你是朋友！'；'我草！'\", \"p44\", \"揭示诺顿与噬梦冒险团之间不稳定的合作意向。\", p44\nCANDIDATE_13, 恐惧神殿, 关键目标, \"诺顿提到的目标之一，暗示其重要性以及与噬梦冒险团命运相关\", 恐惧神殿, p26, \"恐惧神殿，也归我们了！\", \"p26\", \"恐惧神殿作为势力争夺目标的存在。\", p26\nCANDIDATE_14, 陨落狱, 空间与事件, \"作为陨落的特殊区域，出现在故事早期，暗示其作为冒险的起点\", 陨落狱, p10, \"陨落狱开启才只是第一天，想来大部分势力应该都还在最外层的陨落回廊之中徘徊。\", \"p10\", \"陨落狱作为故事核心事件的背景设定。\", p10\nCANDIDATE_15, 契约关系, 权力与利益, \"威尔森家族与诺顿之间的交易与博弈，诺顿试图通过拉凌峰入伙来获取利益\", 威尔森家族, p27, \"诺顿·威尔森苍老的声音通过扩音装置传来……\", \"p27\", \"威尔森家族内部的权力斗争与策略。\", p27",
+  "compiler_raw": "{\n  \"claims\": [\n    {\n      \"claim_id\": \"c1\",\n      \"epistemic_status\": \"strongly_implied\",\n      \"evidence\": [\n        {\n          \"passage_id\": \"p21\"\n        },\n        {\n          \"passage_id\": \"p2\"\n        }\n      ],\n      \"importance\": \"crucial\",\n      \"kind\": \"subject\",\n      \"linked_entities\": [\n        {\n          \"role\": \"subject\",\n          \"surface\": \"黄少天\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"神血雨\"\n        }\n      ],\n      \"predicate\": \"因神血雨腐蚀而右臂溃烂，表现出对环境的强烈抗拒与痛苦\",\n      \"rationale\": \"p2直接描述黄少天因神血雨腐蚀而溃烂右臂并龇牙咧嘴，p1仅以感叹句呼应其痛苦状态。\",\n      \"subject\": \"黄少天\",\n      \"temporal_status\": \"current\",\n      \"value\": \"黄少天因神血雨腐蚀而右臂溃烂，表现出对环境的强烈抗拒与痛苦\"\n    },\n    {\n      \"claim_id\": \"c2\",\n      \"epistemic_status\": \"strongly_implied\",\n      \"evidence\": [\n        {\n          \"passage_id\": \"p14\"\n        },\n        {\n          \"passage_id\": \"p15\"\n        }\n      ],\n      \"importance\": \"crucial\",\n      \"kind\": \"subject\",\n      \"linked_entities\": [\n        {\n          \"role\": \"subject\",\n          \"surface\": \"凌峰\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"啸牙冒险团\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"裁决学院\"\n        }\n      ],\n      \"predicate\": \"当发现两股势力交战时，当机立断选择绕道而非介入，强调尽快穿过荒原\",\n      \"rationale\": \"p14明确描述凌峰察觉两股势力交战并选择绕开，p15强调他当机立断尽快穿过荒原。\",\n      \"subject\": \"凌峰\",\n      \"temporal_status\": \"current\",\n      \"value\": \"凌峰当机立断选择绕道而非介入，强调尽快穿过荒原\"\n    },\n    {\n      \"claim_id\": \"c3\",\n      \"epistemic_status\": \"strongly_implied\",\n      \"evidence\": [\n        {\n          \"passage_id\": \"p9\"\n        },\n        {\n          \"passage_id\": \"p17\"\n        }\n      ],\n      \"importance\": \"crucial\",\n      \"kind\": \"subject\",\n      \"linked_entities\": [\n        {\n          \"role\": \"subject\",\n          \"surface\": \"姜梦月\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"九神廷\"\n        }\n      ],\n      \"predicate\": \"在听到前方有战斗时闪过激动之色，并主动提出从西南方向前进以避开战斗，展现果断与主动性\",\n      \"rationale\": \"p9描述姜梦月眸中闪过一丝激动之色，p17描述她主动提出从西南方向前进以避开战斗。\",\n      \"subject\": \"姜梦月\",\n      \"temporal_status\": \"current\",\n      \"value\": \"姜梦月主动提出从西南方向前进以避开战斗\"\n    },\n    {\n      \"claim_id\": \"c4\",\n      \"epistemic_status\": \"strongly_implied\",\n      \"evidence\": [\n        {\n          \"passage_id\": \"p26\"\n        },\n        {\n          \"passage_id\": \"p27\"\n        }\n      ],\n      \"importance\": \"crucial\",\n      \"kind\": \"subject\",\n      \"linked_entities\": [\n        {\n          \"role\": \"subject\",\n          \"surface\": \"诺顿·威尔森\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"凌峰\"\n        }\n      ],\n      \"predicate\": \"以噬梦的朋友为诱饵，威胁要征服啸牙冒险团，试图将凌峰拉入自己的阵营\",\n      \"rationale\": \"p26明确诺顿威胁要征服啸牙冒险团并要求解决他们，p27显示黄少天对此抗拒。\",\n      \"subject\": \"诺顿·威尔森\",\n      \"temporal_status\": \"current\",\n      \"value\": \"诺顿试图将凌峰拉入自己的阵营\"\n    },\n    {\n      \"claim_id\": \"c5\",\n      \"epistemic_status\": \"strongly_implied\",\n      \"evidence\": [\n        {\n          \"passage_id\": \"p48\"\n        },\n        {\n          \"passage_id\": \"p49\"\n        }\n      ],\n      \"importance\": \"crucial\",\n      \"kind\": \"subject\",\n      \"linked_entities\": [\n        {\n          \"role\": \"subject\",\n          \"surface\": \"凌峰\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"诺顿·威尔森\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"威尔森家族\"\n        }\n      ],\n      \"predicate\": \"揭示自己曾伪装成诺顿潜入威尔森家族，且是造成诺顿与威尔森家族冲突的关键人物\",\n      \"rationale\": \"p48描述凌峰第一次与诺顿照面，p49揭示他曾伪装成诺顿，且是威尔森家族冲突的关键人物。\",\n      \"subject\": \"凌峰\",\n      \"temporal_status\": \"current\",\n      \"value\": \"凌峰曾伪装成诺顿潜入威尔森家族，且是造成诺顿与威尔森家族冲突的关键人物\"\n    },\n    {\n      \"claim_id\": \"c6\",\n      \"epistemic_status\": \"strongly_implied\",\n      \"evidence\": [\n        {\n          \"passage_id\": \"p50\"\n        },\n        {\n          \"passage_id\": \"p51\"\n        }\n      ],\n      \"importance\": \"crucial\",\n      \"kind\": \"subject\",\n      \"linked_entities\": [\n        {\n          \"role\": \"subject\",\n          \"surface\": \"凌峰\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"诺顿·威尔森\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"威尔森家族\"\n        }\n      ],\n      \"predicate\": \"揭示凌峰的过去及其与诺顿·威尔森的敌对关系\",\n      \"rationale\": \"p50明确凌峰是搬空威尔森家族宝库、宰了孙子豪森、盗取裁决学院图书馆的罪魁祸首，p51显示诺顿冷笑。\",\n      \"subject\": \"凌峰\",\n      \"temporal_status\": \"current\",\n      \"value\": \"凌峰是威尔森家族冲突的关键人物\"\n    },\n    {\n      \"claim_id\": \"c7\",\n      \"epistemic_status\": \"strongly_implied\",\n      \"evidence\": [\n        {\n          \"passage_id\": \"p52\"\n        },\n        {\n          \"passage_id\": \"p53\"\n        }\n      ],\n      \"importance\": \"crucial\",\n      \"kind\": \"subject\",\n      \"linked_entities\": [\n        {\n          \"role\": \"subject\",\n          \"surface\": \"莫雷\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"啸牙冒险团\"\n        }\n      ],\n      \"predicate\": \"作为啸牙冒险团团长，伪装成人类，揭露其真实身份为'缝尸鬼'，具有深渊龙蜥的背景\",\n      \"rationale\": \"p52明确莫雷是啸牙冒险团团长'缝尸鬼'，p53描述其座下巨蜥。\",\n      \"subject\": \"莫雷\",\n      \"temporal_status\": \"current\",\n      \"value\": \"莫雷是啸牙冒险团团长，伪装成人类，揭露其真实身份为'缝尸鬼'，具有深渊龙蜥的背景\"\n    },\n    {\n      \"claim_id\": \"c8\",\n      \"epistemic_status\": \"strongly_implied\",\n      \"evidence\": [\n        {\n          \"passage_id\": \"p23\"\n        },\n        {\n          \"passage_id\": \"p31\"\n        }\n      ],\n      \"importance\": \"crucial\",\n      \"kind\": \"subject\",\n      \"linked_entities\": [\n        {\n          \"role\": \"subject\",\n          \"surface\": \"裁决学院\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"啸牙冒险团\"\n        }\n      ],\n      \"predicate\": \"派出侦查单位（五名天灾之城的一部分）参与交战，试图获取噬梦冒险团的传承和图纸\",\n      \"rationale\": \"p23描述裁决学院派出侦查单位，p31描述啸牙团员追袭裁决学院探索队。\",\n      \"subject\": \"裁决学院\",\n      \"temporal_status\": \"current\",\n      \"value\": \"裁决学院派出侦查单位参与交战，试图获取噬梦冒险团的传承和图纸\"\n    },\n    {\n      \"claim_id\": \"c9\",\n      \"epistemic_status\": \"strongly_implied\",\n      \"evidence\": [\n        {\n          \"passage_id\": \"p38\"\n        },\n        {\n          \"passage_id\": \"p39\"\n        }\n      ],\n      \"importance\": \"crucial\",\n      \"kind\": \"subject\",\n      \"linked_entities\": [\n        {\n          \"role\": \"subject\",\n          \"surface\": \"噬梦冒险团\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"阿采\"\n        }\n      ],\n      \"predicate\": \"组成防御圈，背靠背防御，配合姜梦月使用球阵对抗啸牙冒险团的进攻\",\n      \"rationale\": \"p38描述噬梦团员背靠背组成防御圈，p39描述阿采的眼球锁链使用。\",\n      \"subject\": \"噬梦冒险团\",\n      \"temporal_status\": \"current\",\n      \"value\": \"噬梦冒险团组成防御圈并配合姜梦月对抗啸牙冒险团\"\n    },\n    {\n      \"claim_id\": \"c10\",\n      \"epistemic_status\": \"strongly_implied\",\n      \"evidence\": [\n        {\n          \"passage_id\": \"p39\"\n        },\n        {\n          \"passage_id\": \"p40\"\n        }\n      ],\n      \"importance\": \"crucial\",\n      \"kind\": \"subject\",\n      \"linked_entities\": [\n        {\n          \"role\": \"subject\",\n          \"surface\": \"阿采\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"噩梦符文\"\n        }\n      ],\n      \"predicate\": \"眼球锁链在战斗中主动使用，十二枚瞳孔亮起噩梦符文，显示其与噩梦相关的高阶能力\",\n      \"rationale\": \"p39描述阿采的眼球锁链亮起噩梦符文，p40描述啸牙团转瞬即至。\",\n      \"subject\": \"阿采\",\n      \"temporal_status\": \"current\",\n      \"value\": \"阿采的眼球锁链在战斗中主动使用，十二枚瞳孔亮起噩梦符文\"\n    },\n    {\n      \"claim_id\": \"c11\",\n      \"epistemic_status\": \"strongly_implied\",\n      \"evidence\": [\n        {\n          \"passage_id\": \"p31\"\n        },\n        {\n          \"passage_id\": \"p32\"\n        }\n      ],\n      \"importance\": \"crucial\",\n      \"kind\": \"subject\",\n      \"linked_entities\": [\n        {\n          \"role\": \"subject\",\n          \"surface\": \"啸牙冒险团\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"裁决学院\"\n        }\n      ],\n      \"predicate\": \"作为诺顿阵营的入侵者，在凌峰与姜梦月的对峙中主动进攻，企图夺取恐惧神殿和图纸\",\n      \"rationale\": \"p31描述啸牙团员奔袭而来，p32描述为首者叫嚣夺传承。\",\n      \"subject\": \"啸牙冒险团\",\n      \"temporal_status\": \"current\",\n      \"value\": \"啸牙冒险团作为诺顿阵营的入侵者主动进攻，企图夺取恐惧神殿和图纸\"\n    },\n    {\n      \"claim_id\": \"c12\",\n      \"epistemic_status\": \"strongly_implied\",\n      \"evidence\": [\n        {\n          \"passage_id\": \"p44\"\n        },\n        {\n          \"passage_id\": \"p45\"\n        }\n      ],\n      \"importance\": \"crucial\",\n      \"kind\": \"subject\",\n      \"linked_entities\": [\n        {\n          \"role\": \"subject\",\n          \"surface\": \"诺顿·威尔森\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"噬梦冒险团\"\n        }\n      ],\n      \"predicate\": \"诺顿提出与噬梦冒险团合作，但黄少天对此明显抗拒，揭示合作意愿的矛盾\",\n      \"rationale\": \"p44描述诺顿提出合作，p45显示黄少天抗拒，p46显示黄少天愤怒。\",\n      \"subject\": \"诺顿·威尔森\",\n      \"temporal_status\": \"current\",\n      \"value\": \"诺顿提出与噬梦冒险团合作，但黄少天对此明显抗拒\"\n    },\n    {\n      \"claim_id\": \"c13\",\n      \"epistemic_status\": \"strongly_implied\",\n      \"evidence\": [\n        {\n          \"passage_id\": \"p26\"\n        },\n        {\n          \"passage_id\": \"p27\"\n        }\n      ],\n      \"importance\": \"crucial\",\n      \"kind\": \"subject\",\n      \"linked_entities\": [\n        {\n          \"role\": \"subject\",\n          \"surface\": \"恐惧神殿\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"诺顿·威尔森\"\n        }\n      ],\n      \"predicate\": \"诺顿提到的目标之一，暗示其重要性以及与噬梦冒险团命运相关\",\n      \"rationale\": \"p26明确恐惧神殿归诺顿所有，p44显示诺顿试图拉噬梦冒险团合作。\",\n      \"subject\": \"恐惧神殿\",\n      \"temporal_status\": \"current\",\n      \"value\": \"恐惧神殿作为势力争夺目标\"\n    },\n    {\n      \"claim_id\": \"c14\",\n      \"epistemic_status\": \"strongly_implied\",\n      \"evidence\": [\n        {\n          \"passage_id\": \"p10\"\n        },\n        {\n          \"passage_id\": \"p11\"\n        }\n      ],\n      \"importance\": \"crucial\",\n      \"kind\": \"subject\",\n      \"linked_entities\": [\n        {\n          \"role\": \"subject\",\n          \"surface\": \"陨落狱\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"陨落回廊\"\n        }\n      ],\n      \"predicate\": \"作为陨落的特殊区域，出现在故事早期，暗示其作为冒险的起点\",\n      \"rationale\": \"p10描述陨落狱开启才只是第一天，p11暗示大部分势力在陨落回廊徘徊。\",\n      \"subject\": \"陨落狱\",\n      \"temporal_status\": \"current\",\n      \"value\": \"陨落狱作为冒险的起点\"\n    },\n    {\n      \"claim_id\": \"c15\",\n      \"epistemic_status\": \"strongly_implied\",\n      \"evidence\": [\n        {\n          \"passage_id\": \"p27\"\n        },\n        {\n          \"passage_id\": \"p50\"\n        }\n      ],\n      \"importance\": \"crucial\",\n      \"kind\": \"subject\",\n      \"linked_entities\": [\n        {\n          \"role\": \"subject\",\n          \"surface\": \"威尔森家族\"\n        },\n        {\n          \"role\": \"linked_entity\",\n          \"surface\": \"诺顿·威尔森\"\n        }\n      ],\n      \"predicate\": \"威尔森家族与诺顿之间的交易与博弈，诺顿试图通过拉凌峰入伙来获取利益\",\n      \"rationale\": \"p27描述诺顿是威尔森家族族长，p50揭示凌峰是威尔森家族宝库被搬空、豪森被宰、裁决学院图书馆被盗的罪魁祸首。\",\n      \"subject\": \"威尔森家族\",\n      \"temporal_status\": \"current\",\n      \"value\": \"威尔森家族与诺顿之间的交易与博弈，诺顿试图通过拉凌峰入伙来获取利益\"\n    }\n  ]\n}",
+  "claims": [
+    {
+      "claim_id": "c1",
+      "kind": "subject",
+      "subject": "黄少天",
+      "predicate": "因神血雨腐蚀而右臂溃烂，表现出对环境的强烈抗拒与痛苦",
+      "value": "黄少天因神血雨腐蚀而右臂溃烂，表现出对环境的强烈抗拒与痛苦",
+      "linked_entities": [
+        {
+          "surface": "黄少天",
+          "role": "subject"
+        },
+        {
+          "surface": "神血雨",
+          "role": "linked_entity"
+        }
+      ],
+      "epistemic_status": "strongly_implied",
+      "temporal_status": "current",
+      "importance": "crucial",
+      "evidence": [
+        {
+          "passage_id": "p21",
+          "quote": "黄少天骂了句脏话，九殒神剑劈开最近处的土包，只听“砰”的一声，里面炸出的竟是一只被劈成两截的机械蜘蛛！",
+          "char_start": 586,
+          "char_end": 637
+        },
+        {
+          "passage_id": "p2",
+          "quote": "黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂龇牙咧嘴，“快走快走！老子宁愿再打十场群架，也不想再继续呆这儿了！真特娘的要命！”",
+          "char_start": 14,
+          "char_end": 76
+        }
+      ],
+      "rationale": "p2直接描述黄少天因神血雨腐蚀而溃烂右臂并龇牙咧嘴，p1仅以感叹句呼应其痛苦状态。"
+    },
+    {
+      "claim_id": "c2",
+      "kind": "subject",
+      "subject": "凌峰",
+      "predicate": "当发现两股势力交战时，当机立断选择绕道而非介入，强调尽快穿过荒原",
+      "value": "凌峰当机立断选择绕道而非介入，强调尽快穿过荒原",
+      "linked_entities": [
+        {
+          "surface": "凌峰",
+          "role": "subject"
+        },
+        {
+          "surface": "啸牙冒险团",
+          "role": "linked_entity"
+        },
+        {
+          "surface": "裁决学院",
+          "role": "linked_entity"
+        }
+      ],
+      "epistemic_status": "strongly_implied",
+      "temporal_status": "current",
+      "importance": "crucial",
+      "evidence": [
+        {
+          "passage_id": "p14",
+          "quote": "凌峰眸中阴阳鱼浮动，“我已察觉到了！是啸牙冒险团和裁决学院的人！我们没必要介入，绕过去！”",
+          "char_start": 385,
+          "char_end": 430
+        },
+        {
+          "passage_id": "p15",
+          "quote": "凌峰当机立断，眼下最重要的就是尽快穿过这片荒原，没必要节外生枝。",
+          "char_start": 432,
+          "char_end": 464
+        }
+      ],
+      "rationale": "p14明确描述凌峰察觉两股势力交战并选择绕开，p15强调他当机立断尽快穿过荒原。"
+    },
+    {
+      "claim_id": "c3",
+      "kind": "subject",
+      "subject": "姜梦月",
+      "predicate": "在听到前方有战斗时闪过激动之色，并主动提出从西南方向前进以避开战斗，展现果断与主动性",
+      "value": "姜梦月主动提出从西南方向前进以避开战斗",
+      "linked_entities": [
+        {
+          "surface": "姜梦月",
+          "role": "subject"
+        },
+        {
+          "surface": "九神廷",
+          "role": "linked_entity"
+        }
+      ],
+      "epistemic_status": "strongly_implied",
+      "temporal_status": "current",
+      "importance": "crucial",
+      "evidence": [
+        {
+          "passage_id": "p9",
+          "quote": "姜梦月眸中闪过一丝激动之色。",
+          "char_start": 228,
+          "char_end": 242
+        },
+        {
+          "passage_id": "p17",
+          "quote": "姜梦月打开全系地图，指着地图上的路径，“从西南方向前进的话，虽然要绕一些路程，但是可以避开前面那两拨人。”",
+          "char_start": 474,
+          "char_end": 527
+        }
+      ],
+      "rationale": "p9描述姜梦月眸中闪过一丝激动之色，p17描述她主动提出从西南方向前进以避开战斗。"
+    },
+    {
+      "claim_id": "c4",
+      "kind": "subject",
+      "subject": "诺顿·威尔森",
+      "predicate": "以噬梦的朋友为诱饵，威胁要征服啸牙冒险团，试图将凌峰拉入自己的阵营",
+      "value": "诺顿试图将凌峰拉入自己的阵营",
+      "linked_entities": [
+        {
+          "surface": "诺顿·威尔森",
+          "role": "subject"
+        },
+        {
+          "surface": "凌峰",
+          "role": "linked_entity"
+        }
+      ],
+      "epistemic_status": "strongly_implied",
+      "temporal_status": "current",
+      "importance": "crucial",
+      "evidence": [
+        {
+          "passage_id": "p26",
+          "quote": "诺顿·威尔森苍老的声音通过扩音装置传来：“噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！”",
+          "char_start": 769,
+          "char_end": 841
+        },
+        {
+          "passage_id": "p27",
+          "quote": "“我草！”",
+          "char_start": 843,
+          "char_end": 848
+        }
+      ],
+      "rationale": "p26明确诺顿威胁要征服啸牙冒险团并要求解决他们，p27显示黄少天对此抗拒。"
+    },
+    {
+      "claim_id": "c5",
+      "kind": "subject",
+      "subject": "凌峰",
+      "predicate": "揭示自己曾伪装成诺顿潜入威尔森家族，且是造成诺顿与威尔森家族冲突的关键人物",
+      "value": "凌峰曾伪装成诺顿潜入威尔森家族，且是造成诺顿与威尔森家族冲突的关键人物",
+      "linked_entities": [
+        {
+          "surface": "凌峰",
+          "role": "subject"
+        },
+        {
+          "surface": "诺顿·威尔森",
+          "role": "linked_entity"
+        },
+        {
+          "surface": "威尔森家族",
+          "role": "linked_entity"
+        }
+      ],
+      "epistemic_status": "strongly_implied",
+      "temporal_status": "current",
+      "importance": "crucial",
+      "evidence": [
+        {
+          "passage_id": "p48",
+          "quote": "凌峰心中暗自冷笑，严格来说，这还是凌峰第一次和这位威尔森家族族长正式照面。",
+          "char_start": 1435,
+          "char_end": 1472
+        },
+        {
+          "passage_id": "p49",
+          "quote": "不过，之前为了偷盗威尔森家族宝库，他曾经伪装成诺顿的模样，自然对这个老家伙十分熟悉。",
+          "char_start": 1474,
+          "char_end": 1516
+        }
+      ],
+      "rationale": "p48描述凌峰第一次与诺顿照面，p49揭示他曾伪装成诺顿，且是威尔森家族冲突的关键人物。"
+    },
+    {
+      "claim_id": "c6",
+      "kind": "subject",
+      "subject": "凌峰",
+      "predicate": "揭示凌峰的过去及其与诺顿·威尔森的敌对关系",
+      "value": "凌峰是威尔森家族冲突的关键人物",
+      "linked_entities": [
+        {
+          "surface": "凌峰",
+          "role": "subject"
+        },
+        {
+          "surface": "诺顿·威尔森",
+          "role": "linked_entity"
+        },
+        {
+          "surface": "威尔森家族",
+          "role": "linked_entity"
+        }
+      ],
+      "epistemic_status": "strongly_implied",
+      "temporal_status": "current",
+      "importance": "crucial",
+      "evidence": [
+        {
+          "passage_id": "p50",
+          "quote": "只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。",
+          "char_start": 1518,
+          "char_end": 1581
+        },
+        {
+          "passage_id": "p51",
+          "quote": "“桀桀桀……”",
+          "char_start": 1583,
+          "char_end": 1590
+        }
+      ],
+      "rationale": "p50明确凌峰是搬空威尔森家族宝库、宰了孙子豪森、盗取裁决学院图书馆的罪魁祸首，p51显示诺顿冷笑。"
+    },
+    {
+      "claim_id": "c7",
+      "kind": "subject",
+      "subject": "莫雷",
+      "predicate": "作为啸牙冒险团团长，伪装成人类，揭露其真实身份为'缝尸鬼'，具有深渊龙蜥的背景",
+      "value": "莫雷是啸牙冒险团团长，伪装成人类，揭露其真实身份为'缝尸鬼'，具有深渊龙蜥的背景",
+      "linked_entities": [
+        {
+          "surface": "莫雷",
+          "role": "subject"
+        },
+        {
+          "surface": "啸牙冒险团",
+          "role": "linked_entity"
+        }
+      ],
+      "epistemic_status": "strongly_implied",
+      "temporal_status": "current",
+      "importance": "crucial",
+      "evidence": [
+        {
+          "passage_id": "p52",
+          "quote": "一个阴冷的笑声传来，却见啸牙冒险团之中，那为首者摘下兽牙面具，露出满是缝合线的脸。",
+          "char_start": 1592,
+          "char_end": 1633
+        },
+        {
+          "passage_id": "p53",
+          "quote": "此人，正是啸牙冒险团团长，“缝尸鬼”莫雷。",
+          "char_start": 1635,
+          "char_end": 1656
+        }
+      ],
+      "rationale": "p52明确莫雷是啸牙冒险团团长'缝尸鬼'，p53描述其座下巨蜥。"
+    },
+    {
+      "claim_id": "c8",
+      "kind": "subject",
+      "subject": "裁决学院",
+      "predicate": "派出侦查单位（五名天灾之城的一部分）参与交战，试图获取噬梦冒险团的传承和图纸",
+      "value": "裁决学院派出侦查单位参与交战，试图获取噬梦冒险团的传承和图纸",
+      "linked_entities": [
+        {
+          "surface": "裁决学院",
+          "role": "subject"
+        },
+        {
+          "surface": "啸牙冒险团",
+          "role": "linked_entity"
+        }
+      ],
+      "epistemic_status": "strongly_implied",
+      "temporal_status": "current",
+      "importance": "crucial",
+      "evidence": [
+        {
+          "passage_id": "p23",
+          "quote": "“是裁决学院的侦查单位！”",
+          "char_start": 690,
+          "char_end": 703
+        },
+        {
+          "passage_id": "p31",
+          "quote": "果然，话音未落，就见三四十名骑乘深渊龙蜥的啸牙团员，追赶着一大群裁决学院的探索队（PS：五大天灾之城共有五座裁决学院，这里只是诺顿带领的一批），朝他们奔袭而来。",
+          "char_start": 907,
+          "char_end": 987
+        }
+      ],
+      "rationale": "p23描述裁决学院派出侦查单位，p31描述啸牙团员追袭裁决学院探索队。"
+    },
+    {
+      "claim_id": "c9",
+      "kind": "subject",
+      "subject": "噬梦冒险团",
+      "predicate": "组成防御圈，背靠背防御，配合姜梦月使用球阵对抗啸牙冒险团的进攻",
+      "value": "噬梦冒险团组成防御圈并配合姜梦月对抗啸牙冒险团",
+      "linked_entities": [
+        {
+          "surface": "噬梦冒险团",
+          "role": "subject"
+        },
+        {
+          "surface": "阿采",
+          "role": "linked_entity"
+        }
+      ],
+      "epistemic_status": "strongly_implied",
+      "temporal_status": "current",
+      "importance": "crucial",
+      "evidence": [
+        {
+          "passage_id": "p38",
+          "quote": "阴山的古尸挡在最前，剩余七名噬梦团员背靠背组成防御圈。",
+          "char_start": 1178,
+          "char_end": 1205
+        },
+        {
+          "passage_id": "p39",
+          "quote": "阿采的眼球锁链如毒蛇昂首，十二枚瞳孔里同时亮起噩梦符文。",
+          "char_start": 1207,
+          "char_end": 1235
+        }
+      ],
+      "rationale": "p38描述噬梦团员背靠背组成防御圈，p39描述阿采的眼球锁链使用。"
+    },
+    {
+      "claim_id": "c10",
+      "kind": "subject",
+      "subject": "阿采",
+      "predicate": "眼球锁链在战斗中主动使用，十二枚瞳孔亮起噩梦符文，显示其与噩梦相关的高阶能力",
+      "value": "阿采的眼球锁链在战斗中主动使用，十二枚瞳孔亮起噩梦符文",
+      "linked_entities": [
+        {
+          "surface": "阿采",
+          "role": "subject"
+        },
+        {
+          "surface": "噩梦符文",
+          "role": "linked_entity"
+        }
+      ],
+      "epistemic_status": "strongly_implied",
+      "temporal_status": "current",
+      "importance": "crucial",
+      "evidence": [
+        {
+          "passage_id": "p39",
+          "quote": "阿采的眼球锁链如毒蛇昂首，十二枚瞳孔里同时亮起噩梦符文。",
+          "char_start": 1207,
+          "char_end": 1235
+        },
+        {
+          "passage_id": "p40",
+          "quote": "霎时间，啸牙团转瞬即至。",
+          "char_start": 1237,
+          "char_end": 1249
+        }
+      ],
+      "rationale": "p39描述阿采的眼球锁链亮起噩梦符文，p40描述啸牙团转瞬即至。"
+    },
+    {
+      "claim_id": "c11",
+      "kind": "subject",
+      "subject": "啸牙冒险团",
+      "predicate": "作为诺顿阵营的入侵者，在凌峰与姜梦月的对峙中主动进攻，企图夺取恐惧神殿和图纸",
+      "value": "啸牙冒险团作为诺顿阵营的入侵者主动进攻，企图夺取恐惧神殿和图纸",
+      "linked_entities": [
+        {
+          "surface": "啸牙冒险团",
+          "role": "subject"
+        },
+        {
+          "surface": "裁决学院",
+          "role": "linked_entity"
+        }
+      ],
+      "epistemic_status": "strongly_implied",
+      "temporal_status": "current",
+      "importance": "crucial",
+      "evidence": [
+        {
+          "passage_id": "p31",
+          "quote": "果然，话音未落，就见三四十名骑乘深渊龙蜥的啸牙团员，追赶着一大群裁决学院的探索队（PS：五大天灾之城共有五座裁决学院，这里只是诺顿带领的一批），朝他们奔袭而来。",
+          "char_start": 907,
+          "char_end": 987
+        },
+        {
+          "passage_id": "p32",
+          "quote": "为首之人还叫嚣着，“区区下级君主信徒，也敢妄想夺去恐惧君主大人的传承！死！！”",
+          "char_start": 989,
+          "char_end": 1028
+        }
+      ],
+      "rationale": "p31描述啸牙团员奔袭而来，p32描述为首者叫嚣夺传承。"
+    },
+    {
+      "claim_id": "c12",
+      "kind": "subject",
+      "subject": "诺顿·威尔森",
+      "predicate": "诺顿提出与噬梦冒险团合作，但黄少天对此明显抗拒，揭示合作意愿的矛盾",
+      "value": "诺顿提出与噬梦冒险团合作，但黄少天对此明显抗拒",
+      "linked_entities": [
+        {
+          "surface": "诺顿·威尔森",
+          "role": "subject"
+        },
+        {
+          "surface": "噬梦冒险团",
+          "role": "linked_entity"
+        }
+      ],
+      "epistemic_status": "strongly_implied",
+      "temporal_status": "current",
+      "importance": "crucial",
+      "evidence": [
+        {
+          "passage_id": "p44",
+          "quote": "“噬梦的朋友！”",
+          "char_start": 1366,
+          "char_end": 1374
+        },
+        {
+          "passage_id": "p45",
+          "quote": "诺顿的声音传来，“击退啸牙之后，老夫还有重谢！”",
+          "char_start": 1376,
+          "char_end": 1400
+        }
+      ],
+      "rationale": "p44描述诺顿提出合作，p45显示黄少天抗拒，p46显示黄少天愤怒。"
+    },
+    {
+      "claim_id": "c13",
+      "kind": "subject",
+      "subject": "恐惧神殿",
+      "predicate": "诺顿提到的目标之一，暗示其重要性以及与噬梦冒险团命运相关",
+      "value": "恐惧神殿作为势力争夺目标",
+      "linked_entities": [
+        {
+          "surface": "恐惧神殿",
+          "role": "subject"
+        },
+        {
+          "surface": "诺顿·威尔森",
+          "role": "linked_entity"
+        }
+      ],
+      "epistemic_status": "strongly_implied",
+      "temporal_status": "current",
+      "importance": "crucial",
+      "evidence": [
+        {
+          "passage_id": "p26",
+          "quote": "诺顿·威尔森苍老的声音通过扩音装置传来：“噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！”",
+          "char_start": 769,
+          "char_end": 841
+        },
+        {
+          "passage_id": "p27",
+          "quote": "“我草！”",
+          "char_start": 843,
+          "char_end": 848
+        }
+      ],
+      "rationale": "p26明确恐惧神殿归诺顿所有，p44显示诺顿试图拉噬梦冒险团合作。"
+    },
+    {
+      "claim_id": "c14",
+      "kind": "subject",
+      "subject": "陨落狱",
+      "predicate": "作为陨落的特殊区域，出现在故事早期，暗示其作为冒险的起点",
+      "value": "陨落狱作为冒险的起点",
+      "linked_entities": [
+        {
+          "surface": "陨落狱",
+          "role": "subject"
+        },
+        {
+          "surface": "陨落回廊",
+          "role": "linked_entity"
+        }
+      ],
+      "epistemic_status": "strongly_implied",
+      "temporal_status": "current",
+      "importance": "crucial",
+      "evidence": [
+        {
+          "passage_id": "p10",
+          "quote": "陨落狱开启才只是第一天，想来大部分势力应该都还在最外层的陨落回廊之中徘徊。",
+          "char_start": 244,
+          "char_end": 281
+        },
+        {
+          "passage_id": "p11",
+          "quote": "若能占得先机，只怕不只是梦魇神殿，就连其他神殿内埋藏的宝物，也能顺带一起夺去。",
+          "char_start": 283,
+          "char_end": 322
+        }
+      ],
+      "rationale": "p10描述陨落狱开启才只是第一天，p11暗示大部分势力在陨落回廊徘徊。"
+    },
+    {
+      "claim_id": "c15",
+      "kind": "subject",
+      "subject": "威尔森家族",
+      "predicate": "威尔森家族与诺顿之间的交易与博弈，诺顿试图通过拉凌峰入伙来获取利益",
+      "value": "威尔森家族与诺顿之间的交易与博弈，诺顿试图通过拉凌峰入伙来获取利益",
+      "linked_entities": [
+        {
+          "surface": "威尔森家族",
+          "role": "subject"
+        },
+        {
+          "surface": "诺顿·威尔森",
+          "role": "linked_entity"
+        }
+      ],
+      "epistemic_status": "strongly_implied",
+      "temporal_status": "current",
+      "importance": "crucial",
+      "evidence": [
+        {
+          "passage_id": "p27",
+          "quote": "“我草！”",
+          "char_start": 843,
+          "char_end": 848
+        },
+        {
+          "passage_id": "p50",
+          "quote": "只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。",
+          "char_start": 1518,
+          "char_end": 1581
+        }
+      ],
+      "rationale": "p27描述诺顿是威尔森家族族长，p50揭示凌峰是威尔森家族宝库被搬空、豪森被宰、裁决学院图书馆被盗的罪魁祸首。"
+    }
+  ],
+  "rejected_claims": []
+}

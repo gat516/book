@@ -1,0 +1,23 @@
+{
+  "experiment": "minimal_source_only_v1",
+  "status": "completed",
+  "input": {
+    "path": "/home/cj/projects/book/eval/knowledge/book-reviewed.json",
+    "chapter": 1,
+    "text_field": "source",
+    "text_sha256": "63af5b6e2231d78cb119b3a528eb9c9aad5076202020b554f7becd9d12a5743c"
+  },
+  "model": {
+    "requested": "maternion/ling-3.0-tiny:8b",
+    "served": "maternion/ling-3.0-tiny:8b"
+  },
+  "raw": "{\"c1\": null, \"c10\": null, \"c11\": null, \"c12\": null, \"c13\": null, \"c14\": null, \"c15\": null, \"c16\": null, \"c2\": null, \"c3\": null, \"c4\": null, \"c5\": null, \"c6\": null, \"c7\": null, \"c8\": null, \"c9\": null}",
+  "graph_ready": false,
+  "usage": {
+    "calls": 1,
+    "input_tokens": 8095,
+    "output_tokens": 104
+  },
+  "statements": [],
+  "seconds": 4.112
+}

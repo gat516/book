@@ -1,0 +1,17 @@
+{
+  "reviewed_by": "Assistant source-text review, not owner-approved ground truth",
+  "source_sha256": "63af5b6e2231d78cb119b3a528eb9c9aad5076202020b554f7becd9d12a5743c",
+  "entities": ["黄少天", "凌峰", "姜梦月", "诺顿·威尔森", "莫雷", "啸牙冒险团", "裁决学院", "威尔森家族", "神血雨"],
+  "cases": [
+    {"id": "injury", "subject": "黄少天", "proposal": "右臂因神血雨腐蚀而有些溃烂。", "expected_supported": true, "review": "The opening directly narrates the injury."},
+    {"id": "healed", "subject": "黄少天", "proposal": "右臂的伤口已经完全愈合。", "expected_supported": false, "review": "The text describes ulceration and pain; no recovery is stated."},
+    {"id": "detour", "subject": "凌峰", "proposal": "首次察觉啸牙冒险团和裁决学院交战时，决定绕开，不介入。", "expected_supported": true, "review": "His initial decision is explicit; later engagement does not erase it."},
+    {"id": "initial_attack", "subject": "凌峰", "proposal": "首次察觉啸牙冒险团和裁决学院交战时，立即决定主动加入战斗，而不是绕开。", "expected_supported": false, "review": "Contradicts his initial decision; do not conflate it with later forced engagement."},
+    {"id": "impersonation", "subject": "凌峰", "proposal": "此前为偷盗威尔森家族宝库，曾伪装成诺顿的模样。", "expected_supported": true, "review": "Explicit historical narration."},
+    {"id": "recognized", "subject": "诺顿·威尔森", "proposal": "在这次见面时认出了凌峰就是偷盗家族宝库、杀死豪森的人。", "expected_supported": false, "review": "Narration explicitly says Norton does not know."},
+    {"id": "leader", "subject": "莫雷", "proposal": "是啸牙冒险团团长。", "expected_supported": true, "review": "Explicit identification after the mask is removed."},
+    {"id": "wrong_leader", "subject": "诺顿·威尔森", "proposal": "是啸牙冒险团团长。", "expected_supported": false, "review": "The named leader is Mo Lei, not Norton."},
+    {"id": "excitement", "subject": "姜梦月", "proposal": "谈及可能日落前进入九神廷时，眸中闪过一丝激动之色。", "expected_supported": true, "review": "Direct observed emotional cue; not a durable personality change."},
+    {"id": "personality_change", "subject": "姜梦月", "proposal": "听到前方交战后，性格从胆怯变得勇敢，完成了持久的性格转变。", "expected_supported": false, "review": "Neither a prior timid personality nor durable transformation is established."}
+  ]
+}

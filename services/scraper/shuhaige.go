@@ -20,13 +20,16 @@ import (
 // (untranslated) continuation source.
 //
 // Content lives in <h1 class="headline"> (title) + <div class="content"> (paragraphs).
-// Chapters are also split across multiple *pages* here (a "下一页"/"next page" link, not
-// necessarily "下一章"/"next chapter") — the walk loop doesn't need to tell those apart:
-// internal chapter_index increments per page visited regardless of what the site calls
-// it, the same non-issue-by-design as twword's "(1/2)" parts would have been.
+// Chapters are also split across multiple *pages* here. The adapter distinguishes
+// "下一页" from "下一章" so walk can assemble every website page into the one source
+// chapter represented by a ChapterEnvelope (§3.1).
 //
 // mode is "translate": this is genuine source-language text the pipeline should MT.
-type shuhaigeSite struct{}
+type shuhaigeSite struct {
+	// False preserves the historical page-per-chapter indexing for a novel that already
+	// contains those immutable rows. Fresh imports always set this true (§0, §3.1).
+	assembleContinuations bool
+}
 
 // shuhaigeBoilerplate are substrings marking the site's own injected chrome rather than
 // story text: a bookmark/promo line on every page, and a "continue to the next page" nag.
@@ -58,7 +61,7 @@ func isShuhaigeBoilerplate(text string) bool {
 
 func (shuhaigeSite) Mode() string { return "translate" }
 
-func (shuhaigeSite) FetchPage(ctx context.Context, client *httpClient, pageURL string) (Page, bool, error) {
+func (s shuhaigeSite) FetchPage(ctx context.Context, client *httpClient, pageURL string) (Page, bool, error) {
 	resp, err := client.Get(ctx, pageURL)
 	if err != nil {
 		return Page{}, false, err
@@ -94,10 +97,10 @@ func (shuhaigeSite) FetchPage(ctx context.Context, client *httpClient, pageURL s
 	// pager div's class is shared with unrelated nav elements elsewhere on the page). A
 	// multi-page chapter's non-final pages say "下一页" ("next page"); its final page
 	// says "下一章" ("next chapter") instead — verified by fetching a real 3-page
-	// chapter this session. The walk loop doesn't need to know which one it got: either
-	// way it's "the next thing to fetch," consistent with chapter_index counting pages
-	// visited rather than the site's own chapter/page numbering.
+	// chapter this session. Marking the former as a continuation prevents website
+	// pagination from consuming a new internal chapter_index.
 	var nextURL string
+	continues := false
 	doc.Find("a").EachWithBreak(func(_ int, a *goquery.Selection) bool {
 		text := strings.TrimSpace(a.Text())
 		if text != "下一页" && text != "下一章" {
@@ -105,13 +108,15 @@ func (shuhaigeSite) FetchPage(ctx context.Context, client *httpClient, pageURL s
 		}
 		if href, exists := a.Attr("href"); exists {
 			nextURL = resolveURL(pageURL, href)
+			continues = s.assembleContinuations && text == "下一页"
 		}
 		return false
 	})
 
 	return Page{
-		Title:   title,
-		Text:    strings.Join(paragraphs, "\n\n"),
-		NextURL: nextURL,
+		Title:     title,
+		Text:      strings.Join(paragraphs, "\n\n"),
+		NextURL:   nextURL,
+		Continues: continues,
 	}, false, nil
 }

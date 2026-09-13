@@ -272,6 +272,25 @@ func (w *Worker) nextChapterIndex(ctx context.Context, novelID string) (int, err
 	return maxIndex + 1, err
 }
 
+func (w *Worker) hasLegacyPageChapters(ctx context.Context, novelID, host string) (bool, error) {
+	// Early scraper versions assigned one chapter_index per website page and recorded
+	// page numbers in source_meta.part. Published rows are append-only (§0), so resuming
+	// one of those novels must retain its established indexing instead of inserting newly
+	// assembled duplicates. Fresh novels use source-chapter assembly (§3.1).
+	var found bool
+	err := w.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM chapter
+			WHERE novel_id = $1
+			  AND source_meta->>'source_url' LIKE $2
+			  AND CASE
+				WHEN source_meta->>'part' ~ '^[0-9]+$' THEN (source_meta->>'part')::int
+				ELSE 1
+			  END > 1
+		)`, novelID, "%://"+host+"/%").Scan(&found)
+	return found, err
+}
+
 func (w *Worker) handle(ctx context.Context, jobID int64) error {
 	job, err := w.loadJob(ctx, jobID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -292,6 +311,18 @@ func (w *Worker) handle(ctx context.Context, jobID int64) error {
 	if site == nil {
 		return w.fail(ctx, jobID, fmt.Sprintf("unsupported site host %q", parsed.Host))
 	}
+	legacyPageMode := false
+	if shuhaige, ok := site.(shuhaigeSite); ok {
+		legacyPageMode, err = w.hasLegacyPageChapters(ctx, job.novelID, parsed.Host)
+		if err != nil {
+			return w.fail(ctx, jobID, err.Error())
+		}
+		if legacyPageMode {
+			shuhaige.assembleContinuations = false
+			site = shuhaige
+			log.Printf("scrape job %d: preserving legacy page-per-chapter indexing", jobID)
+		}
+	}
 
 	if err := w.setStatus(ctx, jobID, "running", ""); err != nil {
 		return err
@@ -302,25 +333,15 @@ func (w *Worker) handle(ctx context.Context, jobID int64) error {
 		return w.fail(ctx, jobID, err.Error())
 	}
 
-	// Part tracking (see SourceMeta.Part in ingest-api): this site serves one source
-	// chapter as several paginated pages, each of which becomes its own chapter row. Pages
-	// of the same chapter carry an identical title, so a title change is the chapter
-	// boundary and the part counter restarts there.
-	//
-	// Note the counter starts from part 1 at the START URL, so a scrape that begins
-	// mid-chapter labels that first partial chapter from 1 rather than its true part
-	// number — the site does not expose one, and only the first chapter of a run is
-	// affected.
 	previousTitle := ""
 	part := 0
-
 	onChapter := func(page Page) error {
-		if page.Title == previousTitle {
+		if legacyPageMode && page.Title == previousTitle {
 			part++
 		} else {
 			part = 1
-			previousTitle = page.Title
 		}
+		previousTitle = page.Title
 		req := pasteChapterRequest{
 			ChapterIndex:  nextIndex,
 			RawText:       page.Text,
@@ -343,7 +364,7 @@ func (w *Worker) handle(ctx context.Context, jobID int64) error {
 			// re-running a scrape from the original start URL crosses the whole
 			// already-ingested prefix before reaching new chapters, and stopping at the
 			// first duplicate would mean it never gets there.
-			log.Printf("scrape job %d: skipping already-ingested page %q", jobID, page.Title)
+			log.Printf("scrape job %d: skipping already-ingested chapter %q", jobID, page.Title)
 			return nil
 		}
 		nextIndex++

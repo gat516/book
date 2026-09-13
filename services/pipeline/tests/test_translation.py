@@ -12,10 +12,15 @@ from pipeline.translation import (
     strip_locked_term_tags,
     validate_glossary_constraints,
 )
-from pipeline.stages.translate import _translation_fingerprint
+from pipeline.batch import BatchManager
+from pipeline.stages.translate import (
+    _complete_translation,
+    _translation_fingerprint,
+    _translation_parts,
+)
 from types import SimpleNamespace
 
-from fixtures import make_config
+from fixtures import FakeProvider, make_config
 
 
 def test_translation_prompt_front_loads_glossary_and_keeps_chapter_in_user_block():
@@ -41,15 +46,80 @@ def test_translate_key_changes_with_glossary_snapshot():
 
 
 def test_translation_fingerprint_uses_complete_glossary_not_only_version():
-    ctx=SimpleNamespace(novel=SimpleNamespace(source_lang="zh",target_lang="en",ontology={"kinds":["place"]}))
+    ctx=SimpleNamespace(cfg=make_config(), novel=SimpleNamespace(source_lang="zh",target_lang="en",ontology={"kinds":["place"]}))
     assert _translation_fingerprint(ctx,[("九神殿","Dream Palace")]) != _translation_fingerprint(ctx,[("九神殿","Nine Gods Hall")])
 
 
 def test_translation_fingerprint_includes_rendering_prompt(monkeypatch):
-    ctx = SimpleNamespace(novel=SimpleNamespace(source_lang="zh", target_lang="en", ontology={}))
+    ctx = SimpleNamespace(cfg=make_config(), novel=SimpleNamespace(source_lang="zh", target_lang="en", ontology={}))
     before = _translation_fingerprint(ctx, [])
     monkeypatch.setattr("pipeline.stages.translate.build_system_prompt", lambda **kwargs: "new policy")
     assert before != _translation_fingerprint(ctx, [])
+
+
+def test_translation_fingerprint_includes_request_chunk_budget():
+    novel = SimpleNamespace(source_lang="zh", target_lang="en", ontology={})
+    small = SimpleNamespace(cfg=make_config(translation_chunk_tokens=100), novel=novel)
+    large = SimpleNamespace(cfg=make_config(translation_chunk_tokens=200), novel=novel)
+    assert _translation_fingerprint(small, []) != _translation_fingerprint(large, [])
+
+
+def test_translation_parts_bound_long_chapter_without_changing_source_order():
+    ctx = SimpleNamespace(
+        cfg=make_config(translation_chunk_tokens=4),
+        language_profile=language_profile_for("zh"),
+    )
+    source = "甲乙丙丁。\n\n戊己庚辛。\n\n壬癸子丑。"
+    parts = _translation_parts(source, ctx)
+
+    assert len(parts) == 3
+    assert parts == ["甲乙丙丁。", "戊己庚辛。", "壬癸子丑。"]
+
+
+def test_translation_parts_hard_split_one_oversized_sentence():
+    ctx = SimpleNamespace(
+        cfg=make_config(translation_chunk_tokens=2),
+        language_profile=language_profile_for("zh"),
+    )
+    parts = _translation_parts("甲乙丙丁戊。", ctx)
+
+    assert "".join(parts) == "甲乙丙丁戊。"
+    assert all(len(part) / ctx.language_profile.chars_per_token <= 2 for part in parts)
+
+
+async def test_complete_translation_reassembles_ordered_part_results():
+    def respond(prompt, _system):
+        for source, target in (("甲乙丙丁。", "First."), ("戊己庚辛。", "Second."),
+                               ("壬癸子丑。", "Third.")):
+            if source in prompt:
+                return target
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    provider = FakeProvider(respond, served_model="translation-model")
+    ctx = SimpleNamespace(
+        cfg=make_config(translation_chunk_tokens=4),
+        language_profile=language_profile_for("zh"),
+        batch_manager=BatchManager(provider),
+    )
+    translated, served_provider, served_model = await _complete_translation(
+        ctx,
+        root_key="root-key",
+        source_text="甲乙丙丁。\n\n戊己庚辛。\n\n壬癸子丑。",
+        system="translate faithfully",
+        requested_model="translation-model",
+    )
+
+    assert translated == "First.\n\nSecond.\n\nThird."
+    assert (served_provider, served_model) == ("ollama", "translation-model")
+    assert len(provider.batch_requests) == 1
+    assert len(provider.batch_requests[0]) == 3
+    assert ["part 1 of 3" in call["system"] for call in provider.calls] == [
+        True,
+        False,
+        False,
+    ]
+    assert "part 2 of 3" in provider.calls[1]["system"]
+    assert "part 3 of 3" in provider.calls[2]["system"]
 
 
 def test_rendering_policy_preserves_locks_and_distinguishes_names_from_terms():

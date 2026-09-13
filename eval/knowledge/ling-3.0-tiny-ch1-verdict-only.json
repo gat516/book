@@ -1,0 +1,220 @@
+{
+  "experiment": "single_candidate_source_v1",
+  "status": "completed",
+  "verdict_only": true,
+  "source_sha256": "63af5b6e2231d78cb119b3a528eb9c9aad5076202020b554f7becd9d12a5743c",
+  "reviewed_by": "Assistant source-text review, not owner-approved ground truth",
+  "model": "maternion/ling-3.0-tiny:8b",
+  "graph_ready": false,
+  "results": [
+    {
+      "id": "injury",
+      "subject": "黄少天",
+      "proposal": "右臂因神血雨腐蚀而有些溃烂。",
+      "expected_supported": true,
+      "review": "The opening directly narrates the injury.",
+      "raw": "{\"passage_ids\": [\"p2\"], \"reason\": \"原文黄少天描述右臂因神血雨腐蚀而溃烂，与候选陈述一致。\", \"supported\": true}",
+      "served_model": "maternion/ling-3.0-tiny:8b",
+      "input_tokens": 2306,
+      "output_tokens": 39,
+      "verdict": {
+        "passage_ids": [
+          "p2"
+        ],
+        "reason": "原文黄少天描述右臂因神血雨腐蚀而溃烂，与候选陈述一致。",
+        "supported": true
+      },
+      "seconds": 1.998
+    },
+    {
+      "id": "healed",
+      "subject": "黄少天",
+      "proposal": "右臂的伤口已经完全愈合。",
+      "expected_supported": false,
+      "review": "The text describes ulceration and pain; no recovery is stated.",
+      "raw": "{\"passage_ids\": [\"p2\"], \"reason\": \"原文中黄少天描述右臂因神血雨腐蚀而溃烂，并未提及伤口已完全愈合。\", \"supported\": false}",
+      "served_model": "maternion/ling-3.0-tiny:8b",
+      "input_tokens": 2301,
+      "output_tokens": 42,
+      "verdict": {
+        "passage_ids": [
+          "p2"
+        ],
+        "reason": "原文中黄少天描述右臂因神血雨腐蚀而溃烂，并未提及伤口已完全愈合。",
+        "supported": false
+      },
+      "seconds": 0.949
+    },
+    {
+      "id": "detour",
+      "subject": "凌峰",
+      "proposal": "首次察觉啸牙冒险团和裁决学院交战时，决定绕开，不介入。",
+      "expected_supported": true,
+      "review": "His initial decision is explicit; later engagement does not erase it.",
+      "raw": "{\"passage_ids\": [\"p14\", \"p15\"], \"reason\": \"凌峰在p14中明确表示已察觉啸牙冒险团和裁决学院交战，并决定绕开不介入；p15进一步说明他当机立断没必要节外生枝。陈述与原文一致。\",\"supported\": true}",
+      "served_model": "maternion/ling-3.0-tiny:8b",
+      "input_tokens": 2312,
+      "output_tokens": 72,
+      "verdict": {
+        "passage_ids": [
+          "p14",
+          "p15"
+        ],
+        "reason": "凌峰在p14中明确表示已察觉啸牙冒险团和裁决学院交战，并决定绕开不介入；p15进一步说明他当机立断没必要节外生枝。陈述与原文一致。",
+        "supported": true
+      },
+      "seconds": 1.208
+    },
+    {
+      "id": "initial_attack",
+      "subject": "凌峰",
+      "proposal": "首次察觉啸牙冒险团和裁决学院交战时，立即决定主动加入战斗，而不是绕开。",
+      "expected_supported": false,
+      "review": "Contradicts his initial decision; do not conflate it with later forced engagement.",
+      "raw": "{\"passage_ids\": [\"p14\", \"p15\"], \"reason\": \"凌峰在察觉到啸牙冒险团和裁决学院交战时，明确表示‘没必要介入，绕过去’并当机立断决定‘尽快穿过这片荒原，没必要节外生枝’，并未主动加入战斗。\", \"supported\": false}",
+      "served_model": "maternion/ling-3.0-tiny:8b",
+      "input_tokens": 2315,
+      "output_tokens": 71,
+      "verdict": {
+        "passage_ids": [
+          "p14",
+          "p15"
+        ],
+        "reason": "凌峰在察觉到啸牙冒险团和裁决学院交战时，明确表示‘没必要介入，绕过去’并当机立断决定‘尽快穿过这片荒原，没必要节外生枝’，并未主动加入战斗。",
+        "supported": false
+      },
+      "seconds": 1.249
+    },
+    {
+      "id": "impersonation",
+      "subject": "凌峰",
+      "proposal": "此前为偷盗威尔森家族宝库，曾伪装成诺顿的模样。",
+      "expected_supported": true,
+      "review": "Explicit historical narration.",
+      "raw": "{\"passage_ids\": [\"p49\"], \"reason\": \"原文p49明确提到凌峰曾伪装成诺顿的模样来偷盗威尔森家族宝库，支持该陈述。\", \"supported\": true}",
+      "served_model": "maternion/ling-3.0-tiny:8b",
+      "input_tokens": 2310,
+      "output_tokens": 46,
+      "verdict": {
+        "passage_ids": [
+          "p49"
+        ],
+        "reason": "原文p49明确提到凌峰曾伪装成诺顿的模样来偷盗威尔森家族宝库，支持该陈述。",
+        "supported": true
+      },
+      "seconds": 1.012
+    },
+    {
+      "id": "recognized",
+      "subject": "诺顿·威尔森",
+      "proposal": "在这次见面时认出了凌峰就是偷盗家族宝库、杀死豪森的人。",
+      "expected_supported": false,
+      "review": "Narration explicitly says Norton does not know.",
+      "raw": "{\"passage_ids\": [\"p48\", \"p49\", \"p50\"], \"reason\": \"原文中凌峰确实认出了诺顿·威尔森是偷盗家族宝库、杀死豪森的人，但陈述中“在这次见面时”不准确，因为凌峰在之前为了偷盗威尔森家族宝库曾伪装成诺顿的模样，且两人并非初次见面。\", \"supported\": false}",
+      "served_model": "maternion/ling-3.0-tiny:8b",
+      "input_tokens": 2318,
+      "output_tokens": 85,
+      "verdict": {
+        "passage_ids": [
+          "p48",
+          "p49",
+          "p50"
+        ],
+        "reason": "原文中凌峰确实认出了诺顿·威尔森是偷盗家族宝库、杀死豪森的人，但陈述中“在这次见面时”不准确，因为凌峰在之前为了偷盗威尔森家族宝库曾伪装成诺顿的模样，且两人并非初次见面。",
+        "supported": false
+      },
+      "seconds": 1.291
+    },
+    {
+      "id": "leader",
+      "subject": "莫雷",
+      "proposal": "是啸牙冒险团团长。",
+      "expected_supported": true,
+      "review": "Explicit identification after the mask is removed.",
+      "raw": "{\"passage_ids\": [\"p53\"], \"reason\": \"原文直接指出“此人，正是啸牙冒险团团长，‘缝尸鬼’莫雷。”，主语为莫雷，宾语为啸牙冒险团团长，陈述完全符合原文。\", \"supported\": true}",
+      "served_model": "maternion/ling-3.0-tiny:8b",
+      "input_tokens": 2301,
+      "output_tokens": 61,
+      "verdict": {
+        "passage_ids": [
+          "p53"
+        ],
+        "reason": "原文直接指出“此人，正是啸牙冒险团团长，‘缝尸鬼’莫雷。”，主语为莫雷，宾语为啸牙冒险团团长，陈述完全符合原文。",
+        "supported": true
+      },
+      "seconds": 1.195
+    },
+    {
+      "id": "wrong_leader",
+      "subject": "诺顿·威尔森",
+      "proposal": "是啸牙冒险团团长。",
+      "expected_supported": false,
+      "review": "The named leader is Mo Lei, not Norton.",
+      "raw": "{\"passage_ids\": [\"p55\", \"p56\"], \"reason\": \"原文中莫雷是啸牙冒险团团长，诺顿·威尔森是恐惧神殿的君主。诺顿·威尔森并非啸牙冒险团团长。\", \"supported\": false}",
+      "served_model": "maternion/ling-3.0-tiny:8b",
+      "input_tokens": 2307,
+      "output_tokens": 59,
+      "verdict": {
+        "passage_ids": [
+          "p55",
+          "p56"
+        ],
+        "reason": "原文中莫雷是啸牙冒险团团长，诺顿·威尔森是恐惧神殿的君主。诺顿·威尔森并非啸牙冒险团团长。",
+        "supported": false
+      },
+      "seconds": 1.197
+    },
+    {
+      "id": "excitement",
+      "subject": "姜梦月",
+      "proposal": "谈及可能日落前进入九神廷时，眸中闪过一丝激动之色。",
+      "expected_supported": true,
+      "review": "Direct observed emotional cue; not a durable personality change.",
+      "raw": "{\"passage_ids\": [\"p8\", \"p9\"], \"reason\": \"原文p8提到'或许我们今天日落前就能进入九神廷'，p9提到'姜梦月眸中闪过一丝激动之色'，陈述与原文一致。\",\"supported\": true}",
+      "served_model": "maternion/ling-3.0-tiny:8b",
+      "input_tokens": 2312,
+      "output_tokens": 58,
+      "verdict": {
+        "passage_ids": [
+          "p8",
+          "p9"
+        ],
+        "reason": "原文p8提到'或许我们今天日落前就能进入九神廷'，p9提到'姜梦月眸中闪过一丝激动之色'，陈述与原文一致。",
+        "supported": true
+      },
+      "seconds": 1.015
+    },
+    {
+      "id": "personality_change",
+      "subject": "姜梦月",
+      "proposal": "听到前方交战后，性格从胆怯变得勇敢，完成了持久的性格转变。",
+      "expected_supported": false,
+      "review": "Neither a prior timid personality nor durable transformation is established.",
+      "raw": "{\"passage_ids\": [\"p37\", \"p38\", \"p39\"], \"reason\": \"原文中姜梦月准备与啸牙冒险团一战，但并未展现性格从胆怯到勇敢的转变，也未完成持久的性格转变。\", \"supported\": false}",
+      "served_model": "maternion/ling-3.0-tiny:8b",
+      "input_tokens": 2311,
+      "output_tokens": 59,
+      "verdict": {
+        "passage_ids": [
+          "p37",
+          "p38",
+          "p39"
+        ],
+        "reason": "原文中姜梦月准备与啸牙冒险团一战，但并未展现性格从胆怯到勇敢的转变，也未完成持久的性格转变。",
+        "supported": false
+      },
+      "seconds": 1.065
+    }
+  ],
+  "score": {
+    "true_positive": 5,
+    "false_positive": 0,
+    "true_negative": 5,
+    "false_negative": 0,
+    "errors": 0,
+    "correct": 10,
+    "total": 10,
+    "note": "Verdict agreement only; generated values and links require separate review."
+  },
+  "seconds": 12.194
+}

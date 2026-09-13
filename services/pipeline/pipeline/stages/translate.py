@@ -9,6 +9,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 
+from pipeline.batch import BatchProtocolError, BatchRequestFailed
 from pipeline.context import PipelineState, StageContext, language_profile_for
 from pipeline.jobs import (
     idempotency_key,
@@ -59,17 +60,117 @@ async def _glossary(db, novel_id: str) -> tuple[int, list[tuple[str, str, str]]]
 def _translation_fingerprint(ctx: StageContext, glossary) -> str:
     """Hash every stable input included in the translation system prompt."""
     payload = [
-        "translation-input-v3",
+        "translation-input-v4",
         build_system_prompt(source_lang=ctx.novel.source_lang, target_lang=ctx.novel.target_lang,
                             ontology=ctx.novel.ontology, glossary=glossary),
         ctx.novel.source_lang,
         ctx.novel.target_lang,
         ctx.novel.ontology,
         glossary,
+        ctx.cfg.translation_chunk_tokens,
     ]
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def _translation_parts(source_text: str, ctx: StageContext) -> list[str]:
+    """Split provider input without changing the source-chapter boundary.
+
+    ``chunk_text`` preserves paragraph and sentence boundaries. Its documented escape
+    hatch for a single over-budget sentence is useful for retrieval, but translation
+    requests need a hard estimated ceiling, so this function subdivides only that rare
+    case. The complete ordered output is reassembled before it enters storage or any
+    later pipeline stage (instructions.md §3.1, §5).
+    """
+    budget = ctx.cfg.translation_chunk_tokens
+    if budget < 1:
+        raise ValueError("translation_chunk_tokens must be positive")
+
+    max_chars = max(1, int(budget * ctx.language_profile.chars_per_token))
+    parts: list[str] = []
+    for chunk in chunk_text(source_text, ctx.language_profile, budget=budget):
+        if len(chunk.text) <= max_chars:
+            parts.append(chunk.text)
+            continue
+        parts.extend(
+            chunk.text[start : start + max_chars]
+            for start in range(0, len(chunk.text), max_chars)
+        )
+    return [part for part in parts if part.strip()]
+
+
+async def _complete_translation(
+    ctx: StageContext,
+    *,
+    root_key: str,
+    source_text: str,
+    system: str,
+    requested_model: str,
+) -> tuple[str, str, str]:
+    """Translate ordered parts and require one consistent served identity."""
+    parts = _translation_parts(source_text, ctx)
+    if not parts:
+        raise ValueError("cannot translate empty source text")
+
+    request_ids = [
+        root_key
+        if len(parts) == 1
+        else hashlib.sha256(f"{root_key}\x1fpart:{i + 1}:{len(parts)}".encode()).hexdigest()
+        for i in range(len(parts))
+    ]
+    requests: list[BatchRequest] = []
+    for index, (request_id, part) in enumerate(
+        zip(request_ids, parts, strict=True), start=1
+    ):
+        part_system = system
+        if len(parts) > 1:
+            part_system += (
+                f"\nThis input is contiguous part {index} of {len(parts)} of one chapter. "
+                "Translate only this part; do not add a title, recap, or continuation note."
+            )
+        requests.append(
+            {
+                "id": request_id,
+                "prompt": build_user_prompt(part),
+                "system": part_system,
+                "pin_model": True,
+                "model": requested_model,
+            }
+        )
+    batch_ids = await ctx.batch_manager.batch_submit_split(requests)
+    results = []
+    for batch_id in batch_ids:
+        results.extend(await ctx.batch_manager.batch_poll(batch_id))
+
+    expected = set(request_ids)
+    unexpected = [result["id"] for result in results if result["id"] not in expected]
+    if unexpected:
+        raise BatchProtocolError(f"translation batch returned unexpected result ids {unexpected!r}")
+    by_id = {}
+    for result in results:
+        request_id = result["id"]
+        if request_id in by_id:
+            raise BatchProtocolError(f"translation batch returned duplicate result {request_id!r}")
+        by_id[request_id] = result
+    missing = [request_id for request_id in request_ids if request_id not in by_id]
+    if missing:
+        raise BatchProtocolError(f"translation batch returned no result for {missing!r}")
+
+    ordered = [by_id[request_id] for request_id in request_ids]
+    for result in ordered:
+        if result["error"] is not None:
+            raise BatchRequestFailed(result["id"], result["error"])
+    identities = {(result["served_provider"], result["served_model"]) for result in ordered}
+    if len(identities) != 1:
+        raise RuntimeError(f"translation parts changed serving identity: {sorted(identities)!r}")
+    served_provider, served_model = identities.pop()
+    translated = (
+        ordered[0]["output"]
+        if len(ordered) == 1
+        else "\n\n".join(result["output"].strip() for result in ordered)
+    )
+    return translated, served_provider, served_model
 
 
 def _read_object(objects, bucket: str, key: str) -> str:
@@ -207,24 +308,18 @@ class TranslateStage:
             # constraints below still checks the ORIGINAL raw_text: what a term is
             # required by is the chapter as written, not the primed copy we sent.
             primed = prime_glossary_terms(state.envelope.raw_text, glossary)
-            request: BatchRequest = {
-                "id": key,
-                "prompt": build_user_prompt(primed),
-                "system": build_system_prompt(
+            translated, served_provider, served_model = await _complete_translation(
+                ctx,
+                root_key=key,
+                source_text=primed,
+                system=build_system_prompt(
                     source_lang=ctx.novel.source_lang,
                     target_lang=ctx.novel.target_lang,
                     ontology=ctx.novel.ontology,
                     glossary=glossary,
                 ),
-                "pin_model": True,
-                "model": requested_model,
-            }
-            batch_id = await ctx.batch_manager.batch_submit([request])
-            results = await ctx.batch_manager.batch_poll(batch_id)
-            result = ctx.batch_manager.require_single_result(key, results)
-            translated = result["output"]
-            served_provider = result["served_provider"]
-            served_model = result["served_model"]
+                requested_model=requested_model,
+            )
 
         translated_by = f"{served_provider}:{served_model}"
         if not served_provider or not served_model:
@@ -251,30 +346,25 @@ class TranslateStage:
             if not first_violation.recoverable:
                 raise
             protected_key = hashlib.sha256(f"{key}\x1fprotected-term-retry-v1".encode()).hexdigest()
-            protected_request: BatchRequest = {
-                "id": protected_key,
-                "prompt": build_user_prompt(
-                    protect_glossary_terms(state.envelope.raw_text, glossary)
-                ),
-                "system": build_system_prompt(
+            protected_translation, retry_provider, retry_model = await _complete_translation(
+                ctx,
+                root_key=protected_key,
+                source_text=protect_glossary_terms(state.envelope.raw_text, glossary),
+                system=build_system_prompt(
                     source_lang=ctx.novel.source_lang,
                     target_lang=ctx.novel.target_lang,
                     ontology=ctx.novel.ontology,
                     glossary=glossary,
                 ) + "\nPreserve every <locked-term> element and its inner text exactly.",
-                "pin_model": True,
-                "model": requested_model,
-            }
-            retry_batch = await ctx.batch_manager.batch_submit([protected_request])
-            retry_results = await ctx.batch_manager.batch_poll(retry_batch)
-            retry = ctx.batch_manager.require_single_result(protected_key, retry_results)
-            retry_identity = f"{retry['served_provider']}:{retry['served_model']}"
+                requested_model=requested_model,
+            )
+            retry_identity = f"{retry_provider}:{retry_model}"
             if retry_identity != translated_by:
                 raise RuntimeError(
                     f"protected translation retry changed serving identity from "
                     f"{translated_by!r} to {retry_identity!r}"
                 )
-            protected_translation = strip_locked_term_tags(retry["output"])
+            protected_translation = strip_locked_term_tags(protected_translation)
             try:
                 validate_glossary_constraints(
                     state.envelope.raw_text, protected_translation, glossary

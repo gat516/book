@@ -98,6 +98,10 @@ class Config:
     textproc_backend: str
     textproc_grpc_addr: str
     textproc_timeout_seconds: float
+    # Maximum estimated SOURCE tokens sent in one translation request. One source
+    # chapter remains one ChapterEnvelope and one stored translation; this only bounds
+    # the provider-facing work used to produce it (instructions.md §3.1, §5).
+    translation_chunk_tokens: int = 6000
     gateway_addr: str = "localhost:8081"
     gateway_backend: str = "local_gpu"
     gateway_provider: str = "ollama"
@@ -265,6 +269,9 @@ class Config:
             textproc_backend=_getenv("TEXTPROC_BACKEND", "python"),
             textproc_grpc_addr=_getenv("TEXTPROC_GRPC_ADDR", "localhost:50051"),
             textproc_timeout_seconds=float(_getenv("TEXTPROC_TIMEOUT_SECONDS", "10")),
+            translation_chunk_tokens=max(
+                1, int(_getenv("TRANSLATION_CHUNK_TOKENS", "6000"))
+            ),
         )
 
 

@@ -77,7 +77,7 @@ async def test_provider_rejection_persists_exponential_wait_without_sleep():
         async def execute(self, sql, params=()):
             self.calls.append((sql, params))
             if "SELECT provider_retry_attempts" in sql:
-                return Cursor((self.attempts, False))
+                return Cursor((self.attempts, False, True))
             if "UPDATE chapter SET provider_retry_attempts=%s" in sql:
                 self.attempts = params[0]
             return Cursor(None)
@@ -91,11 +91,35 @@ async def test_provider_rejection_persists_exponential_wait_without_sleep():
 
 
 @pytest.mark.asyncio
+async def test_discarded_enrichment_suppresses_only_retry_after_translation_is_ready():
+    from novel_llm import AdmissionRejected
+
+    class Cursor:
+        async def fetchone(self): return (1, True, True)
+
+    class DB:
+        def __init__(self): self.calls = []
+        def transaction(self): return self
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return None
+        async def execute(self, sql, params=()):
+            self.calls.append((sql, params))
+            return Cursor()
+
+    worker = Worker.__new__(Worker)
+    worker.db = DB()
+    msg = type("Message", (), {"novel_id": "novel", "chapter_index": 1})()
+    await worker._record_provider_rejection(msg, AdmissionRejected(retry_after_s=1))
+
+    assert not any("provider_retry_at=now()" in sql for sql, _ in worker.db.calls)
+
+
+@pytest.mark.asyncio
 async def test_provider_retry_after_is_never_shortened_and_success_resets_streak():
     from novel_llm import AdmissionRejected
 
     class Cursor:
-        async def fetchone(self): return (1, False)
+        async def fetchone(self): return (1, False, False)
 
     class DB:
         def __init__(self): self.calls = []
@@ -119,7 +143,10 @@ async def test_provider_retry_after_is_never_shortened_and_success_resets_streak
 @pytest.mark.asyncio
 async def test_retry_sweep_orders_both_due_states_and_enqueues_deduped_messages():
     class Cursor:
-        async def fetchall(self): return [("novel", 3, "error", "generation")]
+        async def fetchall(self): return [
+            ("novel", 3, "error", None, False),
+            ("novel", 4, "done", "generation", True),
+        ]
 
     class DB:
         def __init__(self): self.sql = ""; self.params = ()
@@ -138,9 +165,10 @@ async def test_retry_sweep_orders_both_due_states_and_enqueues_deduped_messages(
     assert "provider_retry_at <= now()" in worker.db.sql
     assert "ORDER BY LEAST" in worker.db.sql
     assert worker.db.params == (MAX_ENRICHMENT_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS)
-    assert len(worker.redis.calls) == 1
-    assert '"enrichment":true' in worker.redis.calls[0][-1]
-    assert '"record_generation_id":"generation"' in worker.redis.calls[0][-1]
+    assert len(worker.redis.calls) == 2
+    assert '"enrichment":true' not in worker.redis.calls[0][-1]
+    assert '"enrichment":true' in worker.redis.calls[1][-1]
+    assert '"record_generation_id":"generation"' in worker.redis.calls[1][-1]
 
 
 @pytest.mark.asyncio
@@ -148,7 +176,7 @@ async def test_provider_rejection_fifth_attempt_is_terminal():
     from novel_llm import AdmissionRejected
 
     class Cursor:
-        async def fetchone(self): return (4, False)
+        async def fetchone(self): return (4, False, False)
 
     class DB:
         def __init__(self): self.calls = []
@@ -888,7 +916,7 @@ async def test_shared_cooldown_deferral_does_not_spend_a_provider_attempt():
     from novel_llm import AdmissionRejected
 
     class Cursor:
-        async def fetchone(self): return (2, False)
+        async def fetchone(self): return (2, False, False)
 
     class DB:
         def __init__(self): self.calls = []

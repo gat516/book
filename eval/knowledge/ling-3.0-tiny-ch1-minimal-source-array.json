@@ -1,0 +1,333 @@
+{
+  "experiment": "minimal_source_only_v1",
+  "status": "completed",
+  "input": {
+    "path": "/home/cj/projects/book/eval/knowledge/book-reviewed.json",
+    "chapter": 1,
+    "text_field": "source",
+    "text_sha256": "63af5b6e2231d78cb119b3a528eb9c9aad5076202020b554f7becd9d12a5743c"
+  },
+  "model": {
+    "requested": "maternion/ling-3.0-tiny:8b",
+    "served": "maternion/ling-3.0-tiny:8b"
+  },
+  "settings": {
+    "decoding": "schema",
+    "max_statements": 16,
+    "shape": "array"
+  },
+  "raw": "{\"statements\": [{\"passage_ids\": [\"p1\", \"p2\"], \"statement\": \"黄少天因神血雨腐蚀右臂溃烂，咒骂并表示不愿久留。\"}, {\"passage_ids\": [\"p3\", \"p6\"], \"statement\": \"凌峰带领噬梦冒险团继续前行，一路异常顺利。\"}, {\"passage_ids\": [\"p4\", \"p5\"], \"statement\": \"神血雨停歇后空气有铁锈腥味，湮兽被驱赶退至巢穴。\"}, {\"passage_ids\": [\"p7\", \"p8\"], \"statement\": \"约莫两个时辰后，猜测日落前能进入九神廷。\"}, {\"passage_ids\": [\"p9\", \"p10\"], \"statement\": \"姜梦月激动，陨落狱开启才第一天，多数势力仍在陨落回廊。\"}, {\"passage_ids\": [\"p11\", \"p12\"], \"statement\": \"若占得先机，可夺其他神殿宝物；阿采发现两股势力交战。\"}, {\"passage_ids\": [\"p13\", \"p14\"], \"statement\": \"凌峰察觉啸牙冒险团和裁决学院的人，建议绕过去。\"}, {\"passage_ids\": [\"p15\", \"p16\"], \"statement\": \"凌峰当机立断需尽快穿过荒原，阿采指示走这边。\"}, {\"passage_ids\": [\"p17\", \"p18\"], \"statement\": \"姜梦月建议从西南前进以避开人，阿采同意。\"}, {\"passage_ids\": [\"p19\", \"p20\"], \"statement\": \"荒原地面隆起，骸骨守卫出现，黄少天骂脏话。\"}, {\"passage_ids\": [\"p21\", \"p22\"], \"statement\": \"黄少天用九殒神剑劈开机械蜘蛛，刻有威尔森家族徽记。\"}, {\"passage_ids\": [\"p23\", \"p24\"], \"statement\": \"阿采确认是裁决学院侦查单位，姜梦月炸毁机械蜘蛛并说被发现了。\"}, {\"passage_ids\": [\"p25\", \"p26\"], \"statement\": \"东北方爆发银光，诺顿声音命令解决啸牙冒险团。\"}, {\"passage_ids\": [\"p27\", \"p28\"], \"statement\": \"黄少天骂凌峰，问他们何时说好的。\"}, {\"passage_ids\": [\"p29\", \"p30\"], \"statement\": \"凌峰白眼称老东西想拉他们下水。\"}, {\"passage_ids\": [\"p31\", \"p32\"], \"statement\": \"啸牙团员追推进探索队，首领叫嚣夺传承。\"}]}",
+  "graph_ready": false,
+  "usage": {
+    "calls": 1,
+    "input_tokens": 2288,
+    "output_tokens": 577
+  },
+  "statements": [
+    {
+      "candidate_id": "c1",
+      "statement": "黄少天因神血雨腐蚀右臂溃烂，咒骂并表示不愿久留。",
+      "evidence": [
+        {
+          "id": "p1",
+          "char_start": 0,
+          "char_end": 12,
+          "text": "“嘶！你小子命可真大！”"
+        },
+        {
+          "id": "p2",
+          "char_start": 14,
+          "char_end": 76,
+          "text": "黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂龇牙咧嘴，“快走快走！老子宁愿再打十场群架，也不想再继续呆这儿了！真特娘的要命！”"
+        }
+      ],
+      "review_required": true
+    },
+    {
+      "candidate_id": "c2",
+      "statement": "凌峰带领噬梦冒险团继续前行，一路异常顺利。",
+      "evidence": [
+        {
+          "id": "p3",
+          "char_start": 78,
+          "char_end": 107,
+          "text": "凌峰摇头笑笑，也不多言，带领着噬梦冒险团一众成员继续前行。"
+        },
+        {
+          "id": "p6",
+          "char_start": 166,
+          "char_end": 181,
+          "text": "这一路前行，反倒是异常的顺利。"
+        }
+      ],
+      "review_required": true
+    },
+    {
+      "candidate_id": "c3",
+      "statement": "神血雨停歇后空气有铁锈腥味，湮兽被驱赶退至巢穴。",
+      "evidence": [
+        {
+          "id": "p4",
+          "char_start": 109,
+          "char_end": 129,
+          "text": "神血雨停歇后，空气中弥漫着铁锈般的腥味。"
+        },
+        {
+          "id": "p5",
+          "char_start": 131,
+          "char_end": 164,
+          "text": "不过似乎也得益于此，至少那些湮兽也被神血雨驱赶，只能退到巢穴躲避。"
+        }
+      ],
+      "review_required": true
+    },
+    {
+      "candidate_id": "c4",
+      "statement": "约莫两个时辰后，猜测日落前能进入九神廷。",
+      "evidence": [
+        {
+          "id": "p7",
+          "char_start": 183,
+          "char_end": 191,
+          "text": "约莫两个时辰后。"
+        },
+        {
+          "id": "p8",
+          "char_start": 193,
+          "char_end": 226,
+          "text": "“按照这个速度，不出意外的话，或许我们今天日落前就能进入九神廷！”"
+        }
+      ],
+      "review_required": true
+    },
+    {
+      "candidate_id": "c5",
+      "statement": "姜梦月激动，陨落狱开启才第一天，多数势力仍在陨落回廊。",
+      "evidence": [
+        {
+          "id": "p9",
+          "char_start": 228,
+          "char_end": 242,
+          "text": "姜梦月眸中闪过一丝激动之色。"
+        },
+        {
+          "id": "p10",
+          "char_start": 244,
+          "char_end": 281,
+          "text": "陨落狱开启才只是第一天，想来大部分势力应该都还在最外层的陨落回廊之中徘徊。"
+        }
+      ],
+      "review_required": true
+    },
+    {
+      "candidate_id": "c6",
+      "statement": "若占得先机，可夺其他神殿宝物；阿采发现两股势力交战。",
+      "evidence": [
+        {
+          "id": "p11",
+          "char_start": 283,
+          "char_end": 322,
+          "text": "若能占得先机，只怕不只是梦魇神殿，就连其他神殿内埋藏的宝物，也能顺带一起夺去。"
+        },
+        {
+          "id": "p12",
+          "char_start": 324,
+          "char_end": 377,
+          "text": "就在此时，阿采手中那眼球锁链忽然轻轻颤动起来，她目光一凝，沉声道：“君主大人，前方似乎有两股势力在交战！”"
+        }
+      ],
+      "review_required": true
+    },
+    {
+      "candidate_id": "c7",
+      "statement": "凌峰察觉啸牙冒险团和裁决学院的人，建议绕过去。",
+      "evidence": [
+        {
+          "id": "p13",
+          "char_start": 379,
+          "char_end": 383,
+          "text": "“嗯。”"
+        },
+        {
+          "id": "p14",
+          "char_start": 385,
+          "char_end": 430,
+          "text": "凌峰眸中阴阳鱼浮动，“我已察觉到了！是啸牙冒险团和裁决学院的人！我们没必要介入，绕过去！”"
+        }
+      ],
+      "review_required": true
+    },
+    {
+      "candidate_id": "c8",
+      "statement": "凌峰当机立断需尽快穿过荒原，阿采指示走这边。",
+      "evidence": [
+        {
+          "id": "p15",
+          "char_start": 432,
+          "char_end": 464,
+          "text": "凌峰当机立断，眼下最重要的就是尽快穿过这片荒原，没必要节外生枝。"
+        },
+        {
+          "id": "p16",
+          "char_start": 466,
+          "char_end": 472,
+          "text": "“走这边！”"
+        }
+      ],
+      "review_required": true
+    },
+    {
+      "candidate_id": "c9",
+      "statement": "姜梦月建议从西南前进以避开人，阿采同意。",
+      "evidence": [
+        {
+          "id": "p17",
+          "char_start": 474,
+          "char_end": 527,
+          "text": "姜梦月打开全系地图，指着地图上的路径，“从西南方向前进的话，虽然要绕一些路程，但是可以避开前面那两拨人。”"
+        },
+        {
+          "id": "p18",
+          "char_start": 529,
+          "char_end": 538,
+          "text": "“那就依你所言。”"
+        }
+      ],
+      "review_required": true
+    },
+    {
+      "candidate_id": "c10",
+      "statement": "荒原地面隆起，骸骨守卫出现，黄少天骂脏话。",
+      "evidence": [
+        {
+          "id": "p19",
+          "char_start": 540,
+          "char_end": 567,
+          "text": "凌峰微微点头，正准备动身，荒原地面突然隆起数十个鼓包。"
+        },
+        {
+          "id": "p20",
+          "char_start": 569,
+          "char_end": 584,
+          "text": "“娘的，又是那些骸骨守卫么？”"
+        }
+      ],
+      "review_required": true
+    },
+    {
+      "candidate_id": "c11",
+      "statement": "黄少天用九殒神剑劈开机械蜘蛛，刻有威尔森家族徽记。",
+      "evidence": [
+        {
+          "id": "p21",
+          "char_start": 586,
+          "char_end": 637,
+          "text": "黄少天骂了句脏话，九殒神剑劈开最近处的土包，只听“砰”的一声，里面炸出的竟是一只被劈成两截的机械蜘蛛！"
+        },
+        {
+          "id": "p22",
+          "char_start": 639,
+          "char_end": 688,
+          "text": "而那机械蜘蛛的腹部，还刻着威尔森家族徽记，虽然已经被劈成两半，但八只复眼却还在疯狂扫描周围的一切。"
+        }
+      ],
+      "review_required": true
+    },
+    {
+      "candidate_id": "c12",
+      "statement": "阿采确认是裁决学院侦查单位，姜梦月炸毁机械蜘蛛并说被发现了。",
+      "evidence": [
+        {
+          "id": "p23",
+          "char_start": 690,
+          "char_end": 703,
+          "text": "“是裁决学院的侦查单位！”"
+        },
+        {
+          "id": "p24",
+          "char_start": 705,
+          "char_end": 744,
+          "text": "姜梦月目光一凝，一击将那机械蜘蛛彻底炸毁，同时回头朝众人道：“我们被发现了！”"
+        }
+      ],
+      "review_required": true
+    },
+    {
+      "candidate_id": "c13",
+      "statement": "东北方爆发银光，诺顿声音命令解决啸牙冒险团。",
+      "evidence": [
+        {
+          "id": "p25",
+          "char_start": 746,
+          "char_end": 767,
+          "text": "仿佛印证她的话，东北方突然爆发出刺目银光。"
+        },
+        {
+          "id": "p26",
+          "char_start": 769,
+          "char_end": 841,
+          "text": "诺顿·威尔森苍老的声音通过扩音装置传来：“噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！”"
+        }
+      ],
+      "review_required": true
+    },
+    {
+      "candidate_id": "c14",
+      "statement": "黄少天骂凌峰，问他们何时说好的。",
+      "evidence": [
+        {
+          "id": "p27",
+          "char_start": 843,
+          "char_end": 848,
+          "text": "“我草！”"
+        },
+        {
+          "id": "p28",
+          "char_start": 850,
+          "char_end": 872,
+          "text": "黄少天扭头看向凌峰，“你们什么时候说好的？”"
+        }
+      ],
+      "review_required": true
+    },
+    {
+      "candidate_id": "c15",
+      "statement": "凌峰白眼称老东西想拉他们下水。",
+      "evidence": [
+        {
+          "id": "p29",
+          "char_start": 874,
+          "char_end": 881,
+          "text": "“说好个——”"
+        },
+        {
+          "id": "p30",
+          "char_start": 883,
+          "char_end": 905,
+          "text": "凌峰一翻白眼，“那老东西，想要拉我们下水！”"
+        }
+      ],
+      "review_required": true
+    },
+    {
+      "candidate_id": "c16",
+      "statement": "啸牙团员追推进探索队，首领叫嚣夺传承。",
+      "evidence": [
+        {
+          "id": "p31",
+          "char_start": 907,
+          "char_end": 987,
+          "text": "果然，话音未落，就见三四十名骑乘深渊龙蜥的啸牙团员，追赶着一大群裁决学院的探索队（PS：五大天灾之城共有五座裁决学院，这里只是诺顿带领的一批），朝他们奔袭而来。"
+        },
+        {
+          "id": "p32",
+          "char_start": 989,
+          "char_end": 1028,
+          "text": "为首之人还叫嚣着，“区区下级君主信徒，也敢妄想夺去恐惧君主大人的传承！死！！”"
+        }
+      ],
+      "review_required": true
+    }
+  ],
+  "seconds": 6.99
+}

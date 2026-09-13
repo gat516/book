@@ -9,12 +9,12 @@ import (
 )
 
 // walk follows next-links starting at startURL until a stop condition fires, calling
-// onChapter for each successfully fetched page in order. shouldStop is polled between
-// chapters (never mid-fetch) so cancellation always lands cleanly at a chapter boundary
-// (instructions.md §7.2's stop-condition discipline, applied to cancellation too).
+// onChapter for each complete source chapter in order. Adapters mark continuation pages,
+// which are assembled before this callback. shouldStop is polled between website pages,
+// but an incomplete source chapter is never ingested (instructions.md §3.1).
 //
 // Stop conditions (§7.2 M2.3, "don't trust a single signal"): a real not-found response,
-// no next link on the page, or short content whose hash matches a chapter already seen
+// no next link on the page, or short content whose hash matches a page already seen
 // this walk (a site serving the same placeholder page instead of a real 404). The hash is
 // computed locally (crypto/sha256) rather than via textproc's HashContent RPC — this
 // comparison is entirely within one scraper run's own fetched pages, never against a
@@ -32,6 +32,7 @@ func walk(
 ) (stopReason string, err error) {
 	seenHashes := make(map[string]bool)
 	pageURL := startURL
+	var chapter *Page
 
 	for {
 		stop, err := shouldStop(ctx)
@@ -66,9 +67,27 @@ func walk(
 		}
 		seenHashes[hash] = true
 
-		if err := onChapter(page); err != nil {
-			return "", fmt.Errorf("handle chapter at %s: %w", pageURL, err)
+		if chapter == nil {
+			assembled := page
+			chapter = &assembled
+		} else {
+			chapter.Text += "\n\n" + page.Text
+			chapter.NextURL = page.NextURL
+			chapter.Continues = page.Continues
 		}
+
+		if page.Continues {
+			if page.NextURL == "" {
+				return "", fmt.Errorf("page %s says the chapter continues but has no next link", pageURL)
+			}
+			pageURL = page.NextURL
+			continue
+		}
+
+		if err := onChapter(*chapter); err != nil {
+			return "", fmt.Errorf("handle chapter at %s: %w", chapter.SourceURL, err)
+		}
+		chapter = nil
 
 		if page.NextURL == "" {
 			return "no_next_link", nil

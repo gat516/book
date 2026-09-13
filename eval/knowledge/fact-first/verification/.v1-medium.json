@@ -1,0 +1,3008 @@
+{
+  "format": "fact-first-verification-v1",
+  "created_at": "2026-09-11T15:36:41.116047+00:00",
+  "provider": "groq",
+  "requested_model": "openai/gpt-oss-120b",
+  "chapter": 1,
+  "split": "regression",
+  "source_hash": "63af5b6e2231d78cb119b3a528eb9c9aad5076202020b554f7becd9d12a5743c",
+  "verified_artifact": "discover=memory;normalize=memory;source=63af5b6e2231d78cb119b3a528eb9c9aad5076202020b554f7becd9d12a5743c",
+  "verified_model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "attempts": [
+    {
+      "attempt": 1,
+      "stage": "verify",
+      "request_digest": "4204d19a49cee80c57ddc4afb42577888739d4929d7206c75d136113cec9ddcf",
+      "transport": "api",
+      "status": "completed",
+      "started_at": "2026-09-11T15:36:41.117318+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p001\":\"“嘶！你小子命可真大！”\",\"p002\":\"黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂龇牙咧嘴，“快走快走！老子宁愿再打十场群架，也不想再继续呆这儿了！真特娘的要命！”\",\"p003\":\"凌峰摇头笑笑，也不多言，带领着噬梦冒险团一众成员继续前行。\",\"p004\":\"神血雨停歇后，空气中弥漫着铁锈般的腥味。\",\"p005\":\"不过似乎也得益于此，至少那些湮兽也被神血雨驱赶，只能退到巢穴躲避。\",\"p006\":\"这一路前行，反倒是异常的顺利。\",\"p007\":\"约莫两个时辰后。\"},\"assertions\":[{\"id\":\"F0\",\"subject\":\"黄少天\",\"predicate\":\"injured_right_arm\",\"object\":\"溃烂\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"右臂溃烂\",\"stated_basis\":\"stated\",\"cited\":[\"p001\",\"p002\"],\"context\":[\"p003\",\"p004\",\"p005\",\"p006\"]},{\"id\":\"F1\",\"subject\":\"黄少天\",\"predicate\":\"injury_cause\",\"object\":\"神血雨腐蚀\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"右臂溃烂\",\"stated_basis\":\"stated\",\"cited\":[\"p001\",\"p002\"],\"context\":[\"p003\",\"p004\",\"p005\",\"p006\"]},{\"id\":\"F2\",\"subject\":\"神血雨\",\"predicate\":\"status\",\"object\":\"停歇\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"驱赶至巢穴\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p004\",\"p005\"],\"context\":[\"p003\",\"p006\",\"p007\"]},{\"id\":\"F3\",\"subject\":\"神血雨\",\"predicate\":\"effect_on_yin_beasts\",\"object\":\"驱赶至巢穴\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"驱赶至巢穴\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p005\"],\"context\":[\"p003\",\"p004\",\"p006\",\"p007\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 975,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 4.705598,
+      "response": "<verifications>\n  <v id=\"F0\" verdict=\"insufficient_evidence\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"wrong\" passage=\"p002\">黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂龇牙咧嘴</v>\n  <v id=\"F1\" verdict=\"insufficient_evidence\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"wrong\" passage=\"p002\">黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂龇牙咧嘴</v>\n  <v id=\"F2\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p004\">神血雨停歇后，空气中弥漫着铁锈般的腥味。</v>\n  <v id=\"F3\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p005\">那些湮兽也被神血雨驱赶，只能退到巢穴躲避。</v>\n</verifications>",
+      "served_provider": "groq",
+      "served_model": "openai/gpt-oss-120b",
+      "usage": {
+        "input_tokens": 933,
+        "output_tokens": 2086,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "rate_limits": {},
+      "validation_status": "accepted"
+    },
+    {
+      "attempt": 2,
+      "stage": "verify",
+      "request_digest": "92573e7ecff4986241af9acacad9ae313c5e3c578de91a6f919cb076ae483801",
+      "transport": "api",
+      "status": "completed",
+      "started_at": "2026-09-11T15:36:45.823745+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p010\":\"陨落狱开启才只是第一天，想来大部分势力应该都还在最外层的陨落回廊之中徘徊。\",\"p011\":\"若能占得先机，只怕不只是梦魇神殿，就连其他神殿内埋藏的宝物，也能顺带一起夺去。\",\"p012\":\"就在此时，阿采手中那眼球锁链忽然轻轻颤动起来，她目光一凝，沉声道：“君主大人，前方似乎有两股势力在交战！”\",\"p013\":\"“嗯。”\",\"p014\":\"凌峰眸中阴阳鱼浮动，“我已察觉到了！是啸牙冒险团和裁决学院的人！我们没必要介入，绕过去！”\",\"p015\":\"凌峰当机立断，眼下最重要的就是尽快穿过这片荒原，没必要节外生枝。\",\"p016\":\"“走这边！”\",\"p017\":\"姜梦月打开全系地图，指着地图上的路径，“从西南方向前进的话，虽然要绕一些路程，但是可以避开前面那两拨人。”\"},\"assertions\":[{\"id\":\"F4\",\"subject\":\"阿采\",\"predicate\":\"ability\",\"object\":\"使用眼球锁链侦查\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"十二枚瞳孔亮起噩梦符文\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p012\",\"p014\"],\"context\":[\"p010\",\"p011\",\"p013\",\"p015\"]},{\"id\":\"F5\",\"subject\":\"眼球锁链\",\"predicate\":\"feature\",\"object\":\"十二枚瞳孔亮起噩梦符文\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"十二枚瞳孔亮起噩梦符文\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p012\"],\"context\":[\"p010\",\"p011\",\"p013\",\"p014\",\"p015\"]},{\"id\":\"F6\",\"subject\":\"凌峰\",\"predicate\":\"decision\",\"object\":\"绕过交战区域\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"不想节外生枝\",\"stated_basis\":\"stated\",\"cited\":[\"p014\",\"p015\"],\"context\":[\"p012\",\"p013\",\"p016\",\"p017\"]},{\"id\":\"F7\",\"subject\":\"凌峰\",\"predicate\":\"reason\",\"object\":\"不想节外生枝\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"不想节外生枝\",\"stated_basis\":\"stated\",\"cited\":[\"p015\"],\"context\":[\"p012\",\"p013\",\"p014\",\"p016\",\"p017\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1098,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 5.004942,
+      "response": "<verifications>\n  <v id=\"F4\" verdict=\"insufficient_evidence\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p012\">就在此时，阿采手中那眼球锁链忽然轻轻颤动起来，她目光一凝，沉声道：“君主大人，前方似乎有两股势力在交战！”</v>\n  <v id=\"F5\" verdict=\"insufficient_evidence\" subject=\"ok\" predicate=\"ok\" object=\"wrong\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p012\">就在此时，阿采手中那眼球锁链忽然轻轻颤动起来，她目光一凝，沉声道：“君主大人，前方似乎有两股势力在交战！”</v>\n  <v id=\"F6\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"ok\" time=\"ok\" passage=\"p014\">“我们没必要介入，绕过去！”</v>\n  <v id=\"F7\" verdict=\"insufficient_evidence\" subject=\"ok\" predicate=\"ok\" object=\"wrong\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p015\">凌峰当机立断，眼下最重要的就是尽快穿过这片荒原，没必要节外生枝。</v>\n</verifications>",
+      "served_provider": "groq",
+      "served_model": "openai/gpt-oss-120b",
+      "usage": {
+        "input_tokens": 1016,
+        "output_tokens": 2246,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "rate_limits": {},
+      "validation_status": "accepted"
+    },
+    {
+      "attempt": 3,
+      "stage": "verify",
+      "request_digest": "9fef0b366037cbd94b8428a8190d199437a6de0cbdfea8f1703021278d8ae5e3",
+      "transport": "api",
+      "status": "failed",
+      "started_at": "2026-09-11T15:36:50.830238+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p015\":\"凌峰当机立断，眼下最重要的就是尽快穿过这片荒原，没必要节外生枝。\",\"p016\":\"“走这边！”\",\"p017\":\"姜梦月打开全系地图，指着地图上的路径，“从西南方向前进的话，虽然要绕一些路程，但是可以避开前面那两拨人。”\",\"p018\":\"“那就依你所言。”\",\"p019\":\"凌峰微微点头，正准备动身，荒原地面突然隆起数十个鼓包。\",\"p020\":\"“娘的，又是那些骸骨守卫么？”\",\"p021\":\"黄少天骂了句脏话，九殒神剑劈开最近处的土包，只听“砰”的一声，里面炸出的竟是一只被劈成两截的机械蜘蛛！\",\"p022\":\"而那机械蜘蛛的腹部，还刻着威尔森家族徽记，虽然已经被劈成两半，但八只复眼却还在疯狂扫描周围的一切。\",\"p023\":\"“是裁决学院的侦查单位！”\",\"p024\":\"姜梦月目光一凝，一击将那机械蜘蛛彻底炸毁，同时回头朝众人道：“我们被发现了！”\"},\"assertions\":[{\"id\":\"F8\",\"subject\":\"姜梦月\",\"predicate\":\"planned_route\",\"object\":\"西南方向绕行\",\"stated_temporal\":\"planned\",\"stated_qualifiers\":\"全系地图指示路径\",\"stated_basis\":\"stated\",\"cited\":[\"p017\",\"p018\"],\"context\":[\"p015\",\"p016\",\"p019\"]},{\"id\":\"F9\",\"subject\":\"姜梦月\",\"predicate\":\"tool_used\",\"object\":\"全系地图\",\"stated_temporal\":\"planned\",\"stated_qualifiers\":\"全系地图指示路径\",\"stated_basis\":\"stated\",\"cited\":[\"p017\"],\"context\":[\"p015\",\"p016\",\"p018\",\"p019\"]},{\"id\":\"F10\",\"subject\":\"机械蜘蛛\",\"predicate\":\"affiliation\",\"object\":\"裁决学院侦查单位\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"姜梦月\",\"stated_qualifiers\":\"腹部刻威尔森家族徽记\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p021\",\"p022\",\"p023\"],\"context\":[\"p017\",\"p018\",\"p019\",\"p020\",\"p024\"]},{\"id\":\"F11\",\"subject\":\"机械蜘蛛\",\"predicate\":\"emblem\",\"object\":\"威尔森家族徽记\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"姜梦月\",\"stated_qualifiers\":\"腹部刻威尔森家族徽记\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p022\"],\"context\":[\"p017\",\"p018\",\"p019\",\"p020\",\"p021\",\"p023\",\"p024\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1184,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 0.318721,
+      "error": {
+        "type": "AdmissionRejected",
+        "message": "rate_limited",
+        "category": "rate_limited",
+        "retry_after_s": 24.0,
+        "exact_hint": true,
+        "rate_limits": {
+          "retry-after": "24",
+          "x-ratelimit-limit-requests": "1000",
+          "x-ratelimit-limit-tokens": "8000",
+          "x-ratelimit-remaining-requests": "993",
+          "x-ratelimit-remaining-tokens": "26",
+          "x-ratelimit-reset-requests": "10m4.8s",
+          "x-ratelimit-reset-tokens": "59.805s"
+        },
+        "rate_limit_details": {
+          "limit_tokens": 8000,
+          "used_tokens": 7974,
+          "requested_tokens": 3161
+        }
+      },
+      "usage": null
+    },
+    {
+      "attempt": 4,
+      "stage": "verify",
+      "request_digest": "9fef0b366037cbd94b8428a8190d199437a6de0cbdfea8f1703021278d8ae5e3",
+      "transport": "api",
+      "status": "failed",
+      "started_at": "2026-09-11T15:37:16.176468+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p015\":\"凌峰当机立断，眼下最重要的就是尽快穿过这片荒原，没必要节外生枝。\",\"p016\":\"“走这边！”\",\"p017\":\"姜梦月打开全系地图，指着地图上的路径，“从西南方向前进的话，虽然要绕一些路程，但是可以避开前面那两拨人。”\",\"p018\":\"“那就依你所言。”\",\"p019\":\"凌峰微微点头，正准备动身，荒原地面突然隆起数十个鼓包。\",\"p020\":\"“娘的，又是那些骸骨守卫么？”\",\"p021\":\"黄少天骂了句脏话，九殒神剑劈开最近处的土包，只听“砰”的一声，里面炸出的竟是一只被劈成两截的机械蜘蛛！\",\"p022\":\"而那机械蜘蛛的腹部，还刻着威尔森家族徽记，虽然已经被劈成两半，但八只复眼却还在疯狂扫描周围的一切。\",\"p023\":\"“是裁决学院的侦查单位！”\",\"p024\":\"姜梦月目光一凝，一击将那机械蜘蛛彻底炸毁，同时回头朝众人道：“我们被发现了！”\"},\"assertions\":[{\"id\":\"F8\",\"subject\":\"姜梦月\",\"predicate\":\"planned_route\",\"object\":\"西南方向绕行\",\"stated_temporal\":\"planned\",\"stated_qualifiers\":\"全系地图指示路径\",\"stated_basis\":\"stated\",\"cited\":[\"p017\",\"p018\"],\"context\":[\"p015\",\"p016\",\"p019\"]},{\"id\":\"F9\",\"subject\":\"姜梦月\",\"predicate\":\"tool_used\",\"object\":\"全系地图\",\"stated_temporal\":\"planned\",\"stated_qualifiers\":\"全系地图指示路径\",\"stated_basis\":\"stated\",\"cited\":[\"p017\"],\"context\":[\"p015\",\"p016\",\"p018\",\"p019\"]},{\"id\":\"F10\",\"subject\":\"机械蜘蛛\",\"predicate\":\"affiliation\",\"object\":\"裁决学院侦查单位\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"姜梦月\",\"stated_qualifiers\":\"腹部刻威尔森家族徽记\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p021\",\"p022\",\"p023\"],\"context\":[\"p017\",\"p018\",\"p019\",\"p020\",\"p024\"]},{\"id\":\"F11\",\"subject\":\"机械蜘蛛\",\"predicate\":\"emblem\",\"object\":\"威尔森家族徽记\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"姜梦月\",\"stated_qualifiers\":\"腹部刻威尔森家族徽记\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p022\"],\"context\":[\"p017\",\"p018\",\"p019\",\"p020\",\"p021\",\"p023\",\"p024\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1184,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 0.102988,
+      "error": {
+        "type": "AdmissionRejected",
+        "message": "rate_limited",
+        "category": "rate_limited",
+        "retry_after_s": 28.0,
+        "exact_hint": true,
+        "rate_limits": {
+          "retry-after": "28",
+          "x-ratelimit-limit-requests": "1000",
+          "x-ratelimit-limit-tokens": "8000",
+          "x-ratelimit-remaining-requests": "993",
+          "x-ratelimit-remaining-tokens": "3391",
+          "x-ratelimit-reset-requests": "10m4.8s",
+          "x-ratelimit-reset-tokens": "34.567s"
+        },
+        "rate_limit_details": {
+          "limit_tokens": 8000,
+          "used_tokens": 4609,
+          "requested_tokens": 7048
+        }
+      },
+      "usage": null
+    },
+    {
+      "attempt": 5,
+      "stage": "verify",
+      "request_digest": "9fef0b366037cbd94b8428a8190d199437a6de0cbdfea8f1703021278d8ae5e3",
+      "transport": "api",
+      "status": "completed",
+      "started_at": "2026-09-11T15:37:45.310073+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p015\":\"凌峰当机立断，眼下最重要的就是尽快穿过这片荒原，没必要节外生枝。\",\"p016\":\"“走这边！”\",\"p017\":\"姜梦月打开全系地图，指着地图上的路径，“从西南方向前进的话，虽然要绕一些路程，但是可以避开前面那两拨人。”\",\"p018\":\"“那就依你所言。”\",\"p019\":\"凌峰微微点头，正准备动身，荒原地面突然隆起数十个鼓包。\",\"p020\":\"“娘的，又是那些骸骨守卫么？”\",\"p021\":\"黄少天骂了句脏话，九殒神剑劈开最近处的土包，只听“砰”的一声，里面炸出的竟是一只被劈成两截的机械蜘蛛！\",\"p022\":\"而那机械蜘蛛的腹部，还刻着威尔森家族徽记，虽然已经被劈成两半，但八只复眼却还在疯狂扫描周围的一切。\",\"p023\":\"“是裁决学院的侦查单位！”\",\"p024\":\"姜梦月目光一凝，一击将那机械蜘蛛彻底炸毁，同时回头朝众人道：“我们被发现了！”\"},\"assertions\":[{\"id\":\"F8\",\"subject\":\"姜梦月\",\"predicate\":\"planned_route\",\"object\":\"西南方向绕行\",\"stated_temporal\":\"planned\",\"stated_qualifiers\":\"全系地图指示路径\",\"stated_basis\":\"stated\",\"cited\":[\"p017\",\"p018\"],\"context\":[\"p015\",\"p016\",\"p019\"]},{\"id\":\"F9\",\"subject\":\"姜梦月\",\"predicate\":\"tool_used\",\"object\":\"全系地图\",\"stated_temporal\":\"planned\",\"stated_qualifiers\":\"全系地图指示路径\",\"stated_basis\":\"stated\",\"cited\":[\"p017\"],\"context\":[\"p015\",\"p016\",\"p018\",\"p019\"]},{\"id\":\"F10\",\"subject\":\"机械蜘蛛\",\"predicate\":\"affiliation\",\"object\":\"裁决学院侦查单位\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"姜梦月\",\"stated_qualifiers\":\"腹部刻威尔森家族徽记\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p021\",\"p022\",\"p023\"],\"context\":[\"p017\",\"p018\",\"p019\",\"p020\",\"p024\"]},{\"id\":\"F11\",\"subject\":\"机械蜘蛛\",\"predicate\":\"emblem\",\"object\":\"威尔森家族徽记\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"姜梦月\",\"stated_qualifiers\":\"腹部刻威尔森家族徽记\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p022\"],\"context\":[\"p017\",\"p018\",\"p019\",\"p020\",\"p021\",\"p023\",\"p024\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1184,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 6.832622,
+      "response": "<verifications>\n  <v id=\"F8\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p017\">“姜梦月打开全系地图，指着地图上的路径，“从西南方向前进的话，虽然要绕一些路程，但是可以避开前面那两拨人。”</v>\n  <v id=\"F9\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p017\">“姜梦月打开全系地图，指着地图上的路径，</v>\n  <v id=\"F10\" verdict=\"insufficient_evidence\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"wrong\" condition=\"na\" time=\"ok\" passage=\"p023\">“是裁决学院的侦查单位！”</v>\n  <v id=\"F11\" verdict=\"insufficient_evidence\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"wrong\" condition=\"na\" time=\"ok\" passage=\"p022\">“而那机械蜘蛛的腹部，还刻着威尔森家族徽记，虽然已经被劈成两半，但八只复眼却还在疯狂扫描周围的一切。”</v>\n</verifications>",
+      "served_provider": "groq",
+      "served_model": "openai/gpt-oss-120b",
+      "usage": {
+        "input_tokens": 1048,
+        "output_tokens": 2933,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "rate_limits": {},
+      "validation_status": "accepted"
+    },
+    {
+      "attempt": 6,
+      "stage": "verify",
+      "request_digest": "aa094f27b52045f90c86f6b545eeca22246fb1b0bda28216c6f048ca3bbf2011",
+      "transport": "api",
+      "status": "completed",
+      "started_at": "2026-09-11T15:37:52.144143+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p017\":\"姜梦月打开全系地图，指着地图上的路径，“从西南方向前进的话，虽然要绕一些路程，但是可以避开前面那两拨人。”\",\"p018\":\"“那就依你所言。”\",\"p019\":\"凌峰微微点头，正准备动身，荒原地面突然隆起数十个鼓包。\",\"p020\":\"“娘的，又是那些骸骨守卫么？”\",\"p021\":\"黄少天骂了句脏话，九殒神剑劈开最近处的土包，只听“砰”的一声，里面炸出的竟是一只被劈成两截的机械蜘蛛！\",\"p022\":\"而那机械蜘蛛的腹部，还刻着威尔森家族徽记，虽然已经被劈成两半，但八只复眼却还在疯狂扫描周围的一切。\",\"p023\":\"“是裁决学院的侦查单位！”\",\"p024\":\"姜梦月目光一凝，一击将那机械蜘蛛彻底炸毁，同时回头朝众人道：“我们被发现了！”\",\"p025\":\"仿佛印证她的话，东北方突然爆发出刺目银光。\",\"p026\":\"诺顿·威尔森苍老的声音通过扩音装置传来：“噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！”\",\"p027\":\"“我草！”\",\"p028\":\"黄少天扭头看向凌峰，“你们什么时候说好的？”\",\"p029\":\"“说好个——”\",\"p030\":\"凌峰一翻白眼，“那老东西，想要拉我们下水！”\",\"p031\":\"果然，话音未落，就见三四十名骑乘深渊龙蜥的啸牙团员，追赶着一大群裁决学院的探索队（PS：五大天灾之城共有五座裁决学院，这里只是诺顿带领的一批），朝他们奔袭而来。\",\"p046\":\"“妈的，谁跟你是朋友！”\",\"p047\":\"黄少天破口大骂，却被凌峰抬手拦下。\",\"p048\":\"凌峰心中暗自冷笑，严格来说，这还是凌峰第一次和这位威尔森家族族长正式照面。\",\"p049\":\"不过，之前为了偷盗威尔森家族宝库，他曾经伪装成诺顿的模样，自然对这个老家伙十分熟悉。\",\"p050\":\"只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。\",\"p051\":\"“桀桀桀……”\"},\"assertions\":[{\"id\":\"F12\",\"subject\":\"机械蜘蛛\",\"predicate\":\"status\",\"object\":\"被劈成两半但复眼仍在扫描\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"姜梦月\",\"stated_qualifiers\":\"腹部刻威尔森家族徽记\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p021\",\"p022\"],\"context\":[\"p017\",\"p018\",\"p019\",\"p020\",\"p023\",\"p024\"]},{\"id\":\"F13\",\"subject\":\"诺顿·威尔森\",\"predicate\":\"proposal\",\"object\":\"联合噬梦冒险团对付啸牙冒险团\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"诺顿·威尔森\",\"stated_qualifiers\":\"许诺恐惧神殿归噬梦\",\"stated_basis\":\"stated\",\"cited\":[\"p026\"],\"context\":[\"p023\",\"p024\",\"p025\",\"p027\",\"p028\",\"p029\",\"p030\"]},{\"id\":\"F14\",\"subject\":\"诺顿·威尔森\",\"predicate\":\"promise\",\"object\":\"恐惧神殿归噬梦冒险团\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"诺顿·威尔森\",\"stated_qualifiers\":\"许诺恐惧神殿归噬梦\",\"stated_basis\":\"stated\",\"cited\":[\"p026\"],\"context\":[\"p023\",\"p024\",\"p025\",\"p027\",\"p028\",\"p029\",\"p030\"]},{\"id\":\"F15\",\"subject\":\"凌峰\",\"predicate\":\"past_action\",\"object\":\"伪装成诺顿偷盗威尔森家族宝库\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"曾伪装诺顿偷盗宝库、宰杀豪森、盗取图书馆\",\"stated_basis\":\"stated\",\"cited\":[\"p049\"],\"context\":[\"p028\",\"p029\",\"p030\",\"p031\",\"p046\",\"p047\",\"p048\",\"p050\",\"p051\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1872,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 6.679217,
+      "response": "<verifications>\n  <v id=\"F12\" verdict=\"insufficient_evidence\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"wrong\" condition=\"ok\" time=\"ok\" passage=\"p022\">而那机械蜘蛛的腹部，还刻着威尔森家族徽记，虽然已经被劈成两半，但八只复眼却还在疯狂扫描周围的一切。</v>\n  <v id=\"F13\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"ok\" time=\"ok\" passage=\"p026\">诺顿·威尔森苍老的声音通过扩音装置传来：“噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！”</v>\n  <v id=\"F14\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"ok\" time=\"ok\" passage=\"p026\">诺顿·威尔森苍老的声音通过扩音装置传来：“噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！”</v>\n  <v id=\"F15\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"ok\" time=\"ok\" passage=\"p049\">不过，之前为了偷盗威尔森家族宝库，他曾经伪装成诺顿的模样，自然对这个老家伙十分熟悉。只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。</v>\n</verifications>",
+      "served_provider": "groq",
+      "served_model": "openai/gpt-oss-120b",
+      "usage": {
+        "input_tokens": 1513,
+        "output_tokens": 3061,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "rate_limits": {},
+      "validation_status": "accepted"
+    },
+    {
+      "attempt": 7,
+      "stage": "verify",
+      "request_digest": "11e446d15d0e7f98d2f2805212f47be06fb1de0db4d54e750d26004e06e01f2f",
+      "transport": "api",
+      "status": "failed",
+      "started_at": "2026-09-11T15:37:58.825111+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p028\":\"黄少天扭头看向凌峰，“你们什么时候说好的？”\",\"p029\":\"“说好个——”\",\"p030\":\"凌峰一翻白眼，“那老东西，想要拉我们下水！”\",\"p031\":\"果然，话音未落，就见三四十名骑乘深渊龙蜥的啸牙团员，追赶着一大群裁决学院的探索队（PS：五大天灾之城共有五座裁决学院，这里只是诺顿带领的一批），朝他们奔袭而来。\",\"p032\":\"为首之人还叫嚣着，“区区下级君主信徒，也敢妄想夺去恐惧君主大人的传承！死！！”\",\"p033\":\"姜梦月捏紧拳头，正欲开口解释，却被凌峰按住了肩膀，“既然他们自己送上门，那就一并解决了！！”\",\"p034\":\"说话间，他掌心猩红杀气再度凝结，三米长的弑神枪虚影吞吐着毁灭波动。\",\"p035\":\"正好，试试自己新习得的这套枪法，到底有何等威能！\",\"p036\":\"“结盾阵！”\",\"p046\":\"“妈的，谁跟你是朋友！”\",\"p047\":\"黄少天破口大骂，却被凌峰抬手拦下。\",\"p048\":\"凌峰心中暗自冷笑，严格来说，这还是凌峰第一次和这位威尔森家族族长正式照面。\",\"p049\":\"不过，之前为了偷盗威尔森家族宝库，他曾经伪装成诺顿的模样，自然对这个老家伙十分熟悉。\",\"p050\":\"只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。\",\"p051\":\"“桀桀桀……”\"},\"assertions\":[{\"id\":\"F16\",\"subject\":\"凌峰\",\"predicate\":\"past_action\",\"object\":\"杀害豪森\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"曾伪装诺顿偷盗宝库、宰杀豪森、盗取图书馆\",\"stated_basis\":\"stated\",\"cited\":[\"p050\"],\"context\":[\"p028\",\"p029\",\"p030\",\"p031\",\"p046\",\"p047\",\"p048\",\"p049\",\"p051\"]},{\"id\":\"F17\",\"subject\":\"凌峰\",\"predicate\":\"past_action\",\"object\":\"盗取裁决学院图书馆\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"曾伪装诺顿偷盗宝库、宰杀豪森、盗取图书馆\",\"stated_basis\":\"stated\",\"cited\":[\"p050\"],\"context\":[\"p028\",\"p029\",\"p030\",\"p031\",\"p046\",\"p047\",\"p048\",\"p049\",\"p051\"]},{\"id\":\"F18\",\"subject\":\"凌峰\",\"predicate\":\"ability\",\"object\":\"凝结猩红杀气形成弑神枪虚影\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"掌心猩红杀气凝结三米长、吞吐毁灭波动、新习得枪法\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p034\",\"p035\"],\"context\":[\"p032\",\"p033\",\"p036\"]},{\"id\":\"F19\",\"subject\":\"弑神枪\",\"predicate\":\"description\",\"object\":\"三米长、吞吐毁灭波动\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"掌心猩红杀气凝结三米长、吞吐毁灭波动、新习得枪法\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p034\"],\"context\":[\"p032\",\"p033\",\"p035\",\"p036\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1518,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 0.091713,
+      "error": {
+        "type": "AdmissionRejected",
+        "message": "rate_limited",
+        "category": "rate_limited",
+        "retry_after_s": 51.0,
+        "exact_hint": true,
+        "rate_limits": {
+          "retry-after": "51",
+          "x-ratelimit-limit-requests": "1000",
+          "x-ratelimit-limit-tokens": "8000",
+          "x-ratelimit-remaining-requests": "991",
+          "x-ratelimit-remaining-tokens": "520",
+          "x-ratelimit-reset-requests": "12m57.599s",
+          "x-ratelimit-reset-tokens": "56.1s"
+        },
+        "rate_limit_details": {
+          "limit_tokens": 8000,
+          "used_tokens": 7480,
+          "requested_tokens": 7293
+        }
+      },
+      "usage": null
+    },
+    {
+      "attempt": 8,
+      "stage": "verify",
+      "request_digest": "11e446d15d0e7f98d2f2805212f47be06fb1de0db4d54e750d26004e06e01f2f",
+      "transport": "api",
+      "status": "completed",
+      "started_at": "2026-09-11T15:38:50.924569+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p028\":\"黄少天扭头看向凌峰，“你们什么时候说好的？”\",\"p029\":\"“说好个——”\",\"p030\":\"凌峰一翻白眼，“那老东西，想要拉我们下水！”\",\"p031\":\"果然，话音未落，就见三四十名骑乘深渊龙蜥的啸牙团员，追赶着一大群裁决学院的探索队（PS：五大天灾之城共有五座裁决学院，这里只是诺顿带领的一批），朝他们奔袭而来。\",\"p032\":\"为首之人还叫嚣着，“区区下级君主信徒，也敢妄想夺去恐惧君主大人的传承！死！！”\",\"p033\":\"姜梦月捏紧拳头，正欲开口解释，却被凌峰按住了肩膀，“既然他们自己送上门，那就一并解决了！！”\",\"p034\":\"说话间，他掌心猩红杀气再度凝结，三米长的弑神枪虚影吞吐着毁灭波动。\",\"p035\":\"正好，试试自己新习得的这套枪法，到底有何等威能！\",\"p036\":\"“结盾阵！”\",\"p046\":\"“妈的，谁跟你是朋友！”\",\"p047\":\"黄少天破口大骂，却被凌峰抬手拦下。\",\"p048\":\"凌峰心中暗自冷笑，严格来说，这还是凌峰第一次和这位威尔森家族族长正式照面。\",\"p049\":\"不过，之前为了偷盗威尔森家族宝库，他曾经伪装成诺顿的模样，自然对这个老家伙十分熟悉。\",\"p050\":\"只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。\",\"p051\":\"“桀桀桀……”\"},\"assertions\":[{\"id\":\"F16\",\"subject\":\"凌峰\",\"predicate\":\"past_action\",\"object\":\"杀害豪森\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"曾伪装诺顿偷盗宝库、宰杀豪森、盗取图书馆\",\"stated_basis\":\"stated\",\"cited\":[\"p050\"],\"context\":[\"p028\",\"p029\",\"p030\",\"p031\",\"p046\",\"p047\",\"p048\",\"p049\",\"p051\"]},{\"id\":\"F17\",\"subject\":\"凌峰\",\"predicate\":\"past_action\",\"object\":\"盗取裁决学院图书馆\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"曾伪装诺顿偷盗宝库、宰杀豪森、盗取图书馆\",\"stated_basis\":\"stated\",\"cited\":[\"p050\"],\"context\":[\"p028\",\"p029\",\"p030\",\"p031\",\"p046\",\"p047\",\"p048\",\"p049\",\"p051\"]},{\"id\":\"F18\",\"subject\":\"凌峰\",\"predicate\":\"ability\",\"object\":\"凝结猩红杀气形成弑神枪虚影\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"掌心猩红杀气凝结三米长、吞吐毁灭波动、新习得枪法\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p034\",\"p035\"],\"context\":[\"p032\",\"p033\",\"p036\"]},{\"id\":\"F19\",\"subject\":\"弑神枪\",\"predicate\":\"description\",\"object\":\"三米长、吞吐毁灭波动\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"掌心猩红杀气凝结三米长、吞吐毁灭波动、新习得枪法\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p034\"],\"context\":[\"p032\",\"p033\",\"p035\",\"p036\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1518,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 6.131515,
+      "response": "<verifications>\n  <v id=\"F16\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p050\">只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祈首。</v>\n  <v id=\"F17\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p050\">只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祈首。</v>\n  <v id=\"F18\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p034\">说话间，他掌心猩红杀气再度凝结，三米长的弑神枪虚影吞吐着毁灭波动。</v>\n  <v id=\"F19\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p034\">说话间，他掌心猩红杀气再度凝结，三米长的弑神枪虚影吞吐着毁灭波动。</v>\n</verifications>",
+      "served_provider": "groq",
+      "served_model": "openai/gpt-oss-120b",
+      "usage": {
+        "input_tokens": 1293,
+        "output_tokens": 2685,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "rate_limits": {},
+      "validation_status": "accepted"
+    },
+    {
+      "attempt": 9,
+      "stage": "verify",
+      "request_digest": "8d5c11cf976bf4132b4986fc12db78993dfbd0c636f293025c6fc138cd35a42f",
+      "transport": "api",
+      "status": "failed",
+      "started_at": "2026-09-11T15:38:57.058573+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p032\":\"为首之人还叫嚣着，“区区下级君主信徒，也敢妄想夺去恐惧君主大人的传承！死！！”\",\"p033\":\"姜梦月捏紧拳头，正欲开口解释，却被凌峰按住了肩膀，“既然他们自己送上门，那就一并解决了！！”\",\"p034\":\"说话间，他掌心猩红杀气再度凝结，三米长的弑神枪虚影吞吐着毁灭波动。\",\"p035\":\"正好，试试自己新习得的这套枪法，到底有何等威能！\",\"p036\":\"“结盾阵！”\",\"p037\":\"姜梦月轻叹一声，只能按照凌峰的命令，准备与啸牙冒险团一战。\",\"p038\":\"阴山的古尸挡在最前，剩余七名噬梦团员背靠背组成防御圈。\",\"p039\":\"阿采的眼球锁链如毒蛇昂首，十二枚瞳孔里同时亮起噩梦符文。\",\"p040\":\"霎时间，啸牙团转瞬即至。\",\"p050\":\"只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。\",\"p051\":\"“桀桀桀……”\",\"p052\":\"一个阴冷的笑声传来，却见啸牙冒险团之中，那为首者摘下兽牙面具，露出满是缝合线的脸。\",\"p053\":\"此人，正是啸牙冒险团团长，“缝尸鬼”莫雷。\",\"p054\":\"他座下巨蜥喷出酸液，腐蚀得地面滋滋作响。\",\"p055\":\"“诺顿老鬼，看来你打错主意了！”\",\"p056\":\"莫雷裂开大嘴，露出满口尖锐的利齿，他阴仄仄的目光，扫向噬梦冒险团众人，“噬梦的，给你们一个机会，配合我们将这些裁决学院的废物解决掉，再乖乖交出梦魇神殿的图纸，我可以考虑将你们梦魇教派，收入麾下！”\"},\"assertions\":[{\"id\":\"F20\",\"subject\":\"凌峰\",\"predicate\":\"status\",\"object\":\"新习得枪法待试用\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"掌心猩红杀气凝结三米长、吞吐毁灭波动、新习得枪法\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p035\"],\"context\":[\"p032\",\"p033\",\"p034\",\"p036\"]},{\"id\":\"F21\",\"subject\":\"阿采\",\"predicate\":\"action\",\"object\":\"激活眼球锁链噩梦符文\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"十二枚瞳孔同时亮起\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p039\"],\"context\":[\"p037\",\"p038\",\"p040\"]},{\"id\":\"F22\",\"subject\":\"眼球锁链\",\"predicate\":\"state\",\"object\":\"十二枚瞳孔同时亮起\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"十二枚瞳孔同时亮起\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p039\"],\"context\":[\"p037\",\"p038\",\"p040\"]},{\"id\":\"F23\",\"subject\":\"莫雷\",\"predicate\":\"title\",\"object\":\"啸牙冒险团团长\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"称号缝尸鬼、脸有缝合线、座下巨蜥喷酸液\",\"stated_basis\":\"stated\",\"cited\":[\"p053\"],\"context\":[\"p050\",\"p051\",\"p052\",\"p054\",\"p055\",\"p056\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1559,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 0.102107,
+      "error": {
+        "type": "AdmissionRejected",
+        "message": "rate_limited",
+        "category": "rate_limited",
+        "retry_after_s": 1.0,
+        "exact_hint": true,
+        "rate_limits": {
+          "retry-after": "1",
+          "x-ratelimit-limit-requests": "1000",
+          "x-ratelimit-limit-tokens": "8000",
+          "x-ratelimit-remaining-requests": "990",
+          "x-ratelimit-remaining-tokens": "4306",
+          "x-ratelimit-reset-requests": "14m24s",
+          "x-ratelimit-reset-tokens": "27.705s"
+        },
+        "rate_limit_details": {
+          "limit_tokens": 8000,
+          "used_tokens": 3694,
+          "requested_tokens": 4379
+        }
+      },
+      "usage": null
+    },
+    {
+      "attempt": 10,
+      "stage": "verify",
+      "request_digest": "8d5c11cf976bf4132b4986fc12db78993dfbd0c636f293025c6fc138cd35a42f",
+      "transport": "api",
+      "status": "completed",
+      "started_at": "2026-09-11T15:38:59.164901+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p032\":\"为首之人还叫嚣着，“区区下级君主信徒，也敢妄想夺去恐惧君主大人的传承！死！！”\",\"p033\":\"姜梦月捏紧拳头，正欲开口解释，却被凌峰按住了肩膀，“既然他们自己送上门，那就一并解决了！！”\",\"p034\":\"说话间，他掌心猩红杀气再度凝结，三米长的弑神枪虚影吞吐着毁灭波动。\",\"p035\":\"正好，试试自己新习得的这套枪法，到底有何等威能！\",\"p036\":\"“结盾阵！”\",\"p037\":\"姜梦月轻叹一声，只能按照凌峰的命令，准备与啸牙冒险团一战。\",\"p038\":\"阴山的古尸挡在最前，剩余七名噬梦团员背靠背组成防御圈。\",\"p039\":\"阿采的眼球锁链如毒蛇昂首，十二枚瞳孔里同时亮起噩梦符文。\",\"p040\":\"霎时间，啸牙团转瞬即至。\",\"p050\":\"只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。\",\"p051\":\"“桀桀桀……”\",\"p052\":\"一个阴冷的笑声传来，却见啸牙冒险团之中，那为首者摘下兽牙面具，露出满是缝合线的脸。\",\"p053\":\"此人，正是啸牙冒险团团长，“缝尸鬼”莫雷。\",\"p054\":\"他座下巨蜥喷出酸液，腐蚀得地面滋滋作响。\",\"p055\":\"“诺顿老鬼，看来你打错主意了！”\",\"p056\":\"莫雷裂开大嘴，露出满口尖锐的利齿，他阴仄仄的目光，扫向噬梦冒险团众人，“噬梦的，给你们一个机会，配合我们将这些裁决学院的废物解决掉，再乖乖交出梦魇神殿的图纸，我可以考虑将你们梦魇教派，收入麾下！”\"},\"assertions\":[{\"id\":\"F20\",\"subject\":\"凌峰\",\"predicate\":\"status\",\"object\":\"新习得枪法待试用\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"掌心猩红杀气凝结三米长、吞吐毁灭波动、新习得枪法\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p035\"],\"context\":[\"p032\",\"p033\",\"p034\",\"p036\"]},{\"id\":\"F21\",\"subject\":\"阿采\",\"predicate\":\"action\",\"object\":\"激活眼球锁链噩梦符文\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"十二枚瞳孔同时亮起\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p039\"],\"context\":[\"p037\",\"p038\",\"p040\"]},{\"id\":\"F22\",\"subject\":\"眼球锁链\",\"predicate\":\"state\",\"object\":\"十二枚瞳孔同时亮起\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"十二枚瞳孔同时亮起\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p039\"],\"context\":[\"p037\",\"p038\",\"p040\"]},{\"id\":\"F23\",\"subject\":\"莫雷\",\"predicate\":\"title\",\"object\":\"啸牙冒险团团长\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"称号缝尸鬼、脸有缝合线、座下巨蜥喷酸液\",\"stated_basis\":\"stated\",\"cited\":[\"p053\"],\"context\":[\"p050\",\"p051\",\"p052\",\"p054\",\"p055\",\"p056\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1559,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 7.291867,
+      "response": "<verifications>\n  <v id=\"F20\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p035\">正好，试试自己新习得的这套枪法，到底有何等威能！</v>\n  <v id=\"F21\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p039\">阿采的眼球锁链如毒蛇昂首，十二枚瞳孔里同时亮起噩梦符文。</v>\n  <v id=\"F22\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p039\">阿采的眼球锁链如毒蛇昂首，十二枚瞳孔里同时亮起噩梦符文。</v>\n  <v id=\"F23\" verdict=\"insufficient_evidence\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p053\">此人，正是啸牙冒险团团长，“缝尸鬼”莫雷。</v>\n</verifications>",
+      "served_provider": "groq",
+      "served_model": "openai/gpt-oss-120b",
+      "usage": {
+        "input_tokens": 1318,
+        "output_tokens": 3316,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "rate_limits": {},
+      "validation_status": "accepted"
+    },
+    {
+      "attempt": 11,
+      "stage": "verify",
+      "request_digest": "6cdd82c6e9f8dedcfe566a12249c7852b068710462bc22948c7b4d8d69975e45",
+      "transport": "api",
+      "status": "failed",
+      "started_at": "2026-09-11T15:39:06.459168+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p050\":\"只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。\",\"p051\":\"“桀桀桀……”\",\"p052\":\"一个阴冷的笑声传来，却见啸牙冒险团之中，那为首者摘下兽牙面具，露出满是缝合线的脸。\",\"p053\":\"此人，正是啸牙冒险团团长，“缝尸鬼”莫雷。\",\"p054\":\"他座下巨蜥喷出酸液，腐蚀得地面滋滋作响。\",\"p055\":\"“诺顿老鬼，看来你打错主意了！”\",\"p056\":\"莫雷裂开大嘴，露出满口尖锐的利齿，他阴仄仄的目光，扫向噬梦冒险团众人，“噬梦的，给你们一个机会，配合我们将这些裁决学院的废物解决掉，再乖乖交出梦魇神殿的图纸，我可以考虑将你们梦魇教派，收入麾下！”\"},\"assertions\":[{\"id\":\"F24\",\"subject\":\"莫雷\",\"predicate\":\"nickname\",\"object\":\"缝尸鬼\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"称号缝尸鬼、脸有缝合线、座下巨蜥喷酸液\",\"stated_basis\":\"stated\",\"cited\":[\"p053\"],\"context\":[\"p050\",\"p051\",\"p052\",\"p054\",\"p055\",\"p056\"]},{\"id\":\"F25\",\"subject\":\"莫雷\",\"predicate\":\"appearance\",\"object\":\"满脸缝合线\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"称号缝尸鬼、脸有缝合线、座下巨蜥喷酸液\",\"stated_basis\":\"stated\",\"cited\":[\"p052\",\"p053\"],\"context\":[\"p050\",\"p051\",\"p054\",\"p055\",\"p056\"]},{\"id\":\"F26\",\"subject\":\"莫雷\",\"predicate\":\"proposal\",\"object\":\"联合噬梦对付裁决学院并索要梦魇神殿图纸\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"莫雷\",\"stated_qualifiers\":\"许诺收梦魇教派入麾下\",\"stated_basis\":\"stated\",\"cited\":[\"p056\"],\"context\":[\"p054\",\"p055\"]},{\"id\":\"F27\",\"subject\":\"莫雷\",\"predicate\":\"promise\",\"object\":\"许诺收梦魇教派入麾下\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"莫雷\",\"stated_qualifiers\":\"许诺收梦魇教派入麾下\",\"stated_basis\":\"stated\",\"cited\":[\"p056\"],\"context\":[\"p054\",\"p055\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1202,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 0.103969,
+      "error": {
+        "type": "AdmissionRejected",
+        "message": "rate_limited",
+        "category": "rate_limited",
+        "retry_after_s": 22.0,
+        "exact_hint": true,
+        "rate_limits": {
+          "retry-after": "22",
+          "x-ratelimit-limit-requests": "1000",
+          "x-ratelimit-limit-tokens": "8000",
+          "x-ratelimit-remaining-requests": "989",
+          "x-ratelimit-remaining-tokens": "924",
+          "x-ratelimit-reset-requests": "15m50.4s",
+          "x-ratelimit-reset-tokens": "53.07s"
+        },
+        "rate_limit_details": {
+          "limit_tokens": 8000,
+          "used_tokens": 7076,
+          "requested_tokens": 3756
+        }
+      },
+      "usage": null
+    },
+    {
+      "attempt": 12,
+      "stage": "verify",
+      "request_digest": "6cdd82c6e9f8dedcfe566a12249c7852b068710462bc22948c7b4d8d69975e45",
+      "transport": "api",
+      "status": "completed",
+      "started_at": "2026-09-11T15:39:29.588192+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p050\":\"只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。\",\"p051\":\"“桀桀桀……”\",\"p052\":\"一个阴冷的笑声传来，却见啸牙冒险团之中，那为首者摘下兽牙面具，露出满是缝合线的脸。\",\"p053\":\"此人，正是啸牙冒险团团长，“缝尸鬼”莫雷。\",\"p054\":\"他座下巨蜥喷出酸液，腐蚀得地面滋滋作响。\",\"p055\":\"“诺顿老鬼，看来你打错主意了！”\",\"p056\":\"莫雷裂开大嘴，露出满口尖锐的利齿，他阴仄仄的目光，扫向噬梦冒险团众人，“噬梦的，给你们一个机会，配合我们将这些裁决学院的废物解决掉，再乖乖交出梦魇神殿的图纸，我可以考虑将你们梦魇教派，收入麾下！”\"},\"assertions\":[{\"id\":\"F24\",\"subject\":\"莫雷\",\"predicate\":\"nickname\",\"object\":\"缝尸鬼\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"称号缝尸鬼、脸有缝合线、座下巨蜥喷酸液\",\"stated_basis\":\"stated\",\"cited\":[\"p053\"],\"context\":[\"p050\",\"p051\",\"p052\",\"p054\",\"p055\",\"p056\"]},{\"id\":\"F25\",\"subject\":\"莫雷\",\"predicate\":\"appearance\",\"object\":\"满脸缝合线\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"称号缝尸鬼、脸有缝合线、座下巨蜥喷酸液\",\"stated_basis\":\"stated\",\"cited\":[\"p052\",\"p053\"],\"context\":[\"p050\",\"p051\",\"p054\",\"p055\",\"p056\"]},{\"id\":\"F26\",\"subject\":\"莫雷\",\"predicate\":\"proposal\",\"object\":\"联合噬梦对付裁决学院并索要梦魇神殿图纸\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"莫雷\",\"stated_qualifiers\":\"许诺收梦魇教派入麾下\",\"stated_basis\":\"stated\",\"cited\":[\"p056\"],\"context\":[\"p054\",\"p055\"]},{\"id\":\"F27\",\"subject\":\"莫雷\",\"predicate\":\"promise\",\"object\":\"许诺收梦魇教派入麾下\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"莫雷\",\"stated_qualifiers\":\"许诺收梦魇教派入麾下\",\"stated_basis\":\"stated\",\"cited\":[\"p056\"],\"context\":[\"p054\",\"p055\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1202,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 8.120217,
+      "response": "<verifications>\n  <v id=\"F24\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"na\" passage=\"p053\">此人，正是啸牙冒险团团长，“缝尸鬼”莫雷。</v>\n  <v id=\"F25\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"na\" passage=\"p052\">一个阴冷的笑声传来，却见啸牙冒险团之中，那为首者摘下兽牙面具，露出满是缝合线的脸。</v>\n  <v id=\"F26\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"na\" passage=\"p056\">莫雷裂开大嘴，露出满口尖锐的利齿，他阴仄仄的目光，扫向噬梦冒险团众人，“噬梦的，给你们一个机会，配合我们将这些裁决学院的废物解决掉，再乖乖交出梦魇神殿的图纸，我可以考虑将你们梦魇教派，收入麾下！”</v>\n  <v id=\"F27\" verdict=\"contradicted\" subject=\"ok\" predicate=\"wrong\" object=\"wrong\" polarity=\"ok\" attribution=\"ok\" condition=\"wrong\" time=\"na\" passage=\"p056\">莫雷裂开大嘴，露出满口尖锐的利齿，他阴仄仄的目光，扫向噬梦冒险团众人，“噬梦的，给你们一个机会，配合我们将这些裁决学院的废物解决掉，再乖乖交出梦魇神殿的图纸，我可以考虑将你们梦魇教派，收入麾下！”</v>\n</verifications>",
+      "served_provider": "groq",
+      "served_model": "openai/gpt-oss-120b",
+      "usage": {
+        "input_tokens": 1071,
+        "output_tokens": 3717,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "rate_limits": {},
+      "validation_status": "accepted"
+    },
+    {
+      "attempt": 13,
+      "stage": "verify",
+      "request_digest": "6686daca0d18d3acd33be93ec8906be151930a6b0eaa5887bd454497541d9f14",
+      "transport": "api",
+      "status": "failed",
+      "started_at": "2026-09-11T15:39:37.711350+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p001\":\"“嘶！你小子命可真大！”\",\"p002\":\"黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂龇牙咧嘴，“快走快走！老子宁愿再打十场群架，也不想再继续呆这儿了！真特娘的要命！”\",\"p003\":\"凌峰摇头笑笑，也不多言，带领着噬梦冒险团一众成员继续前行。\",\"p004\":\"神血雨停歇后，空气中弥漫着铁锈般的腥味。\",\"p005\":\"不过似乎也得益于此，至少那些湮兽也被神血雨驱赶，只能退到巢穴躲避。\",\"p006\":\"这一路前行，反倒是异常的顺利。\",\"p010\":\"陨落狱开启才只是第一天，想来大部分势力应该都还在最外层的陨落回廊之中徘徊。\",\"p011\":\"若能占得先机，只怕不只是梦魇神殿，就连其他神殿内埋藏的宝物，也能顺带一起夺去。\",\"p012\":\"就在此时，阿采手中那眼球锁链忽然轻轻颤动起来，她目光一凝，沉声道：“君主大人，前方似乎有两股势力在交战！”\",\"p013\":\"“嗯。”\",\"p014\":\"凌峰眸中阴阳鱼浮动，“我已察觉到了！是啸牙冒险团和裁决学院的人！我们没必要介入，绕过去！”\",\"p015\":\"凌峰当机立断，眼下最重要的就是尽快穿过这片荒原，没必要节外生枝。\",\"p016\":\"“走这边！”\",\"p017\":\"姜梦月打开全系地图，指着地图上的路径，“从西南方向前进的话，虽然要绕一些路程，但是可以避开前面那两拨人。”\"},\"assertions\":[{\"id\":\"R0\",\"subject\":\"黄少天\",\"predicate\":\"injured_by\",\"object\":\"神血雨\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"右臂溃烂\",\"stated_basis\":\"stated\",\"cited\":[\"p001\",\"p002\"],\"context\":[\"p003\",\"p004\",\"p005\",\"p006\"]},{\"id\":\"R1\",\"subject\":\"阿采\",\"predicate\":\"uses\",\"object\":\"眼球锁链\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"十二枚瞳孔亮起噩梦符文\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p012\"],\"context\":[\"p010\",\"p011\",\"p013\",\"p014\",\"p015\"]},{\"id\":\"R2\",\"subject\":\"凌峰\",\"predicate\":\"avoids\",\"object\":\"啸牙冒险团\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"不想节外生枝\",\"stated_basis\":\"stated\",\"cited\":[\"p014\",\"p015\"],\"context\":[\"p012\",\"p013\",\"p016\",\"p017\"]},{\"id\":\"R3\",\"subject\":\"凌峰\",\"predicate\":\"avoids\",\"object\":\"裁决学院\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"不想节外生枝\",\"stated_basis\":\"stated\",\"cited\":[\"p014\",\"p015\"],\"context\":[\"p012\",\"p013\",\"p016\",\"p017\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1345,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 0.105585,
+      "error": {
+        "type": "AdmissionRejected",
+        "message": "rate_limited",
+        "category": "rate_limited",
+        "retry_after_s": 9.0,
+        "exact_hint": true,
+        "rate_limits": {
+          "retry-after": "9",
+          "x-ratelimit-limit-requests": "1000",
+          "x-ratelimit-limit-tokens": "8000",
+          "x-ratelimit-remaining-requests": "988",
+          "x-ratelimit-remaining-tokens": "292",
+          "x-ratelimit-reset-requests": "17m16.8s",
+          "x-ratelimit-reset-tokens": "57.81s"
+        },
+        "rate_limit_details": {
+          "limit_tokens": 8000,
+          "used_tokens": 7708,
+          "requested_tokens": 1418
+        }
+      },
+      "usage": null
+    },
+    {
+      "attempt": 14,
+      "stage": "verify",
+      "request_digest": "6686daca0d18d3acd33be93ec8906be151930a6b0eaa5887bd454497541d9f14",
+      "transport": "api",
+      "status": "completed",
+      "started_at": "2026-09-11T15:39:47.828956+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p001\":\"“嘶！你小子命可真大！”\",\"p002\":\"黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂龇牙咧嘴，“快走快走！老子宁愿再打十场群架，也不想再继续呆这儿了！真特娘的要命！”\",\"p003\":\"凌峰摇头笑笑，也不多言，带领着噬梦冒险团一众成员继续前行。\",\"p004\":\"神血雨停歇后，空气中弥漫着铁锈般的腥味。\",\"p005\":\"不过似乎也得益于此，至少那些湮兽也被神血雨驱赶，只能退到巢穴躲避。\",\"p006\":\"这一路前行，反倒是异常的顺利。\",\"p010\":\"陨落狱开启才只是第一天，想来大部分势力应该都还在最外层的陨落回廊之中徘徊。\",\"p011\":\"若能占得先机，只怕不只是梦魇神殿，就连其他神殿内埋藏的宝物，也能顺带一起夺去。\",\"p012\":\"就在此时，阿采手中那眼球锁链忽然轻轻颤动起来，她目光一凝，沉声道：“君主大人，前方似乎有两股势力在交战！”\",\"p013\":\"“嗯。”\",\"p014\":\"凌峰眸中阴阳鱼浮动，“我已察觉到了！是啸牙冒险团和裁决学院的人！我们没必要介入，绕过去！”\",\"p015\":\"凌峰当机立断，眼下最重要的就是尽快穿过这片荒原，没必要节外生枝。\",\"p016\":\"“走这边！”\",\"p017\":\"姜梦月打开全系地图，指着地图上的路径，“从西南方向前进的话，虽然要绕一些路程，但是可以避开前面那两拨人。”\"},\"assertions\":[{\"id\":\"R0\",\"subject\":\"黄少天\",\"predicate\":\"injured_by\",\"object\":\"神血雨\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"右臂溃烂\",\"stated_basis\":\"stated\",\"cited\":[\"p001\",\"p002\"],\"context\":[\"p003\",\"p004\",\"p005\",\"p006\"]},{\"id\":\"R1\",\"subject\":\"阿采\",\"predicate\":\"uses\",\"object\":\"眼球锁链\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"十二枚瞳孔亮起噩梦符文\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p012\"],\"context\":[\"p010\",\"p011\",\"p013\",\"p014\",\"p015\"]},{\"id\":\"R2\",\"subject\":\"凌峰\",\"predicate\":\"avoids\",\"object\":\"啸牙冒险团\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"不想节外生枝\",\"stated_basis\":\"stated\",\"cited\":[\"p014\",\"p015\"],\"context\":[\"p012\",\"p013\",\"p016\",\"p017\"]},{\"id\":\"R3\",\"subject\":\"凌峰\",\"predicate\":\"avoids\",\"object\":\"裁决学院\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"不想节外生枝\",\"stated_basis\":\"stated\",\"cited\":[\"p014\",\"p015\"],\"context\":[\"p012\",\"p013\",\"p016\",\"p017\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1345,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 5.342861,
+      "response": "<verifications>\n  <v id=\"R0\" verdict=\"insufficient_evidence\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"wrong\" passage=\"p002\">黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂</v>\n  <v id=\"R1\" verdict=\"insufficient_evidence\" subject=\"ok\" predicate=\"wrong\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p012\">阿采手中那眼球锁链忽然轻轻颤动起来</v>\n  <v id=\"R2\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"ok\" time=\"ok\" passage=\"p015\">凌峰当机立断，眼下最重要的就是尽快穿过这片荒原，没必要节外生枝。</v>\n  <v id=\"R3\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"ok\" time=\"ok\" passage=\"p014\">凌峰眸中阴阳鱼浮动，“我已察觉到了！是啸牙冒险团和裁决学院的人！我们没必要介入，绕过去！”</v>\n</verifications>",
+      "served_provider": "groq",
+      "served_model": "openai/gpt-oss-120b",
+      "usage": {
+        "input_tokens": 1193,
+        "output_tokens": 2398,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "rate_limits": {},
+      "validation_status": "accepted"
+    },
+    {
+      "attempt": 15,
+      "stage": "verify",
+      "request_digest": "476710679d3d0aa282b0db2a2517ff93e81741d89d6b887d4d0973039b23d66e",
+      "transport": "api",
+      "status": "failed",
+      "started_at": "2026-09-11T15:39:53.174675+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p017\":\"姜梦月打开全系地图，指着地图上的路径，“从西南方向前进的话，虽然要绕一些路程，但是可以避开前面那两拨人。”\",\"p018\":\"“那就依你所言。”\",\"p019\":\"凌峰微微点头，正准备动身，荒原地面突然隆起数十个鼓包。\",\"p020\":\"“娘的，又是那些骸骨守卫么？”\",\"p021\":\"黄少天骂了句脏话，九殒神剑劈开最近处的土包，只听“砰”的一声，里面炸出的竟是一只被劈成两截的机械蜘蛛！\",\"p022\":\"而那机械蜘蛛的腹部，还刻着威尔森家族徽记，虽然已经被劈成两半，但八只复眼却还在疯狂扫描周围的一切。\",\"p023\":\"“是裁决学院的侦查单位！”\",\"p024\":\"姜梦月目光一凝，一击将那机械蜘蛛彻底炸毁，同时回头朝众人道：“我们被发现了！”\",\"p025\":\"仿佛印证她的话，东北方突然爆发出刺目银光。\",\"p026\":\"诺顿·威尔森苍老的声音通过扩音装置传来：“噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！”\",\"p027\":\"“我草！”\",\"p028\":\"黄少天扭头看向凌峰，“你们什么时候说好的？”\",\"p029\":\"“说好个——”\",\"p030\":\"凌峰一翻白眼，“那老东西，想要拉我们下水！”\",\"p031\":\"果然，话音未落，就见三四十名骑乘深渊龙蜥的啸牙团员，追赶着一大群裁决学院的探索队（PS：五大天灾之城共有五座裁决学院，这里只是诺顿带领的一批），朝他们奔袭而来。\",\"p046\":\"“妈的，谁跟你是朋友！”\",\"p047\":\"黄少天破口大骂，却被凌峰抬手拦下。\",\"p048\":\"凌峰心中暗自冷笑，严格来说，这还是凌峰第一次和这位威尔森家族族长正式照面。\",\"p049\":\"不过，之前为了偷盗威尔森家族宝库，他曾经伪装成诺顿的模样，自然对这个老家伙十分熟悉。\",\"p050\":\"只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。\",\"p051\":\"“桀桀桀……”\"},\"assertions\":[{\"id\":\"R4\",\"subject\":\"机械蜘蛛\",\"predicate\":\"belongs_to\",\"object\":\"裁决学院\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"姜梦月\",\"stated_qualifiers\":\"腹部刻威尔森家族徽记\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p021\",\"p022\",\"p023\"],\"context\":[\"p017\",\"p018\",\"p019\",\"p020\",\"p024\"]},{\"id\":\"R5\",\"subject\":\"机械蜘蛛\",\"predicate\":\"bears_emblem_of\",\"object\":\"威尔森家族\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"姜梦月\",\"stated_qualifiers\":\"腹部刻威尔森家族徽记\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p022\"],\"context\":[\"p017\",\"p018\",\"p019\",\"p020\",\"p021\",\"p023\",\"p024\"]},{\"id\":\"R6\",\"subject\":\"诺顿·威尔森\",\"predicate\":\"proposes_joint_attack_on\",\"object\":\"啸牙冒险团\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"诺顿·威尔森\",\"stated_qualifiers\":\"许诺恐惧神殿归噬梦\",\"stated_basis\":\"stated\",\"cited\":[\"p026\"],\"context\":[\"p023\",\"p024\",\"p025\",\"p027\",\"p028\",\"p029\",\"p030\"]},{\"id\":\"R7\",\"subject\":\"凌峰\",\"predicate\":\"has_conflict_with\",\"object\":\"威尔森家族\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"曾伪装诺顿偷盗宝库、宰杀豪森、盗取图书馆\",\"stated_basis\":\"stated\",\"cited\":[\"p048\",\"p049\",\"p050\"],\"context\":[\"p028\",\"p029\",\"p030\",\"p031\",\"p046\",\"p047\",\"p051\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1817,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 0.111684,
+      "error": {
+        "type": "AdmissionRejected",
+        "message": "rate_limited",
+        "category": "rate_limited",
+        "retry_after_s": 13.0,
+        "exact_hint": true,
+        "rate_limits": {
+          "retry-after": "13",
+          "x-ratelimit-limit-requests": "1000",
+          "x-ratelimit-limit-tokens": "8000",
+          "x-ratelimit-remaining-requests": "987",
+          "x-ratelimit-remaining-tokens": "21",
+          "x-ratelimit-reset-requests": "18m43.2s",
+          "x-ratelimit-reset-tokens": "59.842s"
+        },
+        "rate_limit_details": {
+          "limit_tokens": 8000,
+          "used_tokens": 7979,
+          "requested_tokens": 1694
+        }
+      },
+      "usage": null
+    },
+    {
+      "attempt": 16,
+      "stage": "verify",
+      "request_digest": "476710679d3d0aa282b0db2a2517ff93e81741d89d6b887d4d0973039b23d66e",
+      "transport": "api",
+      "status": "failed",
+      "started_at": "2026-09-11T15:40:07.303138+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p017\":\"姜梦月打开全系地图，指着地图上的路径，“从西南方向前进的话，虽然要绕一些路程，但是可以避开前面那两拨人。”\",\"p018\":\"“那就依你所言。”\",\"p019\":\"凌峰微微点头，正准备动身，荒原地面突然隆起数十个鼓包。\",\"p020\":\"“娘的，又是那些骸骨守卫么？”\",\"p021\":\"黄少天骂了句脏话，九殒神剑劈开最近处的土包，只听“砰”的一声，里面炸出的竟是一只被劈成两截的机械蜘蛛！\",\"p022\":\"而那机械蜘蛛的腹部，还刻着威尔森家族徽记，虽然已经被劈成两半，但八只复眼却还在疯狂扫描周围的一切。\",\"p023\":\"“是裁决学院的侦查单位！”\",\"p024\":\"姜梦月目光一凝，一击将那机械蜘蛛彻底炸毁，同时回头朝众人道：“我们被发现了！”\",\"p025\":\"仿佛印证她的话，东北方突然爆发出刺目银光。\",\"p026\":\"诺顿·威尔森苍老的声音通过扩音装置传来：“噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！”\",\"p027\":\"“我草！”\",\"p028\":\"黄少天扭头看向凌峰，“你们什么时候说好的？”\",\"p029\":\"“说好个——”\",\"p030\":\"凌峰一翻白眼，“那老东西，想要拉我们下水！”\",\"p031\":\"果然，话音未落，就见三四十名骑乘深渊龙蜥的啸牙团员，追赶着一大群裁决学院的探索队（PS：五大天灾之城共有五座裁决学院，这里只是诺顿带领的一批），朝他们奔袭而来。\",\"p046\":\"“妈的，谁跟你是朋友！”\",\"p047\":\"黄少天破口大骂，却被凌峰抬手拦下。\",\"p048\":\"凌峰心中暗自冷笑，严格来说，这还是凌峰第一次和这位威尔森家族族长正式照面。\",\"p049\":\"不过，之前为了偷盗威尔森家族宝库，他曾经伪装成诺顿的模样，自然对这个老家伙十分熟悉。\",\"p050\":\"只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。\",\"p051\":\"“桀桀桀……”\"},\"assertions\":[{\"id\":\"R4\",\"subject\":\"机械蜘蛛\",\"predicate\":\"belongs_to\",\"object\":\"裁决学院\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"姜梦月\",\"stated_qualifiers\":\"腹部刻威尔森家族徽记\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p021\",\"p022\",\"p023\"],\"context\":[\"p017\",\"p018\",\"p019\",\"p020\",\"p024\"]},{\"id\":\"R5\",\"subject\":\"机械蜘蛛\",\"predicate\":\"bears_emblem_of\",\"object\":\"威尔森家族\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"姜梦月\",\"stated_qualifiers\":\"腹部刻威尔森家族徽记\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p022\"],\"context\":[\"p017\",\"p018\",\"p019\",\"p020\",\"p021\",\"p023\",\"p024\"]},{\"id\":\"R6\",\"subject\":\"诺顿·威尔森\",\"predicate\":\"proposes_joint_attack_on\",\"object\":\"啸牙冒险团\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"诺顿·威尔森\",\"stated_qualifiers\":\"许诺恐惧神殿归噬梦\",\"stated_basis\":\"stated\",\"cited\":[\"p026\"],\"context\":[\"p023\",\"p024\",\"p025\",\"p027\",\"p028\",\"p029\",\"p030\"]},{\"id\":\"R7\",\"subject\":\"凌峰\",\"predicate\":\"has_conflict_with\",\"object\":\"威尔森家族\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"曾伪装诺顿偷盗宝库、宰杀豪森、盗取图书馆\",\"stated_basis\":\"stated\",\"cited\":[\"p048\",\"p049\",\"p050\"],\"context\":[\"p028\",\"p029\",\"p030\",\"p031\",\"p046\",\"p047\",\"p051\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1817,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 0.095502,
+      "error": {
+        "type": "AdmissionRejected",
+        "message": "rate_limited",
+        "category": "rate_limited",
+        "retry_after_s": 15.0,
+        "exact_hint": true,
+        "rate_limits": {
+          "retry-after": "15",
+          "x-ratelimit-limit-requests": "1000",
+          "x-ratelimit-limit-tokens": "8000",
+          "x-ratelimit-remaining-requests": "987",
+          "x-ratelimit-remaining-tokens": "1905",
+          "x-ratelimit-reset-requests": "18m43.2s",
+          "x-ratelimit-reset-tokens": "45.712s"
+        },
+        "rate_limit_details": {
+          "limit_tokens": 8000,
+          "used_tokens": 6095,
+          "requested_tokens": 3878
+        }
+      },
+      "usage": null
+    },
+    {
+      "attempt": 17,
+      "stage": "verify",
+      "request_digest": "476710679d3d0aa282b0db2a2517ff93e81741d89d6b887d4d0973039b23d66e",
+      "transport": "api",
+      "status": "failed",
+      "started_at": "2026-09-11T15:40:23.410030+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p017\":\"姜梦月打开全系地图，指着地图上的路径，“从西南方向前进的话，虽然要绕一些路程，但是可以避开前面那两拨人。”\",\"p018\":\"“那就依你所言。”\",\"p019\":\"凌峰微微点头，正准备动身，荒原地面突然隆起数十个鼓包。\",\"p020\":\"“娘的，又是那些骸骨守卫么？”\",\"p021\":\"黄少天骂了句脏话，九殒神剑劈开最近处的土包，只听“砰”的一声，里面炸出的竟是一只被劈成两截的机械蜘蛛！\",\"p022\":\"而那机械蜘蛛的腹部，还刻着威尔森家族徽记，虽然已经被劈成两半，但八只复眼却还在疯狂扫描周围的一切。\",\"p023\":\"“是裁决学院的侦查单位！”\",\"p024\":\"姜梦月目光一凝，一击将那机械蜘蛛彻底炸毁，同时回头朝众人道：“我们被发现了！”\",\"p025\":\"仿佛印证她的话，东北方突然爆发出刺目银光。\",\"p026\":\"诺顿·威尔森苍老的声音通过扩音装置传来：“噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！”\",\"p027\":\"“我草！”\",\"p028\":\"黄少天扭头看向凌峰，“你们什么时候说好的？”\",\"p029\":\"“说好个——”\",\"p030\":\"凌峰一翻白眼，“那老东西，想要拉我们下水！”\",\"p031\":\"果然，话音未落，就见三四十名骑乘深渊龙蜥的啸牙团员，追赶着一大群裁决学院的探索队（PS：五大天灾之城共有五座裁决学院，这里只是诺顿带领的一批），朝他们奔袭而来。\",\"p046\":\"“妈的，谁跟你是朋友！”\",\"p047\":\"黄少天破口大骂，却被凌峰抬手拦下。\",\"p048\":\"凌峰心中暗自冷笑，严格来说，这还是凌峰第一次和这位威尔森家族族长正式照面。\",\"p049\":\"不过，之前为了偷盗威尔森家族宝库，他曾经伪装成诺顿的模样，自然对这个老家伙十分熟悉。\",\"p050\":\"只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。\",\"p051\":\"“桀桀桀……”\"},\"assertions\":[{\"id\":\"R4\",\"subject\":\"机械蜘蛛\",\"predicate\":\"belongs_to\",\"object\":\"裁决学院\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"姜梦月\",\"stated_qualifiers\":\"腹部刻威尔森家族徽记\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p021\",\"p022\",\"p023\"],\"context\":[\"p017\",\"p018\",\"p019\",\"p020\",\"p024\"]},{\"id\":\"R5\",\"subject\":\"机械蜘蛛\",\"predicate\":\"bears_emblem_of\",\"object\":\"威尔森家族\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"姜梦月\",\"stated_qualifiers\":\"腹部刻威尔森家族徽记\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p022\"],\"context\":[\"p017\",\"p018\",\"p019\",\"p020\",\"p021\",\"p023\",\"p024\"]},{\"id\":\"R6\",\"subject\":\"诺顿·威尔森\",\"predicate\":\"proposes_joint_attack_on\",\"object\":\"啸牙冒险团\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"诺顿·威尔森\",\"stated_qualifiers\":\"许诺恐惧神殿归噬梦\",\"stated_basis\":\"stated\",\"cited\":[\"p026\"],\"context\":[\"p023\",\"p024\",\"p025\",\"p027\",\"p028\",\"p029\",\"p030\"]},{\"id\":\"R7\",\"subject\":\"凌峰\",\"predicate\":\"has_conflict_with\",\"object\":\"威尔森家族\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"曾伪装诺顿偷盗宝库、宰杀豪森、盗取图书馆\",\"stated_basis\":\"stated\",\"cited\":[\"p048\",\"p049\",\"p050\"],\"context\":[\"p028\",\"p029\",\"p030\",\"p031\",\"p046\",\"p047\",\"p051\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1817,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 0.107766,
+      "error": {
+        "type": "AdmissionRejected",
+        "message": "rate_limited",
+        "category": "rate_limited",
+        "retry_after_s": 4.0,
+        "exact_hint": true,
+        "rate_limits": {
+          "retry-after": "4",
+          "x-ratelimit-limit-requests": "1000",
+          "x-ratelimit-limit-tokens": "8000",
+          "x-ratelimit-remaining-requests": "987",
+          "x-ratelimit-remaining-tokens": "4047",
+          "x-ratelimit-reset-requests": "18m43.2s",
+          "x-ratelimit-reset-tokens": "29.647s"
+        },
+        "rate_limit_details": {
+          "limit_tokens": 8000,
+          "used_tokens": 3953,
+          "requested_tokens": 4541
+        }
+      },
+      "usage": null
+    },
+    {
+      "attempt": 18,
+      "stage": "verify",
+      "request_digest": "476710679d3d0aa282b0db2a2517ff93e81741d89d6b887d4d0973039b23d66e",
+      "transport": "api",
+      "status": "completed",
+      "started_at": "2026-09-11T15:40:28.525585+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p017\":\"姜梦月打开全系地图，指着地图上的路径，“从西南方向前进的话，虽然要绕一些路程，但是可以避开前面那两拨人。”\",\"p018\":\"“那就依你所言。”\",\"p019\":\"凌峰微微点头，正准备动身，荒原地面突然隆起数十个鼓包。\",\"p020\":\"“娘的，又是那些骸骨守卫么？”\",\"p021\":\"黄少天骂了句脏话，九殒神剑劈开最近处的土包，只听“砰”的一声，里面炸出的竟是一只被劈成两截的机械蜘蛛！\",\"p022\":\"而那机械蜘蛛的腹部，还刻着威尔森家族徽记，虽然已经被劈成两半，但八只复眼却还在疯狂扫描周围的一切。\",\"p023\":\"“是裁决学院的侦查单位！”\",\"p024\":\"姜梦月目光一凝，一击将那机械蜘蛛彻底炸毁，同时回头朝众人道：“我们被发现了！”\",\"p025\":\"仿佛印证她的话，东北方突然爆发出刺目银光。\",\"p026\":\"诺顿·威尔森苍老的声音通过扩音装置传来：“噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！”\",\"p027\":\"“我草！”\",\"p028\":\"黄少天扭头看向凌峰，“你们什么时候说好的？”\",\"p029\":\"“说好个——”\",\"p030\":\"凌峰一翻白眼，“那老东西，想要拉我们下水！”\",\"p031\":\"果然，话音未落，就见三四十名骑乘深渊龙蜥的啸牙团员，追赶着一大群裁决学院的探索队（PS：五大天灾之城共有五座裁决学院，这里只是诺顿带领的一批），朝他们奔袭而来。\",\"p046\":\"“妈的，谁跟你是朋友！”\",\"p047\":\"黄少天破口大骂，却被凌峰抬手拦下。\",\"p048\":\"凌峰心中暗自冷笑，严格来说，这还是凌峰第一次和这位威尔森家族族长正式照面。\",\"p049\":\"不过，之前为了偷盗威尔森家族宝库，他曾经伪装成诺顿的模样，自然对这个老家伙十分熟悉。\",\"p050\":\"只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。\",\"p051\":\"“桀桀桀……”\"},\"assertions\":[{\"id\":\"R4\",\"subject\":\"机械蜘蛛\",\"predicate\":\"belongs_to\",\"object\":\"裁决学院\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"姜梦月\",\"stated_qualifiers\":\"腹部刻威尔森家族徽记\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p021\",\"p022\",\"p023\"],\"context\":[\"p017\",\"p018\",\"p019\",\"p020\",\"p024\"]},{\"id\":\"R5\",\"subject\":\"机械蜘蛛\",\"predicate\":\"bears_emblem_of\",\"object\":\"威尔森家族\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"姜梦月\",\"stated_qualifiers\":\"腹部刻威尔森家族徽记\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p022\"],\"context\":[\"p017\",\"p018\",\"p019\",\"p020\",\"p021\",\"p023\",\"p024\"]},{\"id\":\"R6\",\"subject\":\"诺顿·威尔森\",\"predicate\":\"proposes_joint_attack_on\",\"object\":\"啸牙冒险团\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"诺顿·威尔森\",\"stated_qualifiers\":\"许诺恐惧神殿归噬梦\",\"stated_basis\":\"stated\",\"cited\":[\"p026\"],\"context\":[\"p023\",\"p024\",\"p025\",\"p027\",\"p028\",\"p029\",\"p030\"]},{\"id\":\"R7\",\"subject\":\"凌峰\",\"predicate\":\"has_conflict_with\",\"object\":\"威尔森家族\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"曾伪装诺顿偷盗宝库、宰杀豪森、盗取图书馆\",\"stated_basis\":\"stated\",\"cited\":[\"p048\",\"p049\",\"p050\"],\"context\":[\"p028\",\"p029\",\"p030\",\"p031\",\"p046\",\"p047\",\"p051\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1817,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 6.015009,
+      "response": "<verifications>\n<v id=\"R4\" verdict=\"insufficient_evidence\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"wrong\" condition=\"na\" time=\"ok\" passage=\"p023\">“是裁决学院的侦查单位！”</v>\n<v id=\"R5\" verdict=\"insufficient_evidence\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"wrong\" condition=\"na\" time=\"ok\" passage=\"p022\">而那机械蜘蛛的腹部，还刻着威尔森家族徽记，虽然已经被劈成两半，但八只复眼却还在疯狂扫描周围的一切。</v>\n<v id=\"R6\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p026\">诺顿·威尔森苍老的声音通过扩音装置传来：“噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！”</v>\n<v id=\"R7\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"na\" condition=\"na\" time=\"ok\" passage=\"p049\">不过，之前为了偷盗威尔森家族宝库，他曾经伪装成诺顿的模样，自然对这个老家伙十分熟悉。</v>\n</verifications>",
+      "served_provider": "groq",
+      "served_model": "openai/gpt-oss-120b",
+      "usage": {
+        "input_tokens": 1480,
+        "output_tokens": 2716,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "rate_limits": {},
+      "validation_status": "accepted"
+    },
+    {
+      "attempt": 19,
+      "stage": "verify",
+      "request_digest": "aace3d3fc672140cc63daa74b197faf15bd9ab95e4d364b53dbf5fea87ffd0fd",
+      "transport": "api",
+      "status": "failed",
+      "started_at": "2026-09-11T15:40:34.542642+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p028\":\"黄少天扭头看向凌峰，“你们什么时候说好的？”\",\"p029\":\"“说好个——”\",\"p030\":\"凌峰一翻白眼，“那老东西，想要拉我们下水！”\",\"p031\":\"果然，话音未落，就见三四十名骑乘深渊龙蜥的啸牙团员，追赶着一大群裁决学院的探索队（PS：五大天灾之城共有五座裁决学院，这里只是诺顿带领的一批），朝他们奔袭而来。\",\"p032\":\"为首之人还叫嚣着，“区区下级君主信徒，也敢妄想夺去恐惧君主大人的传承！死！！”\",\"p033\":\"姜梦月捏紧拳头，正欲开口解释，却被凌峰按住了肩膀，“既然他们自己送上门，那就一并解决了！！”\",\"p034\":\"说话间，他掌心猩红杀气再度凝结，三米长的弑神枪虚影吞吐着毁灭波动。\",\"p035\":\"正好，试试自己新习得的这套枪法，到底有何等威能！\",\"p036\":\"“结盾阵！”\",\"p037\":\"姜梦月轻叹一声，只能按照凌峰的命令，准备与啸牙冒险团一战。\",\"p038\":\"阴山的古尸挡在最前，剩余七名噬梦团员背靠背组成防御圈。\",\"p039\":\"阿采的眼球锁链如毒蛇昂首，十二枚瞳孔里同时亮起噩梦符文。\",\"p040\":\"霎时间，啸牙团转瞬即至。\",\"p046\":\"“妈的，谁跟你是朋友！”\",\"p047\":\"黄少天破口大骂，却被凌峰抬手拦下。\",\"p048\":\"凌峰心中暗自冷笑，严格来说，这还是凌峰第一次和这位威尔森家族族长正式照面。\",\"p049\":\"不过，之前为了偷盗威尔森家族宝库，他曾经伪装成诺顿的模样，自然对这个老家伙十分熟悉。\",\"p050\":\"只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。\",\"p051\":\"“桀桀桀……”\",\"p052\":\"一个阴冷的笑声传来，却见啸牙冒险团之中，那为首者摘下兽牙面具，露出满是缝合线的脸。\",\"p053\":\"此人，正是啸牙冒险团团长，“缝尸鬼”莫雷。\",\"p054\":\"他座下巨蜥喷出酸液，腐蚀得地面滋滋作响。\",\"p055\":\"“诺顿老鬼，看来你打错主意了！”\",\"p056\":\"莫雷裂开大嘴，露出满口尖锐的利齿，他阴仄仄的目光，扫向噬梦冒险团众人，“噬梦的，给你们一个机会，配合我们将这些裁决学院的废物解决掉，再乖乖交出梦魇神殿的图纸，我可以考虑将你们梦魇教派，收入麾下！”\"},\"assertions\":[{\"id\":\"R8\",\"subject\":\"凌峰\",\"predicate\":\"killed\",\"object\":\"豪森\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"曾伪装诺顿偷盗宝库、宰杀豪森、盗取图书馆\",\"stated_basis\":\"stated\",\"cited\":[\"p050\"],\"context\":[\"p028\",\"p029\",\"p030\",\"p031\",\"p046\",\"p047\",\"p048\",\"p049\",\"p051\"]},{\"id\":\"R9\",\"subject\":\"凌峰\",\"predicate\":\"manifests\",\"object\":\"弑神枪\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"掌心猩红杀气凝结三米长、吞吐毁灭波动、新习得枪法\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p034\",\"p035\"],\"context\":[\"p032\",\"p033\",\"p036\"]},{\"id\":\"R10\",\"subject\":\"阿采\",\"predicate\":\"activates\",\"object\":\"眼球锁链\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"十二枚瞳孔同时亮起\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p039\"],\"context\":[\"p037\",\"p038\",\"p040\"]},{\"id\":\"R11\",\"subject\":\"莫雷\",\"predicate\":\"leads\",\"object\":\"啸牙冒险团\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"称号缝尸鬼、脸有缝合线、座下巨蜥喷酸液\",\"stated_basis\":\"stated\",\"cited\":[\"p053\"],\"context\":[\"p050\",\"p051\",\"p052\",\"p054\",\"p055\",\"p056\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1922,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 0.110072,
+      "error": {
+        "type": "AdmissionRejected",
+        "message": "rate_limited",
+        "category": "rate_limited",
+        "retry_after_s": 25.0,
+        "exact_hint": true,
+        "rate_limits": {
+          "retry-after": "25",
+          "x-ratelimit-limit-requests": "1000",
+          "x-ratelimit-limit-tokens": "8000",
+          "x-ratelimit-remaining-requests": "986",
+          "x-ratelimit-remaining-tokens": "1336",
+          "x-ratelimit-reset-requests": "20m9.6s",
+          "x-ratelimit-reset-tokens": "49.98s"
+        },
+        "rate_limit_details": {
+          "limit_tokens": 8000,
+          "used_tokens": 6664,
+          "requested_tokens": 4633
+        }
+      },
+      "usage": null
+    },
+    {
+      "attempt": 20,
+      "stage": "verify",
+      "request_digest": "aace3d3fc672140cc63daa74b197faf15bd9ab95e4d364b53dbf5fea87ffd0fd",
+      "transport": "api",
+      "status": "completed",
+      "started_at": "2026-09-11T15:41:00.668414+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p028\":\"黄少天扭头看向凌峰，“你们什么时候说好的？”\",\"p029\":\"“说好个——”\",\"p030\":\"凌峰一翻白眼，“那老东西，想要拉我们下水！”\",\"p031\":\"果然，话音未落，就见三四十名骑乘深渊龙蜥的啸牙团员，追赶着一大群裁决学院的探索队（PS：五大天灾之城共有五座裁决学院，这里只是诺顿带领的一批），朝他们奔袭而来。\",\"p032\":\"为首之人还叫嚣着，“区区下级君主信徒，也敢妄想夺去恐惧君主大人的传承！死！！”\",\"p033\":\"姜梦月捏紧拳头，正欲开口解释，却被凌峰按住了肩膀，“既然他们自己送上门，那就一并解决了！！”\",\"p034\":\"说话间，他掌心猩红杀气再度凝结，三米长的弑神枪虚影吞吐着毁灭波动。\",\"p035\":\"正好，试试自己新习得的这套枪法，到底有何等威能！\",\"p036\":\"“结盾阵！”\",\"p037\":\"姜梦月轻叹一声，只能按照凌峰的命令，准备与啸牙冒险团一战。\",\"p038\":\"阴山的古尸挡在最前，剩余七名噬梦团员背靠背组成防御圈。\",\"p039\":\"阿采的眼球锁链如毒蛇昂首，十二枚瞳孔里同时亮起噩梦符文。\",\"p040\":\"霎时间，啸牙团转瞬即至。\",\"p046\":\"“妈的，谁跟你是朋友！”\",\"p047\":\"黄少天破口大骂，却被凌峰抬手拦下。\",\"p048\":\"凌峰心中暗自冷笑，严格来说，这还是凌峰第一次和这位威尔森家族族长正式照面。\",\"p049\":\"不过，之前为了偷盗威尔森家族宝库，他曾经伪装成诺顿的模样，自然对这个老家伙十分熟悉。\",\"p050\":\"只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。\",\"p051\":\"“桀桀桀……”\",\"p052\":\"一个阴冷的笑声传来，却见啸牙冒险团之中，那为首者摘下兽牙面具，露出满是缝合线的脸。\",\"p053\":\"此人，正是啸牙冒险团团长，“缝尸鬼”莫雷。\",\"p054\":\"他座下巨蜥喷出酸液，腐蚀得地面滋滋作响。\",\"p055\":\"“诺顿老鬼，看来你打错主意了！”\",\"p056\":\"莫雷裂开大嘴，露出满口尖锐的利齿，他阴仄仄的目光，扫向噬梦冒险团众人，“噬梦的，给你们一个机会，配合我们将这些裁决学院的废物解决掉，再乖乖交出梦魇神殿的图纸，我可以考虑将你们梦魇教派，收入麾下！”\"},\"assertions\":[{\"id\":\"R8\",\"subject\":\"凌峰\",\"predicate\":\"killed\",\"object\":\"豪森\",\"stated_temporal\":\"prior\",\"stated_qualifiers\":\"曾伪装诺顿偷盗宝库、宰杀豪森、盗取图书馆\",\"stated_basis\":\"stated\",\"cited\":[\"p050\"],\"context\":[\"p028\",\"p029\",\"p030\",\"p031\",\"p046\",\"p047\",\"p048\",\"p049\",\"p051\"]},{\"id\":\"R9\",\"subject\":\"凌峰\",\"predicate\":\"manifests\",\"object\":\"弑神枪\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"掌心猩红杀气凝结三米长、吞吐毁灭波动、新习得枪法\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p034\",\"p035\"],\"context\":[\"p032\",\"p033\",\"p036\"]},{\"id\":\"R10\",\"subject\":\"阿采\",\"predicate\":\"activates\",\"object\":\"眼球锁链\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"十二枚瞳孔同时亮起\",\"stated_basis\":\"demonstrated\",\"cited\":[\"p039\"],\"context\":[\"p037\",\"p038\",\"p040\"]},{\"id\":\"R11\",\"subject\":\"莫雷\",\"predicate\":\"leads\",\"object\":\"啸牙冒险团\",\"stated_temporal\":\"ongoing\",\"stated_qualifiers\":\"称号缝尸鬼、脸有缝合线、座下巨蜥喷酸液\",\"stated_basis\":\"stated\",\"cited\":[\"p053\"],\"context\":[\"p050\",\"p051\",\"p052\",\"p054\",\"p055\",\"p056\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 1922,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 6.232161,
+      "response": "<verifications>\n  <v id=\"R8\" verdict=\"insufficient_evidence\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p050\">只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。</v>\n  <v id=\"R9\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p034\">说话间，他掌心猩红杀气再度凝结，三米长的弑神枪虚影吞吐着毁灭波动。</v>\n  <v id=\"R10\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p039\">阿采的眼球锁链如毒蛇昂首，十二枚瞳孔里同时亮起噩梦符文。</v>\n  <v id=\"R11\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p053\">此人，正是啸牙冒险团团长，“缝尸鬼”莫雷。</v>\n</verifications>",
+      "served_provider": "groq",
+      "served_model": "openai/gpt-oss-120b",
+      "usage": {
+        "input_tokens": 1572,
+        "output_tokens": 2820,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "rate_limits": {},
+      "validation_status": "accepted"
+    },
+    {
+      "attempt": 21,
+      "stage": "verify",
+      "request_digest": "0a1bbfc8a13bc4166637e435c8bc364db15cdd201dcb811b81a71528934a6a93",
+      "transport": "api",
+      "status": "failed",
+      "started_at": "2026-09-11T15:41:06.901958+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p054\":\"他座下巨蜥喷出酸液，腐蚀得地面滋滋作响。\",\"p055\":\"“诺顿老鬼，看来你打错主意了！”\",\"p056\":\"莫雷裂开大嘴，露出满口尖锐的利齿，他阴仄仄的目光，扫向噬梦冒险团众人，“噬梦的，给你们一个机会，配合我们将这些裁决学院的废物解决掉，再乖乖交出梦魇神殿的图纸，我可以考虑将你们梦魇教派，收入麾下！”\"},\"assertions\":[{\"id\":\"R12\",\"subject\":\"莫雷\",\"predicate\":\"proposes_joint_attack_on\",\"object\":\"裁决学院\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"莫雷\",\"stated_qualifiers\":\"许诺收梦魇教派入麾下\",\"stated_basis\":\"stated\",\"cited\":[\"p056\"],\"context\":[\"p054\",\"p055\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 658,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 0.092264,
+      "error": {
+        "type": "AdmissionRejected",
+        "message": "rate_limited",
+        "category": "rate_limited",
+        "retry_after_s": 41.0,
+        "exact_hint": true,
+        "rate_limits": {
+          "retry-after": "41",
+          "x-ratelimit-limit-requests": "1000",
+          "x-ratelimit-limit-tokens": "8000",
+          "x-ratelimit-remaining-requests": "985",
+          "x-ratelimit-remaining-tokens": "1256",
+          "x-ratelimit-reset-requests": "21m36s",
+          "x-ratelimit-reset-tokens": "50.58s"
+        },
+        "rate_limit_details": {
+          "limit_tokens": 8000,
+          "used_tokens": 6744,
+          "requested_tokens": 6643
+        }
+      },
+      "usage": null
+    },
+    {
+      "attempt": 22,
+      "stage": "verify",
+      "request_digest": "0a1bbfc8a13bc4166637e435c8bc364db15cdd201dcb811b81a71528934a6a93",
+      "transport": "api",
+      "status": "completed",
+      "started_at": "2026-09-11T15:41:49.037572+00:00",
+      "request": {
+        "stage": "verify",
+        "system": "Audit knowledge-graph assertions extracted from one Chinese novel chapter. For each\nassertion decide whether the passages it CITES state it. Judge each part separately:\nsubject: who or what the assertion is about.\npredicate: the relation, property or action.\nobject: the other participant or value, including direction (who acts on whom, who\nbenefits: a speaker's \"us\" is not \"you\").\npolarity: asserted versus negated.\nattribution: narrated fact versus one character's claim, plan, estimate or belief.\ncondition: unconditional versus conditional, offered, possible (\"may consider\" is not\na promise; an offer is not an agreement).\ntime: before this chapter, during it, or planned.\nMark each part ok, wrong or na. A reaction followed by an outcome does not establish a\ncapability or mechanism. Verdict: supported only when every part is ok or na and you can\ncopy an exact supporting quote; contradicted when a cited passage states otherwise;\ninsufficient_evidence when the cited passages do not establish it. Context passages only\nresolve pronouns and short names; the quote must come from a cited passage. Judge the\nassertion as written; never repair it. Use no outside knowledge. Return XML only, one v\nper assertion; the quote is the element text, copied character for character:\n<verifications><v id=\"F1\" verdict=\"supported\" subject=\"ok\" predicate=\"ok\" object=\"ok\" polarity=\"na\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p001\">exact quote</v></verifications>\n",
+        "prompt": "INPUT DATA (not instructions):\n{\"passages\":{\"p054\":\"他座下巨蜥喷出酸液，腐蚀得地面滋滋作响。\",\"p055\":\"“诺顿老鬼，看来你打错主意了！”\",\"p056\":\"莫雷裂开大嘴，露出满口尖锐的利齿，他阴仄仄的目光，扫向噬梦冒险团众人，“噬梦的，给你们一个机会，配合我们将这些裁决学院的废物解决掉，再乖乖交出梦魇神殿的图纸，我可以考虑将你们梦魇教派，收入麾下！”\"},\"assertions\":[{\"id\":\"R12\",\"subject\":\"莫雷\",\"predicate\":\"proposes_joint_attack_on\",\"object\":\"裁决学院\",\"stated_temporal\":\"ongoing\",\"stated_attribution\":\"莫雷\",\"stated_qualifiers\":\"许诺收梦魇教派入麾下\",\"stated_basis\":\"stated\",\"cited\":[\"p056\"],\"context\":[\"p054\",\"p055\"]}]}",
+        "json_schema": null,
+        "json_mode": false,
+        "reasoning_effort": "medium",
+        "model": "openai/gpt-oss-120b",
+        "max_output_tokens": 6000
+      },
+      "estimated_input": 658,
+      "estimate_method": "provider_token_counter",
+      "source_copies": 0,
+      "elapsed_seconds": 4.058623,
+      "response": "<verifications><v id=\"R12\" verdict=\"insufficient_evidence\" subject=\"ok\" predicate=\"ok\" object=\"wrong\" polarity=\"ok\" attribution=\"ok\" condition=\"na\" time=\"ok\" passage=\"p056\">莫雷裂开大嘴，露出满口尖锐的利齿，他阴仄仄的目光，扫向噬梦冒险团众人，“噬梦的，给你们一个机会，配合我们将这些裁决学院的废物解决掉，再乖乖交出梦魇神殿的图纸，我可以考虑将你们梦魇教派，收入麾下！”</v></verifications>",
+      "served_provider": "groq",
+      "served_model": "openai/gpt-oss-120b",
+      "usage": {
+        "input_tokens": 643,
+        "output_tokens": 1565,
+        "cache_read_tokens": 256,
+        "cache_write_tokens": 0
+      },
+      "rate_limits": {},
+      "validation_status": "accepted"
+    }
+  ],
+  "verifications": [
+    {
+      "id": "F0",
+      "section": "facts",
+      "index": 0,
+      "claim_id": "c1",
+      "subject": "黄少天",
+      "predicate": "injured_right_arm",
+      "object": "溃烂",
+      "stated_temporal": "prior",
+      "stated_qualifiers": "右臂溃烂",
+      "stated_basis": "stated",
+      "cited": [
+        "p001",
+        "p002"
+      ],
+      "context": [
+        "p003",
+        "p004",
+        "p005",
+        "p006"
+      ],
+      "position": 2,
+      "participant_ids": [
+        "e1"
+      ],
+      "verdict_raw": "insufficient_evidence",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "wrong"
+      },
+      "passage": "p002",
+      "quote": "黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂龇牙咧嘴",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e1": true
+      }
+    },
+    {
+      "id": "F1",
+      "section": "facts",
+      "index": 1,
+      "claim_id": "c1",
+      "subject": "黄少天",
+      "predicate": "injury_cause",
+      "object": "神血雨腐蚀",
+      "stated_temporal": "prior",
+      "stated_qualifiers": "右臂溃烂",
+      "stated_basis": "stated",
+      "cited": [
+        "p001",
+        "p002"
+      ],
+      "context": [
+        "p003",
+        "p004",
+        "p005",
+        "p006"
+      ],
+      "position": 2,
+      "participant_ids": [
+        "e1"
+      ],
+      "verdict_raw": "insufficient_evidence",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "wrong"
+      },
+      "passage": "p002",
+      "quote": "黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂龇牙咧嘴",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e1": true
+      }
+    },
+    {
+      "id": "F2",
+      "section": "facts",
+      "index": 2,
+      "claim_id": "c2",
+      "subject": "神血雨",
+      "predicate": "status",
+      "object": "停歇",
+      "stated_temporal": "prior",
+      "stated_qualifiers": "驱赶至巢穴",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p004",
+        "p005"
+      ],
+      "context": [
+        "p003",
+        "p006",
+        "p007"
+      ],
+      "position": 5,
+      "participant_ids": [
+        "e2"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "na",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p004",
+      "quote": "神血雨停歇后，空气中弥漫着铁锈般的腥味。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e2": true
+      }
+    },
+    {
+      "id": "F3",
+      "section": "facts",
+      "index": 3,
+      "claim_id": "c2",
+      "subject": "神血雨",
+      "predicate": "effect_on_yin_beasts",
+      "object": "驱赶至巢穴",
+      "stated_temporal": "prior",
+      "stated_qualifiers": "驱赶至巢穴",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p005"
+      ],
+      "context": [
+        "p003",
+        "p004",
+        "p006",
+        "p007"
+      ],
+      "position": 5,
+      "participant_ids": [
+        "e2"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "na",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p005",
+      "quote": "那些湮兽也被神血雨驱赶，只能退到巢穴躲避。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e2": true
+      }
+    },
+    {
+      "id": "F4",
+      "section": "facts",
+      "index": 4,
+      "claim_id": "c4",
+      "subject": "阿采",
+      "predicate": "ability",
+      "object": "使用眼球锁链侦查",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "十二枚瞳孔亮起噩梦符文",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p012",
+        "p014"
+      ],
+      "context": [
+        "p010",
+        "p011",
+        "p013",
+        "p015"
+      ],
+      "position": 14,
+      "participant_ids": [
+        "e3"
+      ],
+      "verdict_raw": "insufficient_evidence",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p012",
+      "quote": "就在此时，阿采手中那眼球锁链忽然轻轻颤动起来，她目光一凝，沉声道：“君主大人，前方似乎有两股势力在交战！”",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e3": true
+      }
+    },
+    {
+      "id": "F5",
+      "section": "facts",
+      "index": 5,
+      "claim_id": "c4",
+      "subject": "眼球锁链",
+      "predicate": "feature",
+      "object": "十二枚瞳孔亮起噩梦符文",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "十二枚瞳孔亮起噩梦符文",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p012"
+      ],
+      "context": [
+        "p010",
+        "p011",
+        "p013",
+        "p014",
+        "p015"
+      ],
+      "position": 12,
+      "participant_ids": [
+        "e4"
+      ],
+      "verdict_raw": "insufficient_evidence",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "wrong",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p012",
+      "quote": "就在此时，阿采手中那眼球锁链忽然轻轻颤动起来，她目光一凝，沉声道：“君主大人，前方似乎有两股势力在交战！”",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e4": true
+      }
+    },
+    {
+      "id": "F6",
+      "section": "facts",
+      "index": 6,
+      "claim_id": "c5",
+      "subject": "凌峰",
+      "predicate": "decision",
+      "object": "绕过交战区域",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "不想节外生枝",
+      "stated_basis": "stated",
+      "cited": [
+        "p014",
+        "p015"
+      ],
+      "context": [
+        "p012",
+        "p013",
+        "p016",
+        "p017"
+      ],
+      "position": 15,
+      "participant_ids": [
+        "e5"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": "quote_not_in_passage",
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "ok",
+        "time": "ok"
+      },
+      "passage": "p014",
+      "quote": "“我们没必要介入，绕过去！”",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e5": false
+      }
+    },
+    {
+      "id": "F7",
+      "section": "facts",
+      "index": 7,
+      "claim_id": "c5",
+      "subject": "凌峰",
+      "predicate": "reason",
+      "object": "不想节外生枝",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "不想节外生枝",
+      "stated_basis": "stated",
+      "cited": [
+        "p015"
+      ],
+      "context": [
+        "p012",
+        "p013",
+        "p014",
+        "p016",
+        "p017"
+      ],
+      "position": 15,
+      "participant_ids": [
+        "e5"
+      ],
+      "verdict_raw": "insufficient_evidence",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "wrong",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p015",
+      "quote": "凌峰当机立断，眼下最重要的就是尽快穿过这片荒原，没必要节外生枝。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e5": true
+      }
+    },
+    {
+      "id": "F8",
+      "section": "facts",
+      "index": 8,
+      "claim_id": "c6",
+      "subject": "姜梦月",
+      "predicate": "planned_route",
+      "object": "西南方向绕行",
+      "stated_temporal": "planned",
+      "stated_qualifiers": "全系地图指示路径",
+      "stated_basis": "stated",
+      "cited": [
+        "p017",
+        "p018"
+      ],
+      "context": [
+        "p015",
+        "p016",
+        "p019"
+      ],
+      "position": 18,
+      "participant_ids": [
+        "e8"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": "quote_not_in_passage",
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p017",
+      "quote": "“姜梦月打开全系地图，指着地图上的路径，“从西南方向前进的话，虽然要绕一些路程，但是可以避开前面那两拨人。”",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e8": true
+      }
+    },
+    {
+      "id": "F9",
+      "section": "facts",
+      "index": 9,
+      "claim_id": "c6",
+      "subject": "姜梦月",
+      "predicate": "tool_used",
+      "object": "全系地图",
+      "stated_temporal": "planned",
+      "stated_qualifiers": "全系地图指示路径",
+      "stated_basis": "stated",
+      "cited": [
+        "p017"
+      ],
+      "context": [
+        "p015",
+        "p016",
+        "p018",
+        "p019"
+      ],
+      "position": 17,
+      "participant_ids": [
+        "e8"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": "quote_not_in_passage",
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p017",
+      "quote": "“姜梦月打开全系地图，指着地图上的路径，",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e8": true
+      }
+    },
+    {
+      "id": "F10",
+      "section": "facts",
+      "index": 10,
+      "claim_id": "c7",
+      "subject": "机械蜘蛛",
+      "predicate": "affiliation",
+      "object": "裁决学院侦查单位",
+      "stated_temporal": "ongoing",
+      "stated_attribution": "姜梦月",
+      "stated_qualifiers": "腹部刻威尔森家族徽记",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p021",
+        "p022",
+        "p023"
+      ],
+      "context": [
+        "p017",
+        "p018",
+        "p019",
+        "p020",
+        "p024"
+      ],
+      "position": 23,
+      "participant_ids": [
+        "e9"
+      ],
+      "verdict_raw": "insufficient_evidence",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "wrong",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p023",
+      "quote": "“是裁决学院的侦查单位！”",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e9": false
+      }
+    },
+    {
+      "id": "F11",
+      "section": "facts",
+      "index": 11,
+      "claim_id": "c7",
+      "subject": "机械蜘蛛",
+      "predicate": "emblem",
+      "object": "威尔森家族徽记",
+      "stated_temporal": "ongoing",
+      "stated_attribution": "姜梦月",
+      "stated_qualifiers": "腹部刻威尔森家族徽记",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p022"
+      ],
+      "context": [
+        "p017",
+        "p018",
+        "p019",
+        "p020",
+        "p021",
+        "p023",
+        "p024"
+      ],
+      "position": 22,
+      "participant_ids": [
+        "e9"
+      ],
+      "verdict_raw": "insufficient_evidence",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "wrong",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p022",
+      "quote": "“而那机械蜘蛛的腹部，还刻着威尔森家族徽记，虽然已经被劈成两半，但八只复眼却还在疯狂扫描周围的一切。”",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e9": true
+      }
+    },
+    {
+      "id": "F12",
+      "section": "facts",
+      "index": 12,
+      "claim_id": "c7",
+      "subject": "机械蜘蛛",
+      "predicate": "status",
+      "object": "被劈成两半但复眼仍在扫描",
+      "stated_temporal": "ongoing",
+      "stated_attribution": "姜梦月",
+      "stated_qualifiers": "腹部刻威尔森家族徽记",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p021",
+        "p022"
+      ],
+      "context": [
+        "p017",
+        "p018",
+        "p019",
+        "p020",
+        "p023",
+        "p024"
+      ],
+      "position": 22,
+      "participant_ids": [
+        "e9"
+      ],
+      "verdict_raw": "insufficient_evidence",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "wrong",
+        "condition": "ok",
+        "time": "ok"
+      },
+      "passage": "p022",
+      "quote": "而那机械蜘蛛的腹部，还刻着威尔森家族徽记，虽然已经被劈成两半，但八只复眼却还在疯狂扫描周围的一切。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e9": true
+      }
+    },
+    {
+      "id": "F13",
+      "section": "facts",
+      "index": 13,
+      "claim_id": "c8",
+      "subject": "诺顿·威尔森",
+      "predicate": "proposal",
+      "object": "联合噬梦冒险团对付啸牙冒险团",
+      "stated_temporal": "ongoing",
+      "stated_attribution": "诺顿·威尔森",
+      "stated_qualifiers": "许诺恐惧神殿归噬梦",
+      "stated_basis": "stated",
+      "cited": [
+        "p026"
+      ],
+      "context": [
+        "p023",
+        "p024",
+        "p025",
+        "p027",
+        "p028",
+        "p029",
+        "p030"
+      ],
+      "position": 26,
+      "participant_ids": [
+        "e11"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "ok",
+        "time": "ok"
+      },
+      "passage": "p026",
+      "quote": "诺顿·威尔森苍老的声音通过扩音装置传来：“噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！”",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e11": true
+      }
+    },
+    {
+      "id": "F14",
+      "section": "facts",
+      "index": 14,
+      "claim_id": "c8",
+      "subject": "诺顿·威尔森",
+      "predicate": "promise",
+      "object": "恐惧神殿归噬梦冒险团",
+      "stated_temporal": "ongoing",
+      "stated_attribution": "诺顿·威尔森",
+      "stated_qualifiers": "许诺恐惧神殿归噬梦",
+      "stated_basis": "stated",
+      "cited": [
+        "p026"
+      ],
+      "context": [
+        "p023",
+        "p024",
+        "p025",
+        "p027",
+        "p028",
+        "p029",
+        "p030"
+      ],
+      "position": 26,
+      "participant_ids": [
+        "e11"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "ok",
+        "time": "ok"
+      },
+      "passage": "p026",
+      "quote": "诺顿·威尔森苍老的声音通过扩音装置传来：“噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！”",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e11": true
+      }
+    },
+    {
+      "id": "F15",
+      "section": "facts",
+      "index": 15,
+      "claim_id": "c9",
+      "subject": "凌峰",
+      "predicate": "past_action",
+      "object": "伪装成诺顿偷盗威尔森家族宝库",
+      "stated_temporal": "prior",
+      "stated_qualifiers": "曾伪装诺顿偷盗宝库、宰杀豪森、盗取图书馆",
+      "stated_basis": "stated",
+      "cited": [
+        "p049"
+      ],
+      "context": [
+        "p028",
+        "p029",
+        "p030",
+        "p031",
+        "p046",
+        "p047",
+        "p048",
+        "p050",
+        "p051"
+      ],
+      "position": 49,
+      "participant_ids": [
+        "e5"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": "quote_not_in_passage",
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "ok",
+        "time": "ok"
+      },
+      "passage": "p049",
+      "quote": "不过，之前为了偷盗威尔森家族宝库，他曾经伪装成诺顿的模样，自然对这个老家伙十分熟悉。只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e5": false
+      }
+    },
+    {
+      "id": "F16",
+      "section": "facts",
+      "index": 16,
+      "claim_id": "c9",
+      "subject": "凌峰",
+      "predicate": "past_action",
+      "object": "杀害豪森",
+      "stated_temporal": "prior",
+      "stated_qualifiers": "曾伪装诺顿偷盗宝库、宰杀豪森、盗取图书馆",
+      "stated_basis": "stated",
+      "cited": [
+        "p050"
+      ],
+      "context": [
+        "p028",
+        "p029",
+        "p030",
+        "p031",
+        "p046",
+        "p047",
+        "p048",
+        "p049",
+        "p051"
+      ],
+      "position": 50,
+      "participant_ids": [
+        "e5"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": "quote_not_in_passage",
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p050",
+      "quote": "只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祈首。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e5": false
+      }
+    },
+    {
+      "id": "F17",
+      "section": "facts",
+      "index": 17,
+      "claim_id": "c9",
+      "subject": "凌峰",
+      "predicate": "past_action",
+      "object": "盗取裁决学院图书馆",
+      "stated_temporal": "prior",
+      "stated_qualifiers": "曾伪装诺顿偷盗宝库、宰杀豪森、盗取图书馆",
+      "stated_basis": "stated",
+      "cited": [
+        "p050"
+      ],
+      "context": [
+        "p028",
+        "p029",
+        "p030",
+        "p031",
+        "p046",
+        "p047",
+        "p048",
+        "p049",
+        "p051"
+      ],
+      "position": 50,
+      "participant_ids": [
+        "e5"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": "quote_not_in_passage",
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p050",
+      "quote": "只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祈首。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e5": false
+      }
+    },
+    {
+      "id": "F18",
+      "section": "facts",
+      "index": 18,
+      "claim_id": "c11",
+      "subject": "凌峰",
+      "predicate": "ability",
+      "object": "凝结猩红杀气形成弑神枪虚影",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "掌心猩红杀气凝结三米长、吞吐毁灭波动、新习得枪法",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p034",
+        "p035"
+      ],
+      "context": [
+        "p032",
+        "p033",
+        "p036"
+      ],
+      "position": 35,
+      "participant_ids": [
+        "e5"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p034",
+      "quote": "说话间，他掌心猩红杀气再度凝结，三米长的弑神枪虚影吞吐着毁灭波动。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e5": false
+      }
+    },
+    {
+      "id": "F19",
+      "section": "facts",
+      "index": 19,
+      "claim_id": "c11",
+      "subject": "弑神枪",
+      "predicate": "description",
+      "object": "三米长、吞吐毁灭波动",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "掌心猩红杀气凝结三米长、吞吐毁灭波动、新习得枪法",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p034"
+      ],
+      "context": [
+        "p032",
+        "p033",
+        "p035",
+        "p036"
+      ],
+      "position": 34,
+      "participant_ids": [
+        "e14"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p034",
+      "quote": "说话间，他掌心猩红杀气再度凝结，三米长的弑神枪虚影吞吐着毁灭波动。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e14": true
+      }
+    },
+    {
+      "id": "F20",
+      "section": "facts",
+      "index": 20,
+      "claim_id": "c11",
+      "subject": "凌峰",
+      "predicate": "status",
+      "object": "新习得枪法待试用",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "掌心猩红杀气凝结三米长、吞吐毁灭波动、新习得枪法",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p035"
+      ],
+      "context": [
+        "p032",
+        "p033",
+        "p034",
+        "p036"
+      ],
+      "position": 35,
+      "participant_ids": [
+        "e5"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "na",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p035",
+      "quote": "正好，试试自己新习得的这套枪法，到底有何等威能！",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e5": false
+      }
+    },
+    {
+      "id": "F21",
+      "section": "facts",
+      "index": 21,
+      "claim_id": "c13",
+      "subject": "阿采",
+      "predicate": "action",
+      "object": "激活眼球锁链噩梦符文",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "十二枚瞳孔同时亮起",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p039"
+      ],
+      "context": [
+        "p037",
+        "p038",
+        "p040"
+      ],
+      "position": 39,
+      "participant_ids": [
+        "e3"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "na",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p039",
+      "quote": "阿采的眼球锁链如毒蛇昂首，十二枚瞳孔里同时亮起噩梦符文。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e3": true
+      }
+    },
+    {
+      "id": "F22",
+      "section": "facts",
+      "index": 22,
+      "claim_id": "c13",
+      "subject": "眼球锁链",
+      "predicate": "state",
+      "object": "十二枚瞳孔同时亮起",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "十二枚瞳孔同时亮起",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p039"
+      ],
+      "context": [
+        "p037",
+        "p038",
+        "p040"
+      ],
+      "position": 39,
+      "participant_ids": [
+        "e4"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "na",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p039",
+      "quote": "阿采的眼球锁链如毒蛇昂首，十二枚瞳孔里同时亮起噩梦符文。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e4": true
+      }
+    },
+    {
+      "id": "F23",
+      "section": "facts",
+      "index": 23,
+      "claim_id": "c15",
+      "subject": "莫雷",
+      "predicate": "title",
+      "object": "啸牙冒险团团长",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "称号缝尸鬼、脸有缝合线、座下巨蜥喷酸液",
+      "stated_basis": "stated",
+      "cited": [
+        "p053"
+      ],
+      "context": [
+        "p050",
+        "p051",
+        "p052",
+        "p054",
+        "p055",
+        "p056"
+      ],
+      "position": 53,
+      "participant_ids": [
+        "e18"
+      ],
+      "verdict_raw": "insufficient_evidence",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "na",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p053",
+      "quote": "此人，正是啸牙冒险团团长，“缝尸鬼”莫雷。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e18": true
+      }
+    },
+    {
+      "id": "F24",
+      "section": "facts",
+      "index": 24,
+      "claim_id": "c15",
+      "subject": "莫雷",
+      "predicate": "nickname",
+      "object": "缝尸鬼",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "称号缝尸鬼、脸有缝合线、座下巨蜥喷酸液",
+      "stated_basis": "stated",
+      "cited": [
+        "p053"
+      ],
+      "context": [
+        "p050",
+        "p051",
+        "p052",
+        "p054",
+        "p055",
+        "p056"
+      ],
+      "position": 53,
+      "participant_ids": [
+        "e18"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "na"
+      },
+      "passage": "p053",
+      "quote": "此人，正是啸牙冒险团团长，“缝尸鬼”莫雷。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e18": true
+      }
+    },
+    {
+      "id": "F25",
+      "section": "facts",
+      "index": 25,
+      "claim_id": "c15",
+      "subject": "莫雷",
+      "predicate": "appearance",
+      "object": "满脸缝合线",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "称号缝尸鬼、脸有缝合线、座下巨蜥喷酸液",
+      "stated_basis": "stated",
+      "cited": [
+        "p052",
+        "p053"
+      ],
+      "context": [
+        "p050",
+        "p051",
+        "p054",
+        "p055",
+        "p056"
+      ],
+      "position": 53,
+      "participant_ids": [
+        "e18"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "na"
+      },
+      "passage": "p052",
+      "quote": "一个阴冷的笑声传来，却见啸牙冒险团之中，那为首者摘下兽牙面具，露出满是缝合线的脸。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e18": false
+      }
+    },
+    {
+      "id": "F26",
+      "section": "facts",
+      "index": 26,
+      "claim_id": "c16",
+      "subject": "莫雷",
+      "predicate": "proposal",
+      "object": "联合噬梦对付裁决学院并索要梦魇神殿图纸",
+      "stated_temporal": "ongoing",
+      "stated_attribution": "莫雷",
+      "stated_qualifiers": "许诺收梦魇教派入麾下",
+      "stated_basis": "stated",
+      "cited": [
+        "p056"
+      ],
+      "context": [
+        "p054",
+        "p055"
+      ],
+      "position": 56,
+      "participant_ids": [
+        "e18"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "na"
+      },
+      "passage": "p056",
+      "quote": "莫雷裂开大嘴，露出满口尖锐的利齿，他阴仄仄的目光，扫向噬梦冒险团众人，“噬梦的，给你们一个机会，配合我们将这些裁决学院的废物解决掉，再乖乖交出梦魇神殿的图纸，我可以考虑将你们梦魇教派，收入麾下！”",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e18": true
+      }
+    },
+    {
+      "id": "F27",
+      "section": "facts",
+      "index": 27,
+      "claim_id": "c16",
+      "subject": "莫雷",
+      "predicate": "promise",
+      "object": "许诺收梦魇教派入麾下",
+      "stated_temporal": "ongoing",
+      "stated_attribution": "莫雷",
+      "stated_qualifiers": "许诺收梦魇教派入麾下",
+      "stated_basis": "stated",
+      "cited": [
+        "p056"
+      ],
+      "context": [
+        "p054",
+        "p055"
+      ],
+      "position": 56,
+      "participant_ids": [
+        "e18"
+      ],
+      "verdict_raw": "contradicted",
+      "verdict": "contradicted",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "wrong",
+        "object": "wrong",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "wrong",
+        "time": "na"
+      },
+      "passage": "p056",
+      "quote": "莫雷裂开大嘴，露出满口尖锐的利齿，他阴仄仄的目光，扫向噬梦冒险团众人，“噬梦的，给你们一个机会，配合我们将这些裁决学院的废物解决掉，再乖乖交出梦魇神殿的图纸，我可以考虑将你们梦魇教派，收入麾下！”",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e18": true
+      }
+    },
+    {
+      "id": "R0",
+      "section": "relations",
+      "index": 0,
+      "claim_id": "c1",
+      "subject": "黄少天",
+      "predicate": "injured_by",
+      "object": "神血雨",
+      "stated_temporal": "prior",
+      "stated_qualifiers": "右臂溃烂",
+      "stated_basis": "stated",
+      "cited": [
+        "p001",
+        "p002"
+      ],
+      "context": [
+        "p003",
+        "p004",
+        "p005",
+        "p006"
+      ],
+      "position": 2,
+      "participant_ids": [
+        "e1",
+        "e2"
+      ],
+      "verdict_raw": "insufficient_evidence",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "na",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "wrong"
+      },
+      "passage": "p002",
+      "quote": "黄少天捂着因为神血雨的腐蚀而有些溃烂的右臂",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e1": true,
+        "e2": true
+      }
+    },
+    {
+      "id": "R1",
+      "section": "relations",
+      "index": 1,
+      "claim_id": "c4",
+      "subject": "阿采",
+      "predicate": "uses",
+      "object": "眼球锁链",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "十二枚瞳孔亮起噩梦符文",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p012"
+      ],
+      "context": [
+        "p010",
+        "p011",
+        "p013",
+        "p014",
+        "p015"
+      ],
+      "position": 12,
+      "participant_ids": [
+        "e3",
+        "e4"
+      ],
+      "verdict_raw": "insufficient_evidence",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "wrong",
+        "object": "ok",
+        "polarity": "na",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p012",
+      "quote": "阿采手中那眼球锁链忽然轻轻颤动起来",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e3": true,
+        "e4": true
+      }
+    },
+    {
+      "id": "R2",
+      "section": "relations",
+      "index": 2,
+      "claim_id": "c5",
+      "subject": "凌峰",
+      "predicate": "avoids",
+      "object": "啸牙冒险团",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "不想节外生枝",
+      "stated_basis": "stated",
+      "cited": [
+        "p014",
+        "p015"
+      ],
+      "context": [
+        "p012",
+        "p013",
+        "p016",
+        "p017"
+      ],
+      "position": 15,
+      "participant_ids": [
+        "e5",
+        "e6"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "na",
+        "attribution": "ok",
+        "condition": "ok",
+        "time": "ok"
+      },
+      "passage": "p015",
+      "quote": "凌峰当机立断，眼下最重要的就是尽快穿过这片荒原，没必要节外生枝。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e5": true,
+        "e6": false
+      }
+    },
+    {
+      "id": "R3",
+      "section": "relations",
+      "index": 3,
+      "claim_id": "c5",
+      "subject": "凌峰",
+      "predicate": "avoids",
+      "object": "裁决学院",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "不想节外生枝",
+      "stated_basis": "stated",
+      "cited": [
+        "p014",
+        "p015"
+      ],
+      "context": [
+        "p012",
+        "p013",
+        "p016",
+        "p017"
+      ],
+      "position": 15,
+      "participant_ids": [
+        "e5",
+        "e7"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "na",
+        "attribution": "ok",
+        "condition": "ok",
+        "time": "ok"
+      },
+      "passage": "p014",
+      "quote": "凌峰眸中阴阳鱼浮动，“我已察觉到了！是啸牙冒险团和裁决学院的人！我们没必要介入，绕过去！”",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e5": true,
+        "e7": true
+      }
+    },
+    {
+      "id": "R4",
+      "section": "relations",
+      "index": 4,
+      "claim_id": "c7",
+      "subject": "机械蜘蛛",
+      "predicate": "belongs_to",
+      "object": "裁决学院",
+      "stated_temporal": "ongoing",
+      "stated_attribution": "姜梦月",
+      "stated_qualifiers": "腹部刻威尔森家族徽记",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p021",
+        "p022",
+        "p023"
+      ],
+      "context": [
+        "p017",
+        "p018",
+        "p019",
+        "p020",
+        "p024"
+      ],
+      "position": 23,
+      "participant_ids": [
+        "e9",
+        "e7"
+      ],
+      "verdict_raw": "insufficient_evidence",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "wrong",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p023",
+      "quote": "“是裁决学院的侦查单位！”",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e9": false,
+        "e7": true
+      }
+    },
+    {
+      "id": "R5",
+      "section": "relations",
+      "index": 5,
+      "claim_id": "c7",
+      "subject": "机械蜘蛛",
+      "predicate": "bears_emblem_of",
+      "object": "威尔森家族",
+      "stated_temporal": "ongoing",
+      "stated_attribution": "姜梦月",
+      "stated_qualifiers": "腹部刻威尔森家族徽记",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p022"
+      ],
+      "context": [
+        "p017",
+        "p018",
+        "p019",
+        "p020",
+        "p021",
+        "p023",
+        "p024"
+      ],
+      "position": 22,
+      "participant_ids": [
+        "e9",
+        "e10"
+      ],
+      "verdict_raw": "insufficient_evidence",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "wrong",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p022",
+      "quote": "而那机械蜘蛛的腹部，还刻着威尔森家族徽记，虽然已经被劈成两半，但八只复眼却还在疯狂扫描周围的一切。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e9": true,
+        "e10": true
+      }
+    },
+    {
+      "id": "R6",
+      "section": "relations",
+      "index": 6,
+      "claim_id": "c8",
+      "subject": "诺顿·威尔森",
+      "predicate": "proposes_joint_attack_on",
+      "object": "啸牙冒险团",
+      "stated_temporal": "ongoing",
+      "stated_attribution": "诺顿·威尔森",
+      "stated_qualifiers": "许诺恐惧神殿归噬梦",
+      "stated_basis": "stated",
+      "cited": [
+        "p026"
+      ],
+      "context": [
+        "p023",
+        "p024",
+        "p025",
+        "p027",
+        "p028",
+        "p029",
+        "p030"
+      ],
+      "position": 26,
+      "participant_ids": [
+        "e11",
+        "e6"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p026",
+      "quote": "诺顿·威尔森苍老的声音通过扩音装置传来：“噬梦的朋友，不是说好了进入陨落狱之后合作一起行动的么！快来，解决掉啸牙冒险团，恐惧神殿，也归我们了！”",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e11": true,
+        "e6": true
+      }
+    },
+    {
+      "id": "R7",
+      "section": "relations",
+      "index": 7,
+      "claim_id": "c9",
+      "subject": "凌峰",
+      "predicate": "has_conflict_with",
+      "object": "威尔森家族",
+      "stated_temporal": "prior",
+      "stated_qualifiers": "曾伪装诺顿偷盗宝库、宰杀豪森、盗取图书馆",
+      "stated_basis": "stated",
+      "cited": [
+        "p048",
+        "p049",
+        "p050"
+      ],
+      "context": [
+        "p028",
+        "p029",
+        "p030",
+        "p031",
+        "p046",
+        "p047",
+        "p051"
+      ],
+      "position": 50,
+      "participant_ids": [
+        "e5",
+        "e10"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "na",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p049",
+      "quote": "不过，之前为了偷盗威尔森家族宝库，他曾经伪装成诺顿的模样，自然对这个老家伙十分熟悉。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e5": false,
+        "e10": true
+      }
+    },
+    {
+      "id": "R8",
+      "section": "relations",
+      "index": 8,
+      "claim_id": "c9",
+      "subject": "凌峰",
+      "predicate": "killed",
+      "object": "豪森",
+      "stated_temporal": "prior",
+      "stated_qualifiers": "曾伪装诺顿偷盗宝库、宰杀豪森、盗取图书馆",
+      "stated_basis": "stated",
+      "cited": [
+        "p050"
+      ],
+      "context": [
+        "p028",
+        "p029",
+        "p030",
+        "p031",
+        "p046",
+        "p047",
+        "p048",
+        "p049",
+        "p051"
+      ],
+      "position": 50,
+      "participant_ids": [
+        "e5",
+        "e12"
+      ],
+      "verdict_raw": "insufficient_evidence",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p050",
+      "quote": "只不过，自己就站在他眼前，诺顿却不知道，他就是搬空了威尔森家族宝库，同时也是宰了他孙子豪森，以及盗取裁决学院图书馆的罪魁祸首。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e5": false,
+        "e12": true
+      }
+    },
+    {
+      "id": "R9",
+      "section": "relations",
+      "index": 9,
+      "claim_id": "c11",
+      "subject": "凌峰",
+      "predicate": "manifests",
+      "object": "弑神枪",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "掌心猩红杀气凝结三米长、吞吐毁灭波动、新习得枪法",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p034",
+        "p035"
+      ],
+      "context": [
+        "p032",
+        "p033",
+        "p036"
+      ],
+      "position": 35,
+      "participant_ids": [
+        "e5",
+        "e14"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p034",
+      "quote": "说话间，他掌心猩红杀气再度凝结，三米长的弑神枪虚影吞吐着毁灭波动。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e5": false,
+        "e14": true
+      }
+    },
+    {
+      "id": "R10",
+      "section": "relations",
+      "index": 10,
+      "claim_id": "c13",
+      "subject": "阿采",
+      "predicate": "activates",
+      "object": "眼球锁链",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "十二枚瞳孔同时亮起",
+      "stated_basis": "demonstrated",
+      "cited": [
+        "p039"
+      ],
+      "context": [
+        "p037",
+        "p038",
+        "p040"
+      ],
+      "position": 39,
+      "participant_ids": [
+        "e3",
+        "e4"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p039",
+      "quote": "阿采的眼球锁链如毒蛇昂首，十二枚瞳孔里同时亮起噩梦符文。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e3": true,
+        "e4": true
+      }
+    },
+    {
+      "id": "R11",
+      "section": "relations",
+      "index": 11,
+      "claim_id": "c15",
+      "subject": "莫雷",
+      "predicate": "leads",
+      "object": "啸牙冒险团",
+      "stated_temporal": "ongoing",
+      "stated_qualifiers": "称号缝尸鬼、脸有缝合线、座下巨蜥喷酸液",
+      "stated_basis": "stated",
+      "cited": [
+        "p053"
+      ],
+      "context": [
+        "p050",
+        "p051",
+        "p052",
+        "p054",
+        "p055",
+        "p056"
+      ],
+      "position": 53,
+      "participant_ids": [
+        "e18",
+        "e6"
+      ],
+      "verdict_raw": "supported",
+      "verdict": "supported",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "ok",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p053",
+      "quote": "此人，正是啸牙冒险团团长，“缝尸鬼”莫雷。",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e18": true,
+        "e6": true
+      }
+    },
+    {
+      "id": "R12",
+      "section": "relations",
+      "index": 12,
+      "claim_id": "c16",
+      "subject": "莫雷",
+      "predicate": "proposes_joint_attack_on",
+      "object": "裁决学院",
+      "stated_temporal": "ongoing",
+      "stated_attribution": "莫雷",
+      "stated_qualifiers": "许诺收梦魇教派入麾下",
+      "stated_basis": "stated",
+      "cited": [
+        "p056"
+      ],
+      "context": [
+        "p054",
+        "p055"
+      ],
+      "position": 56,
+      "participant_ids": [
+        "e18",
+        "e7"
+      ],
+      "verdict_raw": "insufficient_evidence",
+      "verdict": "insufficient_evidence",
+      "downgrade_reason": null,
+      "parts": {
+        "subject": "ok",
+        "predicate": "ok",
+        "object": "wrong",
+        "polarity": "ok",
+        "attribution": "ok",
+        "condition": "na",
+        "time": "ok"
+      },
+      "passage": "p056",
+      "quote": "莫雷裂开大嘴，露出满口尖锐的利齿，他阴仄仄的目光，扫向噬梦冒险团众人，“噬梦的，给你们一个机会，配合我们将这些裁决学院的废物解决掉，再乖乖交出梦魇神殿的图纸，我可以考虑将你们梦魇教派，收入麾下！”",
+      "format_correction": null,
+      "participants_in_quote": {
+        "e18": true,
+        "e7": true
+      }
+    }
+  ],
+  "status": "completed",
+  "summary": {
+    "assertions": 41,
+    "verdicts": {
+      "insufficient_evidence": 21,
+      "supported": 19,
+      "contradicted": 1
+    },
+    "downgraded": 6
+  },
+  "run_metrics": {
+    "logical_api_calls": 22,
+    "successful_api_calls": 11,
+    "failed_api_calls": 11,
+    "reused_calls": 0,
+    "provider_reported_input_tokens": 13080,
+    "provider_reported_output_tokens": 29543,
+    "provider_reported_cache_read_tokens": 256,
+    "cache_adjusted_input_equivalent": null,
+    "cached_input_discount_assumption": 0.0,
+    "estimated_request_total": 31173,
+    "estimated_request_unit": "tokens",
+    "gross_context_multiplier": null,
+    "context_increase_percent": null,
+    "estimated_context_multiplier": 13.1255,
+    "provider_input_vs_estimated_baseline_multiplier": null,
+    "source_copies_sent": 0,
+    "max_provider_reported_request_tokens": 1572,
+    "unknown_usage_attempts": 11,
+    "wall_seconds": 67.757003
+  },
+  "regression_evaluation": {
+    "known_errors": {
+      "records": 4,
+      "caught": 3,
+      "missed": 1
+    },
+    "known_correct": {
+      "records": 16,
+      "kept": 6,
+      "false_alarms": 10
+    },
+    "superseded_but_true_when_cited": {
+      "records": 3,
+      "supported": 2
+    },
+    "partial": {
+      "records": 0,
+      "rejected": 0
+    },
+    "detail": {
+      "error": [
+        {
+          "id": "F14",
+          "cases": [
+            "T01"
+          ],
+          "verdict": "supported",
+          "downgrade_reason": null,
+          "wrong_parts": []
+        },
+        {
+          "id": "F27",
+          "cases": [
+            "T02",
+            "T07"
+          ],
+          "verdict": "contradicted",
+          "downgrade_reason": null,
+          "wrong_parts": [
+            "predicate",
+            "object",
+            "condition"
+          ]
+        },
+        {
+          "id": "F4",
+          "cases": [
+            "T03"
+          ],
+          "verdict": "insufficient_evidence",
+          "downgrade_reason": null,
+          "wrong_parts": []
+        },
+        {
+          "id": "F5",
+          "cases": [
+            "T04"
+          ],
+          "verdict": "insufficient_evidence",
+          "downgrade_reason": null,
+          "wrong_parts": [
+            "object"
+          ]
+        }
+      ],
+      "correct": [
+        {
+          "id": "F10",
+          "cases": [
+            "K15"
+          ],
+          "verdict": "insufficient_evidence",
+          "downgrade_reason": null,
+          "wrong_parts": [
+            "attribution"
+          ]
+        },
+        {
+          "id": "F11",
+          "cases": [
+            "K15",
+            "T08"
+          ],
+          "verdict": "insufficient_evidence",
+          "downgrade_reason": null,
+          "wrong_parts": [
+            "attribution"
+          ]
+        },
+        {
+          "id": "F13",
+          "cases": [
+            "K11"
+          ],
+          "verdict": "supported",
+          "downgrade_reason": null,
+          "wrong_parts": []
+        },
+        {
+          "id": "F15",
+          "cases": [
+            "K01",
+            "K02"
+          ],
+          "verdict": "insufficient_evidence",
+          "downgrade_reason": "quote_not_in_passage",
+          "wrong_parts": []
+        },
+        {
+          "id": "F16",
+          "cases": [
+            "K03"
+          ],
+          "verdict": "insufficient_evidence",
+          "downgrade_reason": "quote_not_in_passage",
+          "wrong_parts": []
+        },
+        {
+          "id": "F17",
+          "cases": [
+            "K05"
+          ],
+          "verdict": "insufficient_evidence",
+          "downgrade_reason": "quote_not_in_passage",
+          "wrong_parts": []
+        },
+        {
+          "id": "F23",
+          "cases": [
+            "K07"
+          ],
+          "verdict": "insufficient_evidence",
+          "downgrade_reason": null,
+          "wrong_parts": []
+        },
+        {
+          "id": "F24",
+          "cases": [
+            "K07"
+          ],
+          "verdict": "supported",
+          "downgrade_reason": null,
+          "wrong_parts": []
+        },
+        {
+          "id": "F26",
+          "cases": [
+            "K12"
+          ],
+          "verdict": "supported",
+          "downgrade_reason": null,
+          "wrong_parts": []
+        },
+        {
+          "id": "F3",
+          "cases": [
+            "T09"
+          ],
+          "verdict": "supported",
+          "downgrade_reason": null,
+          "wrong_parts": []
+        },
+        {
+          "id": "R11",
+          "cases": [
+            "K07"
+          ],
+          "verdict": "supported",
+          "downgrade_reason": null,
+          "wrong_parts": []
+        },
+        {
+          "id": "R12",
+          "cases": [
+            "K12"
+          ],
+          "verdict": "insufficient_evidence",
+          "downgrade_reason": null,
+          "wrong_parts": [
+            "object"
+          ]
+        },
+        {
+          "id": "R4",
+          "cases": [
+            "K15"
+          ],
+          "verdict": "insufficient_evidence",
+          "downgrade_reason": null,
+          "wrong_parts": [
+            "attribution"
+          ]
+        },
+        {
+          "id": "R5",
+          "cases": [
+            "K15",
+            "T08"
+          ],
+          "verdict": "insufficient_evidence",
+          "downgrade_reason": null,
+          "wrong_parts": [
+            "attribution"
+          ]
+        },
+        {
+          "id": "R6",
+          "cases": [
+            "K11"
+          ],
+          "verdict": "supported",
+          "downgrade_reason": null,
+          "wrong_parts": []
+        },
+        {
+          "id": "R8",
+          "cases": [
+            "K03"
+          ],
+          "verdict": "insufficient_evidence",
+          "downgrade_reason": null,
+          "wrong_parts": []
+        }
+      ],
+      "partial": [],
+      "stale": [
+        {
+          "id": "F6",
+          "cases": [
+            "T05"
+          ],
+          "verdict": "insufficient_evidence",
+          "downgrade_reason": "quote_not_in_passage",
+          "wrong_parts": []
+        },
+        {
+          "id": "R2",
+          "cases": [
+            "T05"
+          ],
+          "verdict": "supported",
+          "downgrade_reason": null,
+          "wrong_parts": []
+        },
+        {
+          "id": "R3",
+          "cases": [
+            "T05"
+          ],
+          "verdict": "supported",
+          "downgrade_reason": null,
+          "wrong_parts": []
+        }
+      ]
+    },
+    "trust": "not established: one chapter, one run, and the labels are the regression set the verifier's instructions were written against"
+  }
+}

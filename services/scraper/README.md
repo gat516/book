@@ -14,10 +14,18 @@ Per-site adapters, not a generic extractor (`adapter.go`'s `siteFor`, keyed by h
 - **m.shuhaige.net** — a raw source-language site. `mode=translate`: the pipeline
   machine-translates it normally. Chapters here are also split across multiple *pages*
   (not chapters) via a "下一页"/"next page" link that becomes "下一章"/"next chapter"
-  on a chapter's final page — the walk loop doesn't distinguish the two, it just follows
-  whichever is present. (An earlier adapter targeted look.twword.com instead; that site's
+  on a chapter's final page. The adapter marks those continuation pages and the walker
+  assembles them before assigning one internal `chapter_index`. (An earlier adapter
+  targeted look.twword.com instead; that site's
   `robots.txt` disallows all bots except a named allowlist of major crawlers, a blanket
   policy this scraper — which honors robots.txt — will never satisfy, so it was replaced.)
+  Novels already ingested by the older page-per-chapter implementation are detected from
+  `source_meta.part` and retain that immutable indexing when a scrape resumes.
+- **novel543.com** — a raw source-language site. `mode=translate`. Its `(1/2)`, `(2/2)`
+  title suffixes identify website pages belonging to one source chapter; prompts and ad
+  blocks are excluded from the extracted paragraphs. This adapter uses the owner's
+  explicit site-specific exception to skip novel543's blanket `robots.txt` denial while
+  retaining the shared rate limit, jitter, timeout, and user agent.
 
 Adding a third site is adding one file implementing the `Site` interface plus a
 `siteFor` case — nothing else changes.
@@ -33,6 +41,11 @@ go run .
 Config (`config.go`, env-driven with compose-friendly defaults): `DATABASE_URL`,
 `REDIS_URL`, `INGEST_API_URL`, `SCRAPE_RATE_PER_SEC`, `SCRAPE_JITTER_MS`,
 `SCRAPE_USER_AGENT`, `CONTENT_LEN_FLOOR`.
+
+Oversized source chapters remain one stored chapter. `TRANSLATION_CHUNK_TOKENS` controls
+the estimated source-token ceiling for each translation request (default `6000`); the
+pipeline sends ordered parts and joins their translated output before storage and later
+stages.
 
 ## Triggering a scrape
 
@@ -55,6 +68,6 @@ terminal status.
 ## Politeness
 
 `politeness.go`: a token-bucket rate limiter + jitter + an honest `User-Agent` + a
-`robots.txt` check (honors `Disallow` for `User-agent: *` only) wrap every request. A
+`robots.txt` check (honors `Disallow` for `User-agent: *` only) wrap requests by default. A
 `robots.txt` fetch failure fails open (many sites have none); an actual `Disallow` match
-fails the request closed.
+fails the request closed. The novel543 adapter's explicit exception is documented above.

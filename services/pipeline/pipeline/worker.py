@@ -833,24 +833,27 @@ class Worker:
         # Keep the due timestamp until the work succeeds. Queue insertion is atomic and
         # deduplicated; a crash between database inspection and enqueue cannot strand it.
         rows = await (await self.db.execute(
-            # No translation_ready filter: a chapter that failed BEFORE translate is
-            # exactly the one with nothing durable saved, so it is the most important to
-            # retry, not the one to skip.
+            # A discarded enrichment must not suppress a prose retry. For a chapter
+            # without durable translation, requeue ordinary reader-critical work; only
+            # an already-translated chapter resumes as low-priority enrichment (§0).
             "SELECT c.novel_id::text, c.chapter_index, c.status, "
             "COALESCE(c.enrichment_retry_generation_id::text, "
-            "c.provider_retry_generation_id::text) FROM chapter c "
+            "c.provider_retry_generation_id::text), c.translation_ready FROM chapter c "
             # needs_name_review is included because nothing produces it any more: the
             # character-name gate no longer blocks translation, so a chapter still parked
             # at that status is stranded exactly the way pre-TRANSLATE failures were before
             # 0033. It was excluded then precisely because it WAS a live human gate.
-            "WHERE NOT c.enrichment_discarded AND ((enrichment_retry_at <= now() AND enrichment_attempts < %s) "
-            "OR (provider_retry_at <= now() AND provider_retry_attempts < %s)) "
+            "WHERE ((NOT c.enrichment_discarded AND enrichment_retry_at <= now() "
+            "AND enrichment_attempts < %s) OR (provider_retry_at <= now() "
+            "AND provider_retry_attempts < %s "
+            "AND (NOT c.translation_ready OR NOT c.enrichment_discarded))) "
             "ORDER BY LEAST(COALESCE(enrichment_retry_at, 'infinity'::timestamptz), "
             "COALESCE(provider_retry_at, 'infinity'::timestamptz)) LIMIT 20",
             (MAX_ENRICHMENT_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS),
         )).fetchall()
-        for novel_id, chapter, status, generation_id in rows:
-            msg = QueueMessage(novel_id=novel_id, chapter_index=chapter, enrichment=True,
+        for novel_id, chapter, status, generation_id, translation_ready in rows:
+            msg = QueueMessage(novel_id=novel_id, chapter_index=chapter,
+                               enrichment=bool(translation_ready),
                                retranslate=status == "name_repair_error",
                                record_generation_id=generation_id)
             await self.redis.eval(queue.ENQUEUE_ENRICHMENT, len(queue.KEYS), *queue.KEYS,
@@ -868,7 +871,10 @@ class Worker:
             )).fetchone()
             if row is None:
                 return
-            if row[2]:
+            # Stop/Discard concerns optional knowledge extraction. It may suppress a
+            # provider retry only after prose is already durable; otherwise it would
+            # strand an untranslated chapter and let later lookahead work pass it.
+            if row[2] and row[1]:
                 return
             # A shared cooldown rejection never reached the provider: it only relays a
             # deadline another call already earned, so it does not spend an attempt.

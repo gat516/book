@@ -42,18 +42,31 @@ func newHTTPClient(reqsPerSecond float64, jitterMs int, userAgent string) *httpC
 // see fetch.go's retry loop, since what counts as "retry" vs. "stop" is adapter-specific
 // (a 404 stops a walk, a 429 should back off and retry).
 func (c *httpClient) Get(ctx context.Context, rawURL string) (*http.Response, error) {
+	return c.get(ctx, rawURL, true)
+}
+
+// GetIgnoringRobots applies the same rate limit, jitter, timeout, and honest user agent
+// as Get while skipping only the robots lookup. Keep this explicit at the adapter call
+// site so one site's configured exception cannot silently weaken every other adapter.
+func (c *httpClient) GetIgnoringRobots(ctx context.Context, rawURL string) (*http.Response, error) {
+	return c.get(ctx, rawURL, false)
+}
+
+func (c *httpClient) get(ctx context.Context, rawURL string, honorRobots bool) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	allowed, err := c.robotsAllow(ctx, req.URL.Scheme+"://"+req.URL.Host, req.URL.Path)
-	if err != nil {
-		// A robots.txt fetch failure shouldn't block scraping (many sites have none) —
-		// fail open on the check itself, not on the site's actual content.
-		allowed = true
-	}
-	if !allowed {
-		return nil, fmt.Errorf("robots.txt disallows %s", rawURL)
+	if honorRobots {
+		allowed, err := c.robotsAllow(ctx, req.URL.Scheme+"://"+req.URL.Host, req.URL.Path)
+		if err != nil {
+			// A robots.txt fetch failure shouldn't block scraping (many sites have none) —
+			// fail open on the check itself, not on the site's actual content.
+			allowed = true
+		}
+		if !allowed {
+			return nil, fmt.Errorf("robots.txt disallows %s", rawURL)
+		}
 	}
 
 	if err := c.limiter.Wait(ctx); err != nil {

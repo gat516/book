@@ -1,0 +1,11 @@
+{
+  "reviewed_by": "Assistant source-text review; diagnostic only, not owner-approved ground truth",
+  "source_sha256": "63af5b6e2231d78cb119b3a528eb9c9aad5076202020b554f7becd9d12a5743c",
+  "cases": [
+    {"id": "injury_cause", "options": ["神血雨的腐蚀导致黄少天右臂有些溃烂。", "凌峰的攻击导致黄少天右臂有些溃烂。", "黄少天右臂已经痊愈。"], "expected_index": 0, "evidence_any": ["p2"]},
+    {"id": "who_knows", "options": ["诺顿知道凌峰是搬空威尔森家族宝库并杀死豪森的人。", "诺顿不知道凌峰是搬空威尔森家族宝库并杀死豪森的人。", "凌峰认出诺顿就是搬空威尔森家族宝库并杀死豪森的人。"], "expected_index": 1, "evidence_any": ["p50"]},
+    {"id": "group_leader", "options": ["诺顿·威尔森是啸牙冒险团团长。", "黄少天是啸牙冒险团团长。", "莫雷是啸牙冒险团团长。"], "expected_index": 2, "evidence_any": ["p53"]},
+    {"id": "initial_decision", "options": ["凌峰首次发现双方交战时决定绕开；后来对方冲来时决定迎战。", "凌峰首次发现双方交战时立即主动加入战斗。", "凌峰从头到尾都拒绝交战。"], "expected_index": 0, "evidence_all": ["p14", "p33"]},
+    {"id": "abstain", "options": ["姜梦月从胆怯变得勇敢，完成持久性格转变。", "姜梦月已经成为诺顿·威尔森的忠诚盟友。", "姜梦月杀死了莫雷。"], "expected_index": null, "evidence_any": []}
+  ]
+}

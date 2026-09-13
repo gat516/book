@@ -66,10 +66,11 @@ type pasteChapterResponse struct {
 	Duplicate    bool `json:"duplicate"`
 }
 
-// PasteChapter posts one scraped page. It reports whether ingest-api recognised the body
-// as already-ingested content (migration 0013's content-hash dedup): a re-run over pages
-// this novel already holds answers 200 + duplicate:true and writes nothing, where a fresh
-// page answers 202. Both are success — only a genuine failure returns an error.
+// PasteChapter posts one assembled source chapter. It reports whether ingest-api
+// recognised the body as already-ingested content (migration 0013's content-hash dedup):
+// a re-run over chapters this novel already holds answers 200 + duplicate:true and
+// writes nothing, where a fresh chapter answers 202. Both are success — only a genuine
+// failure returns an error.
 func (c *ingestClient) PasteChapter(ctx context.Context, novelID string, req pasteChapterRequest) (bool, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
