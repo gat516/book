@@ -356,7 +356,8 @@ class RecordsStage:
         entity_names = {str(e.get("local_id")): e.get("canonical_source", "")
                         for e in result.get("accepted", {}).get("entities", [])}
         entity_names.update({str(r.get("local_id")): r.get("surface", "")
-                             for r in result.get("references", [])})
+                             for r in result.get("unresolved_references",
+                                                  result.get("references", []))})
         payload = {local_id: {
             "kind": "fact" if local_id.startswith("f") else
                     "relation" if local_id.startswith("r") else "event",
