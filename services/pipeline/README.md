@@ -2,11 +2,14 @@
 
 ## Records enrichment
 
-Saved chapter prose is published independently of knowledge enrichment. The records
-worker freezes source passages, performs bounded typed discovery, mechanical grounding
-checks, and sends one name inventory to who's-who. Only who's-who assignments may bind
-an entity; uncertain names remain references. Source values and verbatim evidence are
-retained alongside optional offline target-language renderings.
+Saved chapter prose is published independently of knowledge enrichment. The production
+records worker follows the pinned 96ff9cf contract: atomic discovery, compact selection,
+assertion normalization, chronological who's-who identity, native assertion rendering,
+then publication. Each prefix is checkpointed in `fact_first_run`, so a retry resumes
+from the last validated response. Only who's-who assignments may bind an entity;
+uncertain names remain references. Source values, exact qualifiers and evidence are
+retained alongside optional target-language renderings, with served provider/model
+metadata recorded for every live completion.
 
 Backfill a saved novel without retranslating it:
 
@@ -21,23 +24,24 @@ durable translation URIs in the manifest; it never writes either object. A new p
 ontology, extraction model, or source requires a new record generation. Readers only
 see published runs from the active generation at or before their knowledge chapter.
 
-Record discovery, identity, and rendering use separate cache identities. Every provider
-completion is attributed to its served model before caching. Transport failures retry;
-malformed individual records are dropped with bounded diagnostics; a valid empty chapter
+Malformed individual records are dropped with bounded diagnostics; a valid empty chapter
 is complete. Rendering failure leaves source records available with an explicit fallback.
+The benchmark harness remains available for comparing variants offline; this coding pass
+did not perform live-provider parity or rollout; broader validation is deferred per the
+user's request.
 
 ## Exact source passage references
 
-Source passages are frozen once per run in `record_passage`, with the chapter's
-`source_hash`, and every citation points at that frozen row. Passage ids used to be
-recomputed from the source's non-blank lines on each read, which meant a re-ingest with
-different blank lines silently repointed every stored quote.
+Source passages are frozen once per fact-first run in `fact_first_passage`. They use
+chapter-local `p001`-style ids plus immutable character offsets and the run's source hash.
+Discovery and normalization cite those ids; validators check that evidence belongs to the
+claim package and that source spans and asserted qualifiers satisfy the pinned baseline
+contract.
 
-The model supplies passage references, never offsets: discovery cites a passage id and
-quotes from it, and the checks confirm the quote is verbatim in the cited passage and that
-each named participant is written near it. A citation alone never establishes identity --
-only who's-who may bind a name to an entity, and an uncertain name stays a
-`record_reference` rather than becoming one.
+A citation never establishes identity. The chronological who's-who pass is the only
+authority allowed to bind a normalized local proposal to a persistent entity. An uncertain
+surface remains an unresolved `fact_first_reference`, and its records retain the source
+surface and evidence without an entity binding.
 
 ## Call scheduling
 
