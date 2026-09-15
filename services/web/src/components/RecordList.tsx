@@ -5,14 +5,14 @@ function label(type: string): string {
 }
 
 export function RecordList({ rows, status, onEntity, showChapter = true, title }: { rows: RecordView[]; status?: RecordsStatus; onEntity?: (id: string, surface: string) => void; showChapter?: boolean; title?: string }) {
-  if (!rows.length) return <section className="record-list" aria-label="Chapter records">
+  if (!rows.length) return <section className="record-list" aria-label="Story details">
     {title && <h3>{title}</h3>}
-    <p className="records-empty">{!status ? "No supported records are known at your reading progress yet." : status.extraction_status === "ready" ? "No records in this chapter." : status.extraction_status === "failed" ? "Record extraction failed; retry is available in Book settings." : "Knowledge is still being extracted…"}</p>
+    <p className="records-empty">{!status ? "No supported story details are available at your reading progress yet." : status.extraction_status === "ready" ? "No supported facts, relationships, or events were found in this chapter." : status.extraction_status === "failed" ? "Reader features could not be built; retry from the controls above." : "Story details are still being prepared…"}</p>
   </section>;
-  return <section className="record-list" aria-label="Chapter records">
+  return <section className="record-list" aria-label="Story details">
     {title && <h3>{title}</h3>}
     {rows.map(row => <article className="record-card" key={row.id}>
-      <header><strong>{label(row.type)}</strong>{showChapter && <span>Added to knowledge in chapter {row.source_chapter}</span>}{row.valid_from_chapter != null && <span>Story time: chapter {row.valid_from_chapter}</span>}{row.temporal_qualifier && <em>{temporalLabel(row.temporal_qualifier)}</em>}</header>
+      <header><strong>{label(row.type)}</strong>{showChapter && <span>Learned in chapter {row.source_chapter}</span>}{row.valid_from_chapter != null && <span>Story time: chapter {row.valid_from_chapter}</span>}{row.temporal_qualifier && <em>{temporalLabel(row.temporal_qualifier)}</em>}</header>
       {row.values.map(value => <p key={value.field}><b>{label(value.field)}:</b> {value.rendered ? <><span>{value.rendered}</span> <small>(source: {value.source})</small></> : <><span>{value.source}</span>{value.render_status === "failed" && <small> (source language; English rendering failed)</small>}</>}</p>)}
       {row.polarity && <p><b>Polarity:</b> {row.polarity}</p>}
       {row.attribution && <p><b>Attributed to:</b> {row.attribution}</p>}

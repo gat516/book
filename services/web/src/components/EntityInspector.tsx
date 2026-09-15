@@ -61,13 +61,13 @@ export function EntityInspector({ novelId, entityId, status, mention, at, cache,
       </header>
       <p className="entity-inspector-context">Known through chapter {at}</p>
       {error && <div role="alert">Could not load entity: {error} <button onClick={() => setAttempt((n) => n + 1)}>Retry</button></div>}
-      {!entityId && <p>{status === "repair" ? "Identity unresolved. Knowledge is under repair; unverified facts are withheld." : status === "processing" || status === "pending" ? "Knowledge processing is pending. This name remains clickable." : status === "failed" ? "Knowledge processing failed. Identity is unresolved." : "Identity unresolved. No supported link yet."}</p>}
+      {!entityId && <p>{status === "repair" ? "This name is being relinked while reader features are refreshed. Unverified details stay hidden." : status === "processing" || status === "pending" ? "Character details are still being prepared. This name remains clickable." : status === "failed" ? "Reader features could not be built, so this name is not linked yet." : "This name is not linked to a character yet."}</p>}
       {entityId && !entity && !error && <p role="status">Loading entity…</p>}
       {entity && <>
         <p><strong>{entity.canonical}</strong> · {entity.kind} · First seen in chapter {entity.first_seen_chapter}</p>
         {entity.aliases.length > 0 && <p>Also known as: {entity.aliases.join(", ")}</p>}
-        <h3>Facts and records</h3>
-        {entity.records?.length ? <RecordList rows={entity.records} /> : <p>No supported records are known at your reading progress yet.</p>}
+        <h3>Story details</h3>
+        {entity.records?.length ? <RecordList rows={entity.records} /> : <p>No supported story details are available at your reading progress yet.</p>}
         <TermList renderings={entity.renderings} title="Terms" />
         <button className="entity-inspector-edit" aria-expanded={editing} aria-controls={editorId} onClick={() => setEditing((value) => !value)}>
           {editing ? "Hide glossary editor" : "Edit glossary terms"}

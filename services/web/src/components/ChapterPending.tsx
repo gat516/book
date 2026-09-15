@@ -13,6 +13,18 @@ interface Props {
   onBack: () => void;
 }
 
+function preparationLabel(status: string): string {
+  switch (status) {
+    case "queued": return "Waiting its turn";
+    case "processing": return "Preparing chapter";
+    case "needs_name_review": return "Waiting for a name decision";
+    case "error":
+    case "name_repair_error": return "Needs attention";
+    case "done": return "Ready to read";
+    default: return "Starting";
+  }
+}
+
 // Shown when the reader opens a chapter the pipeline hasn't finished translating yet.
 // Rather than dumping a raw 404/409, this holds the reader here and polls until the
 // chapter becomes readable, then hands off.
@@ -36,7 +48,7 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
     let active = true;
     prioritizeChapter(novelId, chapterIndex).then((result) => {
       if (active) {
-        setPriorityNotice(result.prioritized ? "Requested next after the current chapter finishes." : "Already processing or ready.");
+        setPriorityNotice(result.prioritized ? "Requested next after the current chapter finishes." : "Already being prepared or ready.");
         setInitialRequestDone(true);
       }
     }).catch((err) => { if (active) setError(String(err)); });
@@ -89,7 +101,7 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
     try {
       if (priority) {
         const result = await prioritizeChapter(novelId, chapterIndex);
-        setPriorityNotice(result.prioritized ? "Requested next after the current chapter finishes." : "Already processing or ready.");
+        setPriorityNotice(result.prioritized ? "Requested next after the current chapter finishes." : "Already being prepared or ready.");
       } else {
         await translateAhead(novelId, chapterIndex, 10);
       }
@@ -116,11 +128,11 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
         // Previously this view waited forever on a chapter that had already failed: the
         // old readiness probe couldn't tell "not ready yet" from "will never be ready".
         <p className="chapter-pending-error">
-          This chapter failed during processing. Retry it with priority below. If it fails
+          This chapter couldn’t be prepared. Retry it with priority below. If it fails
           again, {providerFailureDetail(failureCategory) ?? "the model or a service"}.
         </p>
       ) : (
-        <p>This chapter is waiting for processing to finish. It will open automatically when it's ready.</p>
+        <p>This chapter is being prepared for reading. It will open automatically as soon as the translated text is ready.</p>
       )}
       {priorityNotice && <p role="status">{priorityNotice}</p>}
       <PipelineStatus novelId={novelId} />
@@ -144,7 +156,7 @@ export function ChapterPending({ novelId, chapterIndex, siteChapterNo, onReady, 
       )}
       <p className="chapter-pending-hint">
         Checked {checks} time{checks === 1 ? "" : "s"}
-        {status && ` · chapter status: ${status}`}
+        {status && ` · ${preparationLabel(status)}`}
       </p>
       {error && <p className="chapter-pending-error">{error}</p>}
       <div className="chapter-pending-actions">

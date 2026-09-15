@@ -1,13 +1,15 @@
 import type { RecordsRebuildStatus } from "./types";
 
 export function graphCoverageLabel(status: RecordsRebuildStatus): string {
-  if (!status.active_generation_id) return "No facts have been extracted for this book.";
-  const coverage = `${status.published_chapters}/${status.eligible_chapters} chapters published`;
-  return status.has_predecessor
-    ? `Replacing book knowledge: ${coverage} (${status.missing_chapters} remaining).`
-    : `Extracted knowledge: ${coverage}.`;
+  if (!status.active_generation_id) return "Not started";
+  const coverage = `${status.published_chapters} of ${status.eligible_chapters} chapters ready`;
+  if (status.has_predecessor && status.missing_chapters > 0) {
+    return `${status.running ? "Refreshing" : "Refresh paused"} · ${coverage}`;
+  }
+  if (status.missing_chapters === 0) return `Up to date · ${coverage}`;
+  return `${status.running ? "Building" : "Paused"} · ${coverage}`;
 }
 
 export function chapterKnowledgeReviewLabel(chapter: number): string {
-  return `Review knowledge added in chapter ${chapter}`;
+  return `Advanced: inspect story details from chapter ${chapter}`;
 }

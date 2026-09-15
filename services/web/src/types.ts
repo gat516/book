@@ -284,6 +284,10 @@ export interface ChapterListItem {
   // "error". This is what lets the UI say "still being translated" up front instead of
   // bouncing off the chapter endpoint.
   status: string;
+  // Reader-feature work finishes after the chapter becomes readable. Keeping it
+  // separate lets the chapter list distinguish "ready to read" from "cards and AskAI
+  // are still being prepared."
+  graph_status?: "pending" | "done" | "error" | string;
   // Safe category derived server-side from chapter_failure.error_code. Raw diagnostics
   // never appear in the ungated chapter index.
   failure_category?: string;

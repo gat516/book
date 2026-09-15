@@ -46,7 +46,7 @@ export function ChapterKnowledgeWorkspace({ novelId, chapter, at, renderings = [
     setNotice("");
     try {
       await retryRecords(novelId, chapter);
-      setNotice("Extraction retry queued. This panel will update when the worker reports progress.");
+      setNotice("Reader-feature retry queued. This panel will update as work progresses.");
       notifyKnowledgeUpdated(novelId);
       await refresh();
     } catch (reason) {
@@ -60,7 +60,7 @@ export function ChapterKnowledgeWorkspace({ novelId, chapter, at, renderings = [
     setBusy("stop"); setError(""); setNotice("");
     try {
       await discardRecordsChapter(novelId, chapter);
-      setNotice("Chapter extraction paused. Use Extract facts for this chapter to resume it.");
+      setNotice("Reader-feature work paused for this chapter. Use Build reader features for this chapter to resume.");
       notifyKnowledgeUpdated(novelId);
       await refresh();
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
@@ -71,8 +71,8 @@ export function ChapterKnowledgeWorkspace({ novelId, chapter, at, renderings = [
   return <section className="chapter-knowledge" aria-labelledby="chapter-records-heading">
     <header>
       <div>
-        <h2 id="chapter-records-heading">Record extraction inspector</h2>
-        <p>Structured knowledge learned in chapter {chapter}. The reader gate is chapter {at}.</p>
+        <h2 id="chapter-records-heading">Story-detail diagnostics</h2>
+        <p>Advanced view of the supported details found in chapter {chapter}. Spoiler protection is set to chapter {at}.</p>
       </div>
       {status && <span className={`knowledge-badge records-${status.extraction_status}`}>{status.extraction_status}</span>}
     </header>
@@ -93,11 +93,11 @@ export function ChapterKnowledgeWorkspace({ novelId, chapter, at, renderings = [
       {inspector.selection_outcome === "empty" && <p className="glossary-note">{(inspector.counts?.discovered ?? inspector.parsed) > 0 ? "Selection intentionally retained no claims." : "No candidates were discovered for this chapter."}</p>}
       {inspector.stages && <p className="glossary-note">Stages: {Object.entries(inspector.stages).map(([name, value]) => `${name}: ${value}`).join(" · ")}</p>}
       {inspector.rendering_failures > 0 && <p className="glossary-note">
-        {inspector.rendering_failures} record{inspector.rendering_failures === 1 ? "" : "s"} could not be rendered into English; the source records are still shown. To replace these renderings, use Book knowledge → Replace existing facts → Re-extract all chapters. This replaces knowledge for the whole book.
+        {inspector.rendering_failures} detail{inspector.rendering_failures === 1 ? "" : "s"} could not be prepared in English; the source values are still shown. To replace them, use Reader features → Advanced reader-feature options → Refresh every chapter.
       </p>}
       <div className="knowledge-actions">
-        {(status?.extraction_status === "pending" || status?.extraction_status === "failed") && <button type="button" disabled={busy !== null} onClick={() => void retry()}>{busy === "retry" ? "Queuing…" : status.extraction_status === "failed" ? "Retry chapter extraction" : "Extract facts for this chapter"}</button>}
-        {status?.extraction_status === "processing" && <button type="button" disabled={busy !== null} onClick={() => void stopChapter()}>{busy === "stop" ? "Pausing…" : "Pause chapter extraction"}</button>}
+        {(status?.extraction_status === "pending" || status?.extraction_status === "failed") && <button type="button" disabled={busy !== null} onClick={() => void retry()}>{busy === "retry" ? "Queuing…" : status.extraction_status === "failed" ? "Retry reader features" : "Build reader features for this chapter"}</button>}
+        {status?.extraction_status === "processing" && <button type="button" disabled={busy !== null} onClick={() => void stopChapter()}>{busy === "stop" ? "Pausing…" : "Pause reader-feature work"}</button>}
       </div>
       {inspector.drops.length > 0 && <details><summary>Dropped records ({inspector.drops.length})</summary><ul className="chapter-knowledge-list">{inspector.drops.map(drop => <li key={drop.original_index}><strong>Record {drop.original_index}</strong><small>{drop.reasons.join("; ")}</small></li>)}</ul></details>}
       {inspector.dropped > 0 && status?.extraction_status !== "failed" && <p className="glossary-note">Dropped records are immutable diagnostics. A new generation is required to change extraction checks; nothing was discarded from the published history.</p>}

@@ -9,7 +9,7 @@ type Tone = "live" | "warn" | "bad" | "quiet";
 // Where the reader goes to act on a paused or failed chapter. Extraction is started from
 // the book-wide graph controls, so the chapter bar names that button rather than offering
 // one of its own.
-const RESUME_HINT = "Use the chapter extraction control or extract missing chapter facts to resume.";
+const RESUME_HINT = "Use the Reader features controls below to resume.";
 
 interface State {
   tone: Tone;
@@ -35,45 +35,47 @@ export function RecordStatusBanner({ status, onRetry, busy = false }: {
 
   const state: State =
     status === null
-      ? { tone: "quiet", text: "Checking chapter knowledge…" }
+      ? { tone: "quiet", text: "Checking…" }
       // Ranked ahead of everything else because a discarded chapter has no run row, so
       // every status below would otherwise read it as "pending" and promise a worker that
       // is never coming. Discarding also clears the retry fields, so nothing below applies.
       : status.discarded
-      ? { tone: "quiet", text: `Paused — extraction was stopped. ${RESUME_HINT}` }
+      ? { tone: "quiet", text: `Paused for this chapter. ${RESUME_HINT}` }
       : status.retry_at
       ? {
           tone: "warn",
-          text: `Automatic retry scheduled for ${category} (attempt ${attemptLabel}). Next attempt: ${retryTimeLabel(status.retry_at)}.`,
+          text: `Trying again automatically after ${category} (attempt ${attemptLabel}) · ${retryTimeLabel(status.retry_at)}`,
         }
       : retriesExhausted(status)
       ? {
           tone: "bad",
-          text: `Automatic retries exhausted after ${attemptLabel} for ${category}. The chapter remains readable.${onRetry ? "" : ` ${RESUME_HINT}`}`,
+          text: `Couldn’t finish after ${attemptLabel} attempts because of ${category}. The chapter is still readable.${onRetry ? "" : ` ${RESUME_HINT}`}`,
           retryable: true,
         }
       : status.extraction_status === "failed"
       ? {
           tone: "bad",
-          text: `Record extraction failed. The chapter remains readable${status.failure_detail ? ` (${status.failure_detail})` : ""}.${onRetry ? "" : ` ${RESUME_HINT}`}`,
+          text: `Couldn’t build reader features. The chapter is still readable${status.failure_detail ? ` (${status.failure_detail})` : ""}.${onRetry ? "" : ` ${RESUME_HINT}`}`,
           retryable: true,
         }
       : status.extraction_status === "processing"
-      ? { tone: "live", text: `Extracting chapter records${attempts > 0 ? ` (attempt ${attemptLabel})` : ""}…` }
+      ? { tone: "live", text: `Finding characters, facts, relationships, and events${attempts > 0 ? ` · attempt ${attemptLabel}` : ""}…` }
       : status.extraction_status === "pending"
-      ? { tone: "live", text: "Queued for extraction — waiting for a free worker." }
+      ? { tone: "live", text: "Waiting to find this chapter’s story details…" }
       : status.rendering_status === "failed"
-      ? { tone: "bad", text: "English record rendering failed. Source records remain available for review." }
+      ? { tone: "bad", text: "Story details were found, but couldn’t be prepared for display. The chapter is still readable." }
       : status.rendering_status === "pending"
-      ? { tone: "live", text: "Rendering records into English…" }
+      ? { tone: "live", text: "Preparing story details for character cards, timeline, and AskAI…" }
       // The resting state. Extraction previously rendered nothing once it succeeded, so a
       // healthy chapter and a chapter whose knowledge had never been requested looked
       // identical -- both simply had no bar.
       : {
           tone: "quiet",
           text: status.generation_id === null
-            ? "No knowledge extracted for this chapter yet."
-            : `Knowledge extracted for this chapter${status.warning_count > 0 ? ` · ${status.warning_count} warning${status.warning_count === 1 ? "" : "s"}` : ""}.`,
+            ? "Not built for this chapter yet."
+            : status.warning_count > 0
+              ? `Ready, with ${status.warning_count} detail${status.warning_count === 1 ? "" : "s"} skipped.`
+              : "Ready — character cards, timeline, and AskAI can use this chapter.",
         };
 
   return (
@@ -83,7 +85,7 @@ export function RecordStatusBanner({ status, onRetry, busy = false }: {
       role={state.tone === "bad" ? "alert" : "status"}
       className="reader-records-status"
     >
-      <strong className="reader-records-label">Chapter knowledge</strong>
+      <strong className="reader-records-label">This chapter’s reader features</strong>
       <span className={`status-pill status-pill-${state.tone}`}>
         {state.tone === "live" && <span className="reader-records-dot" aria-hidden="true" />}
         {state.text}
@@ -92,13 +94,13 @@ export function RecordStatusBanner({ status, onRetry, busy = false }: {
           queued or being extracted, so live work is visible at a glance and not just as
           a line of text. Removed as soon as the chapter settles. */}
       {state.tone === "live" && (
-        <progress className="reader-records-progress" aria-label="Chapter extraction in progress" />
+        <progress className="reader-records-progress" aria-label="Reader features are being prepared" />
       )}
       {/* Chapters publish in order, so a retry behind an unextracted chapter is refused
           (ingest-api returns 409). Say what it is waiting on instead of offering a button
           that cannot work. */}
       {state.retryable && onRetry && (status?.waiting_on_chapter != null
-        ? <small className="reader-records-waiting">Waiting on chapter {status.waiting_on_chapter} — extract earlier chapters first.</small>
+        ? <small className="reader-records-waiting">Waiting for story details from chapter {status.waiting_on_chapter} first.</small>
         : <button type="button" disabled={busy} onClick={onRetry}>{busy ? "Retrying…" : "Retry now"}</button>
       )}
     </p>

@@ -76,7 +76,7 @@ export function QueueControls({ novelId }: { novelId: string | null }) {
     // Ranked above "Paused" on purpose: the heartbeat renews independently of queue mode,
     // so a worker missing while paused is still genuinely broken, and saying "Paused"
     // there would suggest resuming is all it takes.
-    : queue.worker_alive === false ? { text: "Worker offline — nothing will be processed", tone: "bad" }
+    : queue.worker_alive === false ? { text: "Background processing offline", tone: "bad" }
     // Grey, not amber: a pause is a deliberate choice, so it should read as switched-off
     // rather than as something gone wrong that needs attention.
     : queue.mode === "paused" ? { text: "Paused", tone: "quiet" }
@@ -87,12 +87,12 @@ export function QueueControls({ novelId }: { novelId: string | null }) {
     // The worker is alive by this point, so waiting work is normally just the gap between
     // two chapters rather than a fault. Still surfaced, since a wedged worker keeps its
     // heartbeat while claiming nothing.
-    : pending > 0 ? { text: `${pending} queued, none running yet`, tone: "warn" }
-    : { text: "Idle", tone: "quiet" };
+    : pending > 0 ? { text: `${pending} chapter${pending === 1 ? "" : "s"} waiting`, tone: "warn" }
+    : { text: "All requested work finished", tone: "quiet" };
 
   return <details className="queue-controls" aria-label="Library processing queue">
     <summary>
-      <span className="queue-controls-title">Processing queue</span>
+      <span className="queue-controls-title">Background processing</span>
       <span className={`status-pill status-pill-${headline.tone}`}>
         {headline.tone === "live" && <span className="reader-records-dot" aria-hidden="true" />}
         {headline.text}
@@ -113,7 +113,7 @@ export function QueueControls({ novelId }: { novelId: string | null }) {
       </select>
     </label>
     <p role="status">
-      {queue?.mode === "paused" ? "Paused: no new chapter or background graph work will start." :
+      {queue?.mode === "paused" ? "Paused: no new translations or reader-feature work will start." :
         focused ? `Priority: ${focused.title} (${focused.novel_id.slice(0, 8)}).` : "Open a book to give it priority."}
       {busy && " Saving…"}
     </p>
@@ -129,7 +129,7 @@ export function QueueControls({ novelId }: { novelId: string | null }) {
     {active.map(({ book, chapter }) => <p key={`${book.novel_id}:${chapter.chapter_index}`}>
       Running: <strong>{book.title}</strong> ({book.novel_id.slice(0, 8)}), chapter {chapter.chapter_index} — {describeStage(chapter.stage)}.
     </p>)}
-    <p className="queue-note">Switching books takes effect after current work finishes. Saved translations and queued chapters are kept. These controls are shared across tabs; the last book you focus wins. Scraping is separate.</p>
+    <p className="queue-note">Background processing translates chapters and prepares character cards, timeline details, and AskAI context. Switching books takes effect after current work finishes. Saved work and queued chapters are kept. These controls are shared across tabs; the last book you focus wins. Adding chapters from a website is separate.</p>
     {queue?.mode === "paused" && <button disabled={busy} onClick={() => void apply({
       mode: "all",
       reason: "Resumed from the reader's processing queue controls",

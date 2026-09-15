@@ -32,17 +32,17 @@ export const MODEL_OPTIONS: Record<ProviderName, ModelOption[]> = {
     { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", note: "1M context, more capable, higher cost" },
   ],
   groq: [
-    { id: "openai/gpt-oss-120b", label: "GPT-OSS 120B", note: "Strong free-tier extraction model; 8K token/minute allowance" },
+    { id: "openai/gpt-oss-120b", label: "GPT-OSS 120B", note: "Strong free-tier model for finding story details; 8K token/minute allowance" },
     { id: "qwen/qwen3.8-27b", label: "Qwen 3.8 27B", note: "Smaller fast structured-output alternative" },
   ],
   anthropic: [
-    { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", note: "Cheapest; sensible default for extraction" },
+    { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", note: "Cheapest; sensible default for reader features" },
     { id: "claude-sonnet-5", label: "Claude Sonnet 5", note: "Balanced capability and cost" },
     { id: "claude-opus-5", label: "Claude Opus 5", note: "Most capable; best for difficult translation" },
   ],
   ollama: [
     { id: "qwen2.5:7b-instruct", label: "qwen2.5:7b-instruct", note: "Produces valid JSON here, but needs ~6GB RAM" },
-    { id: "qwen3:4b-instruct-2507-q8_0", label: "Qwen3 4B Instruct (Q8)", note: "Fast structured extraction; facts are evidence-gated." },
+    { id: "qwen3:4b-instruct-2507-q8_0", label: "Qwen3 4B Instruct (Q8)", note: "Fast at finding structured story details; facts are evidence-gated." },
     { id: "llama3.2:3b", label: "llama3.2:3b", note: "Fits easily; fails this pipeline's schema validation" },
   ],
 };

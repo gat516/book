@@ -21,8 +21,9 @@ test("a resumed chapter advances the timer and clears failed state", () => {
   assert.deepEqual(graphStageState(track, 100), {failed: false, stageEnd: 100});
 });
 
-test("pipeline status labels the records stage and keeps unknown stages readable", () => {
-  assert.equal(describeStage("records"), "Extracting records");
+test("processing status explains the reader outcome and groups internal substages", () => {
+  assert.equal(describeStage("records"), "Finding facts and story events");
   assert.deepEqual(stageProgress("records"), { step: 5, total: 7 });
-  assert.equal(describeStage("future_stage"), "Pipeline stage: future_stage");
+  assert.deepEqual(stageProgress("identity"), { step: 5, total: 7 });
+  assert.equal(describeStage("future_stage"), "Working on reader features");
 });

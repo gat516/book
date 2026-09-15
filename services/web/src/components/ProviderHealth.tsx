@@ -83,10 +83,11 @@ export function ProviderHealth({ novelId, track, enabled = true, compact = false
 
   if (!enabled) return null;
   const label = health ? PROVIDER_LABELS[health.provider as keyof typeof PROVIDER_LABELS] ?? health.provider : "Provider";
+  const trackLabel = track === "translate" ? "Translation" : track === "extract" ? "Reader features" : "Model";
   const detail = health ? PROVIDER_HEALTH_DETAILS[health.category] : unavailable ? "the provider health check is unavailable" : "checking the provider";
   return (
     <p className={compact ? "provider-health provider-health-compact" : "provider-health"} role={unavailable ? "status" : "status"}>
-      <strong>{label}</strong>{" — "}{checking && !health ? "Checking…" : health?.category === "ok" ? "Connected" : detail}
+      <strong>{trackLabel}: {label}</strong>{" — "}{checking && !health ? "Checking…" : health?.category === "ok" ? "Connected" : detail}
     </p>
   );
 }

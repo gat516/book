@@ -4,6 +4,7 @@ import type { ChapterListItem, ChapterListResponse, PipelineStatusResponse } fro
 import { PipelineStatus } from "./PipelineStatus";
 import { providerFailureDetail } from "./ProviderHealth";
 import { KnowledgeGraphControls } from "./KnowledgeGraphControls";
+import { readerFeaturesState, readingState } from "../chapterStatus";
 
 interface Props {
   novelId: string;
@@ -129,53 +130,57 @@ export function ChapterList({ novelId, currentChapter, onOpen, onClose, onAdd }:
         {chapters && chapters.length > 0 && (
           <>
             <p className="chapter-list-count">Showing {shownFrom}–{shownTo} of {total}</p>
+            <p className="chapter-list-status-help">
+              <strong>Reading</strong> shows when chapter text is ready. <strong>Reader features</strong> are built afterward for character cards, the timeline, and AskAI.
+            </p>
             <table>
               <thead>
-                <tr><th>#</th><th>Source chapter</th><th>Status</th><th>Actions</th></tr>
+                <tr><th>#</th><th>Source chapter</th><th>Reading</th><th>Reader features</th><th>Actions</th></tr>
               </thead>
               <tbody>
-                {chapters.map((chapter) => (
-                  <tr
-                    key={chapter.chapter_index}
-                    className={chapter.chapter_index === currentChapter ? "chapter-list-current" : undefined}
-                  >
+                {chapters.map((chapter) => {
+                  const active = processing.includes(chapter.chapter_index);
+                  const reading = readingState(chapter, active);
+                  const features = readerFeaturesState(chapter, active);
+                  return <tr key={chapter.chapter_index} className={chapter.chapter_index === currentChapter ? "chapter-list-current" : undefined}>
                     <td>
                       {chapter.chapter_index}
                       {chapter.chapter_index === currentChapter && (
                         <span className="chapter-list-current-label">Current</span>
                       )}
                     </td>
-                    <td>
-                      {chapter.site_chapter_no ?? "—"}
+                    <td className="chapter-list-source">
+                      <span className="chapter-list-source-title" title={chapter.site_chapter_no || undefined}>
+                        {chapter.site_chapter_no ?? "—"}
+                      </span>
                       {chapter.part > 1 && <span className="chapter-list-part"> · Part {chapter.part}</span>}
                       {chapter.source_url && <>
                         {" · "}<a href={chapter.source_url} target="_blank" rel="noreferrer">Source ↗</a>
                       </>}
                     </td>
-                    <td>
-                      {chapter.status === "done"
-                        ? "Ready"
-                        : processing.includes(chapter.chapter_index)
-                          ? "Processing"
-                          : chapter.status === "ingested"
-                            ? "Not queued"
-                            : chapter.status === "queued"
-                              ? "Queued"
-                              : chapter.status === "error"
-                                ? "Failed"
-                                : chapter.status}
+                    <td className="chapter-list-status-cell">
+                      <span className={`status-pill status-pill-${reading.tone}`}>
+                        {reading.label === "Preparing" && <span className="reader-records-dot" aria-hidden="true" />}
+                        {reading.label}
+                      </span>
                       {chapter.status === "error" && chapter.failure_category && (
-                        <small> · {providerFailureDetail(chapter.failure_category)}</small>
+                        <small>{providerFailureDetail(chapter.failure_category)}</small>
                       )}
-                      {chapter.status === "done" && chapter.translation_warning && <small> · Terminology warning</small>}
+                      {chapter.status === "done" && chapter.translation_warning && <small>Some saved names need review</small>}
                     </td>
-                    <td>
-                      <button onClick={() => onOpen(chapter)}>
-                        {chapter.status === "done" ? "Read" : "View status"}
+                    <td className="chapter-list-status-cell">
+                      <span className={`status-pill status-pill-${features.tone}`}>
+                        {features.tone === "live" && features.label === "Building" && <span className="reader-records-dot" aria-hidden="true" />}
+                        {features.label}
+                      </span>
+                    </td>
+                    <td className="chapter-list-action">
+                      <button onClick={() => onOpen(chapter)} aria-label={`${chapter.status === "done" ? "Read" : "View status for"} chapter ${chapter.chapter_index}`}>
+                        Open
                       </button>
                     </td>
-                  </tr>
-                ))}
+                  </tr>;
+                })}
               </tbody>
             </table>
           </>

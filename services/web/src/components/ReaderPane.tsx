@@ -186,7 +186,7 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
         )}
       </p>
       {recordsError && <p role="alert" className="reader-records-error">
-        Could not load chapter knowledge: {recordsError} <button type="button" onClick={() => {
+        Could not load reader features: {recordsError} <button type="button" onClick={() => {
           setRecordsError(null);
           void getRecords(novelId, chapterIndex).then(setRecords).catch((reason) => setRecordsError(errorMessage(reason)));
         }}>Retry</button>

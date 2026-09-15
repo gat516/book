@@ -141,7 +141,7 @@ export function HoverCard({ novelId, entityId, rendering, status, mention, at, c
   return (
     <div className="hover-card" onMouseLeave={onClose}>
       {error && <p className="hover-card-error">{error}</p>}
-      {!entityId && <><h3>{mention}</h3><p>{status === "repair" ? "Identity unresolved — knowledge is under repair." : status === "failed" ? "Knowledge processing failed." : status === "processing" || status === "pending" ? "Knowledge processing is pending." : "Identity unresolved. You can still choose how this term should be translated."}</p></>}
+      {!entityId && <><h3>{mention}</h3><p>{status === "repair" ? "This name is being relinked while reader features are refreshed." : status === "failed" ? "Reader features could not be built for this name." : status === "processing" || status === "pending" ? "Character details are still being prepared." : "This name is not linked to a character yet. You can still choose how it should be translated."}</p></>}
       {entityId && !error && !entity && <p>Loading…</p>}
       {entity && (
         <>
@@ -154,7 +154,7 @@ export function HoverCard({ novelId, entityId, rendering, status, mention, at, c
             rendering={item} displayed={mention} saving={saving === item.source_term}
             onChoose={chooseRendering} onLeave={onClose} />)}
           {notice && <p className="hover-card-notice" role="status">{notice}</p>}
-          <RecordList rows={entity.records ?? []} title="Facts and records" onEntity={onEntity} />
+          <RecordList rows={entity.records ?? []} title="Story details" onEntity={onEntity} />
           <TermList renderings={entity.renderings} title="Terms" />
         </>
       )}

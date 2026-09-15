@@ -81,7 +81,7 @@ export function PipelineStatus({ novelId, onProgress, onStatus }: Props) {
   }, [status?.in_flight.length]);
 
   if (unreachable) return <p className="pipeline-status" role="alert">
-    Pipeline status unavailable: {unreachable} <button type="button" onClick={() => { setUnreachable(null); void poll(); }}>Retry</button>
+    Processing status unavailable: {unreachable} <button type="button" onClick={() => { setUnreachable(null); void poll(); }}>Retry</button>
   </p>;
   if (!status) return null;
 
@@ -95,25 +95,25 @@ export function PipelineStatus({ novelId, onProgress, onStatus }: Props) {
           return <div className="pipeline-status-job" key={item.chapter_index}>
             <p className="pipeline-status-heading">
               <span className="pipeline-status-live-dot" aria-hidden="true" />
-              <strong>Actively processing chapter {item.chapter_index}</strong>
+              <strong>Preparing chapter {item.chapter_index}</strong>
             </p>
             <p>
-              {describeStage(item.stage)} · step {step} of {total} · {elapsed(item.stage_elapsed_secs + sincePoll)} in this step · {elapsed(item.elapsed_secs + sincePoll)} total
+              {describeStage(item.stage)} · stage {step} of {total} · {elapsed(item.stage_elapsed_secs + sincePoll)} on this stage · {elapsed(item.elapsed_secs + sincePoll)} total
             </p>
-            <progress value={step} max={total} aria-label={`Chapter ${item.chapter_index} pipeline progress`} />
+            <progress value={step} max={total} aria-label={`Chapter ${item.chapter_index} preparation progress`} />
           </div>;
         })
       ) : (
         <p>
           {status.queue_mode === "paused" && status.pending_for_novel > 0
-            ? `Queue paused — ${status.pending_for_novel} chapter(s) are intentionally waiting. Resume work in Processing queue.`
+            ? `Processing paused — ${status.pending_for_novel} chapter(s) are waiting. Resume below when you’re ready.`
             : !status.worker_online && status.pending_for_novel > 0
-            ? `Worker offline — ${status.pending_for_novel} chapter(s) from this book are queued but cannot start.`
+            ? `Background processing is offline — ${status.pending_for_novel} chapter(s) from this book cannot start yet.`
             : status.pending_for_novel > 0
-              ? `Worker online — ${status.pending_for_novel} chapter(s) from this book are waiting for their turn.`
+              ? `${status.pending_for_novel} chapter(s) from this book are waiting for their turn.`
               : status.pending > 0
-                ? `Worker ${status.worker_online ? "online" : "offline"}. ${status.pending} job(s) from other books are queued.`
-            : "Pipeline idle — nothing queued."}
+                ? `${status.pending} chapter job(s) from other books are waiting.`
+            : "All requested chapter work is finished."}
         </p>
       )}
       {working && status.pending_for_novel > 0 && <p className="pipeline-status-queue">

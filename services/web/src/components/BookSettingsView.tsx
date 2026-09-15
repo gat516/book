@@ -16,7 +16,7 @@ export function BookSettingsView({ novelId, title, onClose }: Props) {
       <header className="settings-page-header">
         <button className="app-back" onClick={onClose}>← Back to book</button>
         <h1>{title ? `${title} settings` : "Book settings"}</h1>
-        <p>Choose how this book is translated and how its knowledge is extracted.</p>
+        <p>Choose how chapters are translated and which model prepares character cards, timeline details, and AskAI context.</p>
       </header>
       <ProviderConfigPanel key={`provider-${novelId}`} novelId={novelId} defaultOpen />
     </section>

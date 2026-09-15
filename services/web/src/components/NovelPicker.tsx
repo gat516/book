@@ -72,7 +72,7 @@ export function NovelPicker({ onSelect, onBookSettings, onCreateNew, onSettings,
                 onClick={() => onSelect(novel.id)}
                 aria-label={`Open ${novel.title}`}
               >
-                <span className="novel-picker-book-title">{novel.title}</span>
+                <span className="novel-picker-book-title" title={novel.title}>{novel.title}</span>
                 <span className="novel-picker-book-meta">
                   <span className="novel-picker-langs">
                     {novel.source_lang} → {novel.target_lang}
@@ -89,7 +89,7 @@ export function NovelPicker({ onSelect, onBookSettings, onCreateNew, onSettings,
                   {armed === novel.id ? (
                     <div className="novel-picker-confirm" role="group" aria-label={`Confirm deleting ${novel.title}`}>
                       <p>
-                        Delete {novel.title} and all its chapters, translations and knowledge? This cannot be undone.
+                        Delete {novel.title} and all its chapters, translations, and reader features? This cannot be undone.
                       </p>
                       <button
                         type="button"

@@ -201,7 +201,7 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
 
   return (
     <details className="reader-settings settings-section" id="provider-config" open={defaultOpen || undefined}>
-      <summary>Translation and knowledge models</summary>
+      <summary>Translation and reader-feature models</summary>
       {loading ? (
         <p>Loading…</p>
       ) : (
@@ -212,7 +212,7 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
               <dl>
                 <div><dt>Provider</dt><dd>{PROVIDER_LABELS[current.provider]}</dd></div>
                 <div><dt>Translation</dt><dd>{current.translate_model ?? current.model ?? "Server default"}</dd></div>
-                <div><dt>Knowledge</dt><dd>{current.extract_model ?? current.model ?? "Server default"}</dd></div>
+                <div><dt>Reader features</dt><dd>{current.extract_model ?? current.model ?? "Server default"}</dd></div>
                 {(current.provider === "ollama" || current.provider === "custom") && (
                   <div><dt>Endpoint</dt><dd>{current.base_url || "Book server default"}</dd></div>
                 )}
@@ -257,7 +257,7 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
           {!custom && selectedNote && <p className="novel-create-form-hint">{selectedNote}</p>}
           {provider !== "custom" && (
             <label>
-              Knowledge model
+              Reader-feature model
               <select value={extractionCustom ? CUSTOM_MODEL : extractionModel} onChange={(e) => chooseExtractionModel(e.target.value)}>
                 {MODEL_OPTIONS[provider].map((option) => (
                   <option key={option.id} value={option.id}>{option.label}</option>
@@ -268,7 +268,7 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
           )}
           {(extractionCustom || provider === "custom") && (
             <label>
-              Knowledge model name
+              Reader-feature model name
               <input value={extractionModel} onChange={(e) => setExtractionModel(e.target.value)} placeholder="Exact model ID" required={provider === "custom"} />
             </label>
           )}

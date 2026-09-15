@@ -1,8 +1,19 @@
 import type { RecordsStatus } from "./types";
 
 export function retryCategoryLabel(category?: string | null): string {
-  if (!category) return "record processing";
-  return category.replaceAll("_", " ");
+  if (!category) return "a processing error";
+  const labels: Record<string, string> = {
+    credential_missing: "a missing provider key",
+    credential_rejected: "a rejected provider key",
+    model_not_available: "an unavailable model",
+    model_server_error: "a model service error",
+    provider_http_429: "the provider’s rate limit",
+    provider_retry_exhausted: "repeated provider errors",
+    quota_exhausted: "the provider’s usage limit",
+    rate_limited: "the provider’s rate limit",
+    unreachable: "an unreachable model service",
+  };
+  return labels[category] ?? "a processing error";
 }
 
 export function retryTimeLabel(value?: string | null): string {

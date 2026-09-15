@@ -10,5 +10,6 @@ function status(patch: Partial<RecordsStatus> = {}): RecordsStatus {
 test("retry presentation distinguishes scheduled work from exhaustion", () => {
   assert.equal(retriesExhausted(status({ retry_attempts: 5, retry_max_attempts: 5 })), true);
   assert.equal(retriesExhausted(status({ retry_attempts: 5, retry_max_attempts: 5, retry_at: "2099-01-01T00:00:00Z" })), false);
-  assert.equal(retryCategoryLabel("provider_http_429"), "provider http 429");
+  assert.equal(retryCategoryLabel("provider_http_429"), "the provider’s rate limit");
+  assert.equal(retryCategoryLabel("unexpected_internal_name"), "a processing error");
 });
