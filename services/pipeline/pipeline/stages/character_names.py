@@ -23,6 +23,7 @@ from pipeline.jobs import (
     model_id_for_stage,
 )
 from pipeline.llm.provider import Class
+from pipeline.name_checkpoints import NameCheckpoints, uncached_completion
 from pipeline.name_renderings import conventional_english_names
 from pipeline.passages import source_passages
 from pipeline.pinyin_names import GENERIC_TITLES, NameCandidate, NamePlan, plan_character_name
@@ -75,7 +76,7 @@ def _rendering_plan(surface: str, rendering: str, targets: list[str], target_lan
     return NamePlan(candidates, None, method, role, method)
 
 
-async def _discover(ctx: StageContext, source: str) -> dict[str, NamePlan]:
+async def _discover(ctx: StageContext, source: str, *, complete=uncached_completion) -> dict[str, NamePlan]:
     found: dict[str, NamePlan] = {}
     system = (
         "Inventory named characters and stable named semantic terms in the offered Chinese "
@@ -131,53 +132,53 @@ async def _discover(ctx: StageContext, source: str) -> dict[str, NamePlan]:
         )
         # This stage's own deadline budget when the novel runs on Ollama, else the
         # ordinary chapter provider — see StageContext.names_provider.
-        completion = await (ctx.names_provider or ctx.provider).complete(
+        async with complete(ctx,
             prompt, system=system, json_mode=True, json_schema=schema, cls=Class.BATCH,
             model=model_for_stage(STAGE, ctx.cfg, ctx.model_override),
-        )
-        body = json.loads(_strip_fence(completion.text))
-        if (not isinstance(body, dict) or set(body) != {"reviewed", "names"}
-                or body["reviewed"] is not True or not isinstance(body["names"], list)
-                or len(body["names"]) > 64):
-            raise ValueError("character-name discovery did not review the offered passage batch")
-        offered = {p["id"]: p for p in batch}
-        for item in body["names"]:
-            if not isinstance(item, dict) or set(item) != {"surface", "kind", "passage_id", "rendering", "targets"}:
-                # A discovery batch is advisory: one malformed candidate must not prevent
-                # all later RESOLVE/STATE work for an otherwise readable chapter. We still
-                # reject it structurally (never create a glossary row from it), but preserve
-                # valid proposals in the same bounded response. See instructions.md §5:
-                # incomplete terminology may not block reader-visible prose or graph facts.
-                log.warning("character_names: rejected malformed proposal %r", item)
-                continue
-            rendering, targets = item["rendering"], item["targets"]
-            if (rendering not in ("chinese_personal", "foreign_personal", "titled_person", "semantic_term", "not_character")
-                    or item["kind"] not in ("character", "not_character")
-                    or (rendering in ("chinese_personal", "foreign_personal", "titled_person")) != (item["kind"] == "character")
-                    or not isinstance(item["passage_id"], str)
-                    or not isinstance(targets, list) or len(targets) > 4
-                    or any(not isinstance(t, str) or not t.strip() or t != t.strip() or len(t) > 160
-                           or any(ord(c) < 32 for c in t)
-                           or (ctx.novel.target_lang.split("-")[0] == "en" and re.search(r"[\u3400-\u9fff]", t))
-                           for t in targets)):
-                log.warning("character_names: rejected invalid rendering or targets %r", item)
-                continue
-            passage = offered.get(item["passage_id"])
-            surface = item["surface"]
-            if (rendering != "not_character" and passage and isinstance(surface, str)
-                    and 0 < len(surface) <= 80 and surface.strip() == surface and surface in passage["text"]):
-                plan = _rendering_plan(surface, rendering, targets, ctx.novel.target_lang)
-                # Repeated mentions may offer alternative restorations. Preserve them
-                # rather than silently replacing the first passage's suggestions.
-                previous = found.get(surface)
-                if previous and previous != plan:
-                    candidates = tuple(dict.fromkeys(previous.candidates + plan.candidates))[:16]
-                    plan = NamePlan(candidates, None, "contextual_name_review",
-                                    previous.term_role, previous.rendering_method)
-                found[surface] = plan
-                batch_surfaces.add(surface)
-            elif rendering != "not_character":
-                log.warning("character_names: rejected non-literal proposal %r", item)
+        ) as completion:
+            body = json.loads(_strip_fence(completion.text))
+            if (not isinstance(body, dict) or set(body) != {"reviewed", "names"}
+                    or body["reviewed"] is not True or not isinstance(body["names"], list)
+                    or len(body["names"]) > 64):
+                raise ValueError("character-name discovery did not review the offered passage batch")
+            offered = {p["id"]: p for p in batch}
+            for item in body["names"]:
+                if not isinstance(item, dict) or set(item) != {"surface", "kind", "passage_id", "rendering", "targets"}:
+                    # A discovery batch is advisory: one malformed candidate must not prevent
+                    # all later RESOLVE/STATE work for an otherwise readable chapter. We still
+                    # reject it structurally (never create a glossary row from it), but preserve
+                    # valid proposals in the same bounded response. See instructions.md §5:
+                    # incomplete terminology may not block reader-visible prose or graph facts.
+                    log.warning("character_names: rejected malformed proposal %r", item)
+                    continue
+                rendering, targets = item["rendering"], item["targets"]
+                if (rendering not in ("chinese_personal", "foreign_personal", "titled_person", "semantic_term", "not_character")
+                        or item["kind"] not in ("character", "not_character")
+                        or (rendering in ("chinese_personal", "foreign_personal", "titled_person")) != (item["kind"] == "character")
+                        or not isinstance(item["passage_id"], str)
+                        or not isinstance(targets, list) or len(targets) > 4
+                        or any(not isinstance(t, str) or not t.strip() or t != t.strip() or len(t) > 160
+                               or any(ord(c) < 32 for c in t)
+                               or (ctx.novel.target_lang.split("-")[0] == "en" and re.search(r"[\u3400-\u9fff]", t))
+                               for t in targets)):
+                    log.warning("character_names: rejected invalid rendering or targets %r", item)
+                    continue
+                passage = offered.get(item["passage_id"])
+                surface = item["surface"]
+                if (rendering != "not_character" and passage and isinstance(surface, str)
+                        and 0 < len(surface) <= 80 and surface.strip() == surface and surface in passage["text"]):
+                    plan = _rendering_plan(surface, rendering, targets, ctx.novel.target_lang)
+                    # Repeated mentions may offer alternative restorations. Preserve them
+                    # rather than silently replacing the first passage's suggestions.
+                    previous = found.get(surface)
+                    if previous and previous != plan:
+                        candidates = tuple(dict.fromkeys(previous.candidates + plan.candidates))[:16]
+                        plan = NamePlan(candidates, None, "contextual_name_review",
+                                        previous.term_role, previous.rendering_method)
+                    found[surface] = plan
+                    batch_surfaces.add(surface)
+                elif rendering != "not_character":
+                    log.warning("character_names: rejected non-literal proposal %r", item)
         ambiguous = {surface: found[surface] for surface in batch_surfaces
                      if (found[surface].term_role == "chinese_person"
                          and found[surface].auto_target is None)
@@ -187,13 +188,13 @@ async def _discover(ctx: StageContext, source: str) -> dict[str, NamePlan]:
             # model can still emit an invalid decision despite the schema; retain the
             # conservative first-pass plans instead of failing all fact extraction.
             try:
-                found.update(await _focused_renderings(ctx, batch, ambiguous))
+                found.update(await _focused_renderings(ctx, batch, ambiguous, complete=complete))
             except ValueError:
                 log.warning("character_names: rejected malformed focused rendering batch", exc_info=True)
     return found
 
 
-async def _focused_renderings(ctx: StageContext, passages: list[dict], plans: dict[str, NamePlan]) -> dict[str, NamePlan]:
+async def _focused_renderings(ctx: StageContext, passages: list[dict], plans: dict[str, NamePlan], *, complete=uncached_completion) -> dict[str, NamePlan]:
     """Second pass for only uncertain terms; classification and rendering are its sole job.
 
     Keeping this separate from broad inventory prevents a small model from satisfying a
@@ -227,35 +228,35 @@ async def _focused_renderings(ctx: StageContext, passages: list[dict], plans: di
         "ambiguous_terms": surfaces,
         "passages": [{"id": p["id"], "text": p["text"]} for p in passages],
     }, ensure_ascii=False)
-    completion = await (ctx.names_provider or ctx.provider).complete(
+    async with complete(ctx,
         prompt, system=system, json_mode=True, json_schema=schema, cls=Class.BATCH,
         model=model_for_stage(STAGE, ctx.cfg, ctx.model_override),
-    )
-    body = json.loads(_strip_fence(completion.text))
-    if (not isinstance(body, dict) or set(body) != {"reviewed", "decisions"}
-            or body["reviewed"] is not True or not isinstance(body["decisions"], list)
-            or len(body["decisions"]) != len(surfaces)):
-        raise ValueError("focused term rendering did not review every offered surface")
-    result: dict[str, NamePlan] = {}
-    seen: set[str] = set()
-    rendering_for_role = {"chinese_person": "chinese_personal", "foreign_person": "foreign_personal",
-                          "personal_title": "titled_person", "semantic_term": "semantic_term"}
-    for item in body["decisions"]:
-        if not isinstance(item, dict) or set(item) != {"surface", "term_role", "targets"}:
-            raise ValueError("focused term rendering has invalid fields")
-        surface, role, targets = item["surface"], item["term_role"], item["targets"]
-        if (surface not in plans or surface in seen or role not in rendering_for_role
-                or not isinstance(targets, list) or len(targets) > 4
-                or (role == "chinese_person" and targets)
-                or any(not isinstance(t, str) or not t.strip() or t != t.strip() or len(t) > 160
-                       or any(ord(c) < 32 for c in t) for t in targets)):
-            raise ValueError("focused term rendering has invalid decision")
-        seen.add(surface)
-        result[surface] = _rendering_plan(surface, rendering_for_role[role], targets,
-                                          ctx.novel.target_lang)
-    if seen != set(surfaces):
-        raise ValueError("focused term rendering omitted or duplicated a surface")
-    return result
+    ) as completion:
+        body = json.loads(_strip_fence(completion.text))
+        if (not isinstance(body, dict) or set(body) != {"reviewed", "decisions"}
+                or body["reviewed"] is not True or not isinstance(body["decisions"], list)
+                or len(body["decisions"]) != len(surfaces)):
+            raise ValueError("focused term rendering did not review every offered surface")
+        result: dict[str, NamePlan] = {}
+        seen: set[str] = set()
+        rendering_for_role = {"chinese_person": "chinese_personal", "foreign_person": "foreign_personal",
+                              "personal_title": "titled_person", "semantic_term": "semantic_term"}
+        for item in body["decisions"]:
+            if not isinstance(item, dict) or set(item) != {"surface", "term_role", "targets"}:
+                raise ValueError("focused term rendering has invalid fields")
+            surface, role, targets = item["surface"], item["term_role"], item["targets"]
+            if (surface not in plans or surface in seen or role not in rendering_for_role
+                    or not isinstance(targets, list) or len(targets) > 4
+                    or (role == "chinese_person" and targets)
+                    or any(not isinstance(t, str) or not t.strip() or t != t.strip() or len(t) > 160
+                           or any(ord(c) < 32 for c in t) for t in targets)):
+                raise ValueError("focused term rendering has invalid decision")
+            seen.add(surface)
+            result[surface] = _rendering_plan(surface, rendering_for_role[role], targets,
+                                              ctx.novel.target_lang)
+        if seen != set(surfaces):
+            raise ValueError("focused term rendering omitted or duplicated a surface")
+        return result
 
 
 def _evidence_for(source: str, start: int, end: int) -> str:
@@ -376,7 +377,7 @@ class CharacterNamesStage:
             "AND constraint_class='character_name'", (ctx.novel.id,)
         )).fetchall()
         surfaces = {row[0] for row in approved if row[0] in state.envelope.raw_text}
-        plans = await _discover(ctx, state.envelope.raw_text)
+        plans = await _discover(ctx, state.envelope.raw_text, complete=NameCheckpoints(ctx, state))
         surfaces.update(plans)
         pending = []
         async with ctx.db.transaction():
