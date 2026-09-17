@@ -40,6 +40,8 @@ type IngestClient interface {
 	GetProviderConfig(ctx context.Context, novelID string) (json.RawMessage, int, error)
 	ListOllamaModels(ctx context.Context, novelID string, graphTarget bool) (json.RawMessage, int, error)
 	ProviderHealth(ctx context.Context, novelID, track string) (json.RawMessage, int, error)
+	GetEmbeddingConfig(ctx context.Context) (json.RawMessage, int, error)
+	PutEmbeddingConfig(ctx context.Context, body json.RawMessage) (json.RawMessage, int, error)
 	ListProviderCredentials(ctx context.Context) (json.RawMessage, int, error)
 	PutProviderCredential(ctx context.Context, provider string, body json.RawMessage) (json.RawMessage, int, error)
 	DeleteProviderCredential(ctx context.Context, provider string) (json.RawMessage, int, error)
@@ -202,4 +204,11 @@ func (c *ingestHTTPClient) TranslateAhead(ctx context.Context, novelID string, b
 
 func (c *ingestHTTPClient) UpdateNovelSettings(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
 	return c.send(ctx, http.MethodPatch, "/novels/"+novelID+"/settings", body, false)
+}
+
+func (c *ingestHTTPClient) GetEmbeddingConfig(ctx context.Context) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodGet, "/embedding-config", nil, true)
+}
+func (c *ingestHTTPClient) PutEmbeddingConfig(ctx context.Context, body json.RawMessage) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodPut, "/embedding-config", body, true)
 }

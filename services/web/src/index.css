@@ -1342,7 +1342,8 @@ textarea {
 }
 
 .settings-provider-content label,
-.reader-settings form > label {
+.reader-settings form > label,
+.provider-role label {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -1352,7 +1353,9 @@ textarea {
 
 .settings-provider-content input,
 .reader-settings input,
-.reader-settings select {
+.reader-settings select,
+.semantic-search-form input,
+.semantic-search-form select {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
@@ -1515,3 +1518,25 @@ textarea {
 .repair-seen { max-height: 20rem; overflow-y: auto; }
 .repair-extraction { margin-top: 1rem; padding-top: 0.7rem; border-top: 1px solid #e6e1d7; }
 .repair-extraction h4 { margin: 0 0 0.4rem; font-size: 0.9rem; }
+
+/* Explain the three model roles before asking readers to configure them. */
+.settings-role-guide {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+.settings-role-guide > div, .provider-role {
+  border: 1px solid var(--border, #d6d3ce);
+  border-radius: 10px;
+  padding: 1rem;
+}
+.settings-role-guide p { margin: .5rem 0 0; font-size: .9rem; line-height: 1.5; }
+.provider-purpose { display: block; font-size: .8rem; font-weight: normal; margin-top: .3rem; }
+.provider-role { display: grid; gap: .65rem; min-width: 0; margin: .25rem 0; }
+.provider-role legend { padding: 0 .4rem; font-weight: 600; }
+.semantic-search-form { display: grid; gap: .8rem; margin-top: 1rem; }
+.semantic-search-form label { display: grid; gap: .4rem; }
+.semantic-search-form input, .semantic-search-form select { width: 100%; box-sizing: border-box; }
+.semantic-search-form button { justify-self: start; }
+@media (max-width: 640px) { .settings-role-guide { grid-template-columns: 1fr; } }

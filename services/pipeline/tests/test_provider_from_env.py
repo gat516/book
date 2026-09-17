@@ -88,6 +88,18 @@ def test_missing_hosted_embedding_key_keeps_worker_startable(monkeypatch):
     assert isinstance(embed_provider_from_env(cfg), UnavailableEmbeddingProvider)
 
 
+@pytest.mark.parametrize("provider_id", ["gemini", "groq", "deepseek"])
+def test_missing_env_completion_key_allows_saved_account_key_setup(monkeypatch, provider_id):
+    from novel_llm.provider import UnconfiguredCompletionProvider
+    monkeypatch.delenv(f"{provider_id.upper()}_API_KEY", raising=False)
+    cfg = make_config(llm_provider=provider_id)
+    assert isinstance(provider_from_env(cfg), UnconfiguredCompletionProvider)
+
+
+def test_automatic_embeddings_do_not_construct_an_ollama_client():
+    assert isinstance(embed_provider_from_env(make_config()), UnavailableEmbeddingProvider)
+
+
 def test_names_provider_is_none_for_hosted_providers():
     """A novel pinned to a hosted provider must keep that routing (Phase N4).
 

@@ -40,7 +40,7 @@ class FakeProvider:
 
 
 def config() -> Config:
-    return Config("postgres://unused", "secret", "ask-model", 2, "127.0.0.1", 8082)
+    return Config("postgres://unused", "secret", "ask-model", 2, "127.0.0.1", 8082, embed_provider="ollama")
 
 
 def test_app_from_env_routes_gemini_completion_separately(monkeypatch) -> None:
@@ -131,7 +131,7 @@ async def test_startup_does_not_wedge_on_embedding_outage(monkeypatch):
     sleep=AsyncMock()
     monkeypatch.setattr('askai.app.asyncio.sleep',sleep)
     await service.start()
-    assert provider.embed.await_count==1
+    provider.embed.assert_not_awaited()
     sleep.assert_not_awaited()
     assert service.embedding_ready is False
     service.pool.open.assert_awaited_once()
@@ -207,3 +207,64 @@ async def test_missing_provider_credential_is_named():
         )
     assert response.status_code == 502
     assert response.json() == {"error": "ask-ai provider failure", "category": "credential_missing"}
+
+
+@pytest.mark.asyncio
+async def test_saved_provider_and_ai_model_changes_take_effect_without_restart(monkeypatch):
+    from unittest.mock import AsyncMock
+    from askai.provider_config import ProviderConfigRow
+    service = Service(config(), FakeProvider())
+    row = ProviderConfigRow("gemini", "book-ai-model", None, "saved-key")
+    resolve = AsyncMock(return_value=row)
+    monkeypatch.setattr(app_module, "resolve_provider_config", resolve)
+    first = await service._provider_for_novel(None, "book")
+    assert first._model == "book-ai-model"
+    assert first._api_key == "saved-key"
+    assert await service._provider_for_novel(None, "book") is first
+    resolve.return_value = ProviderConfigRow("gemini", "new-ai-model", None, "rotated-key")
+    second = await service._provider_for_novel(None, "book")
+    assert second is not first
+    assert second._model == "new-ai-model"
+    assert second._api_key == "rotated-key"
+    await first.aclose()
+    await second.aclose()
+
+
+@pytest.mark.asyncio
+async def test_ask_uses_book_model_without_env_override_and_can_run_without_embeddings(monkeypatch):
+    from unittest.mock import AsyncMock
+    from novel_llm.embedding_config import EmbeddingBinding
+    provider = FakeProvider()
+    provider.complete = AsyncMock(return_value=Completion("answer", "gemini", "book-ai-model"))
+    service = Service(config(), provider)
+    embedding_provider = FakeProvider()
+    embedding_provider.embed = AsyncMock(side_effect=RuntimeError("disabled"))
+    service.embedding_resolver.resolve = AsyncMock(return_value=EmbeddingBinding(embedding_provider, None))
+    service._provider_for_novel = AsyncMock(return_value=provider)
+    service._records_status = AsyncMock(return_value={"version": "same", "generation_id": "g"})
+    monkeypatch.setattr(app_module, "retrieve", AsyncMock(return_value=[Source("record", "r", 1, "Visible fact")]))
+
+    class Connection:
+        async def execute(self, *args): pass
+        def transaction(self): return self
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+    class Pool:
+        def connection(self): return Connection()
+    service.pool = Pool()
+    response = await service.ask(AskRequest(novel_id="book", question="Who?", at=1))
+    assert response.answer == "answer"
+    assert "model" not in provider.complete.call_args.kwargs
+    assert provider.complete.call_args.kwargs["cls"] == Class.INTERACTIVE
+    assert app_module.retrieve.call_args.args[3] is None
+
+
+@pytest.mark.parametrize("provider_id", ["gemini", "groq", "deepseek"])
+def test_hosted_service_starts_before_key_is_saved(monkeypatch, provider_id):
+    from dataclasses import replace
+    from novel_llm.provider import UnconfiguredCompletionProvider
+    monkeypatch.delenv(f"{provider_id.upper()}_API_KEY", raising=False)
+    monkeypatch.setattr(app_module, "load_config", lambda: replace(config(), llm_provider=provider_id, embed_provider="auto"))
+    monkeypatch.setattr(app_module, "create_app", lambda service: service)
+    service = app_module.app_from_env()
+    assert isinstance(service.provider, UnconfiguredCompletionProvider)

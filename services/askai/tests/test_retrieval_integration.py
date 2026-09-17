@@ -149,3 +149,34 @@ async def test_retrieval_is_gated_by_rls_and_effective_chapter() -> None:
                     assert (await count.fetchone())[0] == 0
         finally:
             await admin.execute("DELETE FROM novel WHERE id IN (%s, %s)", (novel_id, other_novel_id))
+
+
+@pytest.mark.asyncio
+async def test_vector_space_filter_preserves_chapter_and_novel_gates():
+    database_url = os.getenv("ASKAI_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("ASKAI_TEST_DATABASE_URL is not set")
+    novel, other = str(uuid.uuid4()), str(uuid.uuid4())
+    async with await psycopg.AsyncConnection.connect(database_url, autocommit=True) as admin:
+        await admin.execute("INSERT INTO novel(id,title,source_lang,target_lang,ontology) VALUES (%s,'Embedding test','en','en','{}'),(%s,'Other','en','en','{}')", (novel, other))
+        try:
+            for book, chapter, text, space in [
+                (novel, 1, "matching visible", "current"),
+                (novel, 1, "different model same width", "old"),
+                (novel, 1, "untagged legacy", None),
+                (novel, 2, "matching future", "current"),
+                (other, 1, "another book", "current"),
+            ]:
+                await admin.execute("INSERT INTO chunk(novel_id,chapter_index,text,embedding,embedding_space) VALUES (%s,%s,%s,%s::vector,%s)", (book, chapter, text, vector(), space))
+            async with await psycopg.AsyncConnection.connect(database_url, autocommit=True) as reader:
+                await reader.execute("SET ROLE rls_reader")
+                async with reader.transaction():
+                    await reader.execute("SELECT set_config('app.novel_id',%s,true)", (novel,))
+                    await reader.execute("SELECT set_config('app.current_chapter','1',true)")
+                    sources = await retrieve(reader, novel, 1, [1.] + [0.] * 767,
+                                             embedding_space="current", max_chunks=10)
+                    assert [s.text for s in sources if s.kind == "chunk"] == ["matching visible"]
+                    # New settings are readable by Ask AI, but never carry secrets.
+                    await reader.execute("SELECT provider,model FROM embedding_config")
+        finally:
+            await admin.execute("DELETE FROM novel WHERE id IN (%s,%s)", (novel, other))

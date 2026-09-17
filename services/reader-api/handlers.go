@@ -75,6 +75,8 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/provider-config", a.getProviderConfig)
 	mux.HandleFunc("GET /novels/{id}/provider-config/ollama-models", a.getOllamaModels)
 	mux.HandleFunc("GET /novels/{id}/provider-health", a.getProviderHealth)
+	mux.HandleFunc("GET /embedding-config", a.embeddingConfig)
+	mux.HandleFunc("PUT /embedding-config", a.embeddingConfig)
 	mux.HandleFunc("GET /provider-credentials", a.listProviderCredentials)
 	mux.HandleFunc("PUT /provider-credentials/{provider}", a.putProviderCredential)
 	mux.HandleFunc("DELETE /provider-credentials/{provider}", a.deleteProviderCredential)
@@ -1060,4 +1062,29 @@ func (a *API) healthz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (a *API) embeddingConfig(w http.ResponseWriter, r *http.Request) {
+	prepareReaderResponse(w)
+	var result json.RawMessage
+	var status int
+	var err error
+	if r.Method == http.MethodGet {
+		result, status, err = a.ingest.GetEmbeddingConfig(r.Context())
+	} else {
+		var body []byte
+		body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, 4096))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid settings body")
+			return
+		}
+		result, status, err = a.ingest.PutEmbeddingConfig(r.Context(), body)
+	}
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
 }

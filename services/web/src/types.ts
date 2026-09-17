@@ -646,8 +646,15 @@ export interface ProviderConfigView {
 // One credential per provider (migrations 0035, 0080): entered once in Settings and used
 // by every book that names that provider. This is now the only shape that carries a key,
 // and the only masked read left -- api_key_set, never the key itself.
+export type CredentialProviderName = ProviderName | "openrouter";
+
+export interface EmbeddingConfig {
+  provider: "auto" | "disabled" | "server" | "gemini" | "openrouter";
+  model: string;
+}
+
 export interface ProviderCredentialView {
-  provider: ProviderName;
+  provider: CredentialProviderName;
   base_url?: string;
   api_key_set: boolean;
 }

@@ -1145,3 +1145,29 @@ func TestNovelWideRecordsActionsProxyDistinctIntents(t *testing.T) {
 		}
 	}
 }
+
+func (f *fakeIngestClient) GetEmbeddingConfig(_ context.Context) (json.RawMessage, int, error) {
+	return f.response, f.status, f.err
+}
+func (f *fakeIngestClient) PutEmbeddingConfig(_ context.Context, body json.RawMessage) (json.RawMessage, int, error) {
+	f.lastBody = body
+	return f.response, f.status, f.err
+}
+
+func TestEmbeddingSettingsProxy(t *testing.T) {
+	client := &fakeIngestClient{response: json.RawMessage(`{"provider":"disabled","model":""}`), status: 200}
+	api := &API{ingest: client}
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		response := request(t, api, method, "/embedding-config", `{"provider":"disabled"}`, "")
+		if response.Code != 200 || response.Body.String() != string(client.response) {
+			t.Fatalf("%s: %d %s", method, response.Code, response.Body.String())
+		}
+	}
+	if string(client.lastBody) != `{"provider":"disabled"}` {
+		t.Fatalf("wrong forwarded body: %s", client.lastBody)
+	}
+	client.err = errors.New("upstream failed")
+	if got := request(t, api, http.MethodGet, "/embedding-config", "", ""); got.Code != 502 {
+		t.Fatalf("got %d", got.Code)
+	}
+}

@@ -1,7 +1,8 @@
+import { SemanticSearchSettings } from "./SemanticSearchSettings";
 import { useCallback, useEffect, useState } from "react";
 import { deleteProviderCredential, listProviderCredentials, saveProviderCredential } from "../api";
-import { NEEDS_API_KEY, PROVIDER_LABELS } from "../providers";
-import type { ProviderCredentialView, ProviderName } from "../types";
+import { PROVIDER_LABELS } from "../providers";
+import type { ProviderCredentialView, CredentialProviderName } from "../types";
 
 interface Props {
   clickableEntities: boolean;
@@ -9,7 +10,8 @@ interface Props {
   onClose: () => void;
 }
 
-const PROVIDERS: ProviderName[] = ["gemini", "groq", "deepseek", "anthropic", "custom", "ollama"];
+const PROVIDERS: CredentialProviderName[] = ["gemini", "groq", "deepseek", "anthropic", "custom", "openrouter"];
+const LABELS = { ...PROVIDER_LABELS, openrouter: "OpenRouter" };
 
 // Account-wide settings: the provider keys every book draws on, plus reading preferences.
 // Keys live here rather than per book (migration 0035) because the common case is several
@@ -48,7 +50,7 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
     setDrafts((d) => ({ ...d, [provider]: { ...draft(provider), ...patch } }));
   }
 
-  async function save(provider: ProviderName) {
+  async function save(provider: CredentialProviderName) {
     setPending(provider);
     setError(null);
     setNotice(null);
@@ -59,7 +61,7 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
       });
       setCredentials(response.credentials);
       setDraft(provider, { apiKey: "" });
-      setNotice(`Saved ${PROVIDER_LABELS[provider]}.`);
+      setNotice(`Saved ${LABELS[provider]}.`);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -67,14 +69,14 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
     }
   }
 
-  async function remove(provider: ProviderName) {
+  async function remove(provider: CredentialProviderName) {
     setPending(provider);
     setError(null);
     setNotice(null);
     try {
       await deleteProviderCredential(provider);
       await load();
-      setNotice(`Removed the ${PROVIDER_LABELS[provider]} key. Books using it fall back to the server default.`);
+      setNotice(`Removed the ${LABELS[provider]} key. Books using this provider need another key or a provider change.`);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -94,6 +96,11 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
       {error && <p role="alert" className="chapter-list-error">{error}</p>}
       {notice && <p role="status" className="settings-notice">{notice}</p>}
 
+      <div className="settings-role-guide" aria-label="What each setting does">
+        <div><strong>Translation</strong><p>Writes chapter text in your chosen language. Choose its provider and model in Book settings.</p></div>
+        <div><strong>AI features</strong><p>Builds character knowledge and answers Ask AI questions. Uses the book’s provider with its AI features model.</p></div>
+        <div><strong>Semantic search · optional</strong><p>Helps Ask AI find relevant chapter passages. Configured below for all books; needs an embedding model.</p></div>
+      </div>
       <section className="settings-section">
         <h2>Reading</h2>
         <label className="settings-toggle">
@@ -116,20 +123,20 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
         <div className="settings-section-heading">
           <div>
             <h2>Provider keys</h2>
-            <p>Saved once, then available to every book that selects that provider.</p>
+            <p>Add a hosted provider key to use Book without an Ollama server. Then choose that provider in each book’s settings.</p>
           </div>
         </div>
         {loading ? (
           <p>Loading providers…</p>
         ) : (
           <div className="settings-provider-list">
-            {PROVIDERS.filter((p) => NEEDS_API_KEY[p]).map((provider) => {
+            {PROVIDERS.map((provider) => {
               const current = saved.get(provider);
               const busy = pending === provider;
               return (
                 <details key={provider} className="settings-provider">
                   <summary>
-                    <span>{PROVIDER_LABELS[provider]}</span>
+                    <span>{LABELS[provider]}<small className="provider-purpose">{provider === "openrouter" ? "Semantic search only" : provider === "gemini" ? "Translation, AI features, and semantic search" : "Translation and AI features"}</small></span>
                     <span className={`status-pill ${current?.api_key_set ? "status-pill-live" : "status-pill-quiet"}`}>
                       {current?.api_key_set ? "Key saved" : "No key"}
                     </span>
@@ -168,6 +175,7 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
           Keys are encrypted before storage and never sent back to this page; it only learns whether one exists.
         </p>
       </section>
+      <SemanticSearchSettings credentials={credentials} credentialsLoading={loading} />
     </section>
   );
 }

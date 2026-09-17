@@ -15,7 +15,7 @@ class Source:
 def vector_literal(vector: list[float]) -> str:
     return "[" + ",".join(str(value) for value in vector) + "]"
 
-async def retrieve(conn: AsyncConnection, novel_id: str, at: int, embedding: list[float] | None, *, question: str = "", max_chunks: int, max_entities: int = 8, max_records: int = 64) -> list[Source]:
+async def retrieve(conn: AsyncConnection, novel_id: str, at: int, embedding: list[float] | None, *, question: str = "", embedding_space: str | None = None, max_chunks: int, max_entities: int = 8, max_records: int = 64) -> list[Source]:
     """Retrieve chunks and active-generation records under the reader chapter gate.
 
     Record retrieval is entity-first: the nearest visible entities seed a bounded
@@ -31,7 +31,8 @@ async def retrieve(conn: AsyncConnection, novel_id: str, at: int, embedding: lis
         if vector is not None:
             await cur.execute("""SELECT id, chapter_index, text FROM chunk
           WHERE novel_id=%s AND chapter_index<=%s AND embedding IS NOT NULL
-          ORDER BY embedding <=> %s::vector, id LIMIT %s""", (novel_id, at, vector, max_chunks))
+            AND embedding_space IS NOT DISTINCT FROM %s
+          ORDER BY embedding <=> %s::vector, id LIMIT %s""", (novel_id, at, embedding_space, vector, max_chunks))
             chunks = [Source("chunk", row[0], row[1], row[2]) for row in await cur.fetchall()]
         else:
             chunks = []
@@ -44,6 +45,7 @@ async def retrieve(conn: AsyncConnection, novel_id: str, at: int, embedding: lis
           FROM entity e JOIN novel n ON n.id=e.novel_id
          WHERE e.novel_id=%s AND e.record_generation_id=n.active_record_generation
            AND e.first_seen_chapter<=%s AND e.embedding IS NOT NULL
+           AND e.embedding_space IS NOT DISTINCT FROM %s
            AND EXISTS (
              SELECT 1 FROM record_participant p
              JOIN record_row er ON er.id=p.row_id
@@ -60,7 +62,7 @@ async def retrieve(conn: AsyncConnection, novel_id: str, at: int, embedding: lis
                     AND g.entity_id=e.id AND g.locked_at_chapter<=%s
                     AND position(lower(g.target_term) in lower(%s)) > 0)
          ) DESC, e.embedding <=> %s::vector, e.id LIMIT %s""",
-            (novel_id, at, at, at, question, at, question, vector, max_entities))
+            (novel_id, at, embedding_space, at, at, question, at, question, vector, max_entities))
         entity_ids = [row[0] for row in await cur.fetchall()]
 
         # Use a participant-linked result whenever the entity snapshot has a match.

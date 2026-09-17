@@ -97,6 +97,7 @@ class StageContext:
     objects: "Minio"
     cfg: Config
     cache: "LLMCache"  # the §6.1 LLM-result cache, shared by every LLM-bearing stage
+    embedding_space: str | None = None
     textproc: "TextProcClient | None" = None
 
     # The provider identity actually backing `provider`/`batch_manager` for this chapter

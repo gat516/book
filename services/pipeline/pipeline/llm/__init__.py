@@ -3,7 +3,7 @@
 All LLM calls go through the ``LLMProvider`` protocol; no stage imports a provider SDK
 directly. Backends are chosen from config here so switching Anthropic ↔ Ollama is one
 env var (``LLM_PROVIDER``). The embedding backend is separate (§5.4): ``EMBED_PROVIDER``
-defaults to Ollama but can explicitly select a hosted embeddings API.
+defaults to automatic hosted search when credentials are available, or off.
 
 One provider instance is constructed with a *default* model (``llm_model_extract``), but
 stages that need a different model (translate wants ``llm_model_translate``) MUST pass it
@@ -16,6 +16,7 @@ that used to be two sources of truth that could (and did) disagree.
 from __future__ import annotations
 
 from pipeline.config import Config
+from novel_llm.provider import UnconfiguredCompletionProvider
 from novel_llm import (
     AdmissionRejected,
     AnthropicProvider,
@@ -40,6 +41,13 @@ def provider_from_env(cfg: Config, *, tenant: str = "default") -> LLMProvider:
     ``novel_provider_config`` row (PLAN.md Phase N4's zero-config backward compat) — the
     per-novel path constructs providers directly from decrypted config, not through here.
     """
+    # Per-book resolution loads saved keys later, after the DB connection opens.
+    # A missing env key must not prevent the worker from reaching that path.
+    import os
+    if cfg.llm_provider in {"deepseek", "gemini", "groq"} and not (
+        getattr(cfg, f"{cfg.llm_provider}_api_key", "") or os.getenv(f"{cfg.llm_provider.upper()}_API_KEY")
+    ):
+        return UnconfiguredCompletionProvider()
     match cfg.llm_provider:
         case "ollama":
             return OllamaProvider(
@@ -73,6 +81,8 @@ def embed_provider_from_env(cfg: Config, *, tenant: str = "default") -> LLMProvi
     """Return the independent retrieval embedding backend."""
     try:
         match cfg.embed_provider:
+            case "auto" | "disabled":
+                return UnavailableEmbeddingProvider()
             case "ollama":
                 return OllamaProvider(host=cfg.ollama_host, model=cfg.embed_model,
                                       timeout=cfg.ollama_timeout_seconds)

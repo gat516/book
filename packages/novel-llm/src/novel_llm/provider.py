@@ -327,3 +327,16 @@ async def transient_as_backpressure(*, default_retry_s: float = 5.0):
             httpx.WriteTimeout, httpx.PoolTimeout, httpx.RemoteProtocolError) as exc:
         raise AdmissionRejected("unreachable", retry_after_s=default_retry_s,
                                 category="unreachable") from exc
+
+
+class UnconfiguredCompletionProvider(SequentialBatchMixin):
+    """Keep services startable before the user saves a hosted key in Settings."""
+
+    async def complete(self, *args, **kwargs):
+        raise RuntimeError("provider credential is missing")
+
+    async def embed(self, *args, **kwargs):
+        raise RuntimeError("provider credential is missing")
+
+    async def aclose(self):
+        pass

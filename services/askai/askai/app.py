@@ -17,7 +17,8 @@ from psycopg_pool import AsyncConnectionPool
 from novel_llm import AdmissionRejected, Class, GatewayProvider, LLMProvider
 
 from askai.config import Config, load_config
-from askai.provider_config import build_provider, resolve_provider_config
+from askai.provider_config import build_provider, resolve_provider_config, load_provider_credential
+from novel_llm.embedding_config import EmbeddingResolver
 from askai.retrieval import build_context, retrieve
 
 log = logging.getLogger(__name__)
@@ -176,11 +177,14 @@ class Service:
         # always wires two distinct providers.
         self.embed_provider = embed_provider or provider
         self.embedding_ready = False
+        self.embedding_resolver = EmbeddingResolver(config, self.embed_provider, load_provider_credential)
         self.pool = AsyncConnectionPool(config.database_url, open=False, kwargs={"row_factory": tuple_row}, configure=self._configure_connection)
         # Per-novel completion provider cache (PLAN.md Phase N4), mirroring
         # pipeline/worker.py's _provider_cache: a provider wraps a live httpx/SDK client,
         # so this is built once per novel and reused, not reconstructed per question.
         self._provider_cache: dict[str, LLMProvider] = {}
+        self._provider_rows = {}
+        self._retired_providers = []
         self._embed_provider_cache: dict[str, LLMProvider] = {}
 
     async def _configure_connection(self, conn) -> None:
@@ -190,22 +194,16 @@ class Service:
     async def start(self) -> None:
         if not self.config.internal_token or not self.config.model:
             raise RuntimeError("ASKAI_INTERNAL_TOKEN and LLM_MODEL_ASK (or LLM_MODEL_EXTRACT) are required")
-        # Embeddings are retrieval-only. A temporary outage must not wedge Ask AI startup;
-        # each request retries the provider and returns a bounded semantic-retrieval error.
-        try:
-            dimensions = await self.embed_provider.embed(["embedding dimension check"], cls=Class.INTERACTIVE)
-            self.embedding_ready = len(dimensions) == 1 and len(dimensions[0]) == self.config.embed_dim
-            if not self.embedding_ready:
-                log.warning("embedding provider returned unexpected startup dimension")
-        except Exception as exc:  # noqa: BLE001 — readiness is independent of retrieval
-            self.embedding_ready = False
-            log.warning("semantic retrieval unavailable at startup: %s", type(exc).__name__)
+        # Resolve optional embeddings per request, after the database is available.
+        # Startup must not contact a stale env Ollama endpoint when the UI overrides it.
         await self.pool.open()
 
     async def close(self) -> None:
         await self.pool.close()
+        await self.embedding_resolver.aclose()
         candidates = {id(self.provider): self.provider, id(self.embed_provider): self.embed_provider}
         candidates.update({id(p): p for p in self._provider_cache.values()})
+        candidates.update({id(p): p for p in self._retired_providers})
         candidates.update({id(p): p for p in self._embed_provider_cache.values()})
         for candidate in candidates.values():
             close = getattr(candidate, "aclose", None)
@@ -213,12 +211,12 @@ class Service:
                 await close()
 
     async def _provider_for_novel(self, conn, novel_id: str) -> LLMProvider:
-        cached = self._provider_cache.get(novel_id)
-        if cached is not None:
-            return cached
         # Same merge the pipeline does (0035): the novel's own row over the global
         # credential, so an answer comes from the backend that wrote the prose.
         row = await resolve_provider_config(conn, novel_id, self.config.llm_provider)
+        cached = self._provider_cache.get(novel_id)
+        if cached is not None and self._provider_rows.get(novel_id) == row:
+            return cached
         if row is None:
             provider = self.provider
         else:
@@ -233,7 +231,11 @@ class Service:
                 if category == "credential_missing":
                     raise ProviderFailure(category) from exc
                 raise
+        if cached is not None and cached is not self.provider:
+            # Other requests may still be using this client; close it at shutdown.
+            self._retired_providers.append(cached)
         self._provider_cache[novel_id] = provider
+        self._provider_rows[novel_id] = row
         return provider
 
     async def _records_status(self, conn, novel_id: str, at: int) -> dict:
@@ -264,8 +266,10 @@ class Service:
                     backend=self.config.gateway_backend, embed_model=self.config.embed_model,
                     max_output_tokens=self.config.gateway_max_output_tokens)
                 self._provider_cache[request.novel_id] = gateway_provider
-        embedding_provider = self.embed_provider
-        if self.config.embed_provider == "gateway":
+        async with self.pool.connection() as conn:
+            embedding = await self.embedding_resolver.resolve(conn)
+        embedding_provider = embedding.provider
+        if embedding_provider is self.embed_provider and self.config.embed_provider == "gateway":
             embedding_provider = self._embed_provider_cache.get(request.novel_id)
             if embedding_provider is None:
                 embedding_provider = GatewayProvider(address=self.config.gateway_addr, tenant=request.novel_id,
@@ -299,13 +303,14 @@ class Service:
                 sources = await retrieve(conn, request.novel_id, request.at,
                                          vectors[0] if vectors else None,
                                          question=request.question,
+                                         embedding_space=embedding.space,
                                          max_chunks=self.config.max_chunks,
                                          max_entities=self.config.max_entities,
                                          max_records=self.config.max_records)
         context, used = build_context(sources, self.config.max_context_chars)
         if not used:
             return AskResponse(answer=INSUFFICIENT, at=request.at, retrieved_sources=[], served_by=None, records=records)
-        completion = await provider.complete(f"Question:\n{request.question}\n\nRetrieved context:\n{context}", system=SYSTEM, cls=Class.INTERACTIVE, model=self.config.model)
+        completion = await provider.complete(f"Question:\n{request.question}\n\nRetrieved context:\n{context}", system=SYSTEM, cls=Class.INTERACTIVE)
         # A cutover/quarantine during slow inference invalidates the old answer too.
         async with self.pool.connection() as conn:
             async with conn.transaction():
@@ -360,9 +365,8 @@ def create_app(service: Service) -> FastAPI:
     return app
 
 
-def app_from_env() -> FastAPI:
-    from novel_llm import AnthropicProvider, DeepSeekProvider, GeminiProvider, GatewayProvider, GroqProvider, OllamaProvider, OpenRouterProvider, UnavailableEmbeddingProvider
-    cfg = load_config()
+def _completion_from_env(cfg):
+    from novel_llm import AnthropicProvider, DeepSeekProvider, GeminiProvider, GatewayProvider, GroqProvider, OllamaProvider
     match cfg.llm_provider:
         case "ollama":
             provider: LLMProvider = OllamaProvider(host=cfg.ollama_host, model=cfg.model)
@@ -378,7 +382,23 @@ def app_from_env() -> FastAPI:
                 max_output_tokens=cfg.gateway_max_output_tokens)
         case _:
             provider = AnthropicProvider(model=cfg.model)
+    return provider
+
+
+def app_from_env() -> FastAPI:
+    from novel_llm import GeminiProvider, GatewayProvider, OllamaProvider, OpenRouterProvider, UnavailableEmbeddingProvider
+    cfg = load_config()
+    from novel_llm.provider import UnconfiguredCompletionProvider
+    import os
+    if cfg.llm_provider in {"deepseek", "gemini", "groq"} and not (
+        getattr(cfg, f"{cfg.llm_provider}_api_key", "") or os.getenv(f"{cfg.llm_provider.upper()}_API_KEY")
+    ):
+        provider = UnconfiguredCompletionProvider()
+    else:
+        provider = _completion_from_env(cfg)
     match cfg.embed_provider:
+        case "auto" | "disabled":
+            embed_provider = UnavailableEmbeddingProvider()
         case "ollama":
             embed_provider = OllamaProvider(host=cfg.ollama_host, model=cfg.embed_model)
         case "gemini":

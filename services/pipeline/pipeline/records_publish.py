@@ -277,7 +277,7 @@ async def publish_records(ctx: StageContext, state: PipelineState) -> None:
 
         await ctx.db.execute("DELETE FROM chunk WHERE novel_id=%s AND chapter_index=%s", (ctx.novel.id, chapter))
         if target_chunks:
-            await _executemany(ctx.db, "INSERT INTO chunk (novel_id,chapter_index,text,embedding) VALUES (%s,%s,%s,%s)", [(ctx.novel.id,chapter,c.text,e) for c,e in zip(target_chunks,embeddings)])
+            await _executemany(ctx.db, "INSERT INTO chunk (novel_id,chapter_index,text,embedding,embedding_space) VALUES (%s,%s,%s,%s,%s)", [(ctx.novel.id,chapter,c.text,e,ctx.embedding_space if e is not None else None) for c,e in zip(target_chunks,embeddings)])
         # Each unusable candidate becomes one record_drop row, whether parsing rejected
         # it or deterministic grounding did. Counting only check_records() drops hid the
         # nine parser-level failures that motivated this contract repair.
@@ -293,6 +293,9 @@ async def publish_fact_first(ctx: StageContext, state: PipelineState, result: di
     run_id = result.get("fact_first_run_id")
     if not run_id:
         raise ValueError("fact-first result has no durable run id")
+    chunks = list(getattr(state, "chunks", []) or [])
+    embeddings = await _embedding_rows(ctx, chunks)
+    await register_vector_async(ctx.db)
     async with ctx.db.transaction():
         await verify_generation(ctx, state)
         existing = await (await ctx.db.execute(
@@ -461,12 +464,12 @@ async def publish_fact_first(ctx: StageContext, state: PipelineState, result: di
         # depend on an embedding provider.
         await ctx.db.execute("DELETE FROM chunk WHERE novel_id=%s AND chapter_index=%s",
                              (ctx.novel.id, chapter))
-        chunks = list(getattr(state, "chunks", []) or [])
         if chunks:
             async with ctx.db.cursor() as cur:
                 await cur.executemany(
-                    "INSERT INTO chunk(novel_id,chapter_index,text,embedding) VALUES (%s,%s,%s,NULL)",
-                    [(ctx.novel.id, chapter, chunk.text) for chunk in chunks])
+                    "INSERT INTO chunk(novel_id,chapter_index,text,embedding,embedding_space) VALUES (%s,%s,%s,%s,%s)",
+                    [(ctx.novel.id, chapter, chunk.text, vector, ctx.embedding_space if vector is not None else None)
+                     for chunk, vector in zip(chunks, embeddings)])
         # The existing reader status surface is keyed by record_run. Keep it in lock
         # step with the native run after all fact-first rows are durable; otherwise the
         # next chronological chapter remains fenced behind a permanently processing

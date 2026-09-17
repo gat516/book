@@ -24,6 +24,8 @@ from pipeline.config import Config
 from pipeline.context import NovelMeta, PipelineState, StageContext, language_profile_for
 from pipeline.envelope import ChapterEnvelope, QueueMessage, SourceMeta
 from pipeline.llm import embed_provider_from_env, provider_from_env
+from novel_llm.embedding_config import EmbeddingResolver
+from pipeline.provider_config import load_provider_credential
 from pipeline.llm.provider import AdmissionRejected, LLMProvider
 from pipeline.provider_config import (
     build_names_provider,
@@ -156,6 +158,7 @@ class Worker:
                       cfg.deepseek_base_url if cfg.llm_provider == 'deepseek' else ''))
         self._default_batch_manager = BatchManager(self._default_provider)
         self.embed_provider = embed_provider_from_env(cfg)
+        self.embedding_resolver = EmbeddingResolver(cfg, self.embed_provider, load_provider_credential)
         # Per-novel (provider, batch manager, identity, stage-specific Ollama clients,
         # model override) cache, keyed by novel_id — a
         # provider wraps a live httpx/SDK client, so this must be built once and reused
@@ -233,6 +236,7 @@ class Worker:
                 self._loop(), self._reap_forever(), self._heartbeat_forever()
             )
         finally:
+            await self.embedding_resolver.aclose()
             await self.textproc.aclose()
             await self.db.close()
 
@@ -595,6 +599,7 @@ class Worker:
             source_lang=source_lang,
             source_meta=SourceMeta.model_validate(source_meta),
         )
+        embedding = await self.embedding_resolver.resolve(self.db)
         ctx = StageContext(
             novel=NovelMeta(
                 id=msg.novel_id,
@@ -607,7 +612,8 @@ class Worker:
             batch_manager=batch_manager,
             # Embeddings are an independent retrieval backend. Even gateway completion
             # routing must not replace an explicitly selected EMBED_PROVIDER.
-            embed_provider=self.embed_provider,
+            embed_provider=embedding.provider,
+            embedding_space=embedding.space,
             db=self.db,
             objects=self.minio,
             cfg=self.cfg,

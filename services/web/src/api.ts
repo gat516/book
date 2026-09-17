@@ -405,8 +405,16 @@ export function saveProviderCredential(
 
 // The only way to clear a stored key: an omitted key on save means "unchanged".
 export async function deleteProviderCredential(provider: string): Promise<void> {
-  await fetch(`/api/provider-credentials/${provider}`, {
+  const response = await fetch(`/api/provider-credentials/${provider}`, {
     method: "DELETE",
     headers: { "X-Reader-ID": readerId() },
   });
+  if (!response.ok) throw new Error("Could not remove provider key.");
+}
+
+export function getEmbeddingConfig(): Promise<import("./types").EmbeddingConfig> {
+  return request("/embedding-config");
+}
+export function saveEmbeddingConfig(body: import("./types").EmbeddingConfig): Promise<import("./types").EmbeddingConfig> {
+  return request("/embedding-config", { method: "PUT", body: JSON.stringify(body) });
 }

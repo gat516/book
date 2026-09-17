@@ -109,7 +109,7 @@ class Config:
     # Embeddings are an independent, retrieval-only backend. Keep Ollama as the
     # backwards-compatible default; hosted options are explicit because changing the
     # model changes the vector space and requires a re-embed.
-    embed_provider: str = "ollama"
+    embed_provider: str = "auto"
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     # Gemini speaks the OpenAI chat dialect through Google's compatibility endpoint,
@@ -254,7 +254,7 @@ class Config:
             gateway_backend=_getenv("LLM_GATEWAY_BACKEND", "local_gpu"),
             gateway_provider=_getenv("LLM_GATEWAY_PROVIDER", "ollama"),
             gateway_max_output_tokens=int(_getenv("LLM_GATEWAY_MAX_OUTPUT_TOKENS", "8192")),
-            embed_provider=_getenv("EMBED_PROVIDER", "ollama"),
+            embed_provider=_getenv("EMBED_PROVIDER", "auto"),
             openrouter_api_key=_getenv("OPENROUTER_API_KEY", ""),
             openrouter_base_url=_getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
             gemini_api_key=_getenv("GEMINI_API_KEY", ""),

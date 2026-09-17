@@ -65,6 +65,8 @@ func main() {
 	mux.HandleFunc("GET /novels/{id}/provider-health", api.providerHealth)
 	// Global provider credentials (migration 0035): shared by every novel, so a key is
 	// entered once rather than re-pasted per book. A novel may still override with its own.
+	mux.Handle("GET /embedding-config", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.getEmbeddingConfig)))
+	mux.Handle("PUT /embedding-config", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.putEmbeddingConfig)))
 	mux.HandleFunc("GET /provider-credentials", api.listProviderCredentials)
 	mux.HandleFunc("PUT /provider-credentials/{provider}", api.putProviderCredential)
 	mux.HandleFunc("DELETE /provider-credentials/{provider}", api.deleteProviderCredential)

@@ -25,6 +25,16 @@ from pipeline.worker import (
 )
 
 
+def worker_stub():
+    """A worker without external clients; individual tests supply the paths they use."""
+    worker = Worker.__new__(Worker)
+    worker.embedding_resolver = SimpleNamespace(
+        aclose=AsyncMock(),
+        resolve=AsyncMock(return_value=SimpleNamespace(provider=None, space=None)),
+    )
+    return worker
+
+
 async def keep_novel_alive(novel_id, msg=None):
     await asyncio.Event().wait()
 
@@ -82,7 +92,7 @@ async def test_provider_rejection_persists_exponential_wait_without_sleep():
                 self.attempts = params[0]
             return Cursor(None)
 
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.db = DB()
     msg = type("Message", (), {"novel_id": "novel", "chapter_index": 1})()
     await worker._record_provider_rejection(msg, AdmissionRejected(retry_after_s=1))
@@ -106,7 +116,7 @@ async def test_discarded_enrichment_suppresses_only_retry_after_translation_is_r
             self.calls.append((sql, params))
             return Cursor()
 
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.db = DB()
     msg = type("Message", (), {"novel_id": "novel", "chapter_index": 1})()
     await worker._record_provider_rejection(msg, AdmissionRejected(retry_after_s=1))
@@ -130,7 +140,7 @@ async def test_provider_retry_after_is_never_shortened_and_success_resets_streak
             self.calls.append((sql, params))
             return Cursor()
 
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.db = DB()
     msg = type("Message", (), {"novel_id": "novel", "chapter_index": 1})()
     await worker._record_provider_rejection(msg, AdmissionRejected(retry_after_s=300))
@@ -158,7 +168,7 @@ async def test_retry_sweep_orders_both_due_states_and_enqueues_deduped_messages(
         def __init__(self): self.calls = []
         async def eval(self, *args): self.calls.append(args); return 0
 
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.db = DB()
     worker.redis = Redis()
     await worker._retry_enrichment()
@@ -187,7 +197,7 @@ async def test_provider_rejection_fifth_attempt_is_terminal():
             self.calls.append((sql, params))
             return Cursor()
 
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.db = DB()
     msg = type("Message", (), {"novel_id": "novel", "chapter_index": 1})()
     await worker._record_provider_rejection(msg, AdmissionRejected(retry_after_s=1))
@@ -296,7 +306,7 @@ async def test_embedding_provider_does_not_block_the_worker_loop(scheduled, monk
     client, keys = scheduled
     heartbeat = keys[-1] + ":heartbeat"
     monkeypatch.setattr(module, "WORKER_HEARTBEAT", heartbeat)
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.redis = client
     worker.stopping = asyncio.Event()
     worker.cfg = SimpleNamespace(queue_timeout=1, visibility_timeout=300)
@@ -317,7 +327,7 @@ async def test_embedding_provider_does_not_block_the_worker_loop(scheduled, monk
 async def test_worker_start_does_not_require_embeddings(monkeypatch):
     import pipeline.worker as module
 
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.cfg = SimpleNamespace(database_url="postgres://test")
     worker.stopping = asyncio.Event()
     worker.textproc = SimpleNamespace(aclose=AsyncMock())
@@ -345,7 +355,7 @@ async def test_worker_loop_heartbeats_and_drains_background_when_embeddings_are_
     client, keys = scheduled
     heartbeat = keys[-1] + ":heartbeat"
     monkeypatch.setattr(module, "WORKER_HEARTBEAT", heartbeat)
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.redis = client
     worker.stopping = asyncio.Event()
     worker.cfg = SimpleNamespace(queue_timeout=1, visibility_timeout=300)
@@ -365,7 +375,7 @@ async def test_process_heartbeat_is_independent_of_long_provider_work(monkeypatc
     """A long API call/backoff must not make a live process look crashed."""
     import pipeline.worker as module
 
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.stopping = asyncio.Event()
     writes = []
 
@@ -416,7 +426,7 @@ async def test_worker_reaper_does_not_enqueue_twice(scheduled, monkeypatch):
     import pipeline.worker as module
     client, keys = scheduled
     monkeypatch.setattr(module, "PROCESSING_STARTED", keys[2])
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.redis = client
     worker.cfg = SimpleNamespace(visibility_timeout=1)
     raw = message(7)
@@ -429,7 +439,7 @@ async def test_worker_reaper_does_not_enqueue_twice(scheduled, monkeypatch):
 @pytest.mark.parametrize("fail", [False, True])
 async def test_shutdown_preserves_work_that_completes_with_the_signal(scheduled, fail):
     client, keys = scheduled
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.redis = client
     worker.stopping = asyncio.Event()
     worker.cfg = SimpleNamespace(queue_timeout=1, visibility_timeout=300)
@@ -452,7 +462,7 @@ async def test_shutdown_preserves_work_that_completes_with_the_signal(scheduled,
 
 async def test_shutdown_cancels_current_claim_and_requeues_after_cleanup(scheduled):
     client, keys = scheduled
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.redis = client
     worker.stopping = asyncio.Event()
     worker.cfg = SimpleNamespace(queue_timeout=1, visibility_timeout=300)
@@ -485,7 +495,7 @@ async def test_shutdown_cancels_current_claim_and_requeues_after_cleanup(schedul
 
 async def test_shutdown_cancels_background_rebuild_promptly(scheduled):
     client, _ = scheduled
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.redis = client
     worker.stopping = asyncio.Event()
     worker.cfg = SimpleNamespace(queue_timeout=1)
@@ -510,7 +520,7 @@ async def test_shutdown_cancels_background_rebuild_promptly(scheduled):
 
 
 async def test_completed_pointer_does_not_repeat_any_model_work():
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.db = object()
     worker._fetch_one = AsyncMock(return_value=("hash", "uri", {}, "done", True, "saved"))
     await worker._handle(message(4))
@@ -538,7 +548,7 @@ async def test_runtime_reservation_requeues_without_losing_chapter(scheduled):
             self.calls.append((sql, params))
             return Cursor()
 
-    worker=Worker.__new__(Worker)
+    worker=worker_stub()
     worker.redis=client
     worker.db=DB()
     worker.stopping=asyncio.Event()
@@ -566,7 +576,7 @@ async def test_embed_unavailable_does_not_block_chapter_claim(scheduled, monkeyp
     client, keys = scheduled
     heartbeat = keys[-1] + ":heartbeat"
     monkeypatch.setattr(module, "WORKER_HEARTBEAT", heartbeat)
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.redis = client
     worker.stopping = asyncio.Event()
     worker.cfg = SimpleNamespace(queue_timeout=1, visibility_timeout=300)
@@ -613,7 +623,7 @@ async def test_deletion_cancels_inference_releases_claim_and_runs_next_novel(
         monkeypatch.setattr(module.psycopg.AsyncConnection, "connect", unavailable_once)
     deleted = await make_novel(db_conn)
     next_novel = await make_novel(db_conn)
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.redis = client
     worker.stopping = asyncio.Event()
     worker.cfg = make_config(database_url=os.getenv(
@@ -670,7 +680,7 @@ async def test_deletion_cancels_inference_releases_claim_and_runs_next_novel(
 
 
 async def test_claim_cancellation_waits_for_work_and_watcher_cleanup():
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     started, cleaned = asyncio.Event(), asyncio.Event()
     worker._watch_novel = keep_novel_alive
     async def handle(raw):
@@ -693,7 +703,7 @@ async def test_claim_cancellation_waits_for_work_and_watcher_cleanup():
 async def test_deleted_novel_stage_error_does_not_write_failure_history(db_conn, monkeypatch):
     import pipeline.worker as module
     novel = await make_novel(db_conn)
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.db, worker.cfg = db_conn, make_config()
     worker.redis = AsyncMock()
     worker.minio = worker.cache = worker.textproc = worker.embed_provider = None
@@ -751,7 +761,7 @@ async def test_failure_history_survives_retry_without_recording_private_payload(
 async def test_enrichment_failure_cannot_hide_valid_translation(db_conn, monkeypatch, failed_stage):
     import pipeline.worker as module
     novel = await make_novel(db_conn)
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.db, worker.cfg = db_conn, make_config()
     worker.redis = AsyncMock()
     worker.minio = worker.cache = worker.textproc = worker.embed_provider = None
@@ -819,7 +829,7 @@ async def test_enrichment_failure_cannot_hide_valid_translation(db_conn, monkeyp
 async def test_fresh_translation_yields_before_optional_enrichment(db_conn, monkeypatch):
     import pipeline.worker as module
     novel = await make_novel(db_conn)
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.db, worker.cfg = db_conn, make_config()
     worker.redis = AsyncMock()
     worker.minio = worker.cache = worker.textproc = worker.embed_provider = None
@@ -860,7 +870,7 @@ async def test_fresh_translation_yields_before_optional_enrichment(db_conn, monk
 async def test_legacy_readable_pointer_is_demoted_before_enrichment(db_conn, monkeypatch):
     import pipeline.worker as module
     novel = await make_novel(db_conn)
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.db, worker.cfg = db_conn, make_config()
     worker.redis = AsyncMock()
     worker.minio = worker.cache = worker.textproc = worker.embed_provider = None
@@ -929,7 +939,7 @@ async def test_shared_cooldown_deferral_does_not_spend_a_provider_attempt():
         async def __aenter__(self): return self
         async def __aexit__(self, *exc): return False
 
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.db = DB()
     msg = type("Message", (), {"novel_id": "novel", "chapter_index": 1})()
     exc = AdmissionRejected(retry_after_s=1092, category="quota_exhausted")
@@ -958,7 +968,7 @@ async def test_provider_cache_rebuilds_when_novel_config_changes(monkeypatch):
     monkeypatch.setattr(module, "coordinated_provider", lambda provider, *a, **k: provider)
     monkeypatch.setattr(module, "build_names_provider", lambda *a, **k: None)
     monkeypatch.setattr(module, "build_resolve_provider", lambda *a, **k: None)
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.cfg = make_config()
     worker.db = worker.redis = None
     worker._provider_cache, worker._provider_rows = {}, {}
@@ -980,7 +990,7 @@ async def test_provider_change_returns_in_flight_claim_to_pending(scheduled):
     import pipeline.worker as module
 
     client, keys = scheduled
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.redis = client
     worker.stopping = asyncio.Event()
     worker.cfg = make_config()
@@ -1041,6 +1051,8 @@ async def test_failed_manual_graph_retry_does_not_schedule_an_automatic_one(
             raise RuntimeError("stage broke")
 
     async def fetch_one(sql, params):
+        if "SELECT enrichment_discarded" in sql:
+            return (False,)
         if "FROM chapter" in sql:
             return ("hash", "raw/1", {}, "error", True, None, False)
         if "active_record_generation" in sql:
@@ -1052,7 +1064,7 @@ async def test_failed_manual_graph_retry_does_not_schedule_an_automatic_one(
 
     monkeypatch.setattr(module, "DEFAULT_STAGES", [Boom()])
     monkeypatch.setattr(module, "record_failure", record_failure)
-    worker = Worker.__new__(Worker)
+    worker = worker_stub()
     worker.db = DB()
     worker.cfg = make_config()
     worker.redis = AsyncMock()

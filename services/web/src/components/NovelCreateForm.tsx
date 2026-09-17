@@ -97,6 +97,82 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
         <input value={targetLang} onChange={(e) => setTargetLang(e.target.value)} placeholder="en" />
       </label>
 
+      <fieldset>
+        <legend>Translation and AI features</legend>
+        <p className="novel-create-form-hint">This provider and model handle translation, story knowledge, and Ask AI. You can choose separate translation and AI models in Book settings after creation. Hosted providers need an API key, with no Ollama server required.</p>
+        <label>
+          Provider for this book{" "}
+          <span className="novel-create-form-hint">(leave as default to use the server's)</span>
+          <select value={provider} onChange={(e) => chooseProvider(e.target.value as ProviderName | "")}>
+            <option value="">Server default</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="gemini">Gemini</option>
+            <option value="groq">Groq</option>
+            <option value="ollama">Ollama (local)</option>
+            <option value="custom">Custom API (OpenAI-compatible)</option>
+          </select>
+        </label>
+        {provider && (
+          <>
+            {provider !== "custom" && (
+              <label>
+                Model
+                <select
+                  value={customModel ? CUSTOM_MODEL : model}
+                  onChange={(e) => chooseModel(e.target.value)}
+                >
+                  {MODEL_OPTIONS[provider].map((option) => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
+                  ))}
+                  <option value={CUSTOM_MODEL}>Other…</option>
+                </select>
+              </label>
+            )}
+            {(customModel || provider === "custom") && (
+              <label>
+                Model name
+                <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Exact model ID" required={provider === "custom"} />
+              </label>
+            )}
+            {provider !== "ollama" ? (
+              accountKeyProviders.has(provider) ? (
+                <p className="novel-create-form-hint">
+                  This book will use the {PROVIDER_LABELS[provider]} key from Account settings.
+                </p>
+              ) : (
+                <p className="novel-create-form-hint">
+                  No {PROVIDER_LABELS[provider]} key is saved yet. The book can still be created — add the key
+                  under Account settings → Provider keys before its first chapter runs.
+                </p>
+              )
+            ) : (
+              <label>
+                Base URL <span className="novel-create-form-hint">(blank = server's OLLAMA_HOST)</span>
+                <input
+                  value={baseURL}
+                  onChange={(e) => setBaseURL(e.target.value)}
+                  placeholder="http://localhost:11434"
+                />
+              </label>
+            )}
+            {provider === "custom" && (
+              <label>
+                API base URL
+                <span className="novel-create-form-hint">Include the API version path, such as /v1.</span>
+                <input
+                  type="url"
+                  value={baseURL}
+                  onChange={(e) => setBaseURL(e.target.value)}
+                  placeholder="https://models.example.com/v1"
+                  required
+                />
+              </label>
+            )}
+          </>
+        )}
+      </fieldset>
+
       <details className="novel-create-form-advanced">
         <summary>Advanced settings</summary>
         <div className="novel-create-form-advanced-content">
@@ -104,80 +180,6 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
             Genre <span className="novel-create-form-hint">(optional — selects a preset ontology)</span>
             <input value={genre} onChange={(e) => setGenre(e.target.value)} placeholder="xianxia" />
           </label>
-          <fieldset>
-            <legend>Translation provider and model</legend>
-            <label>
-              Translation provider{" "}
-              <span className="novel-create-form-hint">(leave as default to use the server's)</span>
-              <select value={provider} onChange={(e) => chooseProvider(e.target.value as ProviderName | "")}>
-                <option value="">Server default</option>
-                <option value="deepseek">DeepSeek</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="gemini">Gemini</option>
-                <option value="groq">Groq</option>
-                <option value="ollama">Ollama (local)</option>
-                <option value="custom">Custom API (OpenAI-compatible)</option>
-              </select>
-            </label>
-            {provider && (
-              <>
-                {provider !== "custom" && (
-                  <label>
-                    Model
-                    <select
-                      value={customModel ? CUSTOM_MODEL : model}
-                      onChange={(e) => chooseModel(e.target.value)}
-                    >
-                      {MODEL_OPTIONS[provider].map((option) => (
-                        <option key={option.id} value={option.id}>{option.label}</option>
-                      ))}
-                      <option value={CUSTOM_MODEL}>Other…</option>
-                    </select>
-                  </label>
-                )}
-                {(customModel || provider === "custom") && (
-                  <label>
-                    Model name
-                    <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Exact model ID" required={provider === "custom"} />
-                  </label>
-                )}
-                {provider !== "ollama" ? (
-                  accountKeyProviders.has(provider) ? (
-                    <p className="novel-create-form-hint">
-                      This book will use the {PROVIDER_LABELS[provider]} key from Account settings.
-                    </p>
-                  ) : (
-                    <p className="novel-create-form-hint">
-                      No {PROVIDER_LABELS[provider]} key is saved yet. The book can still be created — add the key
-                      under Account settings → Provider keys before its first chapter runs.
-                    </p>
-                  )
-                ) : (
-                  <label>
-                    Base URL <span className="novel-create-form-hint">(blank = server's OLLAMA_HOST)</span>
-                    <input
-                      value={baseURL}
-                      onChange={(e) => setBaseURL(e.target.value)}
-                      placeholder="http://localhost:11434"
-                    />
-                  </label>
-                )}
-                {provider === "custom" && (
-                  <label>
-                    API base URL
-                    <span className="novel-create-form-hint">Include the API version path, such as /v1.</span>
-                    <input
-                      type="url"
-                      value={baseURL}
-                      onChange={(e) => setBaseURL(e.target.value)}
-                      placeholder="https://models.example.com/v1"
-                      required
-                    />
-                  </label>
-                )}
-              </>
-            )}
-          </fieldset>
 
           <fieldset>
             <legend>How far ahead to work</legend>

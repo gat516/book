@@ -102,6 +102,15 @@ document.
 - `eval/` holds the resolution accuracy metric (workstream A) — run it after any prompt,
   model, or resolve change.
 
+Hosted-only setup now includes account-level semantic-search settings (migration 0108).
+`EMBED_PROVIDER=auto` uses an available saved/env Gemini key or leaves search off;
+Settings can override it with Gemini, OpenRouter, Off, or the server configuration.
+Translation and AI features share the book’s completion provider with separate models;
+embeddings use an independent provider. Both workers resolve saved embedding settings
+and keys without restarting. Chunk vectors carry `embedding_space` provenance so Ask AI
+never compares vectors from different providers/models/endpoints. Older untagged vectors
+are excluded from semantic search; existing text and published knowledge are preserved.
+
 ## Commands
 
 ```bash

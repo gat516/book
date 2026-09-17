@@ -201,7 +201,7 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
 
   return (
     <details className="reader-settings settings-section" id="provider-config" open={defaultOpen || undefined}>
-      <summary>Translation and reader-feature models</summary>
+      <summary>Translation and AI features</summary>
       {loading ? (
         <p>Loading…</p>
       ) : (
@@ -212,7 +212,7 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
               <dl>
                 <div><dt>Provider</dt><dd>{PROVIDER_LABELS[current.provider]}</dd></div>
                 <div><dt>Translation</dt><dd>{current.translate_model ?? current.model ?? "Server default"}</dd></div>
-                <div><dt>Reader features</dt><dd>{current.extract_model ?? current.model ?? "Server default"}</dd></div>
+                <div><dt>AI features</dt><dd>{current.extract_model ?? current.model ?? "Server default"}</dd></div>
                 {(current.provider === "ollama" || current.provider === "custom") && (
                   <div><dt>Endpoint</dt><dd>{current.base_url || "Book server default"}</dd></div>
                 )}
@@ -227,7 +227,7 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
           </div>
 
           <label>
-            Provider{" "}
+            Provider for this book{" "}
             <select value={provider} onChange={(e) => chooseProvider(e.target.value as ProviderName)}>
               {PROVIDERS.map((name) => (
                 <option key={name} value={name}>
@@ -237,6 +237,9 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
             </select>
           </label>
 
+          <p className="settings-help">This provider handles both translation and AI features. You can choose a different model for each role below. Save its API key once in Account settings.</p>
+          <fieldset className="provider-role"><legend>Translation</legend>
+          <p className="settings-help">Produces the chapter text you read in the target language.</p>
           {provider !== "custom" && (
             <label>
               Translation model
@@ -255,9 +258,12 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
             </label>
           )}
           {!custom && selectedNote && <p className="novel-create-form-hint">{selectedNote}</p>}
+          </fieldset>
+          <fieldset className="provider-role"><legend>AI features</legend>
+          <p className="settings-help">Extracts characters and story knowledge, and answers Ask AI questions using chapters you have read.</p>
           {provider !== "custom" && (
             <label>
-              Reader-feature model
+              AI features model
               <select value={extractionCustom ? CUSTOM_MODEL : extractionModel} onChange={(e) => chooseExtractionModel(e.target.value)}>
                 {MODEL_OPTIONS[provider].map((option) => (
                   <option key={option.id} value={option.id}>{option.label}</option>
@@ -268,10 +274,12 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
           )}
           {(extractionCustom || provider === "custom") && (
             <label>
-              Reader-feature model name
+              AI features model name
               <input value={extractionModel} onChange={(e) => setExtractionModel(e.target.value)} placeholder="Exact model ID" required={provider === "custom"} />
             </label>
           )}
+          </fieldset>
+          <p className="settings-help">Optional semantic search helps Ask AI find chapter passages. Configure it separately in Account settings → Semantic search.</p>
           {MODEL_LIST_IS_ADVISORY[provider] && (
             <p className="novel-create-form-hint">
               Ollama serves whatever is pulled on the host, so this list is a hint — a model
