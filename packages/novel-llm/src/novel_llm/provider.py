@@ -59,6 +59,7 @@ class BatchResult(TypedDict):
     error: str | None
     served_provider: str
     served_model: str
+    error_category: NotRequired[str]
 
 
 class AdmissionRejected(Exception):
@@ -92,13 +93,22 @@ class AdmissionRejected(Exception):
 
 
 class ProviderError(Exception):
-    """A normalized, non-retryable provider failure.
+    """A normalized provider failure; the caller owns bounded recovery policy.
 
     Providers must raise one of the specific subclasses below instead of exposing SDK
     exception types to pipeline code (§5.4).
     """
 
     category = "provider_error"
+
+
+class ProviderResponseError(ProviderError, RuntimeError):
+    """Safe provider rejection; no upstream prose crosses the provider seam (§5.4)."""
+
+    def __init__(self, category: str):
+        allowed = {"provider_invalid_json", "provider_bad_request", "credential_rejected", "model_not_available", "provider_content_filtered"}
+        self.category = category if category in allowed else "provider_bad_request"
+        super().__init__(self.category)
 
 
 class RequestBudgetExceeded(ProviderError):
@@ -117,6 +127,11 @@ class TruncatedOutput(ProviderError):
     """The provider stopped at its output limit before a complete answer."""
 
     category = "truncated_output"
+
+    def __init__(self, message: str, *, finish_reason: str | None = None):
+        self.finish_reason = finish_reason if finish_reason in {"length", "max_tokens"} else None
+        self.category = "output_limit" if self.finish_reason else "truncated_output"
+        super().__init__(message)
 
 
 class PinnedModelChanged(ProviderError):
@@ -214,6 +229,8 @@ class SequentialBatchMixin:
                 message = str(exc) or repr(exc)
                 results.append({"id": req["id"], "output": "", "error": f"{type(exc).__name__}: {message}",
                                 "served_provider": "", "served_model": ""})
+                if isinstance(exc, ProviderError):
+                    results[-1]["error_category"] = exc.category
         batch_id = uuid.uuid4().hex
         self._batches[batch_id] = results
         return batch_id

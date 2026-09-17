@@ -6,7 +6,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 A novel translation + knowledge graph engine: ingests web-serial novels (zh→en),
 builds a chapter-versioned knowledge graph (entities, facts, edges), and serves a
-spoiler-aware reader experience. **`instructions.md` is the build spec and the single
+spoiler-aware reader experience. **`docs/instructions.md` is the build spec and the single
 source of truth** — every design decision derives from its §0 core principles. Read
 the relevant section before implementing anything; cite sections (e.g. §5.4) in code
 comments and commit messages where the spec drove the decision.
@@ -21,9 +21,44 @@ Non-negotiable principles (spec §0, short form):
 - **Genre-agnostic:** the ontology is per-novel data (JSON), never hardcoded.
 - **Ingestion is offline + idempotent:** content-hash keyed, never on the request path.
 
+## Start here: current paths and focused investigation
+
+The spec is **`docs/instructions.md`**, and the original plan is `docs/PLAN.md`.
+Older handoffs may say the root spec is missing or services are stopped; verify current
+files and service state instead of treating those historical observations as current.
+Use `rg` within the relevant paths below before searching the whole repository.
+
+| Task | Start with |
+| --- | --- |
+| Hosted provider request/error | `packages/novel-llm/src/novel_llm/hosted.py`, `groq.py`, `provider.py` |
+| Provisional term choice / hovercard naming | `services/pipeline/pipeline/display_names.py`, `term_choices.py`, `stages/display_scan.py`; legacy offline name tools: `stages/character_names.py` |
+| Retry scheduling / durable failure | `services/pipeline/pipeline/worker.py`, `failures.py`, `batch.py` |
+| Reader retry explanation / spoiler gate | `services/reader-api/records.go`, `store.go`; `services/web/src/recordStatus.ts` |
+| Reader-feature controls / top status | `services/web/src/components/KnowledgeGraphControls.tsx`, `RecordStatusBanner.tsx`, `ReaderPane.tsx` |
+| Chapter diagnostics (no duplicate build controls) | `services/web/src/components/ChapterKnowledgeWorkspace.tsx` |
+| Translation vs AI provider selection | `services/ingest-api/provider_config.go`; pipeline worker `_provider_for_novel`; `services/askai/askai/app.py` |
+| Optional hosted embeddings | `services/ingest-api/embedding_config.go`, `packages/novel-llm/src/novel_llm/embedding_config.py` |
+| Running local services | `deploy/systemd/`, `scripts/with-env.sh`; Go units rebuild on restart |
+
+For provider incidents, read **`packages/novel-llm/TROUBLESHOOTING.md`** for the diagnostic
+sequence, retry semantics, privacy boundaries, and focused checks. Diagnose the named
+chapter first; avoid broad logs, unrelated service exploration, and repeated full suites.
+
+Current additions (September 17, 2026): hosted setup without Ollama and optional semantic
+search shipped in `96cd91f` (migration 0108). Groq structured-output recovery and clearer
+reader errors use existing DB permissions; **no 0109 migration is required**. The reader
+has one top feature-status/control panel. “Build reader features” resumes unfinished
+work across the book in chapter order; do not reintroduce a separate chapter build button.
+
+Normal ingestion now skips the standalone `CharacterNamesStage`. Existing display
+alignment supplies term types, and `term_choices.py` chooses one stable provisional
+spelling using the established Pinyin/foreign-name/title rules, without extra LLM calls.
+Hovercards approve/correct it; future translations reuse earlier choices. Saved prose and
+approved glossary entries are preserved. See `services/pipeline/README.md`.
+
 ## Current state (update as milestones land)
 
-The Milestone-1 vertical slice is complete end-to-end (PLAN.md Phases 1–5): local infra
+The Milestone-1 vertical slice is complete end-to-end (docs/PLAN.md Phases 1–5): local infra
 (compose), migrations through 0008, the Go `ingest-api` paste path, the Python
 `pipeline` worker (stages: CHUNK, TRANSLATE, CHARACTER-NAMES, SCAN, RECORDS,
 DISPLAY-SCAN), the Go `reader-api` spoiler gate (RLS + app-layer, plus a

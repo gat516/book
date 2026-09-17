@@ -1,19 +1,19 @@
-"""Pre-translation source authority for names and stable semantic terms.
+"""Legacy standalone source-name inventory for explicit offline repair tools.
 
-This stage is intentionally independent of graph resolution.  It may discover exact
-source surfaces and propose restored foreign names or translated personal titles with
-an LLM. Only deterministic Pinyin may auto-lock; model suggestions need human approval.
+Normal ingestion uses display alignment and term_choices instead of this batched
+inventory. Kept for compatibility with saved checkpoints and manual review tooling.
 """
 from __future__ import annotations
 
 import json
 import logging
 import re
+from collections import deque
 
-from psycopg.types.json import Jsonb
+from novel_llm.provider import ProviderResponseError, TruncatedOutput
 
 from pipeline.context import PipelineState, StageContext
-from pipeline.evidence import digest, stable_id
+from pipeline.evidence import digest
 from pipeline.jobs import (
     idempotency_key,
     insert_job,
@@ -24,10 +24,9 @@ from pipeline.jobs import (
 )
 from pipeline.llm.provider import Class
 from pipeline.name_checkpoints import NameCheckpoints, uncached_completion
-from pipeline.name_renderings import conventional_english_names
 from pipeline.passages import source_passages
-from pipeline.pinyin_names import GENERIC_TITLES, NameCandidate, NamePlan, plan_character_name
-from pipeline.glossary_locks import _lock_glossary
+from pipeline.pinyin_names import NamePlan
+from pipeline.term_choices import _record_surface, _rendering_plan, _refresh_pending
 
 log = logging.getLogger(__name__)
 STAGE = "character_names"
@@ -53,27 +52,6 @@ def _batches(source: str, *, byte_budget: int = 8000, max_passages: int = 20):
         size += cost
     if current:
         yield current
-
-
-def _rendering_plan(surface: str, rendering: str, targets: list[str], target_lang: str = "en") -> NamePlan:
-    conventional = conventional_english_names(surface) if target_lang.split("-")[0] == "en" else ()
-    if conventional:
-        suggestions = tuple(targets) if rendering == "foreign_personal" else ()
-        candidates = tuple(NameCandidate(target, (), "", "restored_name")
-                           for target in dict.fromkeys(conventional + suggestions))[:8]
-        return NamePlan(candidates, None, "restored_name", "foreign_person", "restored_name")
-    if rendering == "chinese_personal" or surface in GENERIC_TITLES:
-        # A Chinese personal name's literal meaning is NOT its display spelling.
-        return plan_character_name(surface)
-    if rendering == "semantic_term":
-        candidates = tuple(NameCandidate(target, (), "", "semantic_translation")
-                           for target in dict.fromkeys(targets))
-        return NamePlan(candidates, None, "semantic_translation", "semantic_term", "semantic_translation")
-    method = {"foreign_personal": "restored_name", "titled_person": "translated_title"}[rendering]
-    role = {"foreign_personal": "foreign_person", "titled_person": "personal_title"}[rendering]
-    candidates = tuple(NameCandidate(target, (), "", method) for target in dict.fromkeys(targets))
-    # Never auto-approve a model's restoration, even when it offers only one spelling.
-    return NamePlan(candidates, None, method, role, method)
 
 
 async def _discover(ctx: StageContext, source: str, *, complete=uncached_completion) -> dict[str, NamePlan]:
@@ -103,7 +81,7 @@ async def _discover(ctx: StageContext, source: str, *, complete=uncached_complet
         "Suggestions control terminology only, never character identity or facts. "
         "Return JSON only and set reviewed=true after checking the whole batch."
     )
-    for batch in _batches(source):
+    async def discover_batch(batch):
         batch_surfaces: set[str] = set()
         ids = [p["id"] for p in batch]
         schema = {
@@ -179,6 +157,26 @@ async def _discover(ctx: StageContext, source: str, *, complete=uncached_complet
                     batch_surfaces.add(surface)
                 elif rendering != "not_character":
                     log.warning("character_names: rejected non-literal proposal %r", item)
+        return batch_surfaces
+
+    pending = deque(_batches(source))
+    while pending:
+        batch = pending.popleft()
+        try:
+            batch_surfaces = await discover_batch(batch)
+        except (ProviderResponseError, TruncatedOutput, json.JSONDecodeError) as exc:
+            if isinstance(exc, ProviderResponseError) and exc.category != "provider_invalid_json":
+                raise
+            if len(batch) <= 1:
+                raise
+            # Retry only malformed/incomplete output, with strictly smaller passage
+            # batches. Preserve passage IDs, source order, validators and successful
+            # checkpoints (§0); no provider fallback or unbounded retry loop.
+            middle = len(batch) // 2
+            pending.appendleft(batch[middle:])
+            pending.appendleft(batch[:middle])
+            log.warning("character_names: splitting unreadable response batch passages=%d", len(batch))
+            continue
         ambiguous = {surface: found[surface] for surface in batch_surfaces
                      if (found[surface].term_role == "chinese_person"
                          and found[surface].auto_target is None)
@@ -189,8 +187,10 @@ async def _discover(ctx: StageContext, source: str, *, complete=uncached_complet
             # conservative first-pass plans instead of failing all fact extraction.
             try:
                 found.update(await _focused_renderings(ctx, batch, ambiguous, complete=complete))
-            except ValueError:
-                log.warning("character_names: rejected malformed focused rendering batch", exc_info=True)
+            except (ValueError, TruncatedOutput, ProviderResponseError) as exc:
+                if isinstance(exc, ProviderResponseError) and exc.category != "provider_invalid_json":
+                    raise
+                log.warning("character_names: rejected malformed focused rendering batch")
     return found
 
 
@@ -257,84 +257,6 @@ async def _focused_renderings(ctx: StageContext, passages: list[dict], plans: di
         if seen != set(surfaces):
             raise ValueError("focused term rendering omitted or duplicated a surface")
         return result
-
-
-def _evidence_for(source: str, start: int, end: int) -> str:
-    left = max(source.rfind("。", 0, start), source.rfind("\n", 0, start)) + 1
-    stop = source.find("。", end)
-    right = min(len(source), stop + 1 if stop >= 0 else end + 180)
-    return source[left:right]
-
-
-async def _record_surface(ctx: StageContext, state: PipelineState, surface: str, plan: NamePlan | None = None) -> bool:
-    source = state.envelope.raw_text
-    chapter = state.envelope.chapter_index
-    source_hash = digest(source)
-    matches = list(re.finditer(re.escape(surface), source))
-    if not matches:
-        return False
-    first = matches[0]
-    quote = _evidence_for(source, first.start(), first.end())
-    plan = plan or plan_character_name(surface)
-    if plan.reason in {"generic_title", "not_simple_hanzi_name", "missing_pinyin"}:
-        log.warning("character_names: rejected invalid character surface %r (%s)", surface, plan.reason)
-        return False
-
-    row = await (await ctx.db.execute(
-        "SELECT status,selected_target FROM character_name_review WHERE novel_id=%s AND source_term=%s",
-        (ctx.novel.id, surface),
-    )).fetchone()
-    if row is None:
-        await ctx.db.execute("""INSERT INTO character_name_review
-            (novel_id,source_term,first_seen_chapter,source_hash,char_start,char_end,quote,candidates,reason)
-            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
-            (ctx.novel.id, surface, chapter, source_hash, first.start(), first.end(), quote,
-             Jsonb([candidate.as_dict() for candidate in plan.candidates]), plan.reason))
-        row = await (await ctx.db.execute(
-            "SELECT status,selected_target FROM character_name_review WHERE novel_id=%s AND source_term=%s",
-            (ctx.novel.id, surface),
-        )).fetchone()
-        status, selected = row
-    else:
-        status, selected = row
-
-    for match in matches:
-        occurrence_quote = _evidence_for(source, match.start(), match.end())
-        occurrence_id = stable_id(ctx.novel.id, chapter, source_hash, match.start(), match.end(), "character-name")
-        await ctx.db.execute("""INSERT INTO character_name_occurrence
-            (id,novel_id,chapter_index,source_hash,source_term,char_start,char_end,quote)
-            VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
-            (occurrence_id, ctx.novel.id, chapter, source_hash, surface,
-             match.start(), match.end(), occurrence_quote))
-
-    if status == "approved":
-        return False
-    if plan.auto_target:
-        version = await _lock_glossary(
-            ctx.db, novel_id=ctx.novel.id, source_term=surface,
-            target_term=plan.auto_target, entity_id=None, chapter=chapter,
-            target_lang=ctx.novel.target_lang, require_corroboration=False,
-            constraint_class="character_name",
-        )
-        if version is not None:
-            await ctx.db.execute("""UPDATE character_name_review SET status='approved',
-                selected_target=%s,selection_source='deterministic',reviewed_by='deterministic',reviewed_at=now(),updated_at=now()
-                WHERE novel_id=%s AND source_term=%s""",
-                (plan.auto_target, ctx.novel.id, surface))
-            return False
-    await _refresh_pending(ctx.db, ctx.novel.id, surface, plan, chapter)
-    return True
-
-
-async def _refresh_pending(db, novel_id: str, surface: str, plan: NamePlan, chapter: int) -> None:
-    # Refresh stale pinyin-only choices without changing approved spellings or using
-    # a later chapter to change the evidence shown at an earlier reader gate (§0).
-    await db.execute("""UPDATE character_name_review SET candidates=%s,reason=%s,
-        term_role=%s,rendering_method=%s,updated_at=now()
-        WHERE novel_id=%s AND source_term=%s AND status='pending' AND first_seen_chapter=%s""",
-        (Jsonb([candidate.as_dict() for candidate in plan.candidates]), plan.reason,
-         plan.term_role, plan.rendering_method,
-         novel_id, surface, chapter))
 
 
 class CharacterNamesStage:

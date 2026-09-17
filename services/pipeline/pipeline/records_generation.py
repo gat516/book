@@ -27,6 +27,15 @@ class GenerationFenceError(RuntimeError):
     """The chapter was extracted against a generation that cannot safely publish."""
 
 
+class EarlierChapterPending(RuntimeError):
+    """An extraction dependency is unfinished; this is not a failed attempt (§0)."""
+
+    def __init__(self, chapter: int, generation_id: str):
+        self.chapter = chapter
+        self.generation_id = generation_id
+        super().__init__(f"waiting for chapter {chapter}")
+
+
 @dataclass(frozen=True)
 class GenerationPin:
     id: str
@@ -196,7 +205,7 @@ async def prepare_generation(ctx: StageContext, state: PipelineState) -> Generat
         # identities. Do not accept chapter N while a lower saved/translated chapter
         # in this generation is still missing a published run.
         missing = await (await ctx.db.execute(
-            """SELECT 1
+            """SELECT c.chapter_index
                  FROM chapter c
                 WHERE c.novel_id=%s AND c.chapter_index < %s
                   AND c.translation_ready
@@ -205,13 +214,11 @@ async def prepare_generation(ctx: StageContext, state: PipelineState) -> Generat
                      WHERE r.novel_id=c.novel_id AND r.generation_id=%s
                        AND r.chapter_index=c.chapter_index AND r.status='published'
                   )
-                LIMIT 1""",
+                ORDER BY c.chapter_index LIMIT 1""",
             (ctx.novel.id, state.envelope.chapter_index, gid),
         )).fetchone()
         if missing:
-            raise GenerationFenceError(
-                f"chapter {state.envelope.chapter_index} is out of order; earlier records are unpublished"
-            )
+            raise EarlierChapterPending(int(missing[0]), str(gid))
     pin = GenerationPin(
         id=str(gid), requested_model=requested.requested_model,
         prompt_version=requested.prompt_version, checks_version=requested.checks_version,

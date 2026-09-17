@@ -27,10 +27,11 @@ class BatchProtocolError(BatchError):
 class BatchRequestFailed(BatchError):
     """A provider completed the batch but failed this individual request."""
 
-    def __init__(self, request_id: str, error: str) -> None:
+    def __init__(self, request_id: str, error: str, category: str | None = None) -> None:
         super().__init__(f"batch request {request_id!r} failed: {error}")
         self.request_id = request_id
         self.error = error
+        self.category = category
 
 
 class RequestTooLarge(BatchError):
@@ -127,5 +128,5 @@ class BatchManager:
 
         result = matching[0]
         if result["error"] is not None:
-            raise BatchRequestFailed(request_id, result["error"])
+            raise BatchRequestFailed(request_id, result["error"], result.get("error_category"))
         return result

@@ -903,10 +903,8 @@ def test_translation_is_the_reader_critical_path_before_enrichment():
 
     names = [stage.name for stage in DEFAULT_STAGES]
     assert names[:2] == ["chunk", "translate"]
-    # Enrichment order after translation: terminology and occurrences first, then records
-    # (discovery, checks, who's-who, rendering), then display alignment, which needs both
-    # the locked glossary and the identities records published.
-    assert names[2:] == ["character_names", "scan", "records", "display_scan"]
+    # Name choices reuse display alignment, with no independent inventory calls.
+    assert names[2:] == ["scan", "records", "display_scan"]
 
 
 async def test_enrichment_retries_are_deduplicated_and_yield_to_reading(scheduled):

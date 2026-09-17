@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -37,6 +38,7 @@ class TermAlignment(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     display_term: str
     source_term: str
+    term_role: Literal["chinese_person", "foreign_person", "personal_title", "semantic_term"] = "semantic_term"
 
 
 class TermAlignmentProposal(BaseModel):
@@ -51,12 +53,17 @@ class TermRenderingOccurrence:
     char_start: int
     char_end: int
     method: str = "aligned"
+    term_role: str = "semantic_term"
 
 
 ALIGN_SYSTEM = """Map each offered displayed name to the exact source-language term it translates.
 Return JSON with alignments: [{"display_term": exact offered display name,
-"source_term": exact substring copied from source}]. Omit uncertain mappings. Never
-translate, rewrite, merge identities, or invent text. This is terminology alignment only."""
+"source_term": exact substring copied from source, "term_role": one of
+chinese_person, foreign_person, personal_title, semantic_term}]. Classify ordinary
+Chinese personal names as chinese_person (they use Pinyin), foreign/transcribed names as
+foreign_person, meaningful personal titles as personal_title, and other named terms as
+semantic_term. Omit uncertain mappings. Never translate, rewrite, propose alternate
+spellings, merge identities, or invent text. This is terminology alignment only."""
 
 
 async def discover_names(ctx: StageContext, text: str) -> list[Span]:
@@ -120,7 +127,7 @@ async def align_names(
     payload = json.dumps({"source": source, "translation": display,
                           "display_names": display_names}, ensure_ascii=False)
     key = hashlib.sha256(json.dumps([
-        "display-alignment-v1", ALIGN_SYSTEM, TermAlignmentProposal.model_json_schema(),
+        "display-alignment-v2-single-choice", ALIGN_SYSTEM, TermAlignmentProposal.model_json_schema(),
         payload, requested_id,
     ], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     cached = await ctx.cache.get(key)
@@ -142,6 +149,7 @@ async def align_names(
             return await align_names(ctx, source, display, spans)
 
     by_display: dict[str, str | None] = {}
+    roles: dict[str, str] = {}
     offered = set(display_names)
     for item in proposal.alignments:
         if (item.display_term not in offered or item.source_term not in source
@@ -152,7 +160,9 @@ async def align_names(
             by_display[item.display_term] = None
         elif item.display_term not in by_display:
             by_display[item.display_term] = item.source_term
-    return [TermRenderingOccurrence(source, term, span.char_start, span.char_end)
+            roles[item.display_term] = item.term_role
+    return [TermRenderingOccurrence(source, term, span.char_start, span.char_end,
+                                    term_role=roles[term])
             for span in spans
             for term in [display[span.char_start:span.char_end]]
             for source in [by_display.get(term)] if source]

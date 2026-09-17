@@ -25,12 +25,14 @@ type AskProviderError struct {
 func (e *AskProviderError) Error() string { return "ask-ai provider failure: " + e.Category }
 
 var askProviderCategories = map[string]bool{
-	"credential_missing":  true,
-	"credential_rejected": true,
-	"model_not_available": true,
-	"rate_limited":        true,
-	"quota_exhausted":     true,
-	"model_server_error":  true,
+	"provider_invalid_json": true,
+	"provider_bad_request":  true,
+	"credential_missing":    true,
+	"credential_rejected":   true,
+	"model_not_available":   true,
+	"rate_limited":          true,
+	"quota_exhausted":       true,
+	"model_server_error":    true,
 }
 
 type AskClient interface {

@@ -10,6 +10,20 @@ from pipeline.batch import BatchRequestFailed
 
 def error_code(exc: Exception) -> str:
     category = getattr(exc, "category", None)
+    normalized = {
+        "provider_invalid_json": "provider_invalid_json",
+        "provider_bad_request": "provider_bad_request",
+        "credential_rejected": "credential_rejected",
+        "model_not_available": "model_not_available",
+        "request_budget": "prompt_too_large",
+        "unsupported_schema": "unsupported_schema",
+        "truncated_output": "output_truncated",
+        "output_limit": "output_limit",
+        "provider_content_filtered": "provider_content_filtered",
+        "model_changed": "model_changed",
+    }
+    if category in normalized:
+        return normalized[category]
     if category in {"provider_retry_exhausted", "rate_limited", "quota_exhausted",
                     "model_server_error", "unreachable"}:
         return "model_unreachable" if category == "unreachable" else category
@@ -23,6 +37,9 @@ def error_code(exc: Exception) -> str:
         return "provider_batch_failed"
     if isinstance(exc, (ValidationError, ValueError)):
         return "invalid_stage_output"
+    known = failure_category(exc)
+    if known != "unknown":
+        return known
     return "stage_failed"
 
 

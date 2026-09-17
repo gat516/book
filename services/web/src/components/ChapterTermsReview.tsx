@@ -81,7 +81,7 @@ export function ChapterTermsReview({ novelId, at, renderings }: Props) {
     {!items.length ? <p className="term-empty">No terminology decisions are recorded here yet.</p> : <div className="chapter-terms-list">
       {items.map((item) => <article className="chapter-term-row" key={item.source_term}>
         <div><strong lang="zh">{item.source_term}</strong><small> · {item.status === "pending" ? "pending name review" : item.status === "unlocked" ? "not confirmed" : "confirmed"}</small></div>
-        {item.status === "pending" ? <p className="glossary-note">Choose a candidate in the pending name review above.</p> : <>
+        {item.status === "pending" ? <p className="glossary-note">Confirm the provisional spelling above or correct it in the hovercard.</p> : <>
           <label>Preferred translation<input value={drafts[item.source_term] ?? ""} onChange={(event) => setDrafts((current) => ({ ...current, [item.source_term]: event.target.value }))} disabled={busy === item.source_term} /></label>
           <div className="knowledge-actions">
             <button type="button" disabled={busy !== null || !drafts[item.source_term]?.trim()} onClick={() => void save(item)}>{busy === item.source_term ? "Saving…" : item.status === "unlocked" ? "Confirm term" : "Save correction"}</button>

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { discardRecordsRebuild, extractRecords, getRecordsRebuildStatus, rebuildRecords, stopRecordsBuild, retryRecords, discardRecordsChapter } from "../api";
+import { discardRecordsRebuild, extractRecords, getRecordsRebuildStatus, rebuildRecords, stopRecordsBuild } from "../api";
 import { notifyKnowledgeUpdated, useKnowledgeRevision } from "../knowledgeUpdates";
 import type { RecordsStatus, RecordsRebuildStatus } from "../types";
 import { usePolling } from "../usePolling";
+import { RecordStatusBanner } from "./RecordStatusBanner";
 import { graphCoverageLabel } from "../knowledgeLabels";
 
 // Book and chapter extraction share the same chronological knowledge store.
@@ -57,11 +58,11 @@ export function KnowledgeGraphControls({ novelId, chapter, chapterStatus }: { no
   const published = status?.published_chapters ?? 0;
   const complete = !!status?.active_generation_id && eligible > 0 && status.missing_chapters === 0;
   const tone = status?.running ? "live" : status && !complete && status.active_generation_id ? "warn" : "quiet";
-  return <section className="chapter-knowledge-graph" aria-label="Reader features status and controls">
-    <div className="graph-build-status" role="status" aria-live="polite">
+  return <section className={`chapter-knowledge-graph${chapter !== undefined ? " reader-features-panel" : ""}`} aria-label="Reader features status and controls">
+    {chapter !== undefined ? <RecordStatusBanner status={chapterStatus ?? null} /> : <div className="graph-build-status" role="status" aria-live="polite">
       <div className="reader-features-heading">
         <div>
-          <strong>{chapter === undefined ? "Reader features" : "Reader features across this book"}</strong>
+          <strong>Reader features across this book</strong>
           <p>After a chapter is readable, the app finds its characters, facts, relationships, and events.</p>
         </div>
         <span className={`status-pill status-pill-${tone}`}>
@@ -73,21 +74,16 @@ export function KnowledgeGraphControls({ novelId, chapter, chapterStatus }: { no
         <progress max={eligible} value={published} aria-label={`Reader features ready for ${published} of ${eligible} chapters`} />
         <small>These details power character cards, the timeline, and AskAI. Chapter text is never changed.</small>
       </>}
-    </div>
-    {chapter !== undefined && <div className="knowledge-actions">
-      <strong>Chapter {chapter}</strong>
-      {chapterStatus?.extraction_status === "processing"
-        ? <button disabled={busy} onClick={() => void act(async () => { await discardRecordsChapter(novelId, chapter); return "Reader-feature work paused for this chapter. You can resume it here."; })}>Pause this chapter</button>
-        : <button disabled={busy || !chapterStatus || chapterStatus.extraction_status === "ready"}
-            onClick={() => void act(async () => { await retryRecords(novelId, chapter); return "Reader-feature work queued. Earlier chapters must finish first."; })}>
-            {chapterStatus?.extraction_status === "ready" ? "Reader features ready" : chapterStatus?.extraction_status === "failed" ? "Retry reader features" : "Build reader features for this chapter"}
-          </button>}
     </div>}
-    {status?.running
-      ? <button type="button" disabled={busy} onClick={() => void stop()}>{busy ? "Pausing…" : "Pause reader-feature work"}</button>
-      : <button type="button" disabled={busy || !status || complete} onClick={() => void extract()}>
-          {busy ? "Starting…" : complete ? "Reader features are up to date" : "Build missing reader features"}
-        </button>}
+    <div className="knowledge-actions">
+      {status?.running
+        ? <button type="button" disabled={busy} onClick={() => void stop()}>{busy ? "Pausing…" : "Pause building"}</button>
+        : <button type="button" disabled={busy || !status || complete} onClick={() => void extract()}>
+            {busy ? "Starting…" : complete ? "Reader features are up to date" : "Build reader features"}
+          </button>}
+      {chapter !== undefined && status && <small>{graphCoverageLabel(status)}</small>}
+    </div>
+    <small>Builds missing reader features across this book in chapter order, preserving completed work.</small>
     <details className="graph-advanced">
       <summary>Advanced reader-feature options</summary>
       {confirm === null && <button type="button" disabled={busy || !status?.active_generation_id} onClick={() => setConfirm("rebuild")}>Refresh every chapter…</button>}

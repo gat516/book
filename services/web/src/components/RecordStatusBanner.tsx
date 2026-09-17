@@ -1,15 +1,13 @@
 import type { RecordsStatus } from "../types";
-import { retriesExhausted, retryCategoryLabel, retryTimeLabel } from "../recordStatus";
+import { retriesExhausted, failureExplanation, scheduledRetryMessage } from "../recordStatus";
 
 // The same tone vocabulary the processing-queue pill uses: green means work is in flight,
 // amber means waiting on something, red means it failed. One colour language across both
 // status surfaces, so a reader learns it once rather than per-panel.
 type Tone = "live" | "warn" | "bad" | "quiet";
 
-// Where the reader goes to act on a paused or failed chapter. Extraction is started from
-// the book-wide graph controls, so the chapter bar names that button rather than offering
-// one of its own.
-const RESUME_HINT = "Use the Reader features controls below to resume.";
+// Build and pause actions live directly below this status in the same panel.
+const RESUME_HINT = "Use the build controls below to resume.";
 
 interface State {
   tone: Tone;
@@ -31,7 +29,6 @@ export function RecordStatusBanner({ status, onRetry, busy = false }: {
   const attempts = status?.retry_attempts ?? 0;
   const max = status?.retry_max_attempts ?? 0;
   const attemptLabel = max > 0 ? `${attempts}/${max}` : `${attempts}`;
-  const category = retryCategoryLabel(status?.retry_category);
 
   const state: State =
     status === null
@@ -41,21 +38,23 @@ export function RecordStatusBanner({ status, onRetry, busy = false }: {
       // is never coming. Discarding also clears the retry fields, so nothing below applies.
       : status.discarded
       ? { tone: "quiet", text: `Paused for this chapter. ${RESUME_HINT}` }
+      : status.waiting_on_chapter != null && status.extraction_status !== "ready"
+      ? { tone: "quiet", text: `Waiting for chapter ${status.waiting_on_chapter} to finish building reader features.` }
       : status.retry_at
       ? {
           tone: "warn",
-          text: `Trying again automatically after ${category} (attempt ${attemptLabel}) · ${retryTimeLabel(status.retry_at)}`,
+          text: scheduledRetryMessage(status),
         }
       : retriesExhausted(status)
       ? {
           tone: "bad",
-          text: `Couldn’t finish after ${attemptLabel} attempts because of ${category}. The chapter is still readable.${onRetry ? "" : ` ${RESUME_HINT}`}`,
+          text: `${failureExplanation(status)} Automatic retries stopped after ${attemptLabel} failed attempts.${onRetry ? "" : ` ${RESUME_HINT}`}`,
           retryable: true,
         }
       : status.extraction_status === "failed"
       ? {
           tone: "bad",
-          text: `Couldn’t build reader features. The chapter is still readable${status.failure_detail ? ` (${status.failure_detail})` : ""}.${onRetry ? "" : ` ${RESUME_HINT}`}`,
+          text: `${failureExplanation(status)}${onRetry ? "" : ` ${RESUME_HINT}`}`,
           retryable: true,
         }
       : status.extraction_status === "processing"

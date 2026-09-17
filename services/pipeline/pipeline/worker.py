@@ -37,6 +37,7 @@ from pipeline.provider_config import (
 from pipeline import queue
 from pipeline.failures import error_code, failure_category, record_failure
 from pipeline.records_publish import publish_records
+from pipeline.records_generation import EarlierChapterPending
 from pipeline.stages import DEFAULT_STAGES
 from pipeline.stages.translate import TranslateStage
 from pipeline.textproc import textproc_from_config
@@ -304,6 +305,11 @@ class Worker:
                     "provider admission deferred durably category=%s retry_after_s=%.1f",
                     getattr(exc, "category", "rate_limited"), exc.retry_after_s,
                 )
+            except EarlierChapterPending as exc:
+                msg = QueueMessage.model_validate_json(raw)
+                await self._defer_for_earlier_chapter(msg, exc)
+                log.info("chapter %s/%s waiting for chapter %d", msg.novel_id,
+                         msg.chapter_index, exc.chapter)
             except ProviderConfigChanged:
                 msg = QueueMessage.model_validate_json(raw)
                 await self._clear_preview(msg.novel_id, msg.chapter_index)
@@ -730,7 +736,7 @@ class Worker:
                     (msg.novel_id, state.record_generation_id, msg.chapter_index),
                 )
                 await publish_records(ctx, state)
-        except TranslationPublished:
+        except (TranslationPublished, EarlierChapterPending):
             raise
         except ChapterDiscarded:
             # §0: an operator stop is terminal until an explicit retry. In particular,
@@ -834,6 +840,16 @@ class Worker:
         await self._clear_preview(msg.novel_id, msg.chapter_index)
         log.info("chapter %s/%s done", msg.novel_id, msg.chapter_index)
 
+    async def _defer_for_earlier_chapter(self, msg: QueueMessage, exc: EarlierChapterPending) -> None:
+        # A dependency wait spends no provider call or failure attempt. The due sweep
+        # checks publication before requeueing, so waiting chapters cannot churn (§0).
+        await self.db.execute(
+            "UPDATE chapter SET enrichment_retry_at=now(),enrichment_retry_generation_id=%s,"
+            "status=CASE WHEN translation_ready THEN 'done' ELSE status END "
+            "WHERE novel_id=%s AND chapter_index=%s AND NOT enrichment_discarded",
+            (exc.generation_id, msg.novel_id, msg.chapter_index),
+        )
+
     async def _retry_enrichment(self) -> None:
         assert self.db is not None
         # Keep the due timestamp until the work succeeds. Queue insertion is atomic and
@@ -853,6 +869,12 @@ class Worker:
             "AND enrichment_attempts < %s) OR (provider_retry_at <= now() "
             "AND provider_retry_attempts < %s "
             "AND (NOT c.translation_ready OR NOT c.enrichment_discarded))) "
+            "AND (NOT c.translation_ready OR c.status='name_repair_error' OR NOT EXISTS ("
+            "SELECT 1 FROM chapter earlier WHERE earlier.novel_id=c.novel_id "
+            "AND earlier.chapter_index<c.chapter_index AND earlier.translation_ready "
+            "AND NOT EXISTS (SELECT 1 FROM record_run r WHERE r.novel_id=c.novel_id "
+            "AND r.chapter_index=earlier.chapter_index AND r.status='published' "
+            "AND r.generation_id=(SELECT active_record_generation FROM novel WHERE id=c.novel_id)))) "
             "ORDER BY LEAST(COALESCE(enrichment_retry_at, 'infinity'::timestamptz), "
             "COALESCE(provider_retry_at, 'infinity'::timestamptz)) LIMIT 20",
             (MAX_ENRICHMENT_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS),

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from novel_llm.provider import ProviderResponseError
 
 import httpx
 import pytest
@@ -142,6 +143,9 @@ async def test_startup_does_not_wedge_on_embedding_outage(monkeypatch):
     ("failure", "status", "category"),
     [
         (_status_error(401, body="secret-key=never-echo"), 502, "credential_rejected"),
+        (ProviderResponseError("credential_rejected"), 502, "credential_rejected"),
+        (ProviderResponseError("provider_invalid_json"), 502, "provider_invalid_json"),
+        (ProviderResponseError("provider_bad_request"), 502, "provider_bad_request"),
         (_status_error(429, body='{"error":{"details":[{"retryDelay":"86400s"}]}}'),
          429, "quota_exhausted"),
         (AdmissionRejected("quota_exhausted", category="quota_exhausted"), 429, "quota_exhausted"),

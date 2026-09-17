@@ -324,6 +324,8 @@ func chapterFailureCategory(code string) string {
 		return code
 	}
 	switch code {
+	case "output_limit", "provider_content_filtered", "credential_rejected", "model_not_available", "provider_invalid_json", "provider_bad_request", "unsupported_schema", "prompt_too_large", "output_truncated", "invalid_stage_output":
+		return code
 	case "provider_http_401", "provider_http_403":
 		return "credential_rejected"
 	case "provider_http_404":
@@ -776,8 +778,10 @@ func attachChapterRenderings(
 	// The durable alignment is authoritative for terminology association. It is keyed by
 	// the exact display offsets, so no reverse translation or entity-name matching occurs.
 	aligned, err := tx.Query(ctx,
-		`SELECT t.char_start,t.char_end,t.source_term,g.target_term,
-		        CASE WHEN g.source_term IS NULL THEN 'unlocked' ELSE 'locked' END,
+		`SELECT t.char_start,t.char_end,t.source_term,
+		        COALESCE(g.target_term,CASE WHEN r.status='pending' THEN r.candidates->0->>'target_term' END),
+		        CASE WHEN g.source_term IS NOT NULL THEN 'locked'
+		             WHEN r.status='pending' THEN 'pending' ELSE 'unlocked' END,
 		        COALESCE(r.term_role,CASE WHEN g.constraint_class='character_name'
 		          THEN 'chinese_person' ELSE 'semantic_term' END),
 		        COALESCE(r.candidates,'[]'::jsonb)
@@ -804,6 +808,9 @@ func attachChapterRenderings(
 			aligned.Close()
 			return err
 		}
+		if len(rendering.Candidates) > 1 {
+			rendering.Candidates = rendering.Candidates[:1]
+		}
 		copy := rendering
 		byOffset[[2]int{start, end}] = &copy
 	}
@@ -821,7 +828,7 @@ func attachChapterRenderings(
 	// Compatibility fallback for chapters not yet backfilled: reviewed spellings can be
 	// associated without guessing by exact/normalized offered target spelling.
 	rows, err := tx.Query(ctx,
-		`SELECT DISTINCT r.source_term,g.target_term,
+		`SELECT DISTINCT r.source_term,COALESCE(g.target_term,r.candidates->0->>'target_term'),
 		        CASE WHEN g.source_term IS NULL THEN 'pending' ELSE 'locked' END,
 		        r.term_role,r.candidates
 		 FROM character_name_review r
@@ -854,6 +861,9 @@ func attachChapterRenderings(
 		}
 		for _, candidate := range rendering.Candidates {
 			spellings = append(spellings, candidate.TargetTerm)
+		}
+		if len(rendering.Candidates) > 1 {
+			rendering.Candidates = rendering.Candidates[:1]
 		}
 		copy := rendering
 		for _, spelling := range spellings {

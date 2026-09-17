@@ -28,6 +28,7 @@ from novel_llm.provider import (
     TruncatedOutput,
     UnsupportedSchema,
     PinnedModelChanged,
+    ProviderResponseError,
     system_with_schema,
 )
 
@@ -348,17 +349,20 @@ class HostedProvider(SequentialBatchMixin):
     async def complete(self, prompt: str, *, system: str = "", json_mode: bool = False,
                        cls: Class = Class.BATCH, pin_model: bool = False,
                        model: str | None = None, json_schema: dict | None = None,
-                       max_output_tokens: int | None = None) -> Completion:
+                       max_output_tokens: int | None = None,
+                       reasoning_effort: str | None = None) -> Completion:
         return await self._complete_hosted(
             prompt, system=system, json_mode=json_mode, cls=cls, pin_model=pin_model,
             model=model, json_schema=json_schema, max_output_tokens=max_output_tokens,
-            native_json_schema=self._native_json_schema)
+            native_json_schema=self._native_json_schema, reasoning_effort=reasoning_effort)
 
     async def _complete_hosted(self, prompt: str, *, system: str = "", json_mode: bool = False,
                        cls: Class = Class.BATCH, pin_model: bool = False,
                        model: str | None = None, json_schema: dict | None = None,
                        max_output_tokens: int | None = None,
-                       native_json_schema: bool | None = None) -> Completion:
+                       native_json_schema: bool | None = None,
+                       reasoning_effort: str | None = None,
+                       include_reasoning: bool | None = None) -> Completion:
         del cls  # LiteLLM has no priority concept; the provider boundary still carries it.
         use_model = model or self._model
         messages, response_format = self._request_material(
@@ -372,6 +376,10 @@ class HostedProvider(SequentialBatchMixin):
             "num_retries": 0,
             "fallbacks": [],
         }
+        if reasoning_effort is not None:
+            kwargs["reasoning_effort"] = reasoning_effort
+        if include_reasoning is not None:
+            kwargs["extra_body"] = {"include_reasoning": include_reasoning}
         if response_format is not None:
             kwargs["response_format"] = response_format
         if self._api_key:
@@ -411,6 +419,12 @@ class HostedProvider(SequentialBatchMixin):
                                     exact_hint=exact_hint, category="model_server_error",
                                     rate_limits=safe) from exc
         code, message = _structured_error(exc)
+        if status in (400, 422) and code in {"output_parse_failed", "json_validate_failed"}:
+            raise ProviderResponseError("provider_invalid_json") from exc
+        if status in (401, 403):
+            raise ProviderResponseError("credential_rejected") from exc
+        if status == 404 or code in {"model_not_found", "model_decommissioned"}:
+            raise ProviderResponseError("model_not_available") from exc
         if status in (400, 422) and code == "context_length_exceeded":
             raise RequestBudgetExceeded("provider request exceeds context budget") from exc
         if status == 413 or any(marker in name for marker in
@@ -427,6 +441,8 @@ class HostedProvider(SequentialBatchMixin):
                                any(name.endswith(marker) for marker in _NETWORK_ERROR_NAMES)):
             raise AdmissionRejected("unreachable", retry_after_s=_SERVER_RETRY_S,
                                     category="unreachable") from exc
+        if status in (400, 422):
+            raise ProviderResponseError("provider_bad_request") from exc
         raise exc
 
     def _completion(self, response: Any, *, requested_model: str,
@@ -436,8 +452,10 @@ class HostedProvider(SequentialBatchMixin):
             raise RuntimeError("hosted provider returned no choices")
         choice = choices[0]
         finish = _field(choice, "finish_reason") or _field(response, "stop_reason")
-        if finish in {"length", "max_tokens", "content_filter"}:
-            raise TruncatedOutput("provider output was truncated before completion")
+        if finish in {"length", "max_tokens"}:
+            raise TruncatedOutput("provider reached its output token limit", finish_reason=finish)
+        if finish == "content_filter":
+            raise ProviderResponseError("provider_content_filtered")
         message = _field(choice, "message", {}) or {}
         text = _field(message, "content", "")
         if text is None:

@@ -25,6 +25,9 @@ async def test_complete_records_groq_identity_usage_and_json_contract(monkeypatc
             _hidden_params={"custom_llm_provider": "groq"})
     monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=complete))
     completion = await provider.complete("source", system="stable", json_schema=schema)
+    assert calls[0]["reasoning_effort"] == "low"
+    assert calls[0]["extra_body"] == {"include_reasoning": False}
+    assert "reasoning_format" not in calls[0]
     assert completion.text == '{"facts":[]}'
     assert completion.served_provider == "groq"
     assert completion.served_model == "openai/gpt-oss-120b"
@@ -189,3 +192,19 @@ async def test_unsupported_strict_schema_is_rejected_before_transport(monkeypatc
     with pytest.raises(UnsupportedSchema):
         await provider.complete("source", json_schema=schema)
     assert calls == []
+
+
+@pytest.mark.parametrize("backend", ["groq", "openrouter"])
+async def test_records_reasoning_effort_reaches_transport(monkeypatch, backend):
+    from novel_llm.openrouter import OpenRouterProvider
+    calls = []
+    async def complete(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(model="openai/gpt-oss-120b", choices=[SimpleNamespace(
+            finish_reason="stop", message=SimpleNamespace(content="<records/>"))])
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=complete))
+    provider_class = GroqProvider if backend == "groq" else OpenRouterProvider
+    await provider_class(model="openai/gpt-oss-120b", api_key="test").complete(
+        "extract", reasoning_effort="low")
+    assert calls[0]["reasoning_effort"] == "low"
+    assert "extra_body" not in calls[0]

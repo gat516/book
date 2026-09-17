@@ -12,7 +12,7 @@ export interface RenderedChapter {
   spans: SpanView[];
 }
 
-// Apply confirmed terminology as a presentation overlay instead of mutating the saved
+// Apply chosen terminology (provisional or confirmed) as a presentation overlay instead of mutating the saved
 // translation (§0.2). Recalculate every downstream codepoint offset so a longer or shorter
 // preferred spelling cannot move hover anchors onto unrelated prose.
 export function applyRenderingChoices(text: string, spans: SpanView[]): RenderedChapter {
@@ -25,7 +25,7 @@ export function applyRenderingChoices(text: string, spans: SpanView[]): Rendered
         span.char_start < cursor || span.char_end <= span.char_start || span.char_end > chars.length) continue;
     output.push(...chars.slice(cursor, span.char_start));
     const start = output.length;
-    const replacement = span.rendering?.status === "locked" && span.rendering.target_term
+    const replacement = (span.rendering?.status === "pending" || span.rendering?.status === "locked") && span.rendering.target_term
       ? Array.from(span.rendering.target_term)
       : chars.slice(span.char_start, span.char_end);
     output.push(...replacement);

@@ -32,6 +32,7 @@ import logging
 from pipeline.context import PipelineState, StageContext
 from pipeline.display_names import TermRenderingOccurrence, align_names, discover_names, merge_names
 from pipeline.graph import GraphWriter
+from pipeline.term_choices import record_term_choices
 from pipeline.mentions import Alias, MentionScanRequest, scan_mentions
 
 log = logging.getLogger(__name__)
@@ -57,6 +58,7 @@ class DisplayScanStage:
         # Cards are derived from readable prose, not gated on fact extraction completing.
         # Publish atomically here; graph-write may idempotently replace the same spans.
         async with ctx.db.transaction():
+            await record_term_choices(ctx, state, state.term_renderings)
             await GraphWriter(ctx.db).replace_mention_spans(
                 ctx.novel.id, state.envelope.chapter_index, state.display_spans,
                 state.term_renderings,

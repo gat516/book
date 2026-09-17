@@ -16,7 +16,9 @@ func TestChapterFailureCategoryUsesOnlySafeErrorCodes(t *testing.T) {
 		{"provider_timeout", "timeout"},
 		{"provider_http_500", "model_server_error"},
 		{"provider_http_503", "model_server_error"},
-		{"invalid_stage_output", "unknown"},
+		{"invalid_stage_output", "invalid_stage_output"},
+		{"provider_invalid_json", "provider_invalid_json"},
+		{"credential_rejected", "credential_rejected"},
 		{"", ""},
 	}
 	for _, test := range tests {

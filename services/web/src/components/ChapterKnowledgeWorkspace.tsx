@@ -1,24 +1,21 @@
-import { notifyKnowledgeUpdated, useKnowledgeRevision } from "../knowledgeUpdates";
+import { useKnowledgeRevision } from "../knowledgeUpdates";
 import { useCallback, useEffect, useState } from "react";
-import { discardRecordsChapter, getRecords, getRecordsInspector, getRecordReviews, retryRecords } from "../api";
+import { getRecords, getRecordsInspector, getRecordReviews } from "../api";
 import type { RecordReviewResponse, RecordsInspectorResponse, RecordsResponse } from "../types";
 import { RecordList } from "./RecordList";
 import { ChapterTermsReview } from "./ChapterTermsReview";
 import { NameReviewPanel } from "./NameReviewPanel";
 import { recordPollInterval, recordsTerminal } from "../recordPolling";
 import { usePolling } from "../usePolling";
-import { RecordStatusBanner } from "./RecordStatusBanner";
 import { RecordReviewPanel } from "./RecordReviewPanel";
 
-// Chapter extraction controls and optional detailed knowledge/term review.
+// Optional detailed knowledge/term review. Build controls live in the top reader panel.
 export function ChapterKnowledgeWorkspace({ novelId, chapter, at, renderings = [] }: { novelId: string; chapter: number; at: number; renderings?: import("../types").TermRenderingView[] }) {
   const revision = useKnowledgeRevision(novelId);
   const [records, setRecords] = useState<RecordsResponse | null>(null);
   const [inspector, setInspector] = useState<RecordsInspectorResponse | null>(null);
   const [reviews, setReviews] = useState<RecordReviewResponse | null>(null);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [busy, setBusy] = useState<"retry" | "stop" | null>(null);
 
   const refresh = useCallback(async () => {
     setError("");
@@ -40,33 +37,6 @@ export function ChapterKnowledgeWorkspace({ novelId, chapter, at, renderings = [
 
   usePolling(refresh, recordPollInterval(records), records !== null && !error && !recordsTerminal(records));
 
-  async function retry() {
-    setBusy("retry");
-    setError("");
-    setNotice("");
-    try {
-      await retryRecords(novelId, chapter);
-      setNotice("Reader-feature retry queued. This panel will update as work progresses.");
-      notifyKnowledgeUpdated(novelId);
-      await refresh();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function stopChapter() {
-    setBusy("stop"); setError(""); setNotice("");
-    try {
-      await discardRecordsChapter(novelId, chapter);
-      setNotice("Reader-feature work paused for this chapter. Use Build reader features for this chapter to resume.");
-      notifyKnowledgeUpdated(novelId);
-      await refresh();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
-    finally { setBusy(null); }
-  }
-
   const status = records?.status;
   return <section className="chapter-knowledge" aria-labelledby="chapter-records-heading">
     <header>
@@ -74,10 +44,8 @@ export function ChapterKnowledgeWorkspace({ novelId, chapter, at, renderings = [
         <h2 id="chapter-records-heading">Story-detail diagnostics</h2>
         <p>Advanced view of the supported details found in chapter {chapter}. Spoiler protection is set to chapter {at}.</p>
       </div>
-      {status && <span className={`knowledge-badge records-${status.extraction_status}`}>{status.extraction_status}</span>}
     </header>
     {error && <p role="alert" className="reader-pane-error">{error} <button type="button" onClick={() => void refresh()}>Retry diagnostics</button></p>}
-    {notice && <p role="status">{notice}</p>}
     {!records || !inspector ? <p role="status">Loading record diagnostics…</p> : <>
       <dl className="records-inspector-summary">
         <div><dt>Discovered candidates</dt><dd>{inspector.counts?.discovered ?? inspector.parsed}</dd></div>
@@ -95,14 +63,9 @@ export function ChapterKnowledgeWorkspace({ novelId, chapter, at, renderings = [
       {inspector.rendering_failures > 0 && <p className="glossary-note">
         {inspector.rendering_failures} detail{inspector.rendering_failures === 1 ? "" : "s"} could not be prepared in English; the source values are still shown. To replace them, use Reader features → Advanced reader-feature options → Refresh every chapter.
       </p>}
-      <div className="knowledge-actions">
-        {(status?.extraction_status === "pending" || status?.extraction_status === "failed") && <button type="button" disabled={busy !== null} onClick={() => void retry()}>{busy === "retry" ? "Queuing…" : status.extraction_status === "failed" ? "Retry reader features" : "Build reader features for this chapter"}</button>}
-        {status?.extraction_status === "processing" && <button type="button" disabled={busy !== null} onClick={() => void stopChapter()}>{busy === "stop" ? "Pausing…" : "Pause reader-feature work"}</button>}
-      </div>
       {inspector.drops.length > 0 && <details><summary>Dropped records ({inspector.drops.length})</summary><ul className="chapter-knowledge-list">{inspector.drops.map(drop => <li key={drop.original_index}><strong>Record {drop.original_index}</strong><small>{drop.reasons.join("; ")}</small></li>)}</ul></details>}
       {inspector.dropped > 0 && status?.extraction_status !== "failed" && <p className="glossary-note">Dropped records are immutable diagnostics. A new generation is required to change extraction checks; nothing was discarded from the published history.</p>}
       <RecordList rows={records.rows} status={records.status} title="Facts, relationships, and events" />
-      <RecordStatusBanner status={records.status} busy={busy === "retry"} onRetry={() => void retry()} />
       {reviews && <RecordReviewPanel novelId={novelId} chapter={chapter} items={reviews.items} onReviewed={refresh} />}
       <NameReviewPanel novelId={novelId} chapter={chapter} onApproved={() => void refresh()} />
       <ChapterTermsReview novelId={novelId} at={at} renderings={renderings} />

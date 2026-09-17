@@ -1,3 +1,4 @@
+import { failureExplanation } from "./recordStatus";
 import { readerId } from "./readerId";
 import type {
   AskResponse,
@@ -77,6 +78,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       // failure (e.g. Go's bare "404 page not found"), not something meant for a reader
       // to see verbatim. Keep the status code for anyone debugging; drop the raw text.
       code = `The server could not complete this request (${response.status}).`;
+    }
+    if (code === "ask-ai provider failure" && parsed && typeof parsed === "object" && "category" in parsed) {
+      const category = (parsed as { category?: unknown }).category;
+      code = failureExplanation({ retry_category: typeof category === "string" ? category : null });
     }
     throw new ApiError(response.status, code, parsed);
   }

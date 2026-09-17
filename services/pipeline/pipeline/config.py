@@ -161,7 +161,7 @@ class Config:
     # the provider/account admission ceiling for one call (input plus reserved output).
     # Both affect passage grouping, so both are pinned in graph request identity.
     hosted_graph_context_tokens: int = 32768
-    hosted_graph_output_tokens: int = 2048
+    hosted_graph_output_tokens: int = 4096
     hosted_graph_request_tokens: int = 32768
 
     # Independent extraction calls (fact verification, claim focuses, alignment windows)
@@ -235,7 +235,7 @@ class Config:
             graph_ollama_num_predict=int(_getenv("GRAPH_OLLAMA_NUM_PREDICT", "4096")),
             graph_ollama_think=_optional_bool("GRAPH_OLLAMA_THINK"),
             hosted_graph_context_tokens=int(_getenv("HOSTED_GRAPH_CONTEXT_TOKENS", "32768")),
-            hosted_graph_output_tokens=int(_getenv("HOSTED_GRAPH_OUTPUT_TOKENS", "2048")),
+            hosted_graph_output_tokens=int(_getenv("HOSTED_GRAPH_OUTPUT_TOKENS", "4096")),
             hosted_graph_request_tokens=int(_getenv("HOSTED_GRAPH_REQUEST_TOKENS", "32768")),
             event_remote_timeout_seconds=float(_getenv("EVENT_REMOTE_TIMEOUT_SECONDS", "300")),
             names_ollama_first_token_seconds=float(_getenv("NAMES_OLLAMA_FIRST_TOKEN_SECONDS", "900")),

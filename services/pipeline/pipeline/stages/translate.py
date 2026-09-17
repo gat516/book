@@ -45,7 +45,7 @@ async def _chapter_row(db, novel_id: str, chapter: int):
     ).fetchone()
 
 
-async def _glossary(db, novel_id: str) -> tuple[int, list[tuple[str, str, str]]]:
+async def _glossary(db, novel_id: str, *, chapter: int) -> tuple[int, list[tuple[str, str, str]]]:
     rows = await (
         await db.execute(
             "SELECT source_term, target_term, version, deleted, constraint_class FROM glossary "
@@ -53,8 +53,21 @@ async def _glossary(db, novel_id: str) -> tuple[int, list[tuple[str, str, str]]]
             (novel_id,),
         )
     ).fetchall()
-    # Tombstones still advance the cache version, including deletion of the last term.
-    return (max((r[2] for r in rows), default=0), [(r[0], r[1], r[4]) for r in rows if not r[3]])
+    # Provisional terminology is stable too, but never marked human-approved (§0).
+    # Earlier chapters only; a saved/tombstoned glossary entry always takes precedence.
+    provisional = await (await db.execute(
+        "SELECT source_term,candidates->0->>'target_term',term_role "
+        "FROM character_name_review WHERE novel_id=%s AND status='pending' "
+        "AND first_seen_chapter < %s AND jsonb_array_length(candidates)>0 ORDER BY source_term",
+        (novel_id, chapter),
+    )).fetchall()
+    known = {r[0] for r in rows}
+    terms = [(r[0], r[1], r[4]) for r in rows if not r[3]]
+    terms.extend((source, target, "semantic_term" if role == "semantic_term" else "character_name")
+                 for source, target, role in provisional if source not in known and target)
+    # The translation fingerprint includes the chosen targets, even before a glossary
+    # version exists. Changing a reviewed choice cannot reuse stale translation output.
+    return max((r[2] for r in rows), default=0), terms
 
 
 def _translation_fingerprint(ctx: StageContext, glossary) -> str:
@@ -228,7 +241,7 @@ class TranslateStage:
             translated = await asyncio.to_thread(
                 _read_object, ctx.objects, ctx.cfg.object_bucket, row[0]
             )
-            _, glossary = await _glossary(ctx.db, ctx.novel.id)
+            _, glossary = await _glossary(ctx.db, ctx.novel.id, chapter=state.envelope.chapter_index)
             validate_glossary_constraints(state.envelope.raw_text, translated, glossary)
             self._set_chunks(ctx, state, translated)
             state.translation = translated
@@ -251,7 +264,7 @@ class TranslateStage:
     ) -> None:
         chapter = state.envelope.chapter_index
         raw_hash = state.envelope.source_meta.raw_hash
-        glossary_version, glossary = await _glossary(ctx.db, ctx.novel.id)
+        glossary_version, glossary = await _glossary(ctx.db, ctx.novel.id, chapter=state.envelope.chapter_index)
         translation_fingerprint = _translation_fingerprint(ctx, glossary)
         # The provider actually resolved for this novel this chapter (PLAN.md Phase N4:
         # its own novel_provider_config.provider if it has one, else the process-wide

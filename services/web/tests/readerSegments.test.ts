@@ -109,7 +109,7 @@ test("confirmed spellings overlay every occurrence and adjust later offsets", ()
   assert.equal(segment(rendered.text, rendered.spans).map(piece => piece.text).join(""), rendered.text);
 });
 
-test("pending and unlocked spellings leave saved prose untouched", () => {
+test("provisional spellings overlay display while unknown spellings remain untouched", () => {
   const text = "Chekov spoke.";
   for (const status of ["pending", "unlocked"] as const) {
     const rendered = applyRenderingChoices(text, [{
@@ -117,7 +117,8 @@ test("pending and unlocked spellings leave saved prose untouched", () => {
       rendering: { source_term: "契科夫", target_term: "Chekhov", status,
         term_role: "foreign_person", candidates: [] },
     }]);
-    assert.equal(rendered.text, text);
-    assert.deepEqual(rendered.spans.map(span => [span.char_start, span.char_end]), [[0, 6]]);
+    assert.equal(rendered.text, status === "pending" ? "Chekhov spoke." : text);
+    assert.equal(rendered.spans[0].char_end, status === "pending" ? 7 : 6);
+    assert.equal(rendered.spans[0].rendering?.status, status);
   }
 });

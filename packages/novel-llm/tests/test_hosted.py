@@ -21,6 +21,7 @@ from novel_llm.provider import (
     AdmissionRejected,
     Class,
     PinnedModelChanged,
+    ProviderResponseError,
     RequestBudgetExceeded,
     TruncatedOutput,
     UnsupportedSchema,
@@ -379,10 +380,11 @@ async def test_structured_schema_400_is_unsupported_only_for_schema_errors(monke
 
 
 @pytest.mark.asyncio
-async def test_json_validation_400_is_not_misclassified_as_unsupported_schema(monkeypatch):
+@pytest.mark.parametrize("code", ["json_validate_failed", "output_parse_failed"])
+async def test_json_validation_400_is_not_misclassified_as_unsupported_schema(monkeypatch, code):
     request = httpx.Request("POST", "https://provider.test")
     response = httpx.Response(400, request=request,
-                              json={"error": {"code": "json_validate_failed",
+                              json={"error": {"code": code,
                                                "message": "generated JSON failed validation"}})
 
     class BadRequestError(Exception):
@@ -394,7 +396,7 @@ async def test_json_validation_400_is_not_misclassified_as_unsupported_schema(mo
 
     monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=rejected))
     provider = AnthropicProvider(model="claude", api_key="key")
-    with pytest.raises(BadRequestError):
+    with pytest.raises(ProviderResponseError, match="^provider_invalid_json$"):
         await provider.complete("source", json_schema={"type": "object"})
     await provider.aclose()
 

@@ -11,7 +11,6 @@ import type { RecordsResponse } from "../types";
 import { uniqueChapterRenderings } from "../recordPresentation";
 import { ChapterKnowledgeWorkspace } from "./ChapterKnowledgeWorkspace";
 import { recordPollInterval, recordsTerminal } from "../recordPolling";
-import { RecordStatusBanner } from "./RecordStatusBanner";
 import { KnowledgeGraphControls } from "./KnowledgeGraphControls";
 import { chapterKnowledgeReviewLabel } from "../knowledgeLabels";
 
@@ -191,9 +190,6 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
           void getRecords(novelId, chapterIndex).then(setRecords).catch((reason) => setRecordsError(errorMessage(reason)));
         }}>Retry</button>
       </p>}
-      {/* Unguarded: the bar reports "still loading" itself, so the chapter always has a
-          knowledge status rather than showing nothing until one arrives. */}
-      <RecordStatusBanner status={records?.status ?? null} />
       <KnowledgeGraphControls novelId={novelId} chapter={chapterIndex} chapterStatus={records?.status} />
       {chapter.translation_warning?.code === "locked_terms_missing" && <p role="status" className="reader-translation-warning">
         This chapter is readable, but {chapter.translation_warning.term_count} locked name{chapter.translation_warning.term_count === 1 ? " was" : "s were"} not preserved exactly.

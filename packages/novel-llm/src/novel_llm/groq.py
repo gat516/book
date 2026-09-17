@@ -107,14 +107,23 @@ class GroqProvider(HostedProvider):
     async def complete(self, prompt: str, *, system: str = "", json_mode: bool = False,
                        cls: Class = Class.BATCH, pin_model: bool = False,
                        model: str | None = None, json_schema: dict | None = None,
-                       max_output_tokens: int | None = None) -> Completion:
+                       max_output_tokens: int | None = None,
+                       reasoning_effort: str | None = None) -> Completion:
         use_model = model or self._model
         strict = json_schema is not None and self.schema_transport(use_model) == "native"
+        # GPT-OSS defaults to medium reasoning. Keep structured extraction bounded and
+        # ask for only the final answer; never interpret reasoning as JSON (§5.4).
+        gpt_oss = use_model.removeprefix("groq/") in STRICT_SCHEMA_MODELS
+        structured = json_mode or json_schema is not None
+        if gpt_oss and structured and reasoning_effort is None:
+            reasoning_effort = "low"
+        include_reasoning = False if gpt_oss and structured else None
         if not strict:
             return await self._complete_hosted(
                 prompt, system=system, json_mode=json_mode, cls=cls,
                 pin_model=pin_model, model=model, json_schema=json_schema,
-                max_output_tokens=max_output_tokens, native_json_schema=False)
+                max_output_tokens=max_output_tokens, native_json_schema=False,
+                reasoning_effort=reasoning_effort, include_reasoning=include_reasoning)
         # Validate and normalize the strict wire schema before transport. Unsupported
         # constructs are rejected so strict decoding never silently weakens extraction.
         wire_schema = strict_schema(json_schema)
@@ -131,7 +140,9 @@ class GroqProvider(HostedProvider):
                                            cls=cls, pin_model=pin_model, model=model,
                                            json_schema=wire_schema,
                                            max_output_tokens=max_output_tokens,
-                                           native_json_schema=True)
+                                           native_json_schema=True,
+                                           reasoning_effort=reasoning_effort,
+                                           include_reasoning=include_reasoning)
 
     async def embed(self, texts: list[str], *, cls: Class = Class.BATCH) -> list[list[float]]:
         raise NotImplementedError("Groq embeddings unused; configure Ollama embeddings")

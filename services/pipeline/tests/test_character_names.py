@@ -286,3 +286,37 @@ async def test_completed_character_name_work_is_a_resume_boundary(db_conn):
         assert row == ("done",)
     finally:
         await delete_novel(db_conn, novel_id)
+
+
+async def test_unreadable_discovery_splits_preserving_passage_ids_and_source_order():
+    from novel_llm.provider import ProviderResponseError
+    from pipeline.passages import source_passages
+    source = "凌峰来了。\n林轩离开。"
+    offered = source_passages(source)
+    assert len(offered) == 2
+    calls = []
+    async def complete(prompt, **kwargs):
+        passages = json.loads(prompt.split("\n", 1)[1])["passages"]
+        calls.append([p["id"] for p in passages])
+        if len(passages) > 1:
+            raise ProviderResponseError("provider_invalid_json")
+        surface = "凌峰" if "凌峰" in passages[0]["text"] else "林轩"
+        return SimpleNamespace(text=json.dumps({"reviewed": True, "names": [
+            {"passage_id": passages[0]["id"], **item(surface, "chinese_personal")}
+        ]}))
+    ctx = context([])
+    ctx.provider.complete = AsyncMock(side_effect=complete)
+    assert set(await _discover(ctx, source)) == {"凌峰", "林轩"}
+    assert calls == [[p["id"] for p in offered], [offered[0]["id"]], [offered[1]["id"]]]
+
+
+@pytest.mark.parametrize("category, expected_calls", [
+    ("provider_invalid_json", 2), ("credential_rejected", 1), ("provider_bad_request", 1),
+])
+async def test_discovery_recovery_is_bounded_and_does_not_retry_credentials(category, expected_calls):
+    from novel_llm.provider import ProviderResponseError
+    ctx = context([])
+    ctx.provider.complete = AsyncMock(side_effect=ProviderResponseError(category))
+    with pytest.raises(ProviderResponseError, match=category):
+        await _discover(ctx, "凌峰来了。\n林轩离开。")
+    assert ctx.provider.complete.call_count == expected_calls

@@ -45,48 +45,36 @@ surface and evidence without an entity binding.
 
 ## Call scheduling
 
-A chapter's records work is two provider calls: one bounded typed discovery pass, then one
-who's-who inventory. Both go through `ctx.batch_manager`, so per-novel provider
-configuration, priority class and the served-model cache key apply exactly as they do to
-translation. `GRAPH_MAX_CONCURRENT_CALLS` (default 1) still bounds independent fan-out
-elsewhere in a chapter.
+Records enrichment normally makes three core calls (discovery, selection, normalization),
+plus chronological identity resolution and target-language rendering when needed. Each
+validated core response is checkpointed. Empty selections skip unnecessary work. The
+provider boundary carries priority, model selection, and served-model provenance (§5.4).
 
-The budget binds at the provider, not at the fan-out. Because the shared psycopg
-connection is not safe for concurrent cursors, engine writes are serialized by a lock. The
-setting is scheduling only: it is deliberately absent from generation identity and the
-completion cache key, so it cannot change what a finished call contains.
+## One provisional spelling per term
 
-## Character-name spelling review
+Normal ingestion does **not** run the standalone `CharacterNamesStage` or its focused
+alternative-generation pass. The existing display-name alignment request also classifies
+terms; `term_choices.py` chooses one spelling without another model call:
 
-Before translation, exact source names are classified for display: ordinary Chinese
-personal names use deterministic pinyin; foreign names transcribed in Chinese receive
-suggested restored spellings; distinctive personal titles receive meaning-based
-translations; named species, groups, places, organizations, objects, and techniques use
-semantic translations. A focused second model pass reconsiders ambiguous terms after
-the broad inventory pass, so polyphonic Pinyin is not mistaken for foreign-name
-restoration. A small conventional-transcription lookup supplements the model for
-recognized English names (including complete middle-dot-separated names), so model
-misclassification does not reduce those suggestions to pinyin. Restorations/titles always require human approval, even
-when there is one choice. They never establish identity or approve facts. Organizations,
-places, and other non-person terms are reviewed into the semantic glossary path.
+- Ordinary Chinese personal names keep deterministic Pinyin and surname/given-name spacing.
+- Recognized foreign transcriptions keep conventional restored spellings.
+- Other foreign names, meaningful titles, and semantic terms keep their translated wording.
 
-Existing pending pinyin-only suggestions can be refreshed offline using their original
-quoted evidence, without later chapters, re-importing, approval, or queue changes:
+The first valid choice is stored as a pending `character_name_review`, with one candidate.
+Later mentions cannot replace it; readers confirm or correct it through the hovercard.
+Nothing is auto-approved or turned into an entity identity. Previously approved glossary
+spellings retain precedence, and deleted glossary entries do not resurrect constraints.
 
-```bash
-cd services/pipeline
-../../scripts/with-env.sh .venv/bin/python -m pipeline.refresh_name_reviews \
-  --novel-id NOVEL_UUID --source-term 劳伦斯
-# Add --apply to save the suggestions. Omit --source-term to refresh all pending names.
-```
+The reader overlays provisional or approved choices on mapped display spans without
+rewriting saved translation objects. Later translations use earlier provisional choices
+as well as the approved glossary; the exact choices are included in the translation cache
+fingerprint. Review status and chapter gates still apply. Chapters translated before a
+choice exists retain their saved text; the overlay becomes available once alignment exists.
 
-Already-approved spellings remain locked. Semantic rendering defaults do not override
-an existing glossary spelling; use the glossary correction UI for those.
-
-The review UI exposes the classification. Approval maps Chinese/foreign/personal-title
-roles to a hard `character_name` spelling constraint and semantic terms to the softer
-`semantic_term` constraint. This lets a stale or mistaken review be repaired without
-merging identities or approving graph facts.
+`character_names.py`, `name_checkpoints.py`, and `refresh_name_reviews.py` retain the
+legacy standalone/offline tooling and its saved responses. They are not a normal worker
+stage. Do not reintroduce per-passage name inventory or alternative-generation calls into
+production; use `display_names.py` / `term_choices.py` for this flow.
 
 ## Unlinked reader name cards
 

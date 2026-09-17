@@ -84,3 +84,12 @@ async def test_alignment_requires_exact_offered_display_and_source_terms():
     rows = await align_names(ctx, "契科夫说完便走了。", display, spans)
     assert [(r.source_term, r.display_term, r.char_start, r.char_end) for r in rows] == [
         ("契科夫", "Chekov", 0, 6), ("契科夫", "Chekov", 14, 20)]
+
+
+async def test_alignment_classifies_term_in_the_existing_call_without_spelling_suggestions():
+    ctx = context('{"alignments":[{"display_term":"Lingfeng","source_term":"凌峰","term_role":"chinese_person"}]}')
+    rows = await align_names(ctx, "凌峰来了。", "Lingfeng came.", [
+        Span(alias_id="", byte_start=0, byte_end=8, char_start=0, char_end=8)])
+    assert rows[0].term_role == "chinese_person"
+    assert len(ctx.provider.calls) == 1
+    assert "targets" not in ctx.provider.calls[0]["json_schema"]["properties"]

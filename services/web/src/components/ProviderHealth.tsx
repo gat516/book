@@ -14,6 +14,14 @@ export const PROVIDER_FAILURE_DETAILS: Record<string, string> = {
   provider_retry_exhausted: "the provider rejected five consecutive attempts; automatic retries stopped",
   model_not_available: "the provider could not find the pinned model",
   model_server_error: "the provider returned a server error",
+  provider_invalid_json: "the AI returned a response that could not be read",
+  provider_bad_request: "the AI provider rejected the request",
+  unsupported_schema: "the model does not support the required response format",
+  prompt_too_large: "the request exceeds the model’s input limit",
+  output_limit: "the AI reached its response length limit before finishing",
+  provider_content_filtered: "the AI provider blocked the response with its content filter",
+  output_truncated: "the AI stopped before completing its response",
+  invalid_stage_output: "the AI response did not match the required format",
   unknown: "the provider health check could not identify the cause",
 };
 

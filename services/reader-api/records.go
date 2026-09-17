@@ -125,14 +125,14 @@ SELECT g.id::text,
     WHERE c.novel_id=$1 AND c.chapter_index <= $2
       AND ($3::int IS NULL OR c.chapter_index=$3::int)),0),
   (SELECT min(retry_at) FROM (SELECT c.provider_retry_at AS retry_at FROM chapter c
-	    WHERE c.novel_id=$1 AND ($3::int IS NULL OR c.chapter_index=$3::int)
+	    WHERE c.novel_id=$1 AND c.chapter_index <= $2 AND ($3::int IS NULL OR c.chapter_index=$3::int)
 	    UNION ALL SELECT c.enrichment_retry_at FROM chapter c
-	    WHERE c.novel_id=$1 AND ($3::int IS NULL OR c.chapter_index=$3::int)) retries),
+	    WHERE c.novel_id=$1 AND c.chapter_index <= $2 AND ($3::int IS NULL OR c.chapter_index=$3::int)) retries),
   (SELECT c.provider_retry_category FROM chapter c
-    WHERE c.novel_id=$1 AND ($3::int IS NULL OR c.chapter_index=$3::int)
+    WHERE c.novel_id=$1 AND c.chapter_index <= $2 AND ($3::int IS NULL OR c.chapter_index=$3::int)
     ORDER BY c.chapter_index LIMIT 1),
   COALESCE((SELECT c.enrichment_attempts FROM chapter c
-    WHERE c.novel_id=$1 AND ($3::int IS NULL OR c.chapter_index=$3::int)
+    WHERE c.novel_id=$1 AND c.chapter_index <= $2 AND ($3::int IS NULL OR c.chapter_index=$3::int)
     ORDER BY c.chapter_index LIMIT 1),0),
   -- Deliberately answers only for a named chapter. A discarded chapter has no run row,
   -- so its extraction reads as 'pending' and the reader is told work is queued when the
@@ -192,7 +192,41 @@ SELECT g.id::text,
 	if err := factFirstStatus(ctx, tx, novelID, generation, chapter, &status); err != nil {
 		return "", RecordsStatus{}, err
 	}
+	// Generic stage retries have no provider_retry_category. Read their safe failure
+	// ledger too, including failures before RECORDS has created a run (§0 spoiler gate).
+	if retryCategory == nil && (enrichmentAttempts > 0 || extraction == "failed") {
+		var code string
+		err := tx.QueryRow(ctx, `SELECT cf.error_code FROM chapter_failure cf
+		  JOIN chapter c ON c.novel_id=cf.novel_id AND c.chapter_index=cf.chapter_index
+		 WHERE cf.novel_id=$1 AND cf.chapter_index <= $2
+		   AND ($3::int IS NULL OR cf.chapter_index=$3::int)
+		   AND c.enrichment_attempts > 0 AND NOT c.enrichment_discarded
+		 ORDER BY cf.occurred_at DESC,cf.id DESC LIMIT 1`, novelID, at, chapter).Scan(&code)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return "", RecordsStatus{}, err
+		}
+		if err == nil {
+			code = safeChapterFailureCode(code)
+			status.RetryCategory, status.FailureDetail = &code, &code
+		}
+	}
 	return generation, status, nil
+}
+
+func safeChapterFailureCode(code string) string {
+	switch code {
+	case "output_limit", "provider_content_filtered", "provider_invalid_json", "invalid_stage_output", "provider_bad_request",
+		"credential_missing", "credential_rejected", "model_not_available", "model_not_installed",
+		"prompt_too_large", "unsupported_schema", "output_truncated", "model_changed",
+		"provider_timeout", "timeout", "provider_connection", "model_unreachable", "unreachable",
+		"provider_http_400", "provider_http_401", "provider_http_403", "provider_http_404",
+		"provider_http_413", "provider_http_422", "provider_http_429",
+		"model_server_error", "rate_limited", "quota_exhausted", "provider_retry_exhausted",
+		"provider_batch_failed", "stage_failed":
+		return code
+	default:
+		return "stage_failed"
+	}
 }
 
 // factFirstStatus enriches the common status contract from the run-scoped audit tables.

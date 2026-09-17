@@ -1540,3 +1540,9 @@ textarea {
 .semantic-search-form input, .semantic-search-form select { width: 100%; box-sizing: border-box; }
 .semantic-search-form button { justify-self: start; }
 @media (max-width: 640px) { .settings-role-guide { grid-template-columns: 1fr; } }
+
+/* One chapter control panel; retain the top status bar's visual treatment. */
+.reader-features-panel { background: #f7f9fc; border-color: #d8dce3; border-radius: 8px; }
+.reader-features-panel > .reader-records-status { flex: 1 1 100%; margin: 0; padding: 0; border: 0; background: transparent; }
+.reader-features-panel > .knowledge-actions { align-items: center; margin-left: 0; }
+.reader-features-panel > small { flex-basis: 100%; }

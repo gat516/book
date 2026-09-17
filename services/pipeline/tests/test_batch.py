@@ -132,3 +132,18 @@ async def test_split_cancellation_propagates_without_submitting_siblings():
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+async def test_normalized_provider_error_survives_batch_and_failure_ledger():
+    from novel_llm.provider import ProviderResponseError, SequentialBatchMixin
+    from pipeline.failures import error_code
+
+    class Provider(SequentialBatchMixin):
+        async def complete(self, *args, **kwargs):
+            raise ProviderResponseError("provider_invalid_json")
+
+    provider = Provider()
+    batch = await provider.batch_submit([{"id": "expected", "prompt": "source", "system": "stable"}])
+    with pytest.raises(BatchRequestFailed) as caught:
+        BatchManager.require_single_result("expected", await provider.batch_poll(batch))
+    assert error_code(caught.value) == "provider_invalid_json"

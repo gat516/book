@@ -546,3 +546,80 @@ func TestDatabaseRolesAreLeastPrivilege(t *testing.T) {
 		}
 	}
 }
+
+func TestRecordsStatusReportsSafeFailureWithinReaderGate(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	fixture := seedIntegrationFixture(t, admin)
+	ctx := context.Background()
+	for _, chapter := range []int{1, 3} {
+		if _, err := admin.Exec(ctx, `UPDATE chapter SET enrichment_attempts=1,
+   enrichment_retry_at=now()+interval '5 minutes' WHERE novel_id=$1 AND chapter_index=$2`, fixture.novelID, chapter); err != nil {
+			t.Fatal(err)
+		}
+		code := "provider_invalid_json"
+		if chapter == 3 {
+			code = "credential_rejected"
+		}
+		if _, err := admin.Exec(ctx, `INSERT INTO chapter_failure (novel_id,chapter_index,stage,error_type,error_code)
+   VALUES ($1,$2,'character_names','ProviderResponseError',$3)`, fixture.novelID, chapter, code); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), `DELETE FROM chapter_failure WHERE novel_id=$1`, fixture.novelID)
+	})
+	// A newer failure beyond the reader's cap must not replace the visible cause.
+	if err := store.withReaderTx(ctx, fixture.novelID, 1, func(tx pgx.Tx) error {
+		_, status, err := recordsStatusFor(ctx, tx, fixture.novelID, nil, 1)
+		if err != nil {
+			return err
+		}
+		if status.RetryCategory == nil || *status.RetryCategory != "provider_invalid_json" || status.RetryAt == nil {
+			t.Fatalf("wrong retry status: %+v", status)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestChapterRenderingExposesOneProvisionalChoiceAndRespectsGate(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	fixture := seedIntegrationFixture(t, admin)
+	ctx := context.Background()
+	if _, err := admin.Exec(ctx, `INSERT INTO character_name_review
+  (novel_id,source_term,first_seen_chapter,source_hash,char_start,char_end,quote,candidates,reason,term_role,rendering_method)
+  VALUES ($1,'凌峰',1,'hash-1',0,2,'凌峰来了。','[{"target_term":"Ling Feng","pronunciation":[],"segmentation":"surname+given","method":"pinyin"},{"target_term":"Other","pronunciation":[],"segmentation":"","method":"pinyin"}]','provisional','chinese_person','pinyin')`, fixture.novelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO term_rendering_occurrence
+  (novel_id,chapter_index,char_start,char_end,source_term,display_term,method)
+  VALUES ($1,1,0,8,'凌峰','Lingfeng','aligned')`, fixture.novelID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = admin.Exec(ctx, `DELETE FROM character_name_review WHERE novel_id=$1`, fixture.novelID) })
+	check := func(want bool) {
+		t.Helper()
+		if err := store.withReaderTx(ctx, fixture.novelID, 1, func(tx pgx.Tx) error {
+			spans := []SpanView{{CharStart: 0, CharEnd: 8}}
+			if err := attachChapterRenderings(ctx, tx, fixture.novelID, 1, 1, "Lingfeng came.", spans); err != nil {
+				return err
+			}
+			r := spans[0].Rendering
+			if want && (r == nil || r.Status != "pending" || r.TargetTerm == nil || *r.TargetTerm != "Ling Feng" || len(r.Candidates) != 1) {
+				t.Fatalf("wrong provisional rendering: %+v", r)
+			}
+			if !want && r != nil && r.TargetTerm != nil {
+				t.Fatalf("future choice leaked: %+v", r)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check(true)
+	if _, err := admin.Exec(ctx, `UPDATE character_name_review SET first_seen_chapter=3 WHERE novel_id=$1`, fixture.novelID); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+}

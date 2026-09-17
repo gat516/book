@@ -56,7 +56,7 @@ export function HoverCard({ novelId, entityId, rendering, status, mention, at, c
 
   async function chooseRendering(rendering: TermRenderingView, targetTerm: string) {
     if (!targetTerm) return;
-    if (targetTerm === rendering.target_term) {
+    if (rendering.status === "locked" && targetTerm === rendering.target_term) {
       setNotice(`“${targetTerm}” is already confirmed.`);
       return;
     }
@@ -192,37 +192,24 @@ function RenderingControl({ rendering, displayed, saving, onChoose, onLeave }: {
   onLeave: () => void;
 }) {
   const [draft, setDraft] = useState(rendering.target_term ?? displayed);
-  const options = renderingOptions(rendering);
+  const chosen = rendering.target_term ?? displayed;
   return <section className="hover-card-rendering">
-    <span>Name for future chapters <small lang="zh">{rendering.source_term}</small></span>
+    <span>Term spelling <small lang="zh">{rendering.source_term}</small></span>
     {rendering.status === "locked"
       ? <small>Confirmed as “{rendering.target_term}”.</small>
-      : <button disabled={saving} onClick={() => void onChoose(rendering, displayed)}>Confirm “{displayed}”</button>}
-    {options.length > 0 && <select
-      aria-label={`Suggested name for ${rendering.source_term}`}
-      value={rendering.target_term ?? ""}
-      disabled={saving}
-      onChange={(event) => void onChoose(rendering, event.target.value)}
-    >
-      {!rendering.target_term && <option value="" disabled>Choose a suggestion…</option>}
-      {options.map((option) => <option key={option} value={option}>{option}</option>)}
-    </select>}
+      : <>
+          <small>Using “{chosen}” provisionally. Confirm it or enter a correction.</small>
+          <button disabled={saving} onClick={() => void onChoose(rendering, chosen)}>Confirm “{chosen}”</button>
+        </>}
     <form onSubmit={(event) => { event.preventDefault(); void onChoose(rendering, draft.trim()); }}>
       <label>Preferred spelling<input value={draft} disabled={saving}
         onChange={(event) => setDraft(event.target.value)} /></label>
       <div className="hover-card-rendering-actions">
-        <button disabled={saving || !draft.trim() || draft.trim() === rendering.target_term}>Save spelling</button>
+        <button disabled={saving || !draft.trim() || (rendering.status === "locked" && draft.trim() === rendering.target_term)}>Save spelling</button>
         <button type="button" disabled={saving} onClick={onLeave}>Leave it for now</button>
       </div>
     </form>
   </section>;
-}
-
-function renderingOptions(rendering: TermRenderingView): string[] {
-  return [...new Set([
-    ...(rendering.target_term ? [rendering.target_term] : []),
-    ...rendering.candidates.map((candidate) => candidate.target_term),
-  ])];
 }
 
 function roleForCandidate(candidate: CharacterNameCandidate | undefined, fallback: TermRenderingView["term_role"]): TermRole {

@@ -248,12 +248,12 @@ async def test_deleted_glossary_terms_are_not_constraints_but_advance_cache_vers
             "INSERT INTO glossary (novel_id, source_term, target_term, version, locked_at_chapter, deleted) "
             "VALUES (%s, 'gone', 'Removed', 5, 0, true)", (novel_id,),
         )
-        assert await _glossary(db_conn, novel_id) == (5, [])
+        assert await _glossary(db_conn, novel_id, chapter=CHAPTER) == (5, [])
         await db_conn.execute(
             "INSERT INTO glossary (novel_id, source_term, target_term, version, locked_at_chapter) "
             "VALUES (%s, 'kept', 'Retained', 4, 0)", (novel_id,),
         )
-        assert await _glossary(db_conn, novel_id) == (5, [('kept', 'Retained', 'semantic_term')])
+        assert await _glossary(db_conn, novel_id, chapter=CHAPTER) == (5, [('kept', 'Retained', 'semantic_term')])
     finally:
         await delete_novel(db_conn, novel_id)
 
