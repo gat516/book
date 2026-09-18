@@ -235,46 +235,97 @@ func (s *Store) changeGlossaryTerm(ctx context.Context, novelID, sourceTerm, new
 // not a silent overwrite (correcting an existing term is CorrectGlossaryTerm's job, not
 // this one's).
 func (s *Store) BootstrapGlossaryTerm(ctx context.Context, novelID, sourceTerm, targetTerm string) (int, error) {
-	return s.insertGlossaryTerm(ctx, novelID, sourceTerm, targetTerm, 0, "semantic_term")
+	version, _, err := s.insertGlossaryTerm(ctx, novelID, sourceTerm, targetTerm, 0, "semantic_term")
+	return version, err
 }
 
 // ConfirmGlossaryTerm publishes a reader-confirmed source-to-display spelling at the
 // reader's current knowledge boundary. Unlike bootstrap, it must not backdate the term to
 // chapter 0: learning that a named thing exists can itself be a spoiler (§0.2/§0.3).
-func (s *Store) ConfirmGlossaryTerm(ctx context.Context, novelID, sourceTerm, targetTerm string, atChapter int, termRole string) (int, error) {
+func (s *Store) ConfirmGlossaryTerm(ctx context.Context, novelID, sourceTerm, targetTerm string, atChapter int, termRole string) (int, []QueueMessage, error) {
 	targetTerm = strings.TrimSpace(targetTerm)
 	if targetTerm == "" || len([]rune(targetTerm)) > 160 {
-		return 0, errors.New("target_term is required and must be at most 160 characters")
+		return 0, nil, errors.New("target_term is required and must be at most 160 characters")
 	}
 	constraintClass, _, ok := renderingForRole(termRole)
 	if !ok {
-		return 0, errors.New("term_role must be chinese_person, foreign_person, personal_title, or semantic_term")
+		return 0, nil, errors.New("term_role must be chinese_person, foreign_person, personal_title, or semantic_term")
 	}
 	if atChapter < 0 {
-		return 0, errors.New("at_chapter must be nonnegative")
+		return 0, nil, errors.New("at_chapter must be nonnegative")
 	}
-	return s.insertGlossaryTerm(ctx, novelID, sourceTerm, targetTerm, atChapter, constraintClass)
+	version, created, err := s.insertGlossaryTerm(ctx, novelID, sourceTerm, targetTerm, atChapter, constraintClass)
+	if err != nil || !created {
+		// A repeat confirm of the same spelling already re-queued its chapters the first
+		// time; queueing again would only re-translate identical output.
+		return version, nil, err
+	}
+	chapters, err := s.chaptersRenderingTerm(ctx, novelID, sourceTerm)
+	if err != nil {
+		return version, nil, err
+	}
+	queue := make([]QueueMessage, 0, len(chapters))
+	for _, chapter := range chapters {
+		msg := QueueMessage{NovelID: novelID, ChapterIndex: chapter, Retranslate: true}
+		if err := s.enqueue(ctx, msg); err != nil {
+			// The lock is committed; report what did get queued so the caller can retry.
+			return version, queue, err
+		}
+		queue = append(queue, msg)
+	}
+	return version, queue, nil
 }
 
-func (s *Store) insertGlossaryTerm(ctx context.Context, novelID, sourceTerm, targetTerm string, atChapter int, constraintClass string) (int, error) {
+// chaptersRenderingTerm lists already-translated chapters whose text contains sourceTerm,
+// i.e. the chapters a newly locked spelling must re-translate so the whole book agrees.
+//
+// Both occurrence tables count: term_rendering_occurrence is what normal ingestion writes
+// today (display alignment, and the table the reader's hover card is built from), while
+// character_name_occurrence is only filled by the legacy name inventory. Reading just the
+// legacy table, as ApproveCharacterName does, finds nothing for a book that never ran it.
+// Chapters not yet translated need no pointer: TRANSLATE reads the glossary when it runs.
+func (s *Store) chaptersRenderingTerm(ctx context.Context, novelID, sourceTerm string) ([]int, error) {
+	rows, err := s.db.Query(ctx, `SELECT c.chapter_index FROM chapter c
+		WHERE c.novel_id=$1 AND c.translation_ready AND (
+		  EXISTS (SELECT 1 FROM term_rendering_occurrence t
+		          WHERE t.novel_id=c.novel_id AND t.chapter_index=c.chapter_index AND t.source_term=$2)
+		  OR EXISTS (SELECT 1 FROM character_name_occurrence o
+		          WHERE o.novel_id=c.novel_id AND o.chapter_index=c.chapter_index AND o.source_term=$2))
+		ORDER BY c.chapter_index`, novelID, sourceTerm)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var chapters []int
+	for rows.Next() {
+		var chapter int
+		if err := rows.Scan(&chapter); err != nil {
+			return nil, err
+		}
+		chapters = append(chapters, chapter)
+	}
+	return chapters, rows.Err()
+}
+
+func (s *Store) insertGlossaryTerm(ctx context.Context, novelID, sourceTerm, targetTerm string, atChapter int, constraintClass string) (int, bool, error) {
 	// Shape-check before anything permanent happens, exactly where _lock_glossary does it.
 	// A human seeding a term is still seeding one that every later chapter is rewritten
 	// against, so "a person typed it" is not on its own a reason to skip the guard.
 	if problem := sourceTermProblem(sourceTerm); problem != "" {
-		return 0, fmt.Errorf("%w: %s", ErrGlossaryTermInvalid, problem)
+		return 0, false, fmt.Errorf("%w: %s", ErrGlossaryTermInvalid, problem)
 	}
 	var targetLang string
 	if err := s.db.QueryRow(ctx, "SELECT target_lang FROM novel WHERE id=$1", novelID).
 		Scan(&targetLang); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if problem := targetTermProblem(targetTerm, targetLang); problem != "" {
-		return 0, fmt.Errorf("%w: %s", ErrGlossaryTargetInvalid, problem)
+		return 0, false, fmt.Errorf("%w: %s", ErrGlossaryTargetInvalid, problem)
 	}
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 
@@ -282,14 +333,14 @@ func (s *Store) insertGlossaryTerm(ctx context.Context, novelID, sourceTerm, tar
 	// _lock_glossary both use, so a concurrent bootstrap and a concurrent RESOLVE never
 	// race on the version counter or the changelog hash chain.
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", novelID); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	var maxVersion int
 	if err := tx.QueryRow(ctx,
 		"SELECT COALESCE(MAX(version), 0) FROM glossary WHERE novel_id = $1", novelID,
 	).Scan(&maxVersion); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	newVersion := maxVersion + 1
 
@@ -312,23 +363,23 @@ func (s *Store) insertGlossaryTerm(ctx context.Context, novelID, sourceTerm, tar
 			"SELECT target_term, version FROM glossary WHERE novel_id = $1 AND source_term = $2",
 			novelID, sourceTerm,
 		).Scan(&existingTarget, &newVersion); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		if existingTarget != targetTerm {
-			return 0, fmt.Errorf("%w: %q is already locked to %q, not %q",
+			return 0, false, fmt.Errorf("%w: %q is already locked to %q, not %q",
 				ErrGlossaryTermConflict, sourceTerm, existingTarget, targetTerm)
 		}
 		if err := tx.Commit(ctx); err != nil {
-			return 0, err
+			return 0, false, err
 		}
-		return newVersion, nil
+		return newVersion, false, nil
 	}
 	if isDuplicateTargetTerm(err) {
-		return 0, fmt.Errorf("%w: %q is already the target of another source term",
+		return 0, false, fmt.Errorf("%w: %q is already the target of another source term",
 			ErrGlossaryTermConflict, targetTerm)
 	}
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	var prevSeq int
@@ -340,7 +391,7 @@ func (s *Store) insertGlossaryTerm(ctx context.Context, novelID, sourceTerm, tar
 	if errors.Is(err, pgx.ErrNoRows) {
 		prevSeq, prevHash = 0, ""
 	} else if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	seq := prevSeq + 1
 
@@ -361,13 +412,13 @@ func (s *Store) insertGlossaryTerm(ctx context.Context, novelID, sourceTerm, tar
 		 VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)`,
 		novelID, seq, sourceTerm, targetTerm, atChapter, prevHashArg, rowHash,
 	); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	return newVersion, nil
+	return newVersion, true, nil
 }
 
 // pythonJSONArray builds the exact JSON array string

@@ -659,7 +659,7 @@ func (a *API) confirmGlossaryTerm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.SourceTerm = strings.TrimSpace(req.SourceTerm)
-	version, err := a.store.ConfirmGlossaryTerm(r.Context(), r.PathValue("id"), req.SourceTerm,
+	version, queued, err := a.store.ConfirmGlossaryTerm(r.Context(), r.PathValue("id"), req.SourceTerm,
 		req.TargetTerm, req.AtChapter, req.TermRole)
 	if errors.Is(err, ErrGlossaryTermInvalid) || errors.Is(err, ErrGlossaryTermConflict) {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -669,10 +669,24 @@ func (a *API) confirmGlossaryTerm(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, correctGlossaryTermResp{
-		NovelID: r.PathValue("id"), SourceTerm: req.SourceTerm,
-		TargetTerm: strings.TrimSpace(req.TargetTerm), Version: version,
+	chapters := make([]int, 0, len(queued))
+	for _, msg := range queued {
+		chapters = append(chapters, msg.ChapterIndex)
+	}
+	writeJSON(w, http.StatusCreated, confirmGlossaryTermResp{
+		correctGlossaryTermResp: correctGlossaryTermResp{
+			NovelID: r.PathValue("id"), SourceTerm: req.SourceTerm,
+			TargetTerm: strings.TrimSpace(req.TargetTerm), Version: version,
+		},
+		QueuedChapters: chapters,
 	})
+}
+
+// confirmGlossaryTermResp adds the chapters a new lock sent back for re-translation, so
+// the reader can see that earlier chapters will change spelling (not just later ones).
+type confirmGlossaryTermResp struct {
+	correctGlossaryTermResp
+	QueuedChapters []int `json:"queued_chapters"`
 }
 
 type bootstrapGlossaryResp struct {

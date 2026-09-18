@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -198,12 +199,12 @@ func TestConfirmGlossaryTermKeepsReaderKnowledgeBoundaryAndRole(t *testing.T) {
 	ctx := context.Background()
 	novelID := seedNovelWithGlossary(t, store, map[string]string{})
 
-	version, err := store.ConfirmGlossaryTerm(ctx, novelID, "契科夫", "Chekhov", 42, "foreign_person")
+	version, queued, err := store.ConfirmGlossaryTerm(ctx, novelID, "契科夫", "Chekhov", 42, "foreign_person")
 	if err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
-	if version != 1 {
-		t.Fatalf("version = %d, want 1", version)
+	if version != 1 || len(queued) != 0 {
+		t.Fatalf("version = %d, queued = %v; want 1 and nothing (no chapter uses the term)", version, queued)
 	}
 	var target, class string
 	var lockedAt, changedAt int
@@ -214,6 +215,53 @@ func TestConfirmGlossaryTermKeepsReaderKnowledgeBoundaryAndRole(t *testing.T) {
 	}
 	if target != "Chekhov" || lockedAt != 42 || changedAt != 42 || class != "character_name" {
 		t.Fatalf("confirmed term = target %q, locked %d, changed %d, class %q", target, lockedAt, changedAt, class)
+	}
+}
+
+func TestChaptersRenderingTermFindsTranslatedChaptersFromEitherOccurrenceTable(t *testing.T) {
+	store := integrationStore(t)
+	ctx := context.Background()
+	novelID := seedNovelWithGlossary(t, store, map[string]string{})
+	t.Cleanup(func() {
+		store.db.Exec(context.Background(), `DELETE FROM chapter WHERE novel_id = $1`, novelID)
+	})
+	for chapter, ready := range map[int]bool{1: true, 2: true, 3: false, 4: true, 5: true} {
+		insertTestChapter(t, store, novelID, chapter, fmt.Sprintf("sha256:%s-%d", novelID, chapter))
+		if _, err := store.db.Exec(ctx, `UPDATE chapter SET translation_ready=$3 WHERE novel_id=$1 AND chapter_index=$2`,
+			novelID, chapter, ready); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Current display alignment: chapters 1 and 3 (3 is untranslated, so TRANSLATE will
+	// pick the lock up itself). Legacy inventory: chapter 4. Chapter 2 never uses the term,
+	// and chapter 5 uses a different one.
+	for _, row := range []struct {
+		chapter int
+		term    string
+	}{{1, "阿瑞斯"}, {3, "阿瑞斯"}, {5, "芙蕾雅"}} {
+		if _, err := store.db.Exec(ctx, `INSERT INTO term_rendering_occurrence
+			(novel_id,chapter_index,char_start,char_end,source_term,display_term,method)
+			VALUES($1,$2,0,5,$3,'Aries','aligned')`, novelID, row.chapter, row.term); err != nil {
+			t.Fatalf("seed rendering occurrence: %v", err)
+		}
+	}
+	if _, err := store.db.Exec(ctx, `INSERT INTO character_name_review
+		(novel_id,source_term,first_seen_chapter,source_hash,char_start,char_end,quote,candidates,reason)
+		VALUES($1,'阿瑞斯',4,'sha256:test',0,3,'阿瑞斯','[]','test')`, novelID); err != nil {
+		t.Fatalf("seed name review: %v", err)
+	}
+	if _, err := store.db.Exec(ctx, `INSERT INTO character_name_occurrence
+		(id,novel_id,chapter_index,source_term,char_start,char_end,source_hash,quote)
+		VALUES(gen_random_uuid(),$1,4,'阿瑞斯',0,3,'sha256:test','阿瑞斯')`, novelID); err != nil {
+		t.Fatalf("seed name occurrence: %v", err)
+	}
+
+	chapters, err := store.chaptersRenderingTerm(ctx, novelID, "阿瑞斯")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(chapters) != "[1 4]" {
+		t.Fatalf("chapters = %v, want [1 4]", chapters)
 	}
 }
 
