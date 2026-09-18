@@ -43,6 +43,10 @@ foreign names transcribed in Chinese to conventional {target_lang} spellings, an
 translate meaningful titles, organizations, places, techniques, and artifacts by
 meaning. For English, 劳伦斯 can be Lawrence, not Laolunsi; 天庭 is Heavenly Court,
 not Tianting. Do not translate an ordinary personal name's literal meaning.
+For Chinese personal names in Latin script, separate the surname from the given name
+with a space and capitalize both: 凌峰 is Ling Feng; 龙飞 is Long Fei.
+Keep a multi-syllable given name joined, as in Zhang Wuji, and a compound surname
+joined, as in Ouyang Feng.
 These defaults never override a locked glossary spelling.
 Preserve paragraph breaks and return only the translation.
 

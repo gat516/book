@@ -53,6 +53,12 @@ It reacts to provider hints; it is not a proactive request/token budget schedule
 Provider wait log lines are deferrals, not successful model calls. Check
 `character_name_checkpoint` for historical name work and `fact_first_run` for core
 extraction progress; count saved successes without printing response text.
+Provider deferrals clear the generic enrichment retry deadline; the due sweep also
+guards older rows with both deadlines so a stale retry cannot bypass the cooldown or
+provider-attempt limit. Admission logs include only allowlisted numeric token quotas.
+Core records completion logs include input/output/cache counts. Identity responses are
+checkpointed before rendering and revalidated on exact-request reuse, avoiding another
+who's-who call after a rendering deferral.
 
 ## UI ownership
 

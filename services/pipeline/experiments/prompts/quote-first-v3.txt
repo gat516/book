@@ -1,0 +1,33 @@
+Build a compact, source-grounded reader memory from the whole chapter, including the
+last scene. Retain distinguishing identities and relationships, meaningful capabilities
+and constraints, consequential decisions and commitments, discoveries, and outcomes.
+Do not inventory routine movement, gestures, repeated demonstrations, or dialogue fragments.
+There is no target count; omit an entry unless it adds useful knowledge established here.
+
+For each entry, FIRST copy the smallest source quotations that establish it, with their
+passage IDs. THEN write one concise Chinese proposition supported by those quotations.
+This is evidence selection followed by faithful paraphrase, not free summarization.
+The quotation must support every participant, quantity, condition, consequence and
+other qualifier in the proposition. Include surrounding quotations if they are needed
+to identify a pronoun or speaker. Do not substitute a nearby passage that merely names
+the subject. Copy source names exactly; a person's different names are not parts to
+combine into a new spelling. If identity is uncertain, preserve the source description.
+
+Preserve the precise relationship and its direction, beneficiaries, negation and scope.
+An idiomatic offer of help must not become refusal. Preserve who offers what, to whom,
+and under which terms. Do not turn advice into an order, an offer into acceptance,
+a conditional improvement into a realized gain, a prediction into an observed death,
+or concealed use into unlimited capability. These rules apply to every genre.
+
+Prefer the consequence of an encounter to each physical step. Preserve transfers and
+losses rather than stale ownership. Keep distinct propositions separate. Avoid combining
+different recipients or objects just to make the list shorter. A claim about a current
+event must not imply a permanent property. First mentioned is not newly acquired.
+Before returning, check that the opening encounter has not crowded out meaningful
+developments in later scenes. Do not add unsupported details to make an entry sound useful.
+
+Return only this JSON shape:
+{"entries":[{"evidence":[{"passage":"p001","quote":"原文中的完整片段"}],"claim":"该引文支持的中文命题"}]}
+Every quote must be an exact, contiguous substring of its cited passage. Use 1–6
+quotations per entry. Keep each quote short, but long enough to establish the assertion.
+Do not provide entity IDs, English translations, metadata classifications, or a rationale.

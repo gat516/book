@@ -126,15 +126,23 @@ def _verify_ctx(db):
     return SimpleNamespace(
         db=db,
         novel=SimpleNamespace(id="novel", source_lang="zh", target_lang="en", ontology={"kinds": []}),
-        cfg=SimpleNamespace(prompt_version="prompt", llm_model_extract="extract-model"),
+        cfg=SimpleNamespace(prompt_version="prompt", llm_model_extract="extract-model",
+                            llm_provider="groq", hosted_graph_output_tokens=4096),
+        provider_id="groq",
         model_override=None,
     )
 
 
 def test_generation_identity_includes_code_prompt_and_checks_contracts():
     requested = _requested(_verify_ctx(None))
-    assert requested.prompt_version == f"prompt:{PROMPT_CONTRACT_VERSION}"
-    assert requested.checks_version == CHECKS_VERSION == "records-checks-v2"
+    assert requested.prompt_version.startswith(f"prompt:{PROMPT_CONTRACT_VERSION}:")
+    assert requested.checks_version == CHECKS_VERSION == "fact-first-checks-v1"
+    ctx = _verify_ctx(None)
+    ctx.cfg.hosted_graph_output_tokens = 8192
+    assert _requested(ctx).prompt_version != requested.prompt_version
+    ctx.cfg.hosted_graph_output_tokens = 4096
+    ctx.provider_id = "openrouter"
+    assert _requested(ctx).prompt_version != requested.prompt_version
 
 
 @pytest.mark.asyncio

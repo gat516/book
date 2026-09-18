@@ -146,6 +146,8 @@ async def test_provider_retry_after_is_never_shortened_and_success_resets_streak
     await worker._record_provider_rejection(msg, AdmissionRejected(retry_after_s=300))
     update = next(params for sql, params in worker.db.calls if "provider_retry_at=now()" in sql)
     assert update[1] == 300
+    assert any("enrichment_retry_at=NULL,enrichment_retry_generation_id=NULL" in sql
+               for sql, _ in worker.db.calls)
     await worker._reset_provider_retry(msg)
     assert any("provider_retry_attempts=0" in sql for sql, _ in worker.db.calls)
 
@@ -174,11 +176,50 @@ async def test_retry_sweep_orders_both_due_states_and_enqueues_deduped_messages(
     await worker._retry_enrichment()
     assert "provider_retry_at <= now()" in worker.db.sql
     assert "ORDER BY LEAST" in worker.db.sql
-    assert worker.db.params == (MAX_ENRICHMENT_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS)
+    assert worker.db.params == (MAX_ENRICHMENT_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS,
+                                MAX_PROVIDER_RETRY_ATTEMPTS)
     assert len(worker.redis.calls) == 2
     assert '"enrichment":true' not in worker.redis.calls[0][-1]
     assert '"enrichment":true' in worker.redis.calls[1][-1]
     assert '"record_generation_id":"generation"' in worker.redis.calls[1][-1]
+
+
+@pytest.mark.db
+async def test_provider_cooldown_and_exhaustion_win_over_stale_generic_retry(db_conn):
+    from novel_llm import AdmissionRejected
+    from pipeline.envelope import QueueMessage
+
+    novel = await make_novel(db_conn)
+    worker = worker_stub()
+    worker.db, worker.redis = db_conn, AsyncMock()
+    msg = QueueMessage(novel_id=novel, chapter_index=1)
+    try:
+        await db_conn.execute(
+            "INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status,"
+            "enrichment_retry_at) VALUES (%s,1,'test','raw','{}','error',now())", (novel,))
+        await worker._record_provider_rejection(msg, AdmissionRejected(retry_after_s=300))
+        row = await (await db_conn.execute(
+            "SELECT enrichment_retry_at,provider_retry_at>now() FROM chapter WHERE novel_id=%s",
+            (novel,))).fetchone()
+        assert row == (None, True)
+        # Old workers may have left both deadlines set. The sweep also guards
+        # those durable rows without needing a migration or a bulk reset.
+        await db_conn.execute("UPDATE chapter SET enrichment_retry_at=now() WHERE novel_id=%s", (novel,))
+        await worker._retry_enrichment()
+        assert not any(call.args[-3] == novel for call in worker.redis.eval.await_args_list)
+
+        await db_conn.execute("UPDATE chapter SET provider_retry_attempts=4 WHERE novel_id=%s", (novel,))
+        await worker._record_provider_rejection(msg, AdmissionRejected(retry_after_s=300))
+        row = await (await db_conn.execute(
+            "SELECT enrichment_retry_at,provider_retry_at,provider_retry_attempts FROM chapter WHERE novel_id=%s",
+            (novel,))).fetchone()
+        assert row == (None, None, 5)
+        await db_conn.execute("UPDATE chapter SET enrichment_retry_at=now() WHERE novel_id=%s", (novel,))
+        worker.redis.reset_mock()
+        await worker._retry_enrichment()
+        assert not any(call.args[-3] == novel for call in worker.redis.eval.await_args_list)
+    finally:
+        await delete_novel(db_conn, novel)
 
 
 @pytest.mark.asyncio
@@ -202,6 +243,8 @@ async def test_provider_rejection_fifth_attempt_is_terminal():
     msg = type("Message", (), {"novel_id": "novel", "chapter_index": 1})()
     await worker._record_provider_rejection(msg, AdmissionRejected(retry_after_s=1))
     assert any("provider_retry_at=NULL" in sql for sql, _ in worker.db.calls)
+    assert any("enrichment_retry_at=NULL,enrichment_retry_generation_id=NULL" in sql
+               for sql, _ in worker.db.calls)
     assert any("INSERT INTO chapter_failure" in sql for sql, _ in worker.db.calls)
 
 
@@ -904,7 +947,7 @@ def test_translation_is_the_reader_critical_path_before_enrichment():
     names = [stage.name for stage in DEFAULT_STAGES]
     assert names[:2] == ["chunk", "translate"]
     # Name choices reuse display alignment, with no independent inventory calls.
-    assert names[2:] == ["scan", "records", "display_scan"]
+    assert names[2:] == ["scan", "display_scan", "records"]
 
 
 async def test_enrichment_retries_are_deduplicated_and_yield_to_reading(scheduled):

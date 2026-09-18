@@ -39,6 +39,21 @@ AUTO_SURNAMES = set(
     "凌单乐解查仇区朴"
 )
 
+# Script variants affect surname recognition, not the stored source spelling or
+# pronunciation. In particular 龍 must receive the same boundary as 龙 (§0.8).
+_SURNAME_VARIANTS = str.maketrans({
+    "歐": "欧", "陽": "阳", "馬": "马", "東": "东", "獨": "独", "宮": "宫",
+    "萬": "万", "聞": "闻", "諸": "诸", "遲": "迟", "連": "连", "臺": "台",
+    "孫": "孙", "鍾": "钟", "鐘": "钟", "長": "长", "鮮": "鲜",
+    "於": "于", "閭": "闾", "張": "张", "劉": "刘", "陳": "陈", "楊": "杨",
+    "黃": "黄", "趙": "赵", "吳": "吴", "羅": "罗", "鄭": "郑", "謝": "谢",
+    "許": "许", "韓": "韩", "馮": "冯", "鄧": "邓", "蕭": "萧", "蔣": "蒋",
+    "葉": "叶", "蘇": "苏", "呂": "吕", "盧": "卢", "譚": "谭", "陸": "陆",
+    "賈": "贾", "韋": "韦", "鄒": "邹", "閆": "闫", "龍": "龙",
+    "賀": "贺", "顧": "顾", "龔": "龚", "錢": "钱", "嚴": "严", "湯": "汤",
+    "單": "单", "樂": "乐", "區": "区", "樸": "朴",
+})
+
 
 @dataclass(frozen=True)
 class NameCandidate:
@@ -66,9 +81,10 @@ class NamePlan:
 
 
 def _surname_length(surface: str) -> int:
-    if surface[:2] in COMPOUND_SURNAMES and len(surface) > 2:
+    surname = surface[:2].translate(_SURNAME_VARIANTS)
+    if surname in COMPOUND_SURNAMES and len(surface) > 2:
         return 2
-    if surface[:1] in AUTO_SURNAMES and len(surface) > 1:
+    if surname[:1] in AUTO_SURNAMES and len(surface) > 1:
         return 1
     return 0
 

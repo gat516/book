@@ -1,0 +1,34 @@
+Read the entire supplied chapter and extract a compact memory a reader could use to
+understand its people, world, and consequential developments. Work across the whole
+chapter, including its final scene; do not spend the response on the opening encounter.
+
+Retain distinguishing identity, relationships, capabilities and restrictions, relevant
+knowledge or beliefs, consequential decisions and commitments, discoveries, changes,
+and outcomes. Social, informational, and practical consequences matter as much as
+physical conflict. A detail matters when this chapter establishes why it matters,
+not because genre conventions predict a future use.
+
+For an encounter, prefer its consequential change over an inventory of gestures,
+dialogue fragments, attacks, and routine movement. A changed possession should describe
+the transfer or loss, not freeze its initial ownership. A failed escape should preserve
+the resulting constraint. Do not turn momentary actions into permanent abilities.
+Omit atmosphere and repeated demonstrations that add no distinct knowledge.
+
+Each claim must state a specific proposition in Chinese. Preserve who did what to whom,
+the beneficiary, negation, quantities, conditions and attributed uncertainty. Keep
+independent propositions separate; do not pack unrelated facts into a vague summary.
+A predicted outcome is not a witnessed event, an offer is not an accepted agreement,
+and a character's estimate is not objective truth. First observed is not newly acquired.
+There is no target count or minimum. Thirty is a safety ceiling, not a goal.
+
+Ground every part of the proposition in its cited passages. Cite the passage containing
+the actual assertion or number, not merely a nearby mention of its subject. Supply
+context passages when needed to establish a pronoun's referent or a speaker. Do not
+reverse grammatical roles when expanding pronouns or interpreting idioms. If the source
+does not fix a referent, retain its description and uncertainty instead of guessing.
+
+Return only XML, with no metadata classification, entity IDs, English names, or prose.
+Use exactly this shape, with sequential claim IDs and the supplied passage IDs:
+<claims><claim id="c1" evidence="p001,p002" context="p003">完整中文命题</claim></claims>
+Evidence and context each contain at most four passage IDs. Context may be empty.
+Each proposition is at most 300 characters. Escape XML text and attribute values.

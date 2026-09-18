@@ -49,6 +49,11 @@ Records enrichment normally makes three core calls (discovery, selection, normal
 plus chronological identity resolution and target-language rendering when needed. Each
 validated core response is checkpointed. Empty selections skip unnecessary work. The
 provider boundary carries priority, model selection, and served-model provenance (§5.4).
+Who's-who is also checkpointed before rendering starts. A retry revalidates its original
+response only when the complete request (including earlier entity candidates) matches,
+retaining the actual served model. Rendering deferrals therefore do not repeat a
+completed identity call. Worker logs report core-call input/output/cache token counts
+without source text or model responses.
 
 ## One provisional spelling per term
 
@@ -64,6 +69,10 @@ The first valid choice is stored as a pending `character_name_review`, with one 
 Later mentions cannot replace it; readers confirm or correct it through the hovercard.
 Nothing is auto-approved or turned into an entity identity. Previously approved glossary
 spellings retain precedence, and deleted glossary entries do not resurrect constraints.
+Display scanning runs before records extraction, so a records failure cannot prevent
+name choices from reaching the reader. Simplified and traditional surname spellings
+use the same surname/given-name boundary (龙飞 / 龍飛 → Long Fei); multi-syllable given
+names remain joined. Translation instructions apply this spacing on first appearance.
 
 The reader overlays provisional or approved choices on mapped display spans without
 rewriting saved translation objects. Later translations use earlier provisional choices

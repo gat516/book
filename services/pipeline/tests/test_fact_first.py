@@ -327,7 +327,7 @@ async def test_truncated_output_preserves_partial_usage_without_accepting_it(tmp
         output_tokens=58,
         cache_read_tokens=19,
     )
-    truncated = TruncatedOutput()
+    truncated = TruncatedOutput("provider reached its output token limit", finish_reason="length")
     truncated.partial_completion = partial
     truncated.finish_reason = "length"
     provider = FakeProvider([truncated])

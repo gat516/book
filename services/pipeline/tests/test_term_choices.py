@@ -12,6 +12,8 @@ from pipeline.stages.translate import _glossary
 
 @pytest.mark.parametrize("surface,display,role,target,method", [
     ("凌峰", "Lingfeng", "chinese_person", "Ling Feng", "pinyin"),
+    ("龙飞", "Longfei", "chinese_person", "Long Fei", "pinyin"),
+    ("龍飛", "Longfei", "chinese_person", "Long Fei", "pinyin"),
     ("水寒", "Water Cold", "chinese_person", "Shuihan", "pinyin"),
     ("契科夫", "Chekov", "foreign_person", "Chekhov", "restored_name"),
     ("白衣剑圣", "White-Robed Sword Saint", "personal_title", "White-Robed Sword Saint", "translated_title"),

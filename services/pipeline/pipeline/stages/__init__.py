@@ -1,4 +1,4 @@
-"""Runtime: chunk → translate → scan → records → display scan.
+"""Runtime: chunk → translate → scan → display scan → records.
 
 Translation becomes readable independently of optional records enrichment. Display
 alignment supplies one provisional terminology choice for hovercard review and future
@@ -18,8 +18,10 @@ DEFAULT_STAGES = [
     ChunkStage(),
     TranslateStage(),
     ScanStage(),
-    RecordsStage(),
+    # §0.5 / §0.7: name choices depend on readable prose, not optional extraction.
+    # A records failure must not prevent the reader from receiving corrected names.
     DisplayScanStage(),
+    RecordsStage(),
 ]
 
 __all__ = [

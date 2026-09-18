@@ -1,9 +1,21 @@
 from pipeline.pinyin_names import plan_character_name
+import pytest
 
 
 def test_standard_character_names_are_code_derived():
     assert plan_character_name("凌峰").auto_target == "Ling Feng"
     assert plan_character_name("黄少天").auto_target == "Huang Shaotian"
+
+
+@pytest.mark.parametrize("surface,target", [
+    ("龍飛", "Long Fei"), ("龙飞", "Long Fei"),
+    ("黃少天", "Huang Shaotian"), ("張無忌", "Zhang Wuji"),
+    ("歐陽鋒", "Ouyang Feng"),
+])
+def test_surname_spacing_is_the_same_in_traditional_and_simplified_script(surface, target):
+    plan = plan_character_name(surface)
+    assert plan.candidates[0].target_term == target
+    assert plan.candidates[0].segmentation == "surname+given"
 
 
 def test_surname_less_name_is_joined_but_requires_review():

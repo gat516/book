@@ -302,8 +302,9 @@ class Worker:
                     msg, exc
                 )
                 log.info(
-                    "provider admission deferred durably category=%s retry_after_s=%.1f",
+                    "provider admission deferred durably category=%s retry_after_s=%.1f token_quota=%s",
                     getattr(exc, "category", "rate_limited"), exc.retry_after_s,
+                    getattr(exc, "rate_limit_details", {}),
                 )
             except EarlierChapterPending as exc:
                 msg = QueueMessage.model_validate_json(raw)
@@ -866,7 +867,8 @@ class Worker:
             # at that status is stranded exactly the way pre-TRANSLATE failures were before
             # 0033. It was excluded then precisely because it WAS a live human gate.
             "WHERE ((NOT c.enrichment_discarded AND enrichment_retry_at <= now() "
-            "AND enrichment_attempts < %s) OR (provider_retry_at <= now() "
+            "AND enrichment_attempts < %s AND provider_retry_at IS NULL "
+            "AND provider_retry_attempts < %s) OR (provider_retry_at <= now() "
             "AND provider_retry_attempts < %s "
             "AND (NOT c.translation_ready OR NOT c.enrichment_discarded))) "
             "AND (NOT c.translation_ready OR c.status='name_repair_error' OR NOT EXISTS ("
@@ -877,7 +879,7 @@ class Worker:
             "AND r.generation_id=(SELECT active_record_generation FROM novel WHERE id=c.novel_id)))) "
             "ORDER BY LEAST(COALESCE(enrichment_retry_at, 'infinity'::timestamptz), "
             "COALESCE(provider_retry_at, 'infinity'::timestamptz)) LIMIT 20",
-            (MAX_ENRICHMENT_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS),
+            (MAX_ENRICHMENT_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS),
         )).fetchall()
         for novel_id, chapter, status, generation_id, translation_ready in rows:
             msg = QueueMessage(novel_id=novel_id, chapter_index=chapter,
@@ -912,6 +914,7 @@ class Worker:
                 await self.db.execute(
                     "UPDATE chapter SET provider_retry_attempts=%s,provider_retry_at=NULL,"
                     "provider_retry_category=%s,provider_retry_generation_id=NULL,"
+                    "enrichment_retry_at=NULL,enrichment_retry_generation_id=NULL,"
                     "status=CASE WHEN translation_ready THEN status ELSE 'error' END "
                     "WHERE novel_id=%s AND chapter_index=%s",
                     (attempt, category, msg.novel_id, msg.chapter_index),
@@ -936,7 +939,10 @@ class Worker:
             await self.db.execute(
                 "UPDATE chapter SET provider_retry_attempts=%s,"
                 "provider_retry_at=now() + (%s * interval '1 second'),"
-                "provider_retry_category=%s,provider_retry_generation_id=%s "
+                "provider_retry_category=%s,provider_retry_generation_id=%s,"
+                # §6.2: provider admission owns the next retry. A stale generic due
+                # timestamp must not bypass this cooldown or its exhaustion limit.
+                "enrichment_retry_at=NULL,enrichment_retry_generation_id=NULL "
                 "WHERE novel_id=%s AND chapter_index=%s",
                 (attempt, delay, category, getattr(msg, "record_generation_id", None),
                  msg.novel_id, msg.chapter_index),
