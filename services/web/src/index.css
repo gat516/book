@@ -1546,3 +1546,14 @@ textarea {
 .reader-features-panel > .reader-records-status { flex: 1 1 100%; margin: 0; padding: 0; border: 0; background: transparent; }
 .reader-features-panel > .knowledge-actions { align-items: center; margin-left: 0; }
 .reader-features-panel > small { flex-basis: 100%; }
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
