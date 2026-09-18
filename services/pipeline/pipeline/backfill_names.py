@@ -15,10 +15,12 @@ from dataclasses import replace
 import psycopg
 
 from pipeline.config import Config
-from pipeline.context import NovelMeta, StageContext, language_profile_for
+from pipeline.context import NovelMeta, PipelineState, StageContext, language_profile_for
 from pipeline.display_names import align_names, discover_names, merge_names
+from pipeline.envelope import ChapterEnvelope
 from pipeline.graph import GraphWriter
 from pipeline.mentions import Span
+from pipeline.term_choices import record_term_choices
 from pipeline.worker import Worker
 
 
@@ -43,7 +45,10 @@ async def backfill(novel_id: str, start: int, end: int, apply: bool) -> None:
         )
         chapters = await (await worker.db.execute(
             "SELECT chapter_index, raw_uri, COALESCE(translated_uri, raw_uri), translated_uri IS NOT NULL FROM chapter "
-            "WHERE novel_id=%s AND status='done' AND chapter_index BETWEEN %s AND %s ORDER BY chapter_index",
+            # A translated chapter qualifies even if a later stage failed: names depend only
+            # on the saved prose, and chapters stranded by provider limits need them most.
+            "WHERE novel_id=%s AND (status='done' OR translated_uri IS NOT NULL) "
+            "AND chapter_index BETWEEN %s AND %s ORDER BY chapter_index",
             (novel_id, start, end),
         )).fetchall()
         for index, raw_uri, uri, translated in chapters:
@@ -65,11 +70,18 @@ async def backfill(novel_id: str, start: int, end: int, apply: bool) -> None:
                 # Don't publish offsets if another process replaced this text while the
                 # model worked. Lock only during the short persistence transaction.
                 current = await worker._fetch_one(
-                    "SELECT status, COALESCE(translated_uri, raw_uri) FROM chapter "
+                    "SELECT COALESCE(translated_uri, raw_uri) FROM chapter "
                     "WHERE novel_id=%s AND chapter_index=%s FOR UPDATE", (novel_id, index))
-                if current != ("done", uri):
+                if current != (uri,):
                     raise RuntimeError(f"chapter {index} changed during indexing; retry")
                 if apply:
+                    # Same proposals DISPLAY_SCAN records for a newly ingested chapter:
+                    # pending name reviews and glossary candidates, never an approval a
+                    # human (or the deterministic Pinyin rule) didn't make.
+                    state = PipelineState(envelope=ChapterEnvelope(
+                        novel_id=novel_id, chapter_index=index, raw_text=source_text,
+                        source_lang=source))
+                    await record_term_choices(ctx, state, renderings)
                     await GraphWriter(worker.db).replace_mention_spans(
                         novel_id, index, merged, renderings)
             print(json.dumps({"chapter": index, "added": len(merged)-len(existing),

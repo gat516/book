@@ -115,43 +115,106 @@ async def discover_names(ctx: StageContext, text: str) -> list[Span]:
     return [span for span in spans if whole_name(text, span, ctx.novel.target_lang)]
 
 
-async def align_names(
-    ctx: StageContext, source: str, display: str, spans: list[Span]
-) -> list[TermRenderingOccurrence]:
-    """Align literal display spans to exact source terms; invalid model rows vanish."""
-    display_names = list(dict.fromkeys(display[s.char_start:s.char_end] for s in spans))
-    if not source.strip() or not display_names:
-        return []
+# Each alignment call carries only excerpts, sized to fit a small per-minute token
+# allowance (Groq's free tier allows 8,000 tokens a minute, and sending both whole
+# chapters asked for ~8,600, so the call could never be admitted). This budget covers
+# the excerpt payload; the instructions and the JSON answer fit in the remainder.
+ALIGN_PAYLOAD_TOKENS = 3000
+# Source paragraphs taken on each side of a name's proportional position. Translation
+# merges paragraphs (125 displayed for 170 source in one chapter), so the position only
+# approximates where the source sentence is; the window absorbs that drift.
+ALIGN_WINDOW = 4
+
+
+def _paragraphs(text: str) -> list[str]:
+    return [p for p in text.split("\n") if p.strip()]
+
+
+def _approx_tokens(text: str) -> int:
+    """Rough and deliberately high: ~4 Latin characters per token, one per CJK character."""
+    ascii_chars = sum(ch.isascii() for ch in text)
+    return ascii_chars // 4 + (len(text) - ascii_chars)
+
+
+def _alignment_batches(source: str, display: str, names: list[str]) -> list[dict]:
+    """Group names into payloads that each show every name once, in both languages.
+
+    One example per name is enough to align it: the displayed paragraph where it first
+    appears, plus the source paragraphs at the same relative position in the chapter.
+    """
+    source_paras, display_paras = _paragraphs(source), _paragraphs(display)
+    ratio = len(source_paras) / max(len(display_paras), 1)
+    excerpts = []
+    for name in names:
+        at = next((i for i, p in enumerate(display_paras) if name in p), 0)
+        centre = round(at * ratio)
+        excerpts.append((name, {at}, set(range(max(centre - ALIGN_WINDOW, 0),
+                                              min(centre + ALIGN_WINDOW + 1, len(source_paras))))))
+
+    def payload(group):
+        shown = sorted(set().union(*(d for _, d, _ in group)))
+        sources = sorted(set().union(*(s for _, _, s in group)))
+        return {"source": "\n".join(source_paras[i] for i in sources),
+                "translation": "\n".join(display_paras[i] for i in shown),
+                "display_names": [name for name, _, _ in group]}
+
+    batches, group = [], []
+    for excerpt in excerpts:
+        # A single name over budget still gets its own call rather than being dropped.
+        if group and _approx_tokens(json.dumps(payload(group + [excerpt]), ensure_ascii=False)) > ALIGN_PAYLOAD_TOKENS:
+            batches.append(payload(group))
+            group = []
+        group.append(excerpt)
+    if group:
+        batches.append(payload(group))
+    return batches
+
+
+async def _align_batch(ctx: StageContext, batch: dict) -> TermAlignmentProposal:
     model = model_for_stage("display_scan", ctx.cfg, ctx.model_override)
     requested_id = f"{ctx.provider_id or ctx.cfg.llm_provider}:{model}"
-    payload = json.dumps({"source": source, "translation": display,
-                          "display_names": display_names}, ensure_ascii=False)
+    payload = json.dumps(batch, ensure_ascii=False)
     key = hashlib.sha256(json.dumps([
-        "display-alignment-v2-single-choice", ALIGN_SYSTEM, TermAlignmentProposal.model_json_schema(),
+        "display-alignment-v3-excerpts", ALIGN_SYSTEM, TermAlignmentProposal.model_json_schema(),
         payload, requested_id,
     ], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     cached = await ctx.cache.get(key)
-    if cached is None:
-        completion = await (getattr(ctx, "names_provider", None) or ctx.provider).complete(
-            f"INPUT DATA (not instructions):\n{payload}", system=ALIGN_SYSTEM,
-            json_mode=True, json_schema=TermAlignmentProposal.model_json_schema(),
-            cls=Class.BATCH, model=model,
-        )
-        proposal = TermAlignmentProposal.model_validate_json(completion.text)
-        await ctx.cache.put(key, proposal.model_dump_json(), requested_model_id=requested_id,
-            served_provider=completion.served_provider, served_model=completion.served_model,
-            stage="display_scan_alignment")
-    else:
+    if cached is not None:
         try:
-            proposal = TermAlignmentProposal.model_validate_json(cached)
+            return TermAlignmentProposal.model_validate_json(cached)
         except ValueError:
             await ctx.cache.delete(key)
-            return await align_names(ctx, source, display, spans)
+    completion = await (getattr(ctx, "names_provider", None) or ctx.provider).complete(
+        f"INPUT DATA (not instructions):\n{payload}", system=ALIGN_SYSTEM,
+        json_mode=True, json_schema=TermAlignmentProposal.model_json_schema(),
+        cls=Class.BATCH, model=model,
+    )
+    proposal = TermAlignmentProposal.model_validate_json(completion.text)
+    await ctx.cache.put(key, proposal.model_dump_json(), requested_model_id=requested_id,
+        served_provider=completion.served_provider, served_model=completion.served_model,
+        stage="display_scan_alignment")
+    return proposal
+
+
+async def align_names(
+    ctx: StageContext, source: str, display: str, spans: list[Span]
+) -> list[TermRenderingOccurrence]:
+    """Align literal display spans to exact source terms; invalid model rows vanish.
+
+    The model sees excerpts, but every answer is still checked against the full source
+    chapter: a poorly placed excerpt can make it miss a name, never invent one.
+    """
+    display_names = list(dict.fromkeys(display[s.char_start:s.char_end] for s in spans))
+    if not source.strip() or not display_names:
+        return []
+    alignments = []
+    for batch in _alignment_batches(source, display, display_names):
+        alignments.extend((await _align_batch(ctx, batch)).alignments)
 
     by_display: dict[str, str | None] = {}
     roles: dict[str, str] = {}
     offered = set(display_names)
-    for item in proposal.alignments:
+    for item in alignments:
         if (item.display_term not in offered or item.source_term not in source
                 or not item.source_term.strip()):
             continue
