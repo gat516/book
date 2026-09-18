@@ -61,9 +61,10 @@ Normal ingestion does **not** run the standalone `CharacterNamesStage` or its fo
 alternative-generation pass. The existing display-name alignment request also classifies
 terms; `term_choices.py` chooses one spelling without another model call:
 
-- Chinese personal names use the source-names model's own Pinyin spelling and spacing;
-  there is no surname list or Pinyin library to override it (the prompt says a name stays
-  Pinyin even when its characters have a meaning).
+- Chinese personal names take their letters from pypinyin and their spacing from the
+  source-names model: "An Ruosu", two-character "Longze Liyue". There is no surname list.
+  A name the model translated instead ("Dragon Fei") keeps the matched Pinyin part and
+  gets its surname back in Pinyin ("Long Fei"), even when mislabelled as a title.
 - Recognized foreign transcriptions keep conventional restored spellings.
 - Other foreign names, meaningful titles, and semantic terms keep their translated wording.
 

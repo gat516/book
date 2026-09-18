@@ -19,7 +19,9 @@ dependencies = [
     # Decrypts novel_provider_config.api_key_cipher (PLAN.md Phase N4) — AES-GCM,
     # matching services/ingest-api/crypto.go's stdlib crypto/aes+cipher encryption.
     "cryptography>=42",
-    # Deterministic Hanzi -> Hanyu Pinyin candidates for source-anchored character names.
+    # Hanzi -> Hanyu Pinyin letters for Chinese personal names (term_choices.py); the
+    # model decides only the spacing.
+    "pypinyin>=0.54",
     # Simplified <-> Traditional conversion: a model may write a name in the other script
     # from the source's (星莲 for 星蓮); names are checked and stored in the source's form.
     "opencc-python-reimplemented>=0.1.7",

@@ -5,8 +5,11 @@ approvals occur here. The first choice survives later mentions until the reader
 approves or corrects it through the hovercard.
 """
 from dataclasses import dataclass, replace
+from itertools import islice, product
 import logging
 import re
+
+from pypinyin import Style, pinyin
 
 from psycopg.types.json import Jsonb
 from pipeline.context import PipelineState, StageContext
@@ -37,11 +40,81 @@ class NamePlan:
     rendering_method: str
 
 
+_HANZI = re.compile(r"^[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]{1,6}$")
+
+
+def _letters(word: str) -> str:
+    # Tone-free comparison: pypinyin writes ü as v, a model may write ü, v or u.
+    return word.lower().replace("ü", "u").replace("v", "u")
+
+
+def _align(syllables: tuple[str, ...], words: list[str]) -> tuple[int, list[tuple[str, ...]]]:
+    """The longest tail of ``words`` spelled by a tail of ``syllables``.
+
+    Returns how many leading syllables are left unmatched, and the matched syllable
+    groups, one per word. "An Ruosu" over an·ruo·su matches everything; "Dragon Fei"
+    over long·fei matches only "Fei", leaving the surname unmatched.
+    """
+    best: tuple[int, list[tuple[str, ...]]] = (len(syllables), [])
+
+    def walk(end: int, word: int, groups: list[tuple[str, ...]]) -> None:
+        nonlocal best
+        if end < best[0]:
+            best = (end, groups)
+        if word == 0 or end == 0:
+            return
+        for start in range(end - 1, -1, -1):
+            if _letters("".join(syllables[start:end])) == _letters(words[word - 1]):
+                walk(start, word - 1, [syllables[start:end], *groups])
+
+    walk(len(syllables), len(words), [])
+    return best
+
+
+def _pinyin_name(surface: str, display: str) -> tuple[NameCandidate, int, int] | None:
+    """A Chinese name's spelling: letters from the characters, spacing from the model.
+
+    The letters come from pypinyin, so a name can never come out translated by
+    meaning. Only where the spaces go comes from the model, which knows where a surname
+    ends ("An Ruosu", two-character "Longze Liyue") far better than a surname list.
+    Leading syllables the model did not spell in Pinyin become one word: that is the
+    surname in "Dragon Fei". Also returns how many of the model's words matched and how
+    many leading syllables did not.
+    """
+    if not _HANZI.fullmatch(surface):
+        return None
+    readings = pinyin(surface, style=Style.NORMAL, heteronym=True, errors="ignore", strict=True,
+                      v_to_u=True)
+    if len(readings) != len(surface) or any(not row for row in readings):
+        return None
+    words = re.findall(r"[^\W\d_]+", display.replace("'", "").replace("\u2019", ""))
+    best = None
+    # Polyphonic characters: prefer the reading the model's spelling agrees with.
+    for syllables in islice(product(*(tuple(dict.fromkeys(row)) for row in readings)), 64):
+        unmatched, groups = _align(syllables, words)
+        if best is None or unmatched < best[0][0]:
+            best = ((unmatched, groups), syllables)
+    (unmatched, groups), syllables = best
+    parts = ([syllables[:unmatched]] if unmatched else []) + groups
+    target = " ".join("".join(part).capitalize() for part in parts)
+    segmentation = "mononym" if len(parts) == 1 else "surname+given" if len(parts) == 2 else "split"
+    return NameCandidate(target, syllables, segmentation, "pinyin"), len(groups), unmatched
+
+
 def provisional_plan(surface: str, display: str, role: str, target_lang: str):
+    spelled = _pinyin_name(surface, display) if display.strip() else None
+    if role in ("personal_title", "semantic_term") and spelled:
+        _, matched, leading = spelled
+        # "Dragon Fei" labelled a title: the model spelled the given name in Pinyin but
+        # translated a one- or two-character surname. A real title keeps the whole name
+        # in Pinyin (龍飛大人, "Lord Long Fei") and a term translated by meaning has no
+        # Pinyin in it (龍王, "Dragon King"), so neither matches this.
+        if matched and 1 <= leading <= 2 and len(re.findall(r"[^\W\d_]+", display)) > matched:
+            role = "chinese_person"
     if role == "chinese_person":
-        # The model's own spelling, as written: no Pinyin library, surname list or
-        # translated-surname backstop. Every name is still only a pending choice the
-        # reader confirms or corrects.
+        if spelled:
+            return NamePlan((spelled[0],), "pinyin", "chinese_person", "pinyin")
+        # Not plain hanzi (a mixed or transcribed form): the model's spelling as written.
         if not display.strip():
             return None
         return NamePlan((NameCandidate(display.strip(), (), "", "pinyin"),),

@@ -11,10 +11,10 @@ from pipeline.stages.translate import _glossary
 
 
 @pytest.mark.parametrize("surface,display,role,target,method", [
-    # A Chinese personal name is the model's own spelling, kept as a pending choice.
+    # A Chinese personal name: Pinyin letters, the model's spacing, a pending choice.
     ("凌峰", "Ling Feng", "chinese_person", "Ling Feng", "pinyin"),
     ("龍飛", "Long Fei", "chinese_person", "Long Fei", "pinyin"),
-    ("水寒", "Water Cold", "chinese_person", "Water Cold", "pinyin"),
+    ("水寒", "Water Cold", "chinese_person", "Shuihan", "pinyin"),
     ("契科夫", "Chekov", "foreign_person", "Chekhov", "restored_name"),
     ("白衣剑圣", "White-Robed Sword Saint", "personal_title", "White-Robed Sword Saint", "translated_title"),
     ("天庭", "Heavenly Court", "semantic_term", "Heavenly Court", "semantic_translation"),
@@ -61,6 +61,24 @@ async def test_choice_survives_later_mentions_and_is_reused_from_its_own_chapter
         await delete_novel(db_conn, novel)
 
 
-def test_a_chinese_name_is_the_models_own_spelling():
-    plan = provisional_plan("安若素", "An Ruosu", "chinese_person", "en")
-    assert [(c.target_term, c.method) for c in plan.candidates] == [("An Ruosu", "pinyin")]
+@pytest.mark.parametrize("surface, display, role, target, expected_role", [
+    ("安若素", "An Ruosu", "chinese_person", "An Ruosu", "chinese_person"),  # no surname list
+    ("龍澤璃月", "Longze Liyue", "chinese_person", "Longze Liyue", "chinese_person"),
+    ("吕布", "Lu Bu", "chinese_person", "Lü Bu", "chinese_person"),  # letters from the characters
+    ("龍飛", "Dragon Fei", "chinese_person", "Long Fei", "chinese_person"),
+    ("龍飛", "Dragon Fei", "personal_title", "Long Fei", "chinese_person"),
+    ("白雪", "White Snow", "chinese_person", "Baixue", "chinese_person"),  # no split to copy
+    ("龍飛大人", "Lord Long Fei", "personal_title", "Lord Long Fei", "personal_title"),
+    ("龍王", "Dragon King", "personal_title", "Dragon King", "personal_title"),
+    ("祖龍", "Ancestral Dragon", "semantic_term", "Ancestral Dragon", "semantic_term"),
+])
+def test_chinese_names_take_letters_from_pinyin_and_spacing_from_the_model(
+        surface, display, role, target, expected_role):
+    plan = provisional_plan(surface, display, role, "en")
+    assert plan.candidates[0].target_term == target
+    assert plan.term_role == expected_role
+
+
+def test_a_mixed_form_keeps_the_models_spelling():
+    plan = provisional_plan("诺顿·威尔森", "Norton Wilson", "chinese_person", "en")
+    assert plan.candidates[0].target_term == "Norton Wilson"
