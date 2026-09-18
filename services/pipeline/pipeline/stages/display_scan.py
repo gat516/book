@@ -47,6 +47,18 @@ class DisplayScanStage:
         text = state.translation if state.translation is not None else state.envelope.raw_text
         if ctx.novel.source_lang != ctx.novel.target_lang and state.translation is None:
             return
+        if state.source_names_primed:
+            # TRANSLATE decided this chapter's names from the source and primed them, so
+            # the exact scan above already found every one. Discovery and alignment are
+            # only the fallback for prose that arrived translated (bootstrap chapters).
+            async with ctx.db.transaction():
+                await GraphWriter(ctx.db).replace_mention_spans(
+                    ctx.novel.id, state.envelope.chapter_index, state.display_spans,
+                    state.term_renderings,
+                )
+            log.info("stage %s chapter=%d primed spans=%d", self.name,
+                     state.envelope.chapter_index, len(state.display_spans))
+            return
         linked = list(state.display_spans)
         discovered = await discover_names(ctx, text)
         state.display_spans = merge_names(state.display_spans, discovered)
@@ -119,6 +131,18 @@ class DisplayScanStage:
                  state.envelope.chapter_index),
             )
         ).fetchall()
+        # Pending choices are primed into translation exactly like locked terms, so their
+        # spellings are in the prose verbatim. Only terms this chapter's source contains:
+        # an unrelated phrase that happens to match a pending spelling is not a mention.
+        locked = {source for source, _, _ in rows}
+        pending = await (await ctx.db.execute(
+            "SELECT source_term, candidates->0->>'target_term' FROM character_name_review "
+            "WHERE novel_id=%s AND status='pending' AND first_seen_chapter <= %s "
+            "AND jsonb_array_length(candidates) > 0",
+            (ctx.novel.id, state.envelope.chapter_index),
+        )).fetchall()
+        rows = list(rows) + [(source, target, None) for source, target in pending
+                             if source not in locked and target and source in state.envelope.raw_text]
 
         request = MentionScanRequest(
             text=state.translation,

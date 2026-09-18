@@ -19,7 +19,9 @@ from pipeline.jobs import (
     model_for_stage,
 )
 from pipeline.llm.provider import BatchRequest
+from pipeline.source_names import find_source_names
 from pipeline.stages.chunk import chunk_text
+from pipeline.term_choices import record_term_choices
 from pipeline.translation import (
     GlossaryViolation,
     build_system_prompt,
@@ -54,11 +56,13 @@ async def _glossary(db, novel_id: str, *, chapter: int) -> tuple[int, list[tuple
         )
     ).fetchall()
     # Provisional terminology is stable too, but never marked human-approved (§0).
-    # Earlier chapters only; a saved/tombstoned glossary entry always takes precedence.
+    # Includes names first seen in THIS chapter: the source-names pass records them just
+    # before translation so they are primed on their first appearance, not only after.
+    # A saved/tombstoned glossary entry always takes precedence.
     provisional = await (await db.execute(
         "SELECT source_term,candidates->0->>'target_term',term_role "
         "FROM character_name_review WHERE novel_id=%s AND status='pending' "
-        "AND first_seen_chapter < %s AND jsonb_array_length(candidates)>0 ORDER BY source_term",
+        "AND first_seen_chapter <= %s AND jsonb_array_length(candidates)>0 ORDER BY source_term",
         (novel_id, chapter),
     )).fetchall()
     known = {r[0] for r in rows}
@@ -264,6 +268,13 @@ class TranslateStage:
     ) -> None:
         chapter = state.envelope.chapter_index
         raw_hash = state.envelope.source_meta.raw_hash
+        if ctx.novel.source_lang.split("-")[0] == "zh":
+            # Names first: recorded as pending choices, then primed below like locked
+            # terms, so the spelling is decided before any English exists and the reader
+            # cards can find it by exact search (source_names.py).
+            async with ctx.db.transaction():
+                await record_term_choices(ctx, state, await find_source_names(ctx, state.envelope.raw_text))
+            state.source_names_primed = True
         glossary_version, glossary = await _glossary(ctx.db, ctx.novel.id, chapter=state.envelope.chapter_index)
         translation_fingerprint = _translation_fingerprint(ctx, glossary)
         # The provider actually resolved for this novel this chapter (PLAN.md Phase N4:

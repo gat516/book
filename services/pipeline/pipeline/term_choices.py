@@ -39,7 +39,9 @@ async def record_term_choices(ctx, state, occurrences: list[TermRenderingOccurre
         return
     seen = set()
     for occurrence in occurrences:
-        if occurrence.source_term in seen or occurrence.method != "aligned":
+        # "aligned" comes from display alignment, "source_names" from the pre-translation
+        # source pass; glossary-scan occurrences are already decided and never re-proposed.
+        if occurrence.source_term in seen or occurrence.method not in ("aligned", "source_names"):
             continue
         seen.add(occurrence.source_term)
         plan = provisional_plan(occurrence.source_term, occurrence.display_term,

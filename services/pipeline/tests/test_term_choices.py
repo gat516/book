@@ -28,7 +28,7 @@ def test_one_choice_keeps_existing_rendering_rules_without_autoapproval(surface,
 
 
 @pytest.mark.db
-async def test_choice_survives_later_mentions_and_is_reused_only_by_later_translation(db_conn):
+async def test_choice_survives_later_mentions_and_is_reused_from_its_own_chapter(db_conn):
     novel = await make_novel(db_conn)
     try:
         ctx = SimpleNamespace(db=db_conn, provider=AsyncMock(), novel=SimpleNamespace(
@@ -44,7 +44,10 @@ async def test_choice_survives_later_mentions_and_is_reused_only_by_later_transl
         assert row[0] == "pending"
         assert [c["target_term"] for c in row[1]] == ["Ling Feng"]
         assert row[2] == "chinese_person"
-        assert await _glossary(db_conn, novel, chapter=1) == (0, [])
+        # Recorded before translation, so its own chapter is primed with it too; a chapter
+        # before it never sees it (§0: no name from the future).
+        assert await _glossary(db_conn, novel, chapter=0) == (0, [])
+        assert await _glossary(db_conn, novel, chapter=1) == (0, [("凌峰", "Ling Feng", "character_name")])
         assert await _glossary(db_conn, novel, chapter=2) == (0, [("凌峰", "Ling Feng", "character_name")])
         assert (await (await db_conn.execute("SELECT count(*) FROM glossary WHERE novel_id=%s", (novel,))).fetchone())[0] == 0
         ctx.provider.complete.assert_not_awaited()

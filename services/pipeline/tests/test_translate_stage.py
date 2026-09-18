@@ -110,8 +110,11 @@ async def test_translation_pins_served_snapshot_and_rerun_reads_object(db_conn):
             )
         ).fetchone()
 
-        assert provider.calls[0]["pin_model"] is True
-        assert provider.calls[0]["model"] == "qwen3:8b"
+        # The source-names pass runs first and is not pinned; the translation call is.
+        assert "List the names" in provider.calls[0]["system"]
+        translation_calls = [call for call in provider.calls if call["pin_model"]]
+        assert len(translation_calls) == 1
+        assert translation_calls[0]["model"] == "qwen3:8b"
         assert len(provider.batch_requests) == 1
         assert len(provider.batch_polls) == 1
         assert pin == ("ollama:qwen3:8b-snapshot",)
@@ -121,7 +124,9 @@ async def test_translation_pins_served_snapshot_and_rerun_reads_object(db_conn):
 
         second = _state(novel_id)
         await TranslateStage().run(ctx, second)
-        assert len(provider.calls) == 1
+        # No second translation. (This fake answers the names pass with prose, which is
+        # unusable and so never cached; a real answer is cached like any other.)
+        assert len([call for call in provider.calls if call["pin_model"]]) == 1
         assert second.translation == TRANSLATION
     finally:
         await delete_novel(db_conn, novel_id)
@@ -284,7 +289,7 @@ async def test_protected_retry_succeeds_and_saves_clean_text(db_conn):
         novel_id,state,row,objects,redis,provider=await _run_protected_case(
             db_conn,'The gates of <locked-term data-id="t0">Azure Cloud Sect</locked-term> opened.')
         assert state.translation=='The gates of Azure Cloud Sect opened.'
-        assert row[1:]==(None,0) and len(provider.calls)==2
+        assert row[1:]==(None,0) and len(provider.calls)==3  # names, translation, protected retry
         assert objects.data[(make_config().object_bucket,row[0])].decode()==state.translation
         assert redis.store,"valid protected output remains content-cacheable"
     finally:
@@ -297,7 +302,7 @@ async def test_nonempty_original_is_saved_with_warning_when_retry_still_misses(d
         novel_id,state,row,objects,redis,provider=await _run_protected_case(
             db_conn,'The sect gates opened, still without the locked wording.')
         assert state.translation=='The gates opened clearly.'
-        assert row[1:]==('locked_terms_missing',1) and len(provider.calls)==2
+        assert row[1:]==('locked_terms_missing',1) and len(provider.calls)==3  # names, translation, protected retry
         assert objects.data[(make_config().object_bucket,row[0])].decode()==state.translation
         assert redis.store=={},"warning output must never enter the response cache"
     finally:

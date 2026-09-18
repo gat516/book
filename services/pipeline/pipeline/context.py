@@ -140,6 +140,9 @@ class PipelineState:
     # Exact source-term -> display-span alignments. Derived terminology metadata only;
     # it never binds an entity and is independently chapter-gated on reads (§0.3).
     term_renderings: "list[TermRenderingOccurrence]" = field(default_factory=list)
+    # TRANSLATE ran the source-names pass and primed its spellings, so DISPLAY_SCAN can
+    # find every name by exact search instead of discovering and aligning with a model.
+    source_names_primed: bool = False
 
     # resolve stage (1.6): the AUTHORITATIVE occurrence-ID -> entity_id map (revision pipeline). Every stage that
     # needs to turn a name into an id reads this and nothing else — a surface absent from

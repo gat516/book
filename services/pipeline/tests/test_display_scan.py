@@ -205,6 +205,22 @@ async def test_unlinked_names_publish_before_facts_and_do_not_create_entities(db
     assert len(ctx.provider.calls) == 2  # one discovery + one alignment; rerun is cached
 
 
+async def test_primed_names_are_found_by_exact_search_without_a_model_call(db_conn, novel):
+    from pipeline.display_names import TermRenderingOccurrence
+    from pipeline.term_choices import record_term_choices
+    ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
+    state = _state(source_lang="zh", translation="He returned to the Azure Cloud Sect.")
+    # What TRANSLATE records from the source-names pass before translating.
+    await record_term_choices(ctx, state, [TermRenderingOccurrence(
+        "青云宗", "Azure Cloud Sect", 4, 7, method="source_names", term_role="semantic_term")])
+    state.source_names_primed = True
+    await DisplayScanStage().run(ctx, state)
+    rows = await (await db_conn.execute(
+        "SELECT entity_id, char_start, char_end FROM mention_span WHERE novel_id=%s", (novel,))).fetchall()
+    assert rows == [(None, 19, 35)]
+    assert ctx.provider.calls == []  # no discovery, no alignment
+
+
 async def test_discovery_preserves_verified_link_and_does_not_link_other_names(db_conn, novel):
     entity_id = await _link_term(db_conn, novel)
     ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
