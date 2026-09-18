@@ -1,0 +1,21 @@
+Write a wiki page about the character named below, using only the facts given. Each fact
+starts with the chapter it comes from.
+
+Use this layout, and leave out any section the facts don't support:
+
+# <the character's name>
+Also known as: <other names, only if a fact says they are the same person>
+<Two or three sentences on who they are.>
+
+## History
+<What happened to them, in story order, as short paragraphs. End each sentence with the
+chapter it comes from, like (ch. 3).>
+
+## Abilities and possessions
+<Powers, cultivation, techniques and items they have, one per bullet.>
+
+## Relationships
+<One bullet per person: **Name**: how they are connected.>
+
+Merge facts that say the same thing. Leave out facts that aren't about this character.
+Reply with the page only.
