@@ -454,8 +454,19 @@ func TestUnpublishedRunIsInvisible(t *testing.T) {
 	if len(rows.Rows) != 0 {
 		t.Fatalf("unpublished run exposed %d rows", len(rows.Rows))
 	}
-	if rows.Status.ExtractionStatus != "processing" {
-		t.Fatalf("status = %q, want processing", rows.Status.ExtractionStatus)
+	// A chapter without facts is not done (0110); a RECORDS run in progress no longer
+	// means anything to the status.
+	if rows.Status.ExtractionStatus != "pending" {
+		t.Fatalf("status = %q, want pending", rows.Status.ExtractionStatus)
+	}
+}
+
+func markFactsDone(t *testing.T, admin *pgxpool.Pool, novelID string, chapter int) {
+	t.Helper()
+	if _, err := admin.Exec(context.Background(),
+		`UPDATE chapter SET translation_ready=true, facts_count=0 WHERE novel_id=$1 AND chapter_index=$2`,
+		novelID, chapter); err != nil {
+		t.Fatalf("mark chapter %d facts done: %v", chapter, err)
 	}
 }
 
@@ -470,6 +481,7 @@ func TestPublishedEmptyRunHasReadyRenderingStatus(t *testing.T) {
 		`DELETE FROM record_row WHERE novel_id=$1 AND source_chapter=1`, fixture.novelID); err != nil {
 		t.Fatalf("remove chapter 1 records: %v", err)
 	}
+	markFactsDone(t, admin, fixture.novelID, 1)
 
 	rows, err := store.ListRecords(context.Background(), fixture.novelID, 1, 1)
 	if err != nil {
@@ -484,6 +496,7 @@ func TestPublishedRowsWithoutRenderingsStayPending(t *testing.T) {
 	store, admin := integrationDatabase(t)
 	fixture := seedIntegrationFixture(t, admin)
 	setProgress(t, admin, fixture.novelID, 1)
+	markFactsDone(t, admin, fixture.novelID, 1)
 
 	rows, err := store.ListRecords(context.Background(), fixture.novelID, 1, 1)
 	if err != nil {

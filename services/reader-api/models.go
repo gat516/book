@@ -23,7 +23,9 @@ type RecordsStatus struct {
 	// one. Chapters publish in order (who's-who resolves against earlier chapters), so a
 	// retry of this chapter cannot succeed until that one is done. Single-chapter only;
 	// it can only name an earlier chapter, so it reveals nothing past the reader's gate.
-	WaitingOnChapter *int              `json:"waiting_on_chapter,omitempty"`
+	WaitingOnChapter *int `json:"waiting_on_chapter,omitempty"`
+	// Facts FACTS wrote for this chapter; nil until the stage has run. Single-chapter only.
+	FactsCount       *int              `json:"facts_count,omitempty"`
 	Stages           map[string]string `json:"stages,omitempty"`
 	SelectionOutcome string            `json:"selection_outcome,omitempty"`
 	Counts           *KnowledgeCounts  `json:"counts,omitempty"`

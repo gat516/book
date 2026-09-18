@@ -87,5 +87,10 @@ class FactsStage:
                     [(ctx.novel.id, chapter, PROMPT_VERSION, i, fact, source_hash, model,
                       completion.served_provider, completion.served_model)
                      for i, fact in enumerate(facts)])
+            # The reader-visible "enrichment done" marker (migration 0110): a count only,
+            # never fact text.
+            await ctx.db.execute(
+                "UPDATE chapter SET facts_count=%s WHERE novel_id=%s AND chapter_index=%s",
+                (len(facts), ctx.novel.id, chapter))
         log.info("stage facts chapter=%s facts=%s in=%s out=%s", chapter, len(facts),
                  completion.input_tokens, completion.output_tokens)

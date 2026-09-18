@@ -36,57 +36,39 @@ func recordsStatusFor(ctx context.Context, tx pgx.Tx, novelID string, chapter *i
 	var discarded bool
 	err := tx.QueryRow(ctx, `
 SELECT g.id::text,
-  COALESCE((SELECT CASE WHEN EXISTS (
-                          SELECT 1
-                            FROM chapter c
-                           WHERE c.novel_id=$1
-                             AND ((c.enrichment_retry_at IS NOT NULL AND c.enrichment_attempts < 5)
-                               OR (c.provider_retry_at IS NOT NULL AND c.provider_retry_attempts < 5))
-                             AND c.chapter_index <= $2
-                             AND ($3::int IS NULL OR c.chapter_index = $3::int)
-                        ) THEN 'processing'
-                        WHEN bool_or(r.status='failed') THEN 'failed'
-                        WHEN EXISTS (
-                          SELECT 1
-                            FROM chapter c
-                            JOIN chapter_failure cf
-                              ON cf.novel_id=c.novel_id AND cf.chapter_index=c.chapter_index
-                           WHERE c.novel_id=$1
-                             AND ((c.provider_retry_attempts >= 5 AND c.provider_retry_at IS NULL
-                                   AND cf.error_code='provider_retry_exhausted')
-                               OR (c.enrichment_attempts >= 5 AND c.enrichment_retry_at IS NULL
-                                   AND cf.error_code <> 'provider_retry_exhausted'))
-                             AND c.chapter_index <= $2
-                             AND ($3::int IS NULL OR c.chapter_index = $3::int)
-                        ) THEN 'failed'
-                        WHEN bool_or(r.status='processing') THEN 'processing'
-                        WHEN count(*) > 0 AND bool_and(r.status='published') THEN 'ready'
-                        ELSE 'pending' END
-              FROM record_run r
-             WHERE r.novel_id=$1 AND r.generation_id=g.id AND r.chapter_index <= $2
-               AND ($3::int IS NULL OR r.chapter_index = $3::int)),
-             CASE WHEN EXISTS (
-                       SELECT 1
-                         FROM chapter c
-                        WHERE c.novel_id=$1
-                          AND ((c.enrichment_retry_at IS NOT NULL AND c.enrichment_attempts < 5)
-                            OR (c.provider_retry_at IS NOT NULL AND c.provider_retry_attempts < 5))
-                          AND c.chapter_index <= $2
-                          AND ($3::int IS NULL OR c.chapter_index = $3::int)
-                    ) THEN 'processing'
-                    WHEN EXISTS (
-                       SELECT 1
-                         FROM chapter c
-                         JOIN chapter_failure cf
-                           ON cf.novel_id=c.novel_id AND cf.chapter_index=c.chapter_index
-                        WHERE c.novel_id=$1
-                          AND ((c.provider_retry_attempts >= 5 AND c.provider_retry_at IS NULL
-                                AND cf.error_code='provider_retry_exhausted')
-                            OR (c.enrichment_attempts >= 5 AND c.enrichment_retry_at IS NULL
-                                AND cf.error_code <> 'provider_retry_exhausted'))
-                          AND c.chapter_index <= $2
-                          AND ($3::int IS NULL OR c.chapter_index = $3::int)
-                    ) THEN 'failed' ELSE 'pending' END),
+  -- FACTS is the last enrichment stage; chapter.facts_count marks a chapter done (0110).
+  -- Ready means every readable chapter in range has its facts. Retry and failure state
+  -- come from the chapter ledger, as before.
+  CASE WHEN EXISTS (
+                SELECT 1
+                  FROM chapter c
+                 WHERE c.novel_id=$1
+                   AND ((c.enrichment_retry_at IS NOT NULL AND c.enrichment_attempts < 5)
+                     OR (c.provider_retry_at IS NOT NULL AND c.provider_retry_attempts < 5))
+                   AND c.chapter_index <= $2
+                   AND ($3::int IS NULL OR c.chapter_index = $3::int)
+             ) THEN 'processing'
+       WHEN EXISTS (
+                SELECT 1
+                  FROM chapter c
+                  JOIN chapter_failure cf
+                    ON cf.novel_id=c.novel_id AND cf.chapter_index=c.chapter_index
+                 WHERE c.novel_id=$1
+                   AND ((c.provider_retry_attempts >= 5 AND c.provider_retry_at IS NULL
+                         AND cf.error_code='provider_retry_exhausted')
+                     OR (c.enrichment_attempts >= 5 AND c.enrichment_retry_at IS NULL
+                         AND cf.error_code <> 'provider_retry_exhausted'))
+                   AND c.chapter_index <= $2
+                   AND ($3::int IS NULL OR c.chapter_index = $3::int)
+             ) THEN 'failed'
+       WHEN EXISTS (SELECT 1 FROM chapter c
+                     WHERE c.novel_id=$1 AND c.translation_ready AND c.chapter_index <= $2
+                       AND ($3::int IS NULL OR c.chapter_index = $3::int))
+        AND NOT EXISTS (SELECT 1 FROM chapter c
+                     WHERE c.novel_id=$1 AND c.translation_ready AND c.chapter_index <= $2
+                       AND ($3::int IS NULL OR c.chapter_index = $3::int)
+                       AND c.facts_count IS NULL) THEN 'ready'
+       ELSE 'pending' END,
   CASE WHEN NOT EXISTS (
               SELECT 1 FROM record_row w0
               JOIN record_run r0 ON r0.id=w0.run_id AND r0.status='published'
@@ -151,15 +133,13 @@ SELECT g.id::text,
 	if err != nil {
 		return "", RecordsStatus{}, err
 	}
-	var waitingOn *int
+	// No WaitingOnChapter: FACTS reads only its own chapter, so nothing waits on an
+	// earlier one. A single chapter reports its fact count (never fact text, §0).
+	var factsCount *int
 	if chapter != nil {
-		if err := tx.QueryRow(ctx, `SELECT min(c.chapter_index) FROM chapter c
-			WHERE c.novel_id=$1 AND c.chapter_index < $2
-			  AND c.translation_ready
-			  AND NOT EXISTS (SELECT 1 FROM record_run r
-			        WHERE r.novel_id=c.novel_id AND r.generation_id=$3::uuid
-			          AND r.chapter_index=c.chapter_index AND r.status='published')`,
-			novelID, *chapter, generation).Scan(&waitingOn); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT facts_count FROM chapter
+			WHERE novel_id=$1 AND chapter_index=$2 AND chapter_index <= $3`,
+			novelID, *chapter, at).Scan(&factsCount); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return "", RecordsStatus{}, err
 		}
 	}
@@ -187,7 +167,7 @@ SELECT g.id::text,
 		RetryAt:          retryAt,
 		RetryCategory:    retryCategory,
 		Discarded:        discarded,
-		WaitingOnChapter: waitingOn,
+		FactsCount:       factsCount,
 	}
 	if err := factFirstStatus(ctx, tx, novelID, generation, chapter, &status); err != nil {
 		return "", RecordsStatus{}, err

@@ -29,6 +29,9 @@ export interface RecordsStatus {
   // Earliest earlier chapter still unextracted. Chapters publish in order, so retrying
   // this one cannot succeed until that chapter is done. Single-chapter status only.
   waiting_on_chapter?: number | null;
+  // Facts the FACTS stage wrote for this chapter (a count only; the text stays hidden
+  // until the wiki exists). Absent until the stage has run.
+  facts_count?: number | null;
   stages?: Record<string, string>;
   selection_outcome?: "empty" | "selected" | "all_rejected" | string;
   counts?: KnowledgeCounts;

@@ -23,10 +23,6 @@ import (
 var (
 	ErrRecordsRebuildActive   = errors.New("a records rebuild is already active")
 	ErrRecordsRebuildConflict = errors.New("records rebuild cannot be discarded")
-	// ErrRecordsOutOfOrder refuses a chapter retry that the worker's generation fence
-	// would reject anyway ("earlier records are unpublished"): failing here is immediate
-	// and says why, instead of queueing an attempt that is certain to fail.
-	ErrRecordsOutOfOrder     = errors.New("an earlier chapter has not been extracted yet")
 	ErrRecordsReviewInvalid  = errors.New("invalid records review request")
 	ErrRecordsReviewConflict = errors.New("records review request conflicts with an existing decision")
 	ErrRecordsReviewNotFound = errors.New("record is not available for review")
@@ -69,16 +65,14 @@ func recordsRebuildCounts(ctx context.Context, tx pgx.Tx, novelID, generation st
 		  FROM chapter c
 		 WHERE c.novel_id=$1 AND (c.translation_ready OR c.status='done')
 	), coverage AS (
-		SELECT e.chapter_index, EXISTS (
-			SELECT 1 FROM record_run r
-			 WHERE r.novel_id=$1 AND r.generation_id=$2
-			   AND r.chapter_index=e.chapter_index AND r.status='published'
-		) AS covered FROM eligible e
+		-- FACTS is the last enrichment stage; its count marks a chapter done (0110).
+		SELECT e.chapter_index, c.facts_count IS NOT NULL AS covered
+		  FROM eligible e JOIN chapter c ON c.novel_id=$1 AND c.chapter_index=e.chapter_index
 	)
 	SELECT count(*)::int,
 	       count(*) FILTER (WHERE covered)::int,
 	       count(*) FILTER (WHERE NOT covered)::int
-	  FROM coverage`, novelID, generation).Scan(&eligible, &published, &missing)
+	  FROM coverage`, novelID).Scan(&eligible, &published, &missing)
 	return
 }
 
@@ -103,19 +97,8 @@ func (s *Store) retryRecords(ctx context.Context, novelID string, chapter int) e
 		}
 		return fmt.Errorf("find novel: %w", err)
 	}
-	var waitingOn *int
-	if err = tx.QueryRow(ctx, `SELECT min(c.chapter_index) FROM chapter c
-		WHERE c.novel_id=$1 AND c.chapter_index < $2
-		  AND c.translation_ready
-		  AND NOT EXISTS (SELECT 1 FROM record_run r
-		        WHERE r.novel_id=c.novel_id AND r.generation_id=$3
-		          AND r.chapter_index=c.chapter_index AND r.status='published')`,
-		novelID, chapter, generation).Scan(&waitingOn); err != nil {
-		return fmt.Errorf("check earlier chapters: %w", err)
-	}
-	if waitingOn != nil {
-		return fmt.Errorf("%w: chapter %d", ErrRecordsOutOfOrder, *waitingOn)
-	}
+	// No chapter-order check: FACTS reads only its own chapter, so a retry never waits
+	// on an earlier one (RECORDS' who's-who did, and refused out-of-order retries).
 	// The explicit retry replaces any automatic one: clear the schedule here rather than
 	// when the worker claims the pointer, so there is never a window where the chapter
 	// carries both. A failure of this attempt does not reschedule (worker.py).
@@ -228,10 +211,7 @@ func (s *Store) stopRecordsBuild(ctx context.Context, novelID string) (int, erro
 		enrichment_retry_at=NULL,enrichment_retry_generation_id=NULL,enrichment_attempts=0,
 		provider_retry_at=NULL,provider_retry_generation_id=NULL,provider_retry_attempts=0,
 		provider_retry_category=NULL
-		WHERE c.novel_id=$1 AND NOT c.enrichment_discarded
-		  AND NOT EXISTS (SELECT 1 FROM record_run r
-		        WHERE r.novel_id=c.novel_id AND r.generation_id=$2
-		          AND r.chapter_index=c.chapter_index AND r.status='published')`, novelID, generation)
+		WHERE c.novel_id=$1 AND NOT c.enrichment_discarded AND c.facts_count IS NULL`, novelID)
 	if err != nil {
 		return 0, fmt.Errorf("mark build stopped: %w", err)
 	}
@@ -297,11 +277,8 @@ func (s *Store) extractRecords(ctx context.Context, novelID string) (int, error)
 		provider_retry_at=NULL,provider_retry_generation_id=NULL,provider_retry_attempts=0,
 		provider_retry_category=NULL
 		WHERE c.novel_id=$1 AND (c.translation_ready OR c.status='done')
-		  AND NOT (c.chapter_index = ANY($3))
-		  AND NOT EXISTS (SELECT 1 FROM record_run r
-		        WHERE r.novel_id=c.novel_id AND r.generation_id=$2
-		          AND r.chapter_index=c.chapter_index AND r.status='published')
-		RETURNING c.chapter_index`, novelID, generation, busy)
+		  AND NOT (c.chapter_index = ANY($2)) AND c.facts_count IS NULL
+		RETURNING c.chapter_index`, novelID, busy)
 	if err != nil {
 		return 0, fmt.Errorf("resume unfinished chapters: %w", err)
 	}
@@ -690,8 +667,6 @@ func (a *API) writeRecordsAction(w http.ResponseWriter, action string, body map[
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		writeErr(w, http.StatusNotFound, "no such novel")
-	case errors.Is(err, ErrRecordsOutOfOrder):
-		writeErr(w, http.StatusConflict, err.Error())
 	case err != nil:
 		log.Printf("records %s: %v", action, err)
 		writeErr(w, http.StatusInternalServerError, "records action failed")

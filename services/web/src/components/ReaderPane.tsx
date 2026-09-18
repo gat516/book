@@ -6,7 +6,6 @@ import { HoverCard } from "./HoverCard";
 import { EntityInspector } from "./EntityInspector";
 import { usePolling } from "../usePolling";
 import { applyRenderingChoices, lastMentionPerEntity, segment } from "../readerSegments";
-import { RecordList } from "./RecordList";
 import type { RecordsResponse } from "../types";
 import { uniqueChapterRenderings } from "../recordPresentation";
 import { ChapterKnowledgeWorkspace } from "./ChapterKnowledgeWorkspace";
@@ -194,7 +193,6 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
       {chapter.translation_warning?.code === "locked_terms_missing" && <p role="status" className="reader-translation-warning">
         This chapter is readable, but {chapter.translation_warning.term_count} locked name{chapter.translation_warning.term_count === 1 ? " was" : "s were"} not preserved exactly.
       </p>}
-      {records && <RecordList rows={records.rows} status={records.status} title="Facts, relationships, and events learned here" onEntity={(id, surface) => setSelected({id, mention: surface})} />}
       <details className="chapter-record-diagnostics" onToggle={(event) => setShowRecordDiagnostics(event.currentTarget.open)}>
         <summary>{chapterKnowledgeReviewLabel(chapterIndex)}</summary>
         {showRecordDiagnostics && <ChapterKnowledgeWorkspace

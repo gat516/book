@@ -115,6 +115,11 @@ func TestDiscardMidRebuildRestoresPredecessorAndSequentialRebuildsRemainPossible
 		       ($1,$2,2,'discard-2','test','published')`, novelID, second); err != nil {
 		t.Fatalf("seed completed replacement: %v", err)
 	}
+	// FACTS' count is what marks a chapter done now (0110), not the published run.
+	if _, err := store.db.Exec(context.Background(),
+		`UPDATE chapter SET facts_count=1 WHERE novel_id=$1`, novelID); err != nil {
+		t.Fatalf("mark chapters done: %v", err)
+	}
 	if _, _, err := store.rebuildRecords(context.Background(), novelID); err != nil {
 		t.Fatalf("rebuild after completed replacement: %v", err)
 	}

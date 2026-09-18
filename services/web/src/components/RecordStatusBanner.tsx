@@ -58,9 +58,9 @@ export function RecordStatusBanner({ status, onRetry, busy = false }: {
           retryable: true,
         }
       : status.extraction_status === "processing"
-      ? { tone: "live", text: `Finding characters, facts, relationships, and events${attempts > 0 ? ` · attempt ${attemptLabel}` : ""}…` }
+      ? { tone: "live", text: `Finding this chapter’s names and facts${attempts > 0 ? ` · attempt ${attemptLabel}` : ""}…` }
       : status.extraction_status === "pending"
-      ? { tone: "live", text: "Waiting to find this chapter’s story details…" }
+      ? { tone: "live", text: "Waiting to find this chapter’s names and facts…" }
       : status.rendering_status === "failed"
       ? { tone: "bad", text: "Story details were found, but couldn’t be prepared for display. The chapter is still readable." }
       : status.rendering_status === "pending"
@@ -72,9 +72,9 @@ export function RecordStatusBanner({ status, onRetry, busy = false }: {
           tone: "quiet",
           text: status.generation_id === null
             ? "Not built for this chapter yet."
-            : status.warning_count > 0
-              ? `Ready, with ${status.warning_count} detail${status.warning_count === 1 ? "" : "s"} skipped.`
-              : "Ready — character cards, timeline, and AskAI can use this chapter.",
+            : status.facts_count != null
+              ? `Ready — names highlighted, ${status.facts_count} fact${status.facts_count === 1 ? "" : "s"} collected for the wiki.`
+              : "Ready — names highlighted.",
         };
 
   return (

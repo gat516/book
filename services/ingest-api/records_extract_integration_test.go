@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"reflect"
 	"testing"
@@ -53,9 +52,10 @@ func TestExtractRecordsResumesOnlyUnfinishedIdleChapters(t *testing.T) {
 	for _, sql := range []string{
 		`UPDATE novel SET active_record_generation=$2 WHERE id=$1`,
 		`UPDATE chapter SET translation_ready = chapter_index <> 5 WHERE novel_id=$1 AND $2::uuid IS NOT NULL`,
-		// 1 published, 2 failed with an automatic retry, 3 paused by a discard.
+		// 1 done (has facts), 2 failed with an automatic retry, 3 paused by a discard.
 		`INSERT INTO record_run (novel_id,generation_id,chapter_index,source_hash,request_identity,status)
 		 VALUES ($1,$2,1,'h','r','published'),($1,$2,2,'h','r','failed')`,
+		`UPDATE chapter SET facts_count=3 WHERE novel_id=$1 AND chapter_index=1 AND $2::uuid IS NOT NULL`,
 		`UPDATE chapter SET enrichment_attempts=1, enrichment_retry_at=now()+interval '5 minutes'
 		 WHERE novel_id=$1 AND chapter_index=2 AND $2::uuid IS NOT NULL`,
 		`UPDATE chapter SET enrichment_discarded=true WHERE novel_id=$1 AND chapter_index=3 AND $2::uuid IS NOT NULL`,
@@ -113,7 +113,7 @@ func TestExtractRecordsResumesOnlyUnfinishedIdleChapters(t *testing.T) {
 
 // A chapter retry that the worker's order fence would reject is refused up front, while
 // the earliest unfinished chapter can still be retried directly.
-func TestRetryRecordsRefusesChapterBehindAnUnpublishedOne(t *testing.T) {
+func TestRetryRecordsDoesNotWaitOnEarlierChapters(t *testing.T) {
 	url := os.Getenv("INGEST_TEST_REDIS_URL")
 	if url == "" {
 		t.Skip("INGEST_TEST_REDIS_URL is not set")
@@ -158,10 +158,11 @@ func TestRetryRecordsRefusesChapterBehindAnUnpublishedOne(t *testing.T) {
 			t.Fatalf("seed %q: %v", sql, err)
 		}
 	}
-	if err := store.retryRecords(ctx, novel, 3); !errors.Is(err, ErrRecordsOutOfOrder) {
-		t.Fatalf("retry chapter 3 behind failed chapter 2: err=%v, want ErrRecordsOutOfOrder", err)
+	// FACTS reads only its own chapter, so a retry no longer waits on an earlier one.
+	if err := store.retryRecords(ctx, novel, 3); err != nil {
+		t.Fatalf("retry chapter 3 behind failed chapter 2: %v", err)
 	}
 	if err := store.retryRecords(ctx, novel, 2); err != nil {
-		t.Fatalf("retry earliest unfinished chapter: %v", err)
+		t.Fatalf("retry chapter 2: %v", err)
 	}
 }
