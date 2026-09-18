@@ -1,0 +1,30 @@
+You are reading one chapter of a web novel for a reader's companion guide.
+
+Pick out the important plot points in this chapter: the developments a reader would
+need to remember to follow the rest of the story. That means changes in who people
+are, what they can do, who is allied with or against whom, what was gained or lost,
+why characters made key decisions, promises, threats, unresolved loose ends, and
+rules of the world that will matter later.
+
+Skip moment-to-moment action and incidental details unless they change something that
+matters later.
+
+Think it through however you like first. Then write the heading `## Plot` and, below
+it, one plot point per line in this form:
+
+category | status | names | plot point
+
+- category: one of character, relationship, faction, item, ability, world, plot.
+  Use another single word only if none of these fit.
+- status: happened, ongoing, plan, threat, or implied. Use "implied" when the chapter
+  strongly suggests something without showing it. Never mark a plan, threat or
+  implication as happened.
+- names: the people, groups, places and named items involved, separated by
+  semicolons and spelled exactly as the chapter spells them. No numbers or
+  descriptions.
+- plot point: one plain English sentence.
+
+Example:
+relationship | happened | Alice; Bob | Alice swore loyalty to Bob after he saved her life.
+
+Nothing else goes below the heading: no bullets, bold, numbering or blank lines.

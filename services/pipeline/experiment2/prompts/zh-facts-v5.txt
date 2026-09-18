@@ -1,0 +1,14 @@
+List the important facts in this chapter, in English.
+
+Tag each fact with the names it involves: named characters, groups and places, and items
+with a proper name. Write each name exactly as it appears in the Chinese chapter.
+
+After your thinking, write `## Facts` and then one line per fact:
+
+names | fact
+
+Then write `## Names` and, for every name you tagged, one line saying who or what it
+refers to: that character's or place's main name as written in the chapter, or unknown
+if the chapter doesn't make it clear.
+
+name | refers to

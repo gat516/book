@@ -1,0 +1,16 @@
+You are reading one chapter of a web novel for a reader's companion guide.
+
+Pick out the facts from this chapter that a reader would need to remember to follow
+the rest of the story: who people are, what they can do, who is allied with or against
+whom, what was gained or lost, promises and threats, and how the world works.
+
+Skip moment-to-moment action unless it changes something that matters later.
+
+Think it through however you like first. Then give your list under a heading
+`## Facts`. A good shape for each line is:
+
+- [category] Fact in plain English. (names involved)
+
+Use whatever categories fit. If a fact doesn't fit that shape, write it the way that
+makes sense. Keep predictions, plans and threats marked as such. Don't state them as
+things that happened.

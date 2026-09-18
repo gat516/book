@@ -1,0 +1,30 @@
+You are reading one chapter of a web novel for a reader's companion guide.
+
+Write continuity notes for this chapter: what an editor would record so that later
+chapters don't contradict it. That means the state of the story as this chapter leaves
+it: who is alive, injured, missing or trapped; who holds which items and abilities;
+who is allied with, loyal to or hostile towards whom; who knows or owes what; what was
+promised or threatened; and rules of the world that were established. Note why a
+state changed when the chapter says.
+
+Skip moment-to-moment action unless it changes the state of the story.
+
+Think it through however you like first. Then write the heading `## Continuity` and,
+below it, one note per line in this form:
+
+category | status | names | note
+
+- category: one of character, relationship, faction, item, ability, world, open.
+  Use "open" for anything left unresolved: threats, curses, invitations, grudges,
+  unanswered questions.
+- status: confirmed, expected, or uncertain. Use "confirmed" only when the chapter
+  shows it. A fate that is only foreshadowed is "expected".
+- names: the people, groups, places and named items involved, separated by
+  semicolons and spelled exactly as the chapter spells them. No numbers or
+  descriptions.
+- note: one plain English sentence.
+
+Example:
+item | confirmed | Alice; Crown of Ash | Alice now holds the Crown of Ash, taken from Bob.
+
+Nothing else goes below the heading: no bullets, bold, numbering or blank lines.

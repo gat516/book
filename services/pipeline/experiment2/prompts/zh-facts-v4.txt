@@ -1,0 +1,15 @@
+List the important facts in this chapter, in English.
+
+Tag each fact with the names it involves: named characters, groups and places, and items
+with a proper name. Write each name exactly as it appears in the Chinese chapter.
+
+If a name is another name or a title for someone or something else, add a line:
+
+alias | 別名; 本名 | how the chapter shows it
+
+After your thinking, write `## Facts` and then one line per fact:
+
+names | fact
+
+Example:
+凌峰; 阿瑞斯 | Ling Feng killed Ares.

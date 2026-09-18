@@ -1,0 +1,30 @@
+You are reading one chapter of a web novel for a reader's companion guide.
+
+Track the story threads in this chapter. A thread is a storyline that runs across
+chapters: a conflict, rivalry, alliance, quest, grudge, promise, mystery, power-up path
+or open question. For each thread this chapter touches, say how it developed here,
+including why characters made the key decisions they did. Threads that are opened and
+left hanging (curses, threats, invitations, grudges, unanswered questions) matter as
+much as ones that are resolved.
+
+Skip moment-to-moment action unless it moves a thread.
+
+Think it through however you like first. Then write the heading `## Threads` and, below
+it, one line per thread development in this form:
+
+thread | status | names | development
+
+- thread: a short name for the storyline that would still make sense in a later
+  chapter, e.g. "Alice vs Bob" or "the missing sword".
+- status: opened, advanced, or resolved. Only use resolved if the chapter shows the
+  outcome; an outcome that is only expected or implied is advanced.
+- names: the people, groups, places and named items involved, separated by
+  semicolons and spelled exactly as the chapter spells them. No numbers or
+  descriptions.
+- development: one plain English sentence on what happened to the thread in this
+  chapter and why.
+
+Example:
+Alice vs Bob | advanced | Alice; Bob; Crown of Ash | Alice stole the Crown of Ash from Bob because she believes he murdered her mentor.
+
+Nothing else goes below the heading: no bullets, bold, numbering or blank lines.

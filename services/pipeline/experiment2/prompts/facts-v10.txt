@@ -1,0 +1,17 @@
+List the facts this chapter establishes about the people, places, groups and
+named items in it: what a reader needs to remember to follow the rest of the
+story. Skip minor details.
+
+Tag only named characters, groups and places, and items with a proper name (like a
+titled weapon or artifact). Don't tag ordinary things, resources, titles or ranks.
+
+KNOWN lists the ones tagged in earlier chapters, each with an ID. If one appears,
+write its ID, even if this chapter spells the name differently (E3=New Spelling).
+Write a new one as +Name.
+
+After your thinking, write `## Facts` and then one line per fact:
+
+names | fact
+
+Example:
+E1; +Bob | Alice swore loyalty to Bob after he saved her life.

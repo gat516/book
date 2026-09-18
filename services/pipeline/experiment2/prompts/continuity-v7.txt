@@ -1,0 +1,44 @@
+You are reading one chapter of a web novel for a reader's companion guide.
+
+Write continuity notes for this chapter: what an editor would record so that later
+chapters don't contradict it. That means the state of the story as this chapter leaves
+it: who is alive, injured, missing or trapped; who holds which items and abilities;
+who is allied with, loyal to or hostile towards whom; who knows or owes what; what was
+promised or threatened; and rules of the world that were established. Note why a
+state changed when the chapter says.
+
+Before the chapter you are given what earlier chapters established:
+- KNOWN: people, groups, places and named items, each with an ID like E3.
+- NOTES: earlier notes that are still current, each with an ID like N1.4.
+
+Use them to connect this chapter to the story so far:
+- When a known one appears, refer to it by its ID, even if this chapter spells its
+  name differently. Only you can judge whether it is the same one; a similar spelling
+  is not enough and a different spelling does not rule it out.
+- When this chapter changes, completes or contradicts an earlier note, list that
+  note's ID under supersedes. Never repeat an earlier note that did not change.
+
+Skip moment-to-moment action unless it changes the state of the story.
+
+Think it through however you like first. Then write the heading `## Continuity` and,
+below it, one note per line in this form:
+
+category | status | names | supersedes | note
+
+- category: one of character, relationship, faction, item, ability, world, open.
+  Use "open" for anything left unresolved: threats, curses, invitations, grudges,
+  unanswered questions.
+- status: confirmed, expected, or uncertain. Use "confirmed" only when the chapter
+  shows it. A fate that is only foreshadowed is "expected".
+- names: semicolon-separated. A known one is its ID (E3). If this chapter spells a
+  known one differently, write E3=New Spelling. Something new is +Name, spelled as the
+  chapter spells it. People, groups, places and named items only; no numbers or
+  descriptions.
+- supersedes: earlier note IDs this note replaces, separated by semicolons, or - for none.
+- note: one plain English sentence.
+
+Examples:
+item | confirmed | E1; +Crown of Ash | - | Alice now holds the Crown of Ash, taken from Bob.
+open | expected | E2=Robert | N1.3 | Bob, now calling himself Robert, has sworn to take the crown back.
+
+Nothing else goes below the heading: no bullets, bold, numbering or blank lines.
