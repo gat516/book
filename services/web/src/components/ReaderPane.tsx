@@ -1,17 +1,16 @@
 import { useKnowledgeRevision } from "../knowledgeUpdates";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, getChapter, getRecords, putProgress } from "../api";
-import type { ChapterResponse, EntityView } from "../types";
+import type { ChapterResponse, EntityView, TermRenderingView } from "../types";
 import { HoverCard } from "./HoverCard";
 import { EntityInspector } from "./EntityInspector";
 import { usePolling } from "../usePolling";
 import { applyRenderingChoices, lastMentionPerEntity, segment } from "../readerSegments";
 import type { RecordsResponse } from "../types";
 import { uniqueChapterRenderings } from "../recordPresentation";
-import { ChapterKnowledgeWorkspace } from "./ChapterKnowledgeWorkspace";
 import { recordPollInterval, recordsTerminal } from "../recordPolling";
-import { KnowledgeGraphControls } from "./KnowledgeGraphControls";
-import { chapterKnowledgeReviewLabel } from "../knowledgeLabels";
+import { ChapterStatus } from "./ChapterStatus";
+import { ChapterNames } from "./ChapterNames";
 
 interface Props {
   novelId: string;
@@ -32,7 +31,7 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
   const [selected, setSelected] = useState<{ id: string | null; mention: string } | null>(null);
   const [records, setRecords] = useState<RecordsResponse | null>(null);
   const [recordsError, setRecordsError] = useState<string | null>(null);
-  const [showRecordDiagnostics, setShowRecordDiagnostics] = useState(false);
+  const [showNames, setShowNames] = useState(false);
 
   // Both hover and click views share only the exact novel/chapter/clearance cache.
   // The server's `at` becomes known on load; changing it discards earlier entity data.
@@ -43,7 +42,7 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
     setHovered(null);
     setRecords(null);
     setRecordsError(null);
-    setShowRecordDiagnostics(false);
+    setShowNames(false);
   }, [novelId, chapterIndex, clickableEntities]);
 
   useEffect(() => {
@@ -163,47 +162,55 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
   // interactive anchor per distinct thing. The stored translation remains unchanged.
   const rendered = applyRenderingChoices(chapter.text, chapter.spans);
   const segments = segment(rendered.text, lastMentionPerEntity(rendered.text, rendered.spans));
+  const renderings = uniqueChapterRenderings(chapter.spans);
+  const toReview = new Set(renderings.filter((item) => item.status !== "locked").map((item) => item.source_term)).size;
+  // A spelling saved from the names list or a hover card applies to every span of it.
+  const applyRendering = (updated: TermRenderingView, surface?: string) => setChapter((current) => current ? {
+    ...current,
+    spans: current.spans.map((span) => {
+      const text = Array.from(current.text).slice(span.char_start, span.char_end).join("");
+      return span.rendering?.source_term === updated.source_term || (!span.rendering && surface !== undefined && text === surface)
+        ? { ...span, rendering: updated }
+        : span;
+    }),
+  } : current);
   return (
     <div className="reader-pane">
-      <p className="reader-pane-chapter-label">
-        Chapter {chapterIndex}
-        {chapter.site_chapter_no && (
-          <span className="reader-pane-site-chapter-no">
-            {" "}
-            — {chapter.site_chapter_no}
-            {/* This site paginates a chapter across several pages, each ingested as its
-                own chapter row; without the part number a reader can't tell why the text
-                stops mid-scene. Hidden when the chapter isn't split. */}
-            {chapter.part > 1 && ` (part ${chapter.part})`}
-          </span>
-        )}
-        {chapter.source_url && (
-          <>
-            {" "}— <a href={chapter.source_url} target="_blank" rel="noreferrer">Open source chapter ↗</a>
-          </>
-        )}
-      </p>
+      <header className="chapter-head">
+        <p className="reader-pane-chapter-label">
+          Chapter {chapterIndex}
+          {chapter.site_chapter_no && (
+            <span className="reader-pane-site-chapter-no">
+              {" "}
+              — {chapter.site_chapter_no}
+              {/* This site paginates a chapter across several pages, each ingested as its
+                  own chapter row; without the part number a reader can't tell why the text
+                  stops mid-scene. Hidden when the chapter isn't split. */}
+              {chapter.part > 1 && ` (part ${chapter.part})`}
+            </span>
+          )}
+          {chapter.source_url && (
+            <>
+              {" "}— <a href={chapter.source_url} target="_blank" rel="noreferrer">Open source chapter ↗</a>
+            </>
+          )}
+        </p>
+        <div className="chapter-head-tools">
+          <ChapterStatus novelId={novelId} chapter={chapterIndex} status={records?.status ?? null} />
+          <button type="button" className="chapter-names-toggle" aria-expanded={showNames} onClick={() => setShowNames((open) => !open)}>
+            Names{toReview > 0 ? <span className="chapter-names-count">{toReview} to review</span> : null}
+          </button>
+        </div>
+      </header>
       {recordsError && <p role="alert" className="reader-records-error">
-        Could not load reader features: {recordsError} <button type="button" onClick={() => {
+        Could not load this chapter’s status: {recordsError} <button type="button" onClick={() => {
           setRecordsError(null);
           void getRecords(novelId, chapterIndex).then(setRecords).catch((reason) => setRecordsError(errorMessage(reason)));
         }}>Retry</button>
       </p>}
-      <KnowledgeGraphControls novelId={novelId} chapter={chapterIndex} chapterStatus={records?.status} />
+      {showNames && <ChapterNames novelId={novelId} at={chapter.at} renderings={renderings} onChanged={applyRendering} />}
       {chapter.translation_warning?.code === "locked_terms_missing" && <p role="status" className="reader-translation-warning">
-        This chapter is readable, but {chapter.translation_warning.term_count} locked name{chapter.translation_warning.term_count === 1 ? " was" : "s were"} not preserved exactly.
-      </p>}
-      <details className="chapter-record-diagnostics" onToggle={(event) => setShowRecordDiagnostics(event.currentTarget.open)}>
-        <summary>{chapterKnowledgeReviewLabel(chapterIndex)}</summary>
-        {showRecordDiagnostics && <ChapterKnowledgeWorkspace
-          novelId={novelId}
-          chapter={chapterIndex}
-          at={chapter.at}
-          renderings={uniqueChapterRenderings(chapter.spans)}
-        />}
-      </details>
-      {clickableEntities && chapter.spans.length === 0 && <p className="reader-entity-hint">
-        No named mentions are available for this chapter yet. Cards do not require facts or a glossary entry.
+        {chapter.translation_warning.term_count} confirmed name{chapter.translation_warning.term_count === 1 ? " is" : "s are"} not spelled exactly as confirmed in this chapter’s text.
       </p>}
       {segments.map((piece, index) => {
         if (!piece.mention) return <span key={index}>{piece.text}</span>;
@@ -228,16 +235,7 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
                 at={chapter.at}
                 cache={cache}
                 onEntity={(id, surface) => { setHovered(null); setSelected({ id, mention: surface }); }}
-                onRenderingChanged={(updatedRendering) => setChapter((current) => current ? {
-                  ...current,
-                  spans: current.spans.map((span) => {
-                    const surface = Array.from(current.text).slice(span.char_start, span.char_end).join("");
-                    return span.rendering?.source_term === updatedRendering.source_term ||
-                      (!span.rendering && surface === piece.text)
-                      ? { ...span, rendering: updatedRendering }
-                      : span;
-                  }),
-                } : current)}
+                onRenderingChanged={(updatedRendering) => applyRendering(updatedRendering, piece.text)}
                 onClose={() => setHovered(null)}
               />
             )}

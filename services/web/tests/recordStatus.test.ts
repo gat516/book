@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { retriesExhausted, retryCategoryLabel, failureExplanation, scheduledRetryMessage } from "../src/recordStatus.ts";
+import { chapterStatusState, retriesExhausted, retryCategoryLabel, failureExplanation, scheduledRetryMessage } from "../src/recordStatus.ts";
 import type { RecordsStatus } from "../src/types.ts";
 
 function status(patch: Partial<RecordsStatus> = {}): RecordsStatus {
@@ -22,4 +22,19 @@ test("processing errors identify the cause and next retry", () => {
   assert.match(scheduledRetryMessage(retry), /1 of 5 attempts failed\. Next automatic retry:/);
   assert.equal(failureExplanation(status({ failure_detail: "secret source text" })),
     "An unexpected processing error occurred.");
+});
+
+test("a chapter is ready once FACTS has run, and says how many facts it found", () => {
+  assert.deepEqual(chapterStatusState(status({ extraction_status: "ready", facts_count: 15 })),
+    { tone: "quiet", text: "Ready · 15 facts for the wiki", retryable: false });
+  assert.equal(chapterStatusState(status({ extraction_status: "ready", facts_count: 1 })).text, "Ready · 1 fact for the wiki");
+  assert.equal(chapterStatusState(status({ extraction_status: "pending" })).text, "Waiting to find names and facts…");
+  assert.equal(chapterStatusState(status({ extraction_status: "processing" })).tone, "live");
+  assert.equal(chapterStatusState(null).text, "Checking…");
+});
+
+test("only states a reader can act on offer a retry", () => {
+  assert.equal(chapterStatusState(status({ extraction_status: "failed", retry_attempts: 5, retry_max_attempts: 5 })).retryable, true);
+  assert.equal(chapterStatusState(status({ discarded: true })).retryable, true);
+  assert.equal(chapterStatusState(status({ retry_at: "2099-01-01T00:00:00Z", retry_attempts: 1, retry_max_attempts: 5 })).retryable, false);
 });

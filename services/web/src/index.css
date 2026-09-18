@@ -1557,3 +1557,108 @@ textarea {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+
+/* ---- Chapter header: one quiet status line and the names list toggle. ---- */
+.chapter-head,
+.chapter-names,
+.chapter-names-empty {
+  white-space: normal;
+  font-size: 0.92rem;
+}
+.chapter-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.35rem 1rem;
+  padding-bottom: 0.6rem;
+  margin-bottom: 1.1rem;
+  border-bottom: 1px solid #e8e1d2;
+}
+.chapter-head .reader-pane-chapter-label { margin: 0; }
+.chapter-head-tools { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+
+.chapter-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  color: #6b6152;
+}
+.chapter-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #bdb29c; flex: none; }
+.chapter-status-live .chapter-status-dot { background: #3f7a4f; animation: chapter-status-pulse 1.6s ease-in-out infinite; }
+.chapter-status-warn { color: #7a5c00; }
+.chapter-status-warn .chapter-status-dot { background: #c99a1c; }
+.chapter-status-bad { color: #9c1c2c; }
+.chapter-status-bad .chapter-status-dot { background: #b00020; }
+.chapter-status-retry { padding: 0.1rem 0.6rem; font-size: 0.85rem; }
+@keyframes chapter-status-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .chapter-status-live .chapter-status-dot { animation: none; } }
+
+.chapter-names-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.8rem;
+  border-radius: 999px;
+  font-size: 0.88rem;
+}
+.chapter-names-toggle[aria-expanded="true"] { background: #3f3421; border-color: #3f3421; color: #fff; }
+.chapter-names-toggle[aria-expanded="true"]:hover:not(:disabled) { background: #211a10; }
+/* Same yellow as an unconfirmed name in the text: yellow always means "not reviewed". */
+.chapter-names-count {
+  margin-left: 0.45rem;
+  padding: 0 0.45rem;
+  border-radius: 999px;
+  background: #fff3b0;
+  color: #5c4600;
+  font-size: 0.8rem;
+}
+
+/* ---- Names in this chapter: source term, spelling, how it was chosen, actions. ---- */
+.chapter-names {
+  margin: -0.4rem 0 1.4rem;
+  border: 1px solid #e8e1d2;
+  border-radius: 8px;
+  background: #fbf9f4;
+}
+.chapter-names ul { list-style: none; margin: 0; padding: 0; max-height: 24rem; overflow-y: auto; }
+.chapter-names li {
+  display: grid;
+  grid-template-columns: minmax(5.5rem, 8rem) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.35rem 0.9rem;
+  padding: 0.45rem 0.9rem;
+}
+.chapter-names li + li { border-top: 1px solid #efe9dc; }
+.chapter-name-source { font-size: 1.08rem; color: #3f3421; }
+.chapter-name-spelling { justify-self: start; padding: 0 3px; border-radius: 2px; background: #fff3b0; }
+.chapter-names li.is-confirmed .chapter-name-spelling { background: transparent; padding: 0; }
+.chapter-name-state { font-size: 0.8rem; color: #8a7f6b; }
+.chapter-name-actions { display: flex; gap: 0.35rem; }
+.chapter-name-actions button,
+.chapter-name-edit button { padding: 0.15rem 0.6rem; font-size: 0.85rem; }
+.chapter-name-edit { grid-column: 2 / -1; display: flex; gap: 0.4rem; }
+.chapter-name-edit input { flex: 1; min-width: 0; padding: 0.2rem 0.45rem; border: 1px solid #cfc5b0; border-radius: 5px; }
+.chapter-names-error { margin: 0; padding: 0.45rem 0.9rem; color: #9c1c2c; border-bottom: 1px solid #efe9dc; }
+.chapter-names-empty { margin: -0.4rem 0 1.4rem; color: #8a7f6b; }
+@media (max-width: 560px) {
+  .chapter-names li { grid-template-columns: minmax(0, 1fr) auto; }
+  .chapter-name-state { grid-column: 1; }
+  .chapter-name-actions { grid-column: 2; grid-row: 1 / span 3; align-self: center; flex-direction: column; }
+  .chapter-name-edit { grid-column: 1 / -1; }
+}
+
+/* ---- Book-wide progress in the chapter list. ---- */
+.book-progress {
+  margin: 0.75rem 0 1rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid #e8e1d2;
+  border-radius: 8px;
+  background: #fbf9f4;
+}
+.book-progress-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem 0.8rem; }
+.book-progress-head span { color: #6b6152; font-size: 0.9rem; }
+.book-progress-head button { margin-left: auto; padding: 0.2rem 0.75rem; font-size: 0.88rem; }
+.book-progress progress { display: block; width: 100%; height: 6px; margin-top: 0.55rem; accent-color: #3f3421; }
+.book-progress-note { margin: 0.5rem 0 0; font-size: 0.88rem; color: #6b6152; }
+.book-progress-error { margin: 0.5rem 0 0; font-size: 0.88rem; color: #9c1c2c; }

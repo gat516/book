@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { approveCharacterName, confirmGlossaryTerm, correctGlossaryTerm, getEntity } from "../api";
-import type { CharacterNameCandidate, EntityView, TermRenderingView, TermRole } from "../types";
+import { confirmGlossaryTerm, getEntity } from "../api";
+import { saveRendering } from "../termActions";
+import type { EntityView, TermRenderingView, TermRole } from "../types";
 import { RecordList } from "./RecordList";
 import { TermList } from "./TermList";
 
@@ -64,28 +65,7 @@ export function HoverCard({ novelId, entityId, rendering, status, mention, at, c
     setError(null);
     setNotice(null);
     try {
-      if (rendering.status === "pending") {
-        const candidate = rendering.candidates.find((item) => item.target_term === targetTerm);
-        await approveCharacterName(
-          novelId,
-          rendering.source_term,
-          targetTerm,
-          roleForCandidate(candidate, rendering.term_role),
-        );
-      } else if (rendering.status === "unlocked") {
-        await confirmGlossaryTerm(novelId, {
-          source_term: rendering.source_term,
-          target_term: targetTerm,
-          at_chapter: at,
-          term_role: rendering.term_role || "semantic_term",
-        });
-      } else {
-        await correctGlossaryTerm(novelId, rendering.source_term, {
-          target_term: targetTerm,
-          at_chapter: at,
-        });
-      }
-      const updatedRendering = { ...rendering, target_term: targetTerm, status: "locked" as const };
+      const updatedRendering = await saveRendering(novelId, rendering, targetTerm, at);
       setSpanRendering(updatedRendering);
       setEntity((current) => {
         if (!current) return current;
@@ -210,12 +190,4 @@ function RenderingControl({ rendering, displayed, saving, onChoose, onLeave }: {
       </div>
     </form>
   </section>;
-}
-
-function roleForCandidate(candidate: CharacterNameCandidate | undefined, fallback: TermRenderingView["term_role"]): TermRole {
-  if (candidate?.method === "restored_name") return "foreign_person";
-  if (candidate?.method === "translated_title") return "personal_title";
-  if (candidate?.method === "semantic_translation") return "semantic_term";
-  if (candidate?.method === "pinyin") return "chinese_person";
-  return fallback || "chinese_person";
 }

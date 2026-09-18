@@ -87,3 +87,40 @@ export function retriesExhausted(status: RecordsStatus): boolean {
     (status.retry_max_attempts ?? 0) > 0 &&
     (status.retry_attempts ?? 0) >= (status.retry_max_attempts ?? 0);
 }
+
+// One colour language across status surfaces: green is work in flight, amber is waiting
+// on something, red is a failure, grey is settled.
+export type StatusTone = "live" | "warn" | "bad" | "quiet";
+
+export interface ChapterStatusState {
+  tone: StatusTone;
+  text: string;
+  // Only states a reader can act on offer Retry: a scheduled retry will happen by itself.
+  retryable: boolean;
+}
+
+/**
+ * The one-line status of a chapter's names and facts. A chapter is done when FACTS has
+ * written its facts (migration 0110); name highlighting runs just before it in the same
+ * pass, so "ready" covers both.
+ */
+export function chapterStatusState(status: RecordsStatus | null): ChapterStatusState {
+  if (status === null) return { tone: "quiet", text: "Checking…", retryable: false };
+  if (status.discarded) return { tone: "quiet", text: "Paused", retryable: true };
+  if (status.retry_at) return { tone: "warn", text: scheduledRetryMessage(status), retryable: false };
+  if (retriesExhausted(status) || status.extraction_status === "failed") {
+    return { tone: "bad", text: `${failureExplanation(status)}.`, retryable: true };
+  }
+  if (status.extraction_status === "processing") {
+    return { tone: "live", text: "Finding names and facts…", retryable: false };
+  }
+  if (status.extraction_status !== "ready") {
+    return { tone: "live", text: "Waiting to find names and facts…", retryable: false };
+  }
+  const facts = status.facts_count;
+  return {
+    tone: "quiet",
+    text: facts == null ? "Ready" : `Ready · ${facts} fact${facts === 1 ? "" : "s"} for the wiki`,
+    retryable: false,
+  };
+}
