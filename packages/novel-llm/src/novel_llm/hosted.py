@@ -362,7 +362,8 @@ class HostedProvider(SequentialBatchMixin):
                        max_output_tokens: int | None = None,
                        native_json_schema: bool | None = None,
                        reasoning_effort: str | None = None,
-                       include_reasoning: bool | None = None) -> Completion:
+                       include_reasoning: bool | None = None,
+                       extra_body: dict[str, Any] | None = None) -> Completion:
         del cls  # LiteLLM has no priority concept; the provider boundary still carries it.
         use_model = model or self._model
         messages, response_format = self._request_material(
@@ -378,8 +379,11 @@ class HostedProvider(SequentialBatchMixin):
         }
         if reasoning_effort is not None:
             kwargs["reasoning_effort"] = reasoning_effort
+        body = dict(extra_body or {})
         if include_reasoning is not None:
-            kwargs["extra_body"] = {"include_reasoning": include_reasoning}
+            body["include_reasoning"] = include_reasoning
+        if body:
+            kwargs["extra_body"] = body
         if response_format is not None:
             kwargs["response_format"] = response_format
         if self._api_key:

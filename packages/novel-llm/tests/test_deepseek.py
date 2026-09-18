@@ -34,6 +34,25 @@ async def test_complete_returns_served_identity_and_usage(monkeypatch):
     assert completion.cache_read_tokens == 3
 
 
+@pytest.mark.parametrize("effort, sent, body", [
+    ("low", None, {"reasoning_effort": "low"}),  # the level itself, not LiteLLM's on/off
+    ("none", "none", None),                       # LiteLLM's "none" -> thinking disabled is right
+    (None, None, None),
+])
+async def test_reasoning_effort_level_reaches_deepseek(monkeypatch, effort, sent, body):
+    calls = []
+    async def complete(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop",
+            message=SimpleNamespace(content="ok"))], model="deepseek-v4-flash", usage={})
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=complete))
+    await DeepSeekProvider(model="deepseek-v4-flash", api_key="k").complete(
+        "hi", reasoning_effort=effort, max_output_tokens=50)
+    assert calls[0].get("reasoning_effort") == sent
+    assert calls[0].get("extra_body") == body
+    assert calls[0]["max_tokens"] == 50
+
+
 async def test_embed_raises_not_implemented():
     provider = DeepSeekProvider(model="deepseek-chat", api_key="test-key")
     with pytest.raises(NotImplementedError):
