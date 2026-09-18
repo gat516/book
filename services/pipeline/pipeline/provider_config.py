@@ -30,6 +30,7 @@ class ProviderConfigRow:
     extract_model: str | None
     base_url: str | None
     api_key: str | None
+    facts_model: str | None = None
 
 
 def _decryption_key() -> bytes:
@@ -57,16 +58,17 @@ async def load_provider_config(db, novel_id: str) -> ProviderConfigRow | None:
     """
     row = await (
         await db.execute(
-            "SELECT provider, model, translate_model, extract_model, base_url "
+            "SELECT provider, model, translate_model, extract_model, base_url, facts_model "
             "FROM novel_provider_config WHERE novel_id = %s",
             (novel_id,),
         )
     ).fetchone()
     if row is None:
         return None
-    provider, model, translate_model, extract_model, base_url = row
+    provider, model, translate_model, extract_model, base_url, facts_model = row
     return ProviderConfigRow(provider=provider, model=model, translate_model=translate_model,
-                             extract_model=extract_model, base_url=base_url, api_key=None)
+                             extract_model=extract_model, base_url=base_url, api_key=None,
+                             facts_model=facts_model)
 
 
 async def load_provider_credential(db, provider: str) -> tuple[str | None, str | None]:
@@ -123,6 +125,7 @@ async def resolve_provider_config(db, novel_id: str, default_provider: str) -> P
         extract_model=row.extract_model if row is not None else None,
         base_url=effective_base_url,
         api_key=global_api_key,
+        facts_model=row.facts_model if row is not None else None,
     )
 
 

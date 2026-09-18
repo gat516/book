@@ -32,6 +32,16 @@ async def test_keeps_only_names_the_chapter_contains_with_an_english_spelling():
     assert len(ctx.provider.calls) == 1  # a usable answer is cached
 
 
+async def test_a_name_in_the_other_script_is_kept_in_the_chapters_own_form():
+    source = "裁決會召見了凌峰。"
+    ctx = context(json.dumps({"names": [
+        {"source_term": "裁决会", "display_term": "Judgement Council", "term_role": "semantic_term"},
+        {"source_term": "燕", "display_term": "Yan", "term_role": "chinese_person"},  # not 琰: rejected
+    ]}, ensure_ascii=False))
+    names = await find_source_names(ctx, source)
+    assert [(n.source_term, n.display_term) for n in names] == [("裁決會", "Judgement Council")]
+
+
 async def test_thinking_is_turned_down_only_where_the_backend_supports_it():
     answer = '{"names": []}'
     for provider_id, expected in [("deepseek", "none"), ("groq", "low"), ("ollama", None)]:
@@ -45,3 +55,14 @@ async def test_unusable_answer_costs_only_the_names_not_the_chapter():
     ctx = context("Here is the translation instead of JSON.")
     assert await find_source_names(ctx, "凌峰来了。") == []
     assert ctx.cache.redis.store == {}
+
+
+async def test_one_malformed_entry_drops_only_that_name():
+    source = "阿瑞斯跪在秩序神殿前。"
+    ctx = context(json.dumps({"names": [
+        {"source_term": "阿瑞斯", "display_term": "Aries", "term_role": "foreign_person"},
+        {"source_term": "秩序神殿", "display_term": "Order Temple", "term_role": "place"},  # bad role
+    ]}, ensure_ascii=False))
+    names = await find_source_names(ctx, source)
+    assert [n.source_term for n in names] == ["阿瑞斯"]
+    assert ctx.cache.redis.store == {}  # a partial answer is not cached

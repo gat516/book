@@ -21,6 +21,7 @@ type ProviderConfigInput struct {
 	Model          string
 	TranslateModel string
 	ExtractModel   string
+	FactsModel     string
 	BaseURL        string
 }
 
@@ -31,6 +32,7 @@ type ProviderConfigView struct {
 	Model          string `json:"model,omitempty"`
 	TranslateModel string `json:"translate_model,omitempty"`
 	ExtractModel   string `json:"extract_model,omitempty"`
+	FactsModel     string `json:"facts_model,omitempty"`
 	BaseURL        string `json:"base_url,omitempty"`
 }
 
@@ -45,9 +47,9 @@ func insertProviderConfig(ctx context.Context, tx pgx.Tx, novelID string, cfg Pr
 		baseURLArg = cfg.BaseURL
 	}
 	_, err := tx.Exec(ctx,
-		`INSERT INTO novel_provider_config (novel_id, provider, model, translate_model, extract_model, base_url)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		novelID, cfg.Provider, modelArg, nullableText(cfg.TranslateModel), nullableText(cfg.ExtractModel), baseURLArg,
+		`INSERT INTO novel_provider_config (novel_id, provider, model, translate_model, extract_model, facts_model, base_url)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		novelID, cfg.Provider, modelArg, nullableText(cfg.TranslateModel), nullableText(cfg.ExtractModel), nullableText(cfg.FactsModel), baseURLArg,
 	)
 	if err != nil {
 		return fmt.Errorf("insert novel_provider_config: %w", err)
@@ -59,11 +61,11 @@ func insertProviderConfig(ctx context.Context, tx pgx.Tx, novelID string, cfg Pr
 // ErrProviderConfigNotFound if the novel has none set.
 func (s *Store) GetProviderConfig(ctx context.Context, novelID string) (ProviderConfigView, error) {
 	var v ProviderConfigView
-	var model, translateModel, extractModel, baseURL *string
+	var model, translateModel, extractModel, factsModel, baseURL *string
 	err := s.db.QueryRow(ctx,
-		`SELECT provider, model, translate_model, extract_model, base_url FROM novel_provider_config WHERE novel_id = $1`,
+		`SELECT provider, model, translate_model, extract_model, facts_model, base_url FROM novel_provider_config WHERE novel_id = $1`,
 		novelID,
-	).Scan(&v.Provider, &model, &translateModel, &extractModel, &baseURL)
+	).Scan(&v.Provider, &model, &translateModel, &extractModel, &factsModel, &baseURL)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ProviderConfigView{}, ErrProviderConfigNotFound
 	}
@@ -78,6 +80,9 @@ func (s *Store) GetProviderConfig(ctx context.Context, novelID string) (Provider
 	}
 	if extractModel != nil {
 		v.ExtractModel = *extractModel
+	}
+	if factsModel != nil {
+		v.FactsModel = *factsModel
 	}
 	if baseURL != nil {
 		v.BaseURL = *baseURL
@@ -104,16 +109,17 @@ func (s *Store) UpsertProviderConfig(ctx context.Context, novelID string, cfg Pr
 	}
 	defer tx.Rollback(ctx)
 	_, err = tx.Exec(ctx,
-		`INSERT INTO novel_provider_config (novel_id, provider, model, translate_model, extract_model, base_url, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, now())
+		`INSERT INTO novel_provider_config (novel_id, provider, model, translate_model, extract_model, facts_model, base_url, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, now())
 		 ON CONFLICT (novel_id) DO UPDATE SET
 		   provider = EXCLUDED.provider,
 		   model = EXCLUDED.model,
 		   translate_model = EXCLUDED.translate_model,
 		   extract_model = EXCLUDED.extract_model,
+		   facts_model = EXCLUDED.facts_model,
 		   base_url = EXCLUDED.base_url,
 		   updated_at = now()`,
-		novelID, cfg.Provider, modelArg, nullableText(cfg.TranslateModel), nullableText(cfg.ExtractModel), baseURLArg,
+		novelID, cfg.Provider, modelArg, nullableText(cfg.TranslateModel), nullableText(cfg.ExtractModel), nullableText(cfg.FactsModel), baseURLArg,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert novel_provider_config: %w", err)

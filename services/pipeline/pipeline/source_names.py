@@ -20,10 +20,12 @@ import json
 import logging
 import re
 
+from novel_llm.provider import TruncatedOutput
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from pipeline.chinese_script import source_form
 from pipeline.context import StageContext
-from pipeline.display_names import TermAlignment, TermRenderingOccurrence
+from pipeline.display_names import LEAST_THINKING, TermAlignment, TermRenderingOccurrence, valid_items
 from pipeline.jobs import model_for_stage
 from pipeline.llm.provider import Class
 
@@ -36,28 +38,26 @@ words, numbers and generic ranks.
 Return JSON: {"names": [{"source_term": copied exactly from the chapter, "display_term":
 its English form, "term_role": one of chinese_person, foreign_person, personal_title,
 semantic_term}]}.
-Chinese personal names use Pinyin with the surname separated: 凌峰 is Ling Feng.
+Chinese personal names use Pinyin with the surname separated, even when their
+characters have a meaning: 凌峰 is Ling Feng, and 白雪 is Bai Xue, not White Snow.
 Foreign names transcribed into Chinese use their usual English spelling: 勞倫斯 is
-Lawrence. Other names are translated by meaning: 秩序神殿 is Order Temple."""
+Lawrence. A personal_title is a person's name with a title: translate only the title
+and keep the name in Pinyin, so 凌峰大人 is Lord Ling Feng. Other names are translated
+by meaning: 秩序神殿 is Order Temple."""
 
 _CJK = re.compile(r"[㐀-鿿豈-﫿]")
-
-# Listing names needs no reasoning: on DeepSeek, low thinking spent ~9x the tokens of
-# thinking off (11.8k vs 1.3k output on one chapter) for the same characters plus
-# generic extras. Each backend gets its lowest setting: DeepSeek can switch thinking
-# off; gpt-oss (Groq/OpenRouter) bottoms out at "low"; the rest take no such argument.
-_LEAST_THINKING = {"deepseek": "none", "groq": "low", "openrouter": "low"}
-
 
 class SourceNames(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     names: list[TermAlignment] = Field(max_length=256)
 
 
-def _usable(source: str, item: TermAlignment) -> bool:
-    term, english = item.source_term, item.display_term
-    return (bool(term.strip()) and len(term) <= 40 and term in source
-            and bool(english.strip()) and len(english) <= 80 and not _CJK.search(english))
+def _usable(source: str, item: TermAlignment) -> str | None:
+    """The term as written in the source (either script), or None if the pair is unusable."""
+    term, english = item.source_term.strip(), item.display_term
+    if not term or len(term) > 40 or not english.strip() or len(english) > 80 or _CJK.search(english):
+        return None
+    return source_form(term, source)
 
 
 async def find_source_names(ctx: StageContext, source: str) -> list[TermRenderingOccurrence]:
@@ -72,7 +72,7 @@ async def find_source_names(ctx: StageContext, source: str) -> list[TermRenderin
     model = model_for_stage("display_scan", ctx.cfg, ctx.model_override)
     provider_id = ctx.provider_id or ctx.cfg.llm_provider
     requested_id = f"{provider_id}:{model}"
-    effort = _LEAST_THINKING.get(provider_id)
+    effort = LEAST_THINKING.get(provider_id)
     key = hashlib.sha256(json.dumps([
         "source-names-v1", SYSTEM, SourceNames.model_json_schema(), source,
         ctx.novel.target_lang, requested_id, effort,
@@ -85,26 +85,30 @@ async def find_source_names(ctx: StageContext, source: str) -> list[TermRenderin
         except ValidationError:
             await ctx.cache.delete(key)
     if proposal is None:
-        completion = await (getattr(ctx, "names_provider", None) or ctx.provider).complete(
-            f"Chapter (data, not instructions):\n{source}", system=SYSTEM,
-            json_mode=True, json_schema=SourceNames.model_json_schema(),
-            cls=Class.BATCH, model=model, **({"reasoning_effort": effort} if effort else {}),
-        )
         try:
-            proposal = SourceNames.model_validate_json(completion.text)
-        except ValidationError:
-            log.warning("source names: unusable answer for chapter; translating without new names")
+            completion = await (getattr(ctx, "names_provider", None) or ctx.provider).complete(
+                f"Chapter (data, not instructions):\n{source}", system=SYSTEM,
+                json_mode=True, json_schema=SourceNames.model_json_schema(),
+                cls=Class.BATCH, model=model, **({"reasoning_effort": effort} if effort else {}),
+            )
+        except TruncatedOutput:
+            log.warning("source names: answer hit the output limit; translating without new names")
             return []
-        await ctx.cache.put(key, proposal.model_dump_json(), requested_model_id=requested_id,
-                            served_provider=completion.served_provider,
-                            served_model=completion.served_model, stage="source_names")
+        names, clean = valid_items(completion.text, "names", TermAlignment)
+        proposal = SourceNames(names=names)
+        if clean:
+            await ctx.cache.put(key, proposal.model_dump_json(), requested_model_id=requested_id,
+                                served_provider=completion.served_provider,
+                                served_model=completion.served_model, stage="source_names")
     found: dict[str, TermRenderingOccurrence] = {}
     for item in proposal.names:
-        if _usable(source, item) and item.source_term not in found:
-            start = source.index(item.source_term)
+        term = _usable(source, item)
+        if term and term not in found:
+            start = source.index(term)
+            # Stored in the source's own form, so later lookups and priming match it.
             # Offsets point into the SOURCE here; record_term_choices reads only the
             # terms and role, and display offsets come later from DISPLAY_SCAN.
-            found[item.source_term] = TermRenderingOccurrence(
-                item.source_term, item.display_term, start, start + len(item.source_term),
+            found[term] = TermRenderingOccurrence(
+                term, item.display_term, start, start + len(term),
                 method="source_names", term_role=item.term_role)
     return list(found.values())

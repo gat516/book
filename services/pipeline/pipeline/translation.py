@@ -120,6 +120,24 @@ def prime_glossary_terms(source_text: str, glossary) -> str:
     return pattern.sub(lambda match: replacement[match.group(0)], source_text)
 
 
+# Typographic characters some models (gpt-oss) put inside names: "Ling<U+00A0>Feng",
+# "Ruo<U+2011>su". They render like the plain forms but defeat every exact match -- the
+# glossary check, DISPLAY_SCAN's highlights, name search -- so they are replaced in code.
+_LINT = str.maketrans({
+    " ": " ",  # no-break space
+    " ": " ",  # narrow no-break space
+    " ": " ",  # figure space
+    " ": " ",  # thin space
+    "‐": "-",  # hyphen
+    "‑": "-",  # non-breaking hyphen
+})
+
+
+def lint_translation(text: str) -> str:
+    """Normalize look-alike spaces and hyphens so stored prose matches plain spellings."""
+    return text.translate(_LINT)
+
+
 _LOCKED_TAG = re.compile(r'<locked-term data-id="t\d+">(.*?)</locked-term>', re.DOTALL)
 
 
@@ -198,3 +216,34 @@ def validate_glossary_constraints(
             untranslated_sources=tuple(untranslated),
             hard=hard_violation,
         )
+
+
+def respell_names(text: str, respellings: list[tuple[str, str]], other_targets: list[str],
+                  lang: str) -> str | None:
+    """Swap each old spelling for its new one wherever it stands as a whole name.
+
+    Names are primed into the source before translation, so a pending spelling is in
+    the English verbatim, and correcting it is a literal swap rather than an alignment
+    problem. Matching is leftmost-longest against every other known spelling too, so
+    "Long Fei" inside "Lord Long Fei" (a different term) is left alone. Returns None
+    when any old spelling does not occur, meaning the chapter was not translated with
+    it and only a retranslation can apply the change.
+    """
+    from pipeline.mentions import Alias, MentionScanRequest, scan_mentions, whole_name
+
+    olds = {old: new for old, new in respellings if old and old != new}
+    if not olds:
+        return text
+    aliases = [Alias(alias_id="respell", surface=old) for old in olds]
+    aliases += [Alias(alias_id="other", surface=t) for t in dict.fromkeys(other_targets)
+                if t and t not in olds]
+    spans = scan_mentions(MentionScanRequest(text=text, aliases=aliases, lang=lang)).spans
+    hits = sorted({(s.char_start, s.char_end) for s in spans
+                   if s.alias_id == "respell" and whole_name(text, s, lang)})
+    if {text[start:end] for start, end in hits} != set(olds):
+        return None
+    pieces, at = [], 0
+    for start, end in hits:
+        pieces += [text[at:start], olds[text[start:end]]]
+        at = end
+    return "".join(pieces) + text[at:]

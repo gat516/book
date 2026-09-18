@@ -51,6 +51,8 @@ class BatchRequest(TypedDict):
     model: NotRequired[str | None]
     json_schema: NotRequired[dict | None]
     max_output_tokens: NotRequired[int | None]
+    # Only for backends whose complete() accepts it (DeepSeek, Groq, OpenRouter).
+    reasoning_effort: NotRequired[str | None]
 
 
 class BatchResult(TypedDict):
@@ -216,6 +218,8 @@ class SequentialBatchMixin:
                                     model=req.get("model"), **schema_options)
                 if req.get("max_output_tokens") is not None:
                     call_options["max_output_tokens"] = req["max_output_tokens"]
+                if req.get("reasoning_effort") is not None:
+                    call_options["reasoning_effort"] = req["reasoning_effort"]
                 completion = await self.complete(req["prompt"], **call_options)  # type: ignore[attr-defined]
                 results.append({"id": req["id"], "output": completion.text, "error": None,
                                 "served_provider": completion.served_provider, "served_model": completion.served_model})

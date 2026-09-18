@@ -46,4 +46,30 @@ type QueueMessage struct {
 	// queue. The pipeline uses this to reuse durable prose while rebuilding records.
 	Enrichment  bool `json:"enrichment,omitempty"`
 	Retranslate bool `json:"retranslate,omitempty"`
+	// Respell rides on a Retranslate pointer when a confirmed name replaces a spelling
+	// that was primed into the chapter: the pipeline swaps it in the saved text instead of
+	// calling the model, and retranslates only when the old spelling is not there.
+	Respell []Respelling `json:"respell,omitempty"`
+}
+
+// Respelling is one name whose chapter text currently reads From and should read To.
+type Respelling struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// respellFor decides what a newly confirmed spelling costs an already-translated
+// chapter. Names are primed into the source before translation (§0: structural, not
+// prompted), so the text already holds the primed spelling verbatim: the same spelling
+// needs no work at all, a different one is a literal swap. Only an unknown primed
+// spelling still needs the model.
+func respellFor(msg QueueMessage, primed, target string) (QueueMessage, bool) {
+	if !msg.Retranslate || primed == "" {
+		return msg, true
+	}
+	if primed == target {
+		return msg, false
+	}
+	msg.Respell = []Respelling{{From: primed, To: target}}
+	return msg, true
 }

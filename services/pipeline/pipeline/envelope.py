@@ -30,6 +30,14 @@ class ChapterEnvelope(BaseModel):
     source_meta: SourceMeta = Field(default_factory=SourceMeta)
 
 
+class Respelling(BaseModel):
+    """A confirmed name whose old spelling is already in the chapter, word for word."""
+
+    model_config = {"populate_by_name": True}
+    old: str = Field(alias="from")
+    new: str = Field(alias="to")
+
+
 class QueueMessage(BaseModel):
     """The lightweight pointer LPUSHed onto ``jobs:pending`` (mirror of the Go struct).
 
@@ -47,3 +55,7 @@ class QueueMessage(BaseModel):
     # Re-run translation even when a readable version already exists. The old object
     # remains active until the replacement passes every hard character-name check.
     retranslate: bool = False
+    # Set with retranslate when a confirmed name replaces a spelling that was primed into
+    # the chapter: TRANSLATE swaps it in the saved text instead of calling the model, and
+    # retranslates only if the old spelling is not actually there.
+    respell: list[Respelling] = Field(default_factory=list)

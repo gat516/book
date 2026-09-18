@@ -4,7 +4,7 @@ This is terminology, never identity. No model calls, glossary locks, or automati
 approvals occur here. The first choice survives later mentions until the reader
 approves or corrects it through the hovercard.
 """
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import logging
 import re
 
@@ -12,26 +12,52 @@ from psycopg.types.json import Jsonb
 from pipeline.context import PipelineState, StageContext
 from pipeline.display_names import TermRenderingOccurrence
 from pipeline.evidence import digest, stable_id
-from pipeline.glossary_locks import _lock_glossary
 from pipeline.name_renderings import conventional_english_names
-from pipeline.pinyin_names import GENERIC_TITLES, NameCandidate, NamePlan, plan_character_name
 
 log = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class NameCandidate:
+    target_term: str
+    pronunciation: tuple[str, ...]
+    segmentation: str
+    method: str
+
+    def as_dict(self) -> dict:
+        return {"target_term": self.target_term, "pronunciation": list(self.pronunciation),
+                "segmentation": self.segmentation, "method": self.method}
+
+
+@dataclass(frozen=True)
+class NamePlan:
+    candidates: tuple[NameCandidate, ...]
+    reason: str
+    term_role: str
+    rendering_method: str
+
+
 def provisional_plan(surface: str, display: str, role: str, target_lang: str):
+    if role == "chinese_person":
+        # The model's own spelling, as written: no Pinyin library, surname list or
+        # translated-surname backstop. Every name is still only a pending choice the
+        # reader confirms or corrects.
+        if not display.strip():
+            return None
+        return NamePlan((NameCandidate(display.strip(), (), "", "pinyin"),),
+                        "model_spelling", "chinese_person", "pinyin")
     rendering = {
         "chinese_person": "chinese_personal", "foreign_person": "foreign_personal",
         "personal_title": "titled_person", "semantic_term": "semantic_term",
     }.get(role)
     if rendering is None:
         return None
-    # Preserve Pinyin surname/given-name formatting and conventional foreign-name
-    # restoration. Titles and semantic terms keep their existing translated wording.
+    # Conventional foreign-name restoration; titles and semantic terms keep the model's
+    # translated wording.
     plan = _rendering_plan(surface, rendering, [display], target_lang)
     if not plan.candidates:
         return None
-    return replace(plan, candidates=plan.candidates[:1], auto_target=None)
+    return replace(plan, candidates=plan.candidates[:1])
 
 
 async def record_term_choices(ctx, state, occurrences: list[TermRenderingOccurrence]) -> None:
@@ -56,19 +82,15 @@ def _rendering_plan(surface: str, rendering: str, targets: list[str], target_lan
         suggestions = tuple(targets) if rendering == "foreign_personal" else ()
         candidates = tuple(NameCandidate(target, (), "", "restored_name")
                            for target in dict.fromkeys(conventional + suggestions))[:8]
-        return NamePlan(candidates, None, "restored_name", "foreign_person", "restored_name")
-    if rendering == "chinese_personal" or surface in GENERIC_TITLES:
-        # A Chinese personal name's literal meaning is NOT its display spelling.
-        return plan_character_name(surface)
+        return NamePlan(candidates, "restored_name", "foreign_person", "restored_name")
     if rendering == "semantic_term":
         candidates = tuple(NameCandidate(target, (), "", "semantic_translation")
                            for target in dict.fromkeys(targets))
-        return NamePlan(candidates, None, "semantic_translation", "semantic_term", "semantic_translation")
+        return NamePlan(candidates, "semantic_translation", "semantic_term", "semantic_translation")
     method = {"foreign_personal": "restored_name", "titled_person": "translated_title"}[rendering]
     role = {"foreign_personal": "foreign_person", "titled_person": "personal_title"}[rendering]
     candidates = tuple(NameCandidate(target, (), "", method) for target in dict.fromkeys(targets))
-    # Never auto-approve a model's restoration, even when it offers only one spelling.
-    return NamePlan(candidates, None, method, role, method)
+    return NamePlan(candidates, method, role, method)
 
 
 def _evidence_for(source: str, start: int, end: int) -> str:
@@ -78,7 +100,7 @@ def _evidence_for(source: str, start: int, end: int) -> str:
     return source[left:right]
 
 
-async def _record_surface(ctx: StageContext, state: PipelineState, surface: str, plan: NamePlan | None = None, *, preserve_existing: bool = False) -> bool:
+async def _record_surface(ctx: StageContext, state: PipelineState, surface: str, plan: NamePlan, *, preserve_existing: bool = False) -> bool:
     source = state.envelope.raw_text
     chapter = state.envelope.chapter_index
     source_hash = digest(source)
@@ -87,10 +109,6 @@ async def _record_surface(ctx: StageContext, state: PipelineState, surface: str,
         return False
     first = matches[0]
     quote = _evidence_for(source, first.start(), first.end())
-    plan = plan or plan_character_name(surface)
-    if plan.reason in {"generic_title", "not_simple_hanzi_name", "missing_pinyin"}:
-        log.warning("character_names: rejected invalid character surface %r (%s)", surface, plan.reason)
-        return False
 
     row = await (await ctx.db.execute(
         "SELECT status,selected_target,jsonb_array_length(candidates)>0 FROM character_name_review WHERE novel_id=%s AND source_term=%s",
@@ -124,19 +142,6 @@ async def _record_surface(ctx: StageContext, state: PipelineState, surface: str,
         return False
     if preserve_existing and existed and row[2]:
         return True
-    if plan.auto_target:
-        version = await _lock_glossary(
-            ctx.db, novel_id=ctx.novel.id, source_term=surface,
-            target_term=plan.auto_target, entity_id=None, chapter=chapter,
-            target_lang=ctx.novel.target_lang, require_corroboration=False,
-            constraint_class="character_name",
-        )
-        if version is not None:
-            await ctx.db.execute("""UPDATE character_name_review SET status='approved',
-                selected_target=%s,selection_source='deterministic',reviewed_by='deterministic',reviewed_at=now(),updated_at=now()
-                WHERE novel_id=%s AND source_term=%s""",
-                (plan.auto_target, ctx.novel.id, surface))
-            return False
     await _refresh_pending(ctx.db, ctx.novel.id, surface, plan, chapter)
     return True
 

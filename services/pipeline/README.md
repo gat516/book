@@ -61,7 +61,9 @@ Normal ingestion does **not** run the standalone `CharacterNamesStage` or its fo
 alternative-generation pass. The existing display-name alignment request also classifies
 terms; `term_choices.py` chooses one spelling without another model call:
 
-- Ordinary Chinese personal names keep deterministic Pinyin and surname/given-name spacing.
+- Chinese personal names use the source-names model's own Pinyin spelling and spacing;
+  there is no surname list or Pinyin library to override it (the prompt says a name stays
+  Pinyin even when its characters have a meaning).
 - Recognized foreign transcriptions keep conventional restored spellings.
 - Other foreign names, meaningful titles, and semantic terms keep their translated wording.
 
@@ -70,9 +72,7 @@ Later mentions cannot replace it; readers confirm or correct it through the hove
 Nothing is auto-approved or turned into an entity identity. Previously approved glossary
 spellings retain precedence, and deleted glossary entries do not resurrect constraints.
 Display scanning runs before records extraction, so a records failure cannot prevent
-name choices from reaching the reader. Simplified and traditional surname spellings
-use the same surname/given-name boundary (龙飞 / 龍飛 → Long Fei); multi-syllable given
-names remain joined. Translation instructions apply this spacing on first appearance.
+name choices from reaching the reader.
 
 The reader overlays provisional or approved choices on mapped display spans without
 rewriting saved translation objects. Later translations use earlier provisional choices
@@ -80,10 +80,10 @@ as well as the approved glossary; the exact choices are included in the translat
 fingerprint. Review status and chapter gates still apply. Chapters translated before a
 choice exists retain their saved text; the overlay becomes available once alignment exists.
 
-`character_names.py`, `name_checkpoints.py`, and `refresh_name_reviews.py` retain the
-legacy standalone/offline tooling and its saved responses. They are not a normal worker
-stage. Do not reintroduce per-passage name inventory or alternative-generation calls into
-production; use `display_names.py` / `term_choices.py` for this flow.
+The legacy per-passage name inventory (`character_names.py`, its checkpoints and the
+`pinyin_names.py` surname lists) was removed. Do not reintroduce per-passage name inventory
+or alternative-generation calls into production; use `source_names.py` /
+`display_names.py` / `term_choices.py` for this flow.
 
 ## Unlinked reader name cards
 

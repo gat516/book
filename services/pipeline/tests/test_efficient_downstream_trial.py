@@ -136,7 +136,7 @@ def test_rendering_uses_shared_local_pinyin_and_glossary_spellings():
     sect = next(t for t, source in terms.items() if source == "青云宗")
     payload = {"notes": {"n1": marked["n1"]}, "new_terms": {tid: "凌峰"}}
     out = accept_rendering({"notes": {"n1": f"⟦{tid}⟧ arrived at ⟦{sect}⟧."},
-                            "terms": {tid: ["Peak Ling", "chinese_person"]}}, payload, terms, spellings)
+                            "terms": {tid: ["Ling Feng", "chinese_person"]}}, payload, terms, spellings)
     assert out["n1"] == "Ling Feng arrived at Azure Cloud Sect."
     payload = {"notes": {"n2": marked["n2"]}, "new_terms": {}}
     out = accept_rendering({"notes": {"n2": f"⟦{tid}⟧ left ⟦{sect}⟧."}, "terms": {}}, payload, terms, spellings)

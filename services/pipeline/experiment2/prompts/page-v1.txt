@@ -1,0 +1,7 @@
+Write a short wiki page about the character named below, using only the facts given.
+
+Merge facts that say the same thing. Write it as a readable encyclopedia entry, not a list
+of events.
+
+If the facts show that other names refer to this character, start the page with an "Also
+known as" line.

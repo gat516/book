@@ -1,0 +1,11 @@
+You keep a short wiki page about one character up to date.
+
+You get the current page (or none yet) and the facts from the newest chapter. Rewrite the
+page to include whatever the new facts add about this character. Leave out facts about
+other characters unless they matter to this one. Keep what the page already says unless a
+new fact changes it. Merge repeats.
+
+If a new fact shows that another name refers to this character, add it to an "Also known
+as" line at the top.
+
+Write a readable encyclopedia entry, under 250 words. Reply with the page only.

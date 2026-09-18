@@ -26,8 +26,10 @@ from pipeline.translation import (
     GlossaryViolation,
     build_system_prompt,
     build_user_prompt,
+    lint_translation,
     prime_glossary_terms,
     protect_glossary_terms,
+    respell_names,
     strip_locked_term_tags,
     validate_glossary_constraints,
 )
@@ -153,6 +155,11 @@ async def _complete_translation(
                 "system": part_system,
                 "pin_model": True,
                 "model": requested_model,
+                # DeepSeek otherwise thinks at full effort and can spend the whole output
+                # budget before finishing the chapter (TruncatedOutput); translation
+                # doesn't need it. Other backends keep their existing default.
+                **({"reasoning_effort": "none"}
+                   if (getattr(ctx, "provider_id", None) or ctx.cfg.llm_provider) == "deepseek" else {}),
             }
         )
     batch_ids = await ctx.batch_manager.batch_submit_split(requests)
@@ -268,6 +275,8 @@ class TranslateStage:
     ) -> None:
         chapter = state.envelope.chapter_index
         raw_hash = state.envelope.source_meta.raw_hash
+        if state.respell and await self._respell(ctx, state):
+            return
         if ctx.novel.source_lang.split("-")[0] == "zh":
             # Names first: recorded as pending choices, then primed below like locked
             # terms, so the spelling is decided before any English exists and the reader
@@ -345,6 +354,10 @@ class TranslateStage:
                 requested_model=requested_model,
             )
 
+        # Lint before any check or write: look-alike spaces/hyphens inside names would
+        # otherwise fail the glossary check and every later exact match (highlights,
+        # name search) even though the name is spelled correctly.
+        translated = lint_translation(translated)
         translated_by = f"{served_provider}:{served_model}"
         if not served_provider or not served_model:
             raise RuntimeError("translation provider returned an empty served identity")
@@ -388,20 +401,18 @@ class TranslateStage:
                     f"protected translation retry changed serving identity from "
                     f"{translated_by!r} to {retry_identity!r}"
                 )
-            protected_translation = strip_locked_term_tags(protected_translation)
             try:
+                protected_translation = lint_translation(strip_locked_term_tags(protected_translation))
                 validate_glossary_constraints(
                     state.envelope.raw_text, protected_translation, glossary
                 )
             except GlossaryViolation as retry_violation:
-                if not retry_violation.recoverable:
-                    raise
-                if first_violation.hard or retry_violation.hard:
-                    # Character-name spellings are identity-bearing terminology. Never
-                    # publish a replacement that omits or retranslates one.
-                    raise retry_violation
-                # The ordinary completion is readable and contains no protection markup.
-                # Preserve it, report only an operational count, and let enrichment run.
+                # Still failing after lint and the protected retry (including malformed
+                # protection markup): keep the ordinary completion, which is readable and
+                # markup-free, and report only an operational count. A missed name is a
+                # spelling to fix in review, not a reason to leave the chapter unreadable.
+                log.warning("translate: glossary check still failing after retry chapter=%s terms=%s",
+                            chapter, retry_violation.term_count)
                 warning_count = max(first_violation.term_count, retry_violation.term_count, 1)
             else:
                 translated = protected_translation
@@ -467,6 +478,55 @@ class TranslateStage:
 
         state.translation = translated
         self._set_chunks(ctx, state, translated)
+
+    async def _respell(self, ctx: StageContext, state: PipelineState) -> bool:
+        """Apply confirmed spellings to the saved translation; False means retranslate.
+
+        No model call: the old spellings were primed, so they are in the text verbatim.
+        The result still has to pass the same glossary backstop a fresh translation does.
+        """
+        chapter = state.envelope.chapter_index
+        row = await _chapter_row(ctx.db, ctx.novel.id, chapter)
+        if not row or not row[0] or not row[2] or row[2] == "external":
+            return False
+        glossary_version, glossary = await _glossary(ctx.db, ctx.novel.id, chapter=chapter)
+        current = await asyncio.to_thread(_read_object, ctx.objects, ctx.cfg.object_bucket, row[0])
+        respelled = respell_names(current, state.respell, [target for _, target, _ in glossary],
+                                  ctx.novel.target_lang)
+        if respelled is None:
+            log.info("translate: respell chapter=%s old spelling absent; retranslating", chapter)
+            return False
+        try:
+            validate_glossary_constraints(state.envelope.raw_text, respelled, glossary)
+        except GlossaryViolation:
+            log.info("translate: respell chapter=%s fails the glossary check; retranslating", chapter)
+            return False
+        if respelled != current:
+            digest = hashlib.sha256(respelled.encode("utf-8")).hexdigest()
+            uri = f"translated/{ctx.novel.id}/{chapter}/{digest}.txt"
+            await asyncio.to_thread(_write_object, ctx.objects, ctx.cfg.object_bucket, uri, respelled)
+            async with ctx.db.transaction():
+                next_version = await (await ctx.db.execute(
+                    "SELECT COALESCE(MAX(version),0)+1 FROM chapter_translation_version "
+                    "WHERE novel_id=%s AND chapter_index=%s",
+                    (ctx.novel.id, chapter),
+                )).fetchone()
+                await ctx.db.execute(
+                    "INSERT INTO chapter_translation_version "
+                    "(novel_id,chapter_index,version,translated_uri,translated_by,glossary_version,translation_fingerprint,reason) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,'respell')",
+                    (ctx.novel.id, chapter, next_version[0], uri, row[2], glossary_version,
+                     _translation_fingerprint(ctx, glossary)),
+                )
+                await ctx.db.execute(
+                    "UPDATE chapter SET translated_uri=%s, glossary_version=%s "
+                    "WHERE novel_id=%s AND chapter_index=%s",
+                    (uri, glossary_version, ctx.novel.id, chapter),
+                )
+        log.info("translate: respelled chapter=%s without a model call", chapter)
+        state.translation = respelled
+        self._set_chunks(ctx, state, respelled)
+        return True
 
     @staticmethod
     def _set_chunks(ctx: StageContext, state: PipelineState, translated: str) -> None:

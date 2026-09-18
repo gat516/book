@@ -629,6 +629,7 @@ export interface SaveProviderConfigRequest {
   model?: string;
   translate_model?: string;
   extract_model?: string;
+  facts_model?: string;
   base_url?: string;
 }
 
@@ -639,6 +640,7 @@ export interface ProviderConfigView {
   model?: string;
   translate_model?: string;
   extract_model?: string;
+  facts_model?: string;
   base_url?: string;
 }
 

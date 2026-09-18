@@ -58,6 +58,7 @@ type providerConfigReq struct {
 	Model          string `json:"model,omitempty"`
 	TranslateModel string `json:"translate_model,omitempty"`
 	ExtractModel   string `json:"extract_model,omitempty"`
+	FactsModel     string `json:"facts_model,omitempty"`
 	BaseURL        string `json:"base_url,omitempty"`
 }
 
@@ -189,7 +190,12 @@ func (a *API) buildProviderConfigInput(req providerConfigReq) (ProviderConfigInp
 	if req.ExtractModel == "" {
 		req.ExtractModel = req.Model
 	}
-	return ProviderConfigInput{Provider: req.Provider, Model: req.Model, TranslateModel: req.TranslateModel, ExtractModel: req.ExtractModel, BaseURL: req.BaseURL}, nil
+	// Facts default to the extract model, so a client that predates the facts field
+	// (.claude/plans/facts-stage.md) keeps one model for both enrichment calls.
+	if req.FactsModel == "" {
+		req.FactsModel = req.ExtractModel
+	}
+	return ProviderConfigInput{Provider: req.Provider, Model: req.Model, TranslateModel: req.TranslateModel, ExtractModel: req.ExtractModel, FactsModel: req.FactsModel, BaseURL: req.BaseURL}, nil
 }
 
 func validateCustomProviderBaseURL(raw string) error {

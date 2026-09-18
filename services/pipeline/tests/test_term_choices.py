@@ -11,10 +11,10 @@ from pipeline.stages.translate import _glossary
 
 
 @pytest.mark.parametrize("surface,display,role,target,method", [
-    ("凌峰", "Lingfeng", "chinese_person", "Ling Feng", "pinyin"),
-    ("龙飞", "Longfei", "chinese_person", "Long Fei", "pinyin"),
-    ("龍飛", "Longfei", "chinese_person", "Long Fei", "pinyin"),
-    ("水寒", "Water Cold", "chinese_person", "Shuihan", "pinyin"),
+    # A Chinese personal name is the model's own spelling, kept as a pending choice.
+    ("凌峰", "Ling Feng", "chinese_person", "Ling Feng", "pinyin"),
+    ("龍飛", "Long Fei", "chinese_person", "Long Fei", "pinyin"),
+    ("水寒", "Water Cold", "chinese_person", "Water Cold", "pinyin"),
     ("契科夫", "Chekov", "foreign_person", "Chekhov", "restored_name"),
     ("白衣剑圣", "White-Robed Sword Saint", "personal_title", "White-Robed Sword Saint", "translated_title"),
     ("天庭", "Heavenly Court", "semantic_term", "Heavenly Court", "semantic_translation"),
@@ -24,7 +24,6 @@ def test_one_choice_keeps_existing_rendering_rules_without_autoapproval(surface,
     assert len(plan.candidates) == 1
     assert plan.candidates[0].target_term == target
     assert plan.rendering_method == method
-    assert plan.auto_target is None
 
 
 @pytest.mark.db
@@ -34,7 +33,7 @@ async def test_choice_survives_later_mentions_and_is_reused_from_its_own_chapter
         ctx = SimpleNamespace(db=db_conn, provider=AsyncMock(), novel=SimpleNamespace(
             id=novel, source_lang="zh", target_lang="en"))
         state = SimpleNamespace(envelope=SimpleNamespace(raw_text="凌峰来了。", chapter_index=1))
-        occurrence = TermRenderingOccurrence("凌峰", "Lingfeng", 0, 8, term_role="chinese_person")
+        occurrence = TermRenderingOccurrence("凌峰", "Ling Feng", 0, 8, term_role="chinese_person")
         await record_term_choices(ctx, state, [occurrence, occurrence])
         # Even another valid proposal for this same chapter cannot replace the choice.
         await record_term_choices(ctx, state, [TermRenderingOccurrence(
@@ -60,3 +59,8 @@ async def test_choice_survives_later_mentions_and_is_reused_from_its_own_chapter
         assert await _glossary(db_conn, novel, chapter=2) == (1, [])
     finally:
         await delete_novel(db_conn, novel)
+
+
+def test_a_chinese_name_is_the_models_own_spelling():
+    plan = provisional_plan("安若素", "An Ruosu", "chinese_person", "en")
+    assert [(c.target_term, c.method) for c in plan.candidates] == [("An Ruosu", "pinyin")]

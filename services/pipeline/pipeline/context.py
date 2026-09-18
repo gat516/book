@@ -143,6 +143,8 @@ class PipelineState:
     # TRANSLATE ran the source-names pass and primed its spellings, so DISPLAY_SCAN can
     # find every name by exact search instead of discovering and aligning with a model.
     source_names_primed: bool = False
+    # (old, new) spellings from a respell pointer; TRANSLATE applies them to the saved text.
+    respell: list[tuple[str, str]] = field(default_factory=list)
 
     # resolve stage (1.6): the AUTHORITATIVE occurrence-ID -> entity_id map (revision pipeline). Every stage that
     # needs to turn a name into an id reads this and nothing else — a surface absent from

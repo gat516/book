@@ -196,6 +196,9 @@ class Config:
     resolve_ollama_timeout_seconds: float = 120
     resolve_ollama_total_timeout_seconds: float = 1800
     resolve_ollama_num_ctx: int = 16384
+    # FACTS stage (.claude/plans/facts-stage.md). Blank falls back to llm_model_extract;
+    # a book's novel_provider_config.facts_model overrides both.
+    llm_model_facts: str = ""
 
     @classmethod
     def load(cls) -> "Config":
@@ -217,6 +220,7 @@ class Config:
             llm_provider=_getenv("LLM_PROVIDER", "ollama"),
             llm_model_translate=_getenv("LLM_MODEL_TRANSLATE", "qwen2.5:14b"),
             llm_model_extract=_getenv("LLM_MODEL_EXTRACT", "qwen2.5:14b"),
+            llm_model_facts=_getenv("LLM_MODEL_FACTS", ""),
             embed_model=_getenv("EMBED_MODEL", "nomic-embed-text"),
             embed_dim=int(_getenv("EMBED_DIM", "768")),
             ollama_host=_getenv("OLLAMA_HOST", "http://localhost:11434"),

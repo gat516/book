@@ -18,6 +18,7 @@ from pathlib import Path
 import psycopg
 from minio import Minio
 
+from novel_llm.custom import CustomProvider
 from novel_llm.deepseek import DeepSeekProvider
 from pipeline.config import Config
 from pipeline.llm.provider import Class
@@ -31,6 +32,11 @@ def make_provider(args, row, cfg):
     model without touching the book's saved configuration (key from DEEPSEEK_API_KEY)."""
     if args.provider == "deepseek":
         return DeepSeekProvider(model=args.model or "deepseek-v4-flash")
+    if args.provider == "local":
+        # A llama-server on this machine (OpenAI-compatible); it ignores the key.
+        return CustomProvider(model=args.model or "ling-3.0-tiny",
+                              base_url="http://127.0.0.1:8090/v1", api_key="local",
+                              timeout=300.0)  # CPU: ~40s to read a chapter, ~10 tokens/s to write
     return build_provider(row, cfg)
 
 

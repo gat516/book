@@ -55,9 +55,16 @@ async def test_cache_uses_text_prompt_and_actual_model():
 
 async def test_malformed_model_output_is_not_cached():
     ctx = context('{"names":[{"entity_id":"invented"}]}')
-    with pytest.raises(ValueError):
-        await discover_names(ctx, "Ann left.")
+    assert await discover_names(ctx, "Ann left.") == []
     assert ctx.cache.redis.store == {}
+
+
+async def test_one_malformed_name_drops_only_itself():
+    ctx = context('{"names":["Ann",{"entity_id":"invented"},"Bo"]}')
+    text = "Ann met Bo."
+    spans = await discover_names(ctx, text)
+    assert [text[s.char_start:s.char_end] for s in spans] == ["Ann", "Bo"]
+    assert ctx.cache.redis.store == {}  # partial answers are used once, not cached
 
 
 async def test_names_in_unspaced_source_text_do_not_need_latin_word_boundaries():

@@ -77,3 +77,31 @@ async def test_schema_request_uses_explicit_prompt_fallback_and_json_mode(monkey
             message=SimpleNamespace(content='{"facts":[]}'))], model="model", usage={})
     monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=complete))
     assert (await provider.complete("source", system="stable", json_schema=schema)).text == '{"facts":[]}'
+
+
+@pytest.mark.parametrize("requested, served, expected", [
+    ("deepseek-v4-flash", "deepseek-flash", "deepseek-v4-flash"),  # DeepSeek's own alias
+    ("deepseek-v4-pro", "deepseek-pro", "deepseek-v4-pro"),
+    ("deepseek-chat", "deepseek-chat", "deepseek-chat"),
+])
+async def test_versionless_served_name_counts_as_the_requested_model(
+        monkeypatch, requested, served, expected):
+    async def complete(**kwargs):
+        return SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop",
+            message=SimpleNamespace(content="ok"))], model=served, usage={})
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=complete))
+    completion = await DeepSeekProvider(model=requested, api_key="k").complete(
+        "hi", pin_model=True)
+    assert completion.served_model == expected
+
+
+@pytest.mark.parametrize("served", ["deepseek-pro", "deepseek-v3-flash", "deepseek-chat"])
+async def test_a_different_served_model_still_breaks_the_pin(monkeypatch, served):
+    from novel_llm import PinnedModelChanged
+    async def complete(**kwargs):
+        return SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop",
+            message=SimpleNamespace(content="ok"))], model=served, usage={})
+    monkeypatch.setattr(hosted, "litellm", SimpleNamespace(acompletion=complete))
+    with pytest.raises(PinnedModelChanged):
+        await DeepSeekProvider(model="deepseek-v4-flash", api_key="k").complete(
+            "hi", pin_model=True)

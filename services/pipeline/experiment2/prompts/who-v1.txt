@@ -1,0 +1,5 @@
+For each name or title that refers to a person in this chapter, write one line:
+
+the name as written | who it refers to, using the name the chapter mainly calls them, or unknown if the chapter doesn't make it clear
+
+Write `## Names` first, then the lines.

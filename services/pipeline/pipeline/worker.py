@@ -634,11 +634,12 @@ class Worker:
         state = PipelineState(
             envelope=envelope,
             expected_record_generation_id=msg.record_generation_id,
+            respell=[(r.old, r.new) for r in msg.respell] if msg.retranslate else [],
         )
         stage_name = ""
         try:
             for stage in DEFAULT_STAGES:
-                if msg.enrichment and stage.name in {"records", "display_scan"}:
+                if msg.enrichment and stage.name in {"records", "display_scan", "facts"}:
                     discarded_row = await self._fetch_one(
                         "SELECT enrichment_discarded FROM chapter WHERE novel_id=%s AND chapter_index=%s",
                         (msg.novel_id, msg.chapter_index),
@@ -871,12 +872,9 @@ class Worker:
             "AND provider_retry_attempts < %s) OR (provider_retry_at <= now() "
             "AND provider_retry_attempts < %s "
             "AND (NOT c.translation_ready OR NOT c.enrichment_discarded))) "
-            "AND (NOT c.translation_ready OR c.status='name_repair_error' OR NOT EXISTS ("
-            "SELECT 1 FROM chapter earlier WHERE earlier.novel_id=c.novel_id "
-            "AND earlier.chapter_index<c.chapter_index AND earlier.translation_ready "
-            "AND NOT EXISTS (SELECT 1 FROM record_run r WHERE r.novel_id=c.novel_id "
-            "AND r.chapter_index=earlier.chapter_index AND r.status='published' "
-            "AND r.generation_id=(SELECT active_record_generation FROM novel WHERE id=c.novel_id)))) "
+            # No chapter-order gate: RECORDS waited for every earlier chapter's published
+            # record_run, which nothing produces now. FACTS is per chapter
+            # (.claude/plans/facts-stage.md), so a due chapter is simply re-queued.
             "ORDER BY LEAST(COALESCE(enrichment_retry_at, 'infinity'::timestamptz), "
             "COALESCE(provider_retry_at, 'infinity'::timestamptz)) LIMIT 20",
             (MAX_ENRICHMENT_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS),
@@ -1026,7 +1024,9 @@ class Worker:
                 build_names_provider(self.cfg, provider_id=row.provider, row=row),
                 build_resolve_provider(self.cfg, provider_id=row.provider, row=row),
                 {"translate": row.translate_model or row.model or self.cfg.llm_model_translate,
-                 "extract": row.extract_model or row.model or self.cfg.llm_model_extract},
+                 "extract": row.extract_model or row.model or self.cfg.llm_model_extract,
+                 "facts": (row.facts_model or self.cfg.llm_model_facts or row.extract_model
+                           or row.model or self.cfg.llm_model_extract)},
             )
         self._provider_cache[novel_id] = result
         return result

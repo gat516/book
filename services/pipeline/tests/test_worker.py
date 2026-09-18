@@ -946,8 +946,8 @@ def test_translation_is_the_reader_critical_path_before_enrichment():
 
     names = [stage.name for stage in DEFAULT_STAGES]
     assert names[:2] == ["chunk", "translate"]
-    # Name choices reuse display alignment, with no independent inventory calls.
-    assert names[2:] == ["scan", "display_scan", "records"]
+    # FACTS replaced RECORDS; askai's chunk index follows it.
+    assert names[2:] == ["scan", "display_scan", "facts", "chunk_index"]
 
 
 async def test_enrichment_retries_are_deduplicated_and_yield_to_reading(scheduled):

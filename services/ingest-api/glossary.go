@@ -254,6 +254,10 @@ func (s *Store) ConfirmGlossaryTerm(ctx context.Context, novelID, sourceTerm, ta
 	if atChapter < 0 {
 		return 0, nil, errors.New("at_chapter must be nonnegative")
 	}
+	primed, err := primedSpelling(ctx, s.db, novelID, sourceTerm)
+	if err != nil {
+		return 0, nil, err
+	}
 	version, created, err := s.insertGlossaryTerm(ctx, novelID, sourceTerm, targetTerm, atChapter, constraintClass)
 	if err != nil || !created {
 		// A repeat confirm of the same spelling already re-queued its chapters the first
@@ -266,7 +270,10 @@ func (s *Store) ConfirmGlossaryTerm(ctx context.Context, novelID, sourceTerm, ta
 	}
 	queue := make([]QueueMessage, 0, len(chapters))
 	for _, chapter := range chapters {
-		msg := QueueMessage{NovelID: novelID, ChapterIndex: chapter, Retranslate: true}
+		msg, needed := respellFor(QueueMessage{NovelID: novelID, ChapterIndex: chapter, Retranslate: true}, primed, targetTerm)
+		if !needed {
+			continue
+		}
 		if err := s.enqueue(ctx, msg); err != nil {
 			// The lock is committed; report what did get queued so the caller can retry.
 			return version, queue, err

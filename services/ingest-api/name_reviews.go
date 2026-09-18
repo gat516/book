@@ -91,6 +91,12 @@ func (s *Store) ApproveCharacterName(ctx context.Context, novelID, sourceTerm, t
 		return version, nil, nil
 	}
 
+	// Read before this approval rewrites the glossary: it is what the text says now.
+	primed, err := primedSpelling(ctx, tx, novelID, sourceTerm)
+	if err != nil {
+		return 0, nil, err
+	}
+
 	var maxVersion int
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(version),0) FROM glossary WHERE novel_id=$1`, novelID).Scan(&maxVersion); err != nil {
 		return 0, nil, err
@@ -182,7 +188,9 @@ func (s *Store) ApproveCharacterName(ctx context.Context, novelID, sourceTerm, t
 			rows.Close()
 			return 0, nil, err
 		}
-		queue = append(queue, QueueMessage{NovelID: novelID, ChapterIndex: chapter, Retranslate: ready})
+		if msg, needed := respellFor(QueueMessage{NovelID: novelID, ChapterIndex: chapter, Retranslate: ready}, primed, targetTerm); needed {
+			queue = append(queue, msg)
+		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -204,6 +212,23 @@ func (s *Store) ApproveCharacterName(ctx context.Context, novelID, sourceTerm, t
 		}
 	}
 	return version, queue, nil
+}
+
+// primedSpelling is the spelling translation currently substitutes for sourceTerm,
+// mirroring the pipeline's _glossary precedence: a live glossary lock wins, otherwise
+// the pending review's first candidate. Empty when nothing was primed.
+func primedSpelling(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, novelID, sourceTerm string) (string, error) {
+	var primed *string
+	err := q.QueryRow(ctx, `SELECT COALESCE(
+		(SELECT target_term FROM glossary WHERE novel_id=$1 AND source_term=$2 AND NOT deleted),
+		(SELECT candidates->0->>'target_term' FROM character_name_review
+		 WHERE novel_id=$1 AND source_term=$2 AND status='pending'))`, novelID, sourceTerm).Scan(&primed)
+	if err != nil {
+		return "", err
+	}
+	return valueOrEmpty(primed), nil
 }
 
 func valueOrEmpty(value *string) string {

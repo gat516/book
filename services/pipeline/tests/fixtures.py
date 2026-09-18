@@ -126,6 +126,7 @@ class FakeProvider(SequentialBatchMixin):
         model: str | None = None,
         json_schema: dict | None = None,
         reasoning_effort: str | None = None,
+        max_output_tokens: int | None = None,
     ) -> Completion:
         self.calls.append(
             {

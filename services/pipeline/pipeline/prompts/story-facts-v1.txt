@@ -1,0 +1,3 @@
+List the important facts in this chapter: short summaries of what happened.
+
+Write `## Facts` and then one fact per line.

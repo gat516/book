@@ -20,7 +20,9 @@ dependencies = [
     # matching services/ingest-api/crypto.go's stdlib crypto/aes+cipher encryption.
     "cryptography>=42",
     # Deterministic Hanzi -> Hanyu Pinyin candidates for source-anchored character names.
-    "pypinyin>=0.54",
+    # Simplified <-> Traditional conversion: a model may write a name in the other script
+    # from the source's (星莲 for 星蓮); names are checked and stored in the source's form.
+    "opencc-python-reimplemented>=0.1.7",
 ]
 
 [project.optional-dependencies]
@@ -40,6 +42,10 @@ markers = [
 
 [tool.setuptools.packages.find]
 include = ["pipeline*"]
+
+# Versioned stage prompts ship with the code; a prompt's file name is its version.
+[tool.setuptools.package-data]
+pipeline = ["prompts/*.txt"]
 
 [build-system]
 requires = ["setuptools>=68"]

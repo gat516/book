@@ -27,6 +27,8 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
   const [provider, setProvider] = useState<ProviderName>("gemini");
   const [translationModel, setTranslationModel] = useState("");
   const [extractionModel, setExtractionModel] = useState("");
+  // Blank means "same as the AI features model" (ingest-api defaults it the same way).
+  const [factsModel, setFactsModel] = useState("");
   // A saved model that is not in the catalog must stay editable rather than being
   // silently rewritten to a listed one on the next save.
   const [custom, setCustom] = useState(false);
@@ -52,6 +54,7 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
         setProvider(config.provider);
         setTranslationModel(config.translate_model ?? config.model ?? "");
         setExtractionModel(config.extract_model ?? config.model ?? "");
+        setFactsModel(config.facts_model ?? "");
         setCustom(
           !!(config.translate_model ?? config.model) && !MODEL_OPTIONS[config.provider].some((m) => m.id === (config.translate_model ?? config.model)),
         );
@@ -102,6 +105,7 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
     // time. Always reset to the new provider's default.
     setTranslationModel(DEFAULT_MODEL[next] ?? "");
     setExtractionModel(DEFAULT_MODEL[next] ?? "");
+    setFactsModel("");
     setCustom(next === "custom");
     setExtractionCustom(next === "custom");
     setBaseURL("");
@@ -137,12 +141,14 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
         provider,
         translate_model: translationModel.trim() || undefined,
         extract_model: extractionModel.trim() || undefined,
+        facts_model: factsModel.trim() || undefined,
         base_url: baseURL.trim() || undefined,
       });
       setCurrent(view);
       setProvider(view.provider);
       setTranslationModel(view.translate_model ?? view.model ?? "");
       setExtractionModel(view.extract_model ?? view.model ?? "");
+      setFactsModel(view.facts_model ?? "");
       setBaseURL(view.base_url ?? "");
       setSaved(true);
       if (view.provider === "ollama") {
@@ -213,6 +219,7 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
                 <div><dt>Provider</dt><dd>{PROVIDER_LABELS[current.provider]}</dd></div>
                 <div><dt>Translation</dt><dd>{current.translate_model ?? current.model ?? "Server default"}</dd></div>
                 <div><dt>AI features</dt><dd>{current.extract_model ?? current.model ?? "Server default"}</dd></div>
+                <div><dt>Story facts</dt><dd>{current.facts_model ?? current.extract_model ?? current.model ?? "Server default"}</dd></div>
                 {(current.provider === "ollama" || current.provider === "custom") && (
                   <div><dt>Endpoint</dt><dd>{current.base_url || "Book server default"}</dd></div>
                 )}
@@ -278,6 +285,12 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
               <input value={extractionModel} onChange={(e) => setExtractionModel(e.target.value)} placeholder="Exact model ID" required={provider === "custom"} />
             </label>
           )}
+            <label>
+            Story facts model
+            <input value={factsModel} onChange={(e) => setFactsModel(e.target.value)}
+              placeholder="Same as the AI features model" />
+          </label>
+          <p className="settings-help">Writes each chapter's hidden story facts that wiki pages are built from.</p>
           </fieldset>
           <p className="settings-help">Optional semantic search helps Ask AI find chapter passages. Configure it separately in Account settings → Semantic search.</p>
           {MODEL_LIST_IS_ADVISORY[provider] && (

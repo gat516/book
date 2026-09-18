@@ -61,10 +61,17 @@ def model_for_stage(stage: str, cfg: Config, override: dict[str, str] | str | No
     if isinstance(override, dict):
         if stage == "translate":
             return override.get("translate") or cfg.llm_model_translate
+        if stage == "facts":
+            return (override.get("facts") or cfg.llm_model_facts or override.get("extract")
+                    or cfg.llm_model_extract)
         return override.get("extract") or cfg.llm_model_extract
     if override:
         return override
-    return cfg.llm_model_translate if stage == "translate" else cfg.llm_model_extract
+    if stage == "translate":
+        return cfg.llm_model_translate
+    if stage == "facts":
+        return cfg.llm_model_facts or cfg.llm_model_extract
+    return cfg.llm_model_extract
 
 
 def ontology_version(ontology: dict) -> str:
