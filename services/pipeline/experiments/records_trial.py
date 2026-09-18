@@ -17,6 +17,7 @@ from pipeline.fact_first import _source_passages, validate_discovery
 from pipeline.llm import provider_from_env
 from pipeline.llm.provider import AdmissionRejected, Class
 from pipeline.provider_config import build_provider, resolve_provider_config
+from linked_memory import validate_linked_memory
 
 
 async def run(args):
@@ -35,7 +36,7 @@ async def run(args):
     provider_id = config.provider if config else cfg.llm_provider
     request = {"prompt": prompt, "system": system, "model": model,
                "max_output_tokens": args.output_tokens, "reasoning_effort": args.reasoning}
-    if args.format in {"quoted-json", "memory-json"}:
+    if args.format in {"quoted-json", "memory-json", "linked-memory-json"}:
         request["json_mode"] = True
     identity = hashlib.sha256(json.dumps([args.novel, provider_id, request],
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
@@ -64,6 +65,8 @@ async def run(args):
         try:
             if args.format == "quoted-json":
                 artifact["quote_validation"] = validate_quotes(result.text, case)
+            elif args.format == "linked-memory-json":
+                artifact["linked_memory"] = validate_linked_memory(result.text, case)
             elif args.format == "memory-json":
                 artifact["memory"] = json.loads(result.text)
             else:
@@ -127,8 +130,8 @@ if __name__ == "__main__":
     parser.add_argument("--novel", required=True)
     parser.add_argument("--case", type=Path, required=True)
     parser.add_argument("--prompt", type=Path, required=True)
-    parser.add_argument("--reasoning", choices=["low", "medium", "high"], default="low")
-    parser.add_argument("--format", choices=["claims-xml", "quoted-json", "memory-json"], default="claims-xml")
+    parser.add_argument("--reasoning", choices=["none", "low", "medium", "high"], default="low")
+    parser.add_argument("--format", choices=["claims-xml", "quoted-json", "memory-json", "linked-memory-json"], default="claims-xml")
     parser.add_argument("--model")
     parser.add_argument("--output-tokens", type=int, default=4096)
     parser.add_argument("--output", type=Path, default=Path(__file__).parent / "results")

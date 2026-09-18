@@ -1,0 +1,14 @@
+{
+  "priorities": {
+    "identity": "New identities or explicit aliases that change who an object is understood to be.",
+    "relationship": "Durable relationships, allegiances, conflicts, or ownership changes.",
+    "ability": "Important abilities and their limits, conditions, or costs.",
+    "commitment": "Promises, plans, goals, obligations, or consequential decisions.",
+    "outcome": "Consequential outcomes and discoveries; preserve predictions as predictions.",
+    "world": "World rules needed to understand future developments."
+  },
+  "candidate_limit": 16,
+  "identity_witness_target": 2,
+  "max_enrichment_input_tokens": 2400,
+  "max_context_tokens": 400
+}

@@ -27,9 +27,12 @@ def save(path, value):
 
 class LocalCalls:
     """Checkpoint real provider responses without the production queue or cache."""
-    def __init__(self, provider, output, admission_retries=0):
+    def __init__(self, provider, output, admission_retries=0, *, max_new_calls=None, min_interval=0):
         self.provider, self.output, self.attempts = provider, output, []
         self.admission_retries = admission_retries
+        self.events = []
+        self.max_new_calls, self.new_calls = max_new_calls, 0
+        self.min_interval, self.last_call_finished = min_interval, None
 
     async def call(self, stage, request):
         for attempt in range(self.admission_retries + 1):
@@ -56,8 +59,20 @@ class LocalCalls:
             saved = json.loads(path.read_text())
             if saved.get("status") == "completed":
                 self.attempts.append({"stage": stage, "artifact": str(path), "completion": saved["completion"], "reused": True})
+                self.events.append({"stage": stage, "status": "completed", "reused": True,
+                                    "artifact": str(path)})
                 return saved["completion"]
             path.rename(path.with_name(path.stem + f"-{time.time_ns()}.json"))
+        if self.max_new_calls is not None and self.new_calls >= self.max_new_calls:
+            raise ValueError("local new-call budget exhausted; resume from checkpoints")
+        if self.last_call_finished is not None:
+            delay = self.min_interval - (time.monotonic() - self.last_call_finished)
+            if delay > 0:
+                print(json.dumps({"stage": stage, "pacing_seconds": round(delay, 1)}), flush=True)
+                while delay > 0:
+                    await asyncio.sleep(min(delay, 30))
+                    delay = self.min_interval - (time.monotonic() - self.last_call_finished)
+        self.new_calls += 1
         artifact = {"stage": stage, "request": request, "created_at": datetime.now(timezone.utc).isoformat()}
         started = time.monotonic()
         try:
@@ -90,8 +105,12 @@ class LocalCalls:
                 pass
             raise
         finally:
+            self.last_call_finished = time.monotonic()
             artifact["elapsed_s"] = round(time.monotonic() - started, 3)
             save(path, artifact)
+            self.events.append({"stage": stage, "status": artifact["status"], "reused": False,
+                                "artifact": str(path),
+                                "usage_known": artifact["status"] == "completed"})
             print(json.dumps({"stage": stage, "status": artifact["status"], "artifact": str(path),
                               "input_tokens": artifact.get("completion", {}).get("input_tokens"),
                               "output_tokens": artifact.get("completion", {}).get("output_tokens"),

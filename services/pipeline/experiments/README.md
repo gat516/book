@@ -1,5 +1,10 @@
 # Records experiment
 
+The current lightweight path is [`evidence_trial.py`](evidence_trial.py), documented
+in [`EVIDENCE-PIPELINE.md`](EVIDENCE-PIPELINE.md). It uses the book's existing hosted
+provider with one default extraction call, locally attached excerpts, and separately
+requested offline enrichment. No consumer-installed models or additional services.
+
 Develop and review the extraction behavior here before integrating it into the worker.
 The worker stays paused during this experiment. Results are local artifacts, never
 published knowledge, glossary changes, queue jobs, or translation changes.
@@ -59,3 +64,37 @@ This configuration completed five identity and three rendering calls for the nin
 saved notes. Including the saved extraction, successful requests used 13,583 input
 and 5,894 output tokens. See `DOWNSTREAM-REVIEW.md` for quality issues and
 `results/batched-downstream-chapter-1-small/reader-preview.md` for the actual output.
+
+## Incremental efficiency trial
+
+`efficient_downstream_trial.py` reuses saved extraction, retrieves bounded identity
+candidates, emits only new entities and witnessed alias additions, and links existing
+IDs directly. Batch sizes use conservative token estimates, with source citations
+retained. A bounded unresolved follow-up can expand candidates and neighboring context.
+Rendering uses local terminology markers and a shared provisional naming map; existing
+glossary spellings take precedence. No identity follows from a terminology match.
+
+```bash
+../../scripts/with-env.sh .venv/bin/python experiments/efficient_downstream_trial.py \
+  --extraction experiments/results/memory-v4-medium-80129cf4949848cc.json \
+  --output experiments/results/efficient-downstream-chapter-1 \
+  --max-new-calls 10
+```
+
+The new-call limit includes failures, deferrals, and admission retries per invocation.
+Checkpoints remain free to replay. Across invocations subtract prior attempts from any
+authorized total. Summaries distinguish successful chain usage from newly spent/reused
+usage; failed usage remains unknown. See `EFFICIENCY-REVIEW.md` for the live trial.
+`--min-request-interval 60` spaces new requests after the previous attempt finishes;
+checkpoint replays incur no delay. Scalar unresolved strings are normalized to one-item
+lists without changing their contents. The second live run reached rendering but failed
+quality/validation checks and did not demonstrate end-to-end savings.
+
+## Joint extraction and local identity
+
+`records_trial.py --format linked-memory-json` with `prompts/linked-memory-v1.txt`
+tests notes and explicit chapter-local participant identities in one completion.
+`linked_memory.py` validates citations, source-name witnesses and declared ID references;
+it never merges matching spellings. This is an untyped experimental representation,
+not production `state.resolutions` or a published generation. See
+`JOINT-EXTRACTION-REVIEW.md` for cost and source review of the first live request.
