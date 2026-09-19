@@ -1,0 +1,22 @@
+List what this chapter establishes or changes about its characters, places, groups and
+items. Skip moment-to-moment action and dialogue.
+
+Usually 5 facts, at most 8. One short sentence each, about one thing.
+
+Call each person by their name. A title belongs to the person who holds it: never write a
+title as another person's name.
+
+Tag each fact with one category:
+- intro: who someone is (origin, race, role, title, appearance, personality)
+- alias: another name someone goes by, or a hidden identity revealed
+- relationship: a bond between two people; add its kind, one of master, disciple,
+  family, spouse, lover, friend, ally, rival, enemy, superior, subordinate. Write it as
+  "<Name> is <Name>'s <kind>", then anything else in the same sentence.
+- ability: powers, techniques, cultivation level, breakthroughs
+- item: a treasure or possession someone gains or loses
+- affiliation: joining, leaving or holding a position in a group
+- status: death, injury, imprisonment, disappearance, recovery
+- event: anything else that matters to the story
+
+Write `## Facts`, then one fact per line as `category | fact`, or
+`relationship: kind | fact`.
