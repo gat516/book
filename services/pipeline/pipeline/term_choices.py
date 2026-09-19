@@ -5,18 +5,29 @@ approvals occur here. The first choice survives later mentions until the reader
 approves or corrects it through the hovercard.
 """
 from dataclasses import dataclass, replace
+import hashlib
 from itertools import islice, product
+import json
 import logging
 import re
+from uuid import NAMESPACE_URL, uuid5
 
 from pypinyin import Style, pinyin
 
 from psycopg.types.json import Jsonb
 from pipeline.context import PipelineState, StageContext
 from pipeline.display_names import TermRenderingOccurrence
-from pipeline.evidence import digest, stable_id
 
 log = logging.getLogger(__name__)
+
+
+def digest(value) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def stable_id(*parts) -> str:
+    return str(uuid5(NAMESPACE_URL, json.dumps(parts, ensure_ascii=False)))
 
 
 @dataclass(frozen=True)

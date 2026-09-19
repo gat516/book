@@ -44,8 +44,7 @@ class GraphWriter:
         """Delete this chapter's existing display spans and re-insert. Same discipline
         as ``replace_chunks``: derived data, not knowledge, no natural key to
         `ON CONFLICT` against — delete-and-reinsert is what makes re-running a chapter
-        idempotent (§0.7). ``span.alias_id`` carries the entity id (§4's alias-id
-        convention, shared with the extraction-time scanner)."""
+        idempotent (§0.7). Spans are terminology only; they carry no identity."""
         async with self.db.cursor() as cur:
             await cur.execute(
                 "DELETE FROM mention_span WHERE novel_id = %s AND chapter_index = %s",
@@ -58,11 +57,11 @@ class GraphWriter:
             if spans:
                 await cur.executemany(
                     """
-                    INSERT INTO mention_span (novel_id, chapter_index, entity_id, char_start, char_end)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO mention_span (novel_id, chapter_index, char_start, char_end)
+                    VALUES (%s, %s, %s, %s)
                     """,
                     [
-                        (novel_id, chapter_index, s.alias_id or None, s.char_start, s.char_end)
+                        (novel_id, chapter_index, s.char_start, s.char_end)
                         for s in spans
                     ],
                 )

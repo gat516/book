@@ -30,28 +30,17 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("PATCH /queue", a.queueControl)
 	mux.HandleFunc("GET /healthz", a.healthz)
 	mux.HandleFunc("PUT /novels/{id}/progress", a.putProgress)
-	mux.HandleFunc("GET /novels/{id}/entity/{eid}", a.getEntity)
-	mux.HandleFunc("GET /novels/{id}/wiki", a.getWiki)
 	mux.HandleFunc("GET /novels/{id}/wiki/pages", a.getWikiPages)
 	mux.HandleFunc("GET /novels/{id}/wiki/pages/{subject}", a.getWikiPage)
+	mux.HandleFunc("GET /novels/{id}/wiki/events", a.getWikiEvents)
 	mux.HandleFunc("POST /novels/{id}/wiki/facts/retract", a.retractFact)
-	mux.HandleFunc("GET /novels/{id}/timeline", a.getTimeline)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}", a.getChapter)
-	mux.HandleFunc("GET /novels/{id}/chapter/{n}/rows", a.getRecords)
-	// The status/inspector response is the diagnostics surface consumed by the web
-	// operator panel; rows remains the reader-facing record payload.
-	mux.HandleFunc("GET /novels/{id}/chapter/{n}/records/status", a.getRecordsInspector)
-	mux.HandleFunc("GET /novels/{id}/chapter/{n}/records/inspector", a.getRecordsInspector)
-	mux.HandleFunc("POST /novels/{id}/chapter/{n}/records/retry", a.postRecordsAction)
-	mux.HandleFunc("POST /novels/{id}/chapter/{n}/records/discard", a.postRecordsAction)
-	mux.HandleFunc("POST /novels/{id}/chapter/{n}/records/render-retry", a.postRecordsAction)
-	mux.HandleFunc("POST /novels/{id}/records/rebuild", a.postRecordsAction)
-	mux.HandleFunc("POST /novels/{id}/records/extract", a.postRecordsAction)
-	mux.HandleFunc("POST /novels/{id}/records/stop", a.stopRecordsBuild)
-	mux.HandleFunc("GET /novels/{id}/records/rebuild/status", a.getRecordsRebuildStatus)
-	mux.HandleFunc("POST /novels/{id}/records/rebuild/discard", a.discardRecordRebuild)
-	mux.HandleFunc("GET /novels/{id}/chapter/{n}/records/review", a.getRecordReviews)
-	mux.HandleFunc("PATCH /novels/{id}/chapter/{n}/records/review", a.patchRecordReview)
+	mux.HandleFunc("GET /novels/{id}/chapter/{n}/facts/status", a.getChapterFactsStatus)
+	mux.HandleFunc("POST /novels/{id}/chapter/{n}/facts/retry", a.postFactsAction("retry", true))
+	mux.HandleFunc("POST /novels/{id}/chapter/{n}/facts/discard", a.postFactsAction("discard", true))
+	mux.HandleFunc("POST /novels/{id}/facts/extract", a.postFactsAction("extract", false))
+	mux.HandleFunc("POST /novels/{id}/facts/stop", a.postFactsAction("stop", false))
+	mux.HandleFunc("GET /novels/{id}/facts/status", a.getFactsStatus)
 	mux.HandleFunc("GET /novels/{id}/chapters", a.getChapters)
 	mux.HandleFunc("GET /novels/{id}/progress", a.getProgress)
 	mux.HandleFunc("GET /novels/{id}/pipeline", a.getPipelineStatus)
@@ -357,8 +346,7 @@ func (a *API) getChapter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if n > progress {
-		// 404, not 403 — same "don't confirm existence of gated content" posture as
-		// getEntity/getRelationships.
+		// 404, not 403: don't confirm existence of gated content.
 		writeError(w, http.StatusNotFound, "chapter not found")
 		return
 	}
@@ -374,13 +362,12 @@ func (a *API) getChapter(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load chapter")
 	default:
 		writeJSON(w, http.StatusOK, ChapterResponse{
-			RecordsStatus:      chapter.RecordsStatus,
+			FactsStatus:        chapter.FactsStatus,
 			NovelID:            novelID,
 			ChapterIndex:       n,
 			At:                 progress,
 			Text:               chapter.Text,
 			Spans:              chapter.Spans,
-			RecordRows:         chapter.RecordRows,
 			HasNext:            chapter.HasNext,
 			SiteChapterNo:      chapter.SiteChapterNo,
 			SourceURL:          chapter.SourceURL,
@@ -1126,7 +1113,7 @@ func (a *API) readerAt(w http.ResponseWriter, r *http.Request) (string, int, boo
 	return novelID, at, true
 }
 
-// getWikiPages lists the character pages a reader may see at their chapter.
+// getWikiPages lists the wiki pages a reader may see at their chapter, of every kind.
 func (a *API) getWikiPages(w http.ResponseWriter, r *http.Request) {
 	novelID, at, ok := a.readerAt(w, r)
 	if !ok {
@@ -1141,7 +1128,7 @@ func (a *API) getWikiPages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, WikiPagesResponse{NovelID: novelID, At: at, Pages: pages})
 }
 
-// getWikiPage returns one character's page as of the reader's chapter.
+// getWikiPage returns one subject's page as of the reader's chapter.
 func (a *API) getWikiPage(w http.ResponseWriter, r *http.Request) {
 	novelID, at, ok := a.readerAt(w, r)
 	if !ok {
@@ -1149,12 +1136,12 @@ func (a *API) getWikiPage(w http.ResponseWriter, r *http.Request) {
 	}
 	subject, ok := pathUUID(r, "subject")
 	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid character id")
+		writeError(w, http.StatusBadRequest, "invalid subject id")
 		return
 	}
 	page, err := a.store.GetWikiPage(r.Context(), novelID, subject, at)
 	if errors.Is(err, ErrNotFound) {
-		writeError(w, http.StatusNotFound, "no page for this character at your chapter")
+		writeError(w, http.StatusNotFound, "no page for this subject at your chapter")
 		return
 	}
 	if err != nil {
@@ -1163,6 +1150,21 @@ func (a *API) getWikiPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
+}
+
+// getWikiEvents returns the Events timeline as of the reader's chapter.
+func (a *API) getWikiEvents(w http.ResponseWriter, r *http.Request) {
+	novelID, at, ok := a.readerAt(w, r)
+	if !ok {
+		return
+	}
+	events, err := a.store.ListWikiEvents(r.Context(), novelID, at)
+	if err != nil {
+		log.Printf("list wiki events: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load wiki events")
+		return
+	}
+	writeJSON(w, http.StatusOK, events)
 }
 
 // retractFact removes a bad fact from every reader's wiki (0113). The reader may only

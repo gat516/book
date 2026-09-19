@@ -59,11 +59,11 @@ async def backfill(novel_id: str, start: int, end: int, apply: bool) -> None:
             display_ctx = ctx if translated else replace(ctx, novel=replace(ctx.novel, target_lang=source))
             names = await discover_names(display_ctx, text)
             rows = await (await worker.db.execute(
-                "SELECT entity_id, char_start, char_end FROM mention_span WHERE novel_id=%s AND chapter_index=%s",
+                "SELECT char_start, char_end FROM mention_span WHERE novel_id=%s AND chapter_index=%s",
                 (novel_id, index),
             )).fetchall()
-            existing = [Span(alias_id=str(entity) if entity else "", char_start=a, char_end=b,
-                             byte_start=0, byte_end=0) for entity, a, b in rows]
+            existing = [Span(alias_id="", char_start=a, char_end=b, byte_start=0, byte_end=0)
+                        for a, b in rows]
             merged = merge_names(existing, names)
             renderings = await align_names(display_ctx, source_text, text, merged)
             async with worker.db.transaction():

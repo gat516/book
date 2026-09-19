@@ -1,4 +1,4 @@
-from pipeline.tagged_facts import TaggedFact, mark_names, parse_tagged
+from pipeline.tagged_facts import TaggedFact, mark_names, parse_names, parse_tagged
 
 
 def test_tagged_lines_parse_and_a_malformed_line_drops_only_itself():
@@ -34,3 +34,18 @@ def test_place_facts_and_the_to_form_of_relationships_parse():
     assert facts == [TaggedFact("place", None, "The valley is sealed."),
                      TaggedFact("relationship", "subordinate", "A is subordinate to B.")]
     assert says_none("## Facts\n\nNone\n") and not says_none("## Facts\nevent | x")
+
+
+def test_facts_and_names_are_read_from_their_own_sections():
+    from pipeline.tagged_facts import says_none
+    answer = """## Facts
+intro | The Order guards the pass.
+
+## Names
+organization | The Order
+- place | Iron Pass
+technique | Frost Palm
+"""
+    assert parse_tagged(answer) == [TaggedFact("intro", None, "The Order guards the pass.")]
+    assert parse_names(answer) == [("organization", "The Order"), ("place", "Iron Pass")]
+    assert says_none("## Facts\n\nNone\n\n## Names\n") and parse_names("## Facts\nNone\n") == []

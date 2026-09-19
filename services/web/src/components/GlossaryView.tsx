@@ -1,26 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
 import { bootstrapGlossary, correctGlossaryTerm, deleteGlossaryTerm, getGlossary } from "../api";
-import type { EntityView, GlossaryResponse, GlossaryTermView } from "../types";
+import type { GlossaryResponse, GlossaryTermView } from "../types";
 import { NameReviewPanel } from "./NameReviewPanel";
 
 interface Props {
   novelId: string;
   at?: number;
-  entity?: EntityView;
-  suggestedTarget?: string;
 }
 
-export function GlossaryView({ novelId, at, entity, suggestedTarget }: Props) {
+export function GlossaryView({ novelId, at }: Props) {
   const [data, setData] = useState<GlossaryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  const [source, setSource] = useState(entity?.canonical ?? "");
-  const [target, setTarget] = useState(suggestedTarget ?? "");
-  const [showAll, setShowAll] = useState(false);
-  const [addedSources, setAddedSources] = useState<string[]>([]);
+  const [source, setSource] = useState("");
+  const [target, setTarget] = useState("");
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -61,31 +57,22 @@ export function GlossaryView({ novelId, at, entity, suggestedTarget }: Props) {
     setDraft(term.target_term);
   }
 
-  // IDs are authoritative. Unbound human seeds can be shown by a known source name,
-  // but this is only a UI filter: creating a term never binds or merges graph entities.
-  const knownSources = new Set(entity ? [entity.canonical, ...entity.aliases, ...addedSources] : []);
-  const terms = (data?.terms ?? []).filter((term) => !entity || showAll ||
-    term.entity_id === entity.id || (!term.entity_id && knownSources.has(term.source_term)));
+  const terms = data?.terms ?? [];
 
   return (
     <section className="glossary-view" aria-label="Glossary management">
-      {entity ? <h3>Glossary terms</h3> : <h2>Glossary</h2>}
+      <h2>Glossary</h2>
       <p className="glossary-note">
         Add names and terms to keep future translations consistent. Changes apply to future
         translation work; existing chapter text and highlights are not rewritten.
         Deleted terms stay removed until you add them again.
       </p>
-      {!entity && <NameReviewPanel novelId={novelId} onApproved={() => void load()} />}
-      {entity && <>
-        <p className="glossary-note">Check the source spelling before adding. These controls edit translation terms, not the entity's facts or identity.</p>
-        <label><input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> Show all visible glossary terms</label>
-      </>}
+      <NameReviewPanel novelId={novelId} onApproved={() => void load()} />
       <form className="glossary-add" onSubmit={(event) => {
         event.preventDefault();
         if (!source.trim() || !target.trim()) return;
         void mutate(async () => {
           await bootstrapGlossary(novelId, { terms: [{ source_term: source.trim(), target_term: target.trim() }] });
-          setAddedSources((previous) => [...previous, source.trim()]);
           setSource("");
           setTarget("");
         }, "Term added.");
@@ -100,8 +87,8 @@ export function GlossaryView({ novelId, at, entity, suggestedTarget }: Props) {
       }}>Refresh glossary</button></div>}
       {notice && <p role="status">{notice}</p>}
       {!data && !error && <p>Loading glossary…</p>}
-      {data && <p className="glossary-note">{terms.length} {entity && !showAll ? "related" : "active"} terms visible through chapter {data.at}. Model suggestions are not included until approved by the pipeline.</p>}
-      {data && terms.length === 0 && <p>No {entity && !showAll ? "related" : "locked"} terms yet. Add one above; you do not need to wait for translation.</p>}
+      {data && <p className="glossary-note">{terms.length} active terms visible through chapter {data.at}. Model suggestions are not included until approved by the pipeline.</p>}
+      {data && terms.length === 0 && <p>No locked terms yet. Add one above; you do not need to wait for translation.</p>}
       {!!terms.length && data && <div className="glossary-table-wrap"><table>
         <thead><tr><th>Source</th><th>Translation</th><th>Locked at ch.</th><th>Actions</th></tr></thead>
         <tbody>{terms.map((term) => <tr key={term.source_term}>

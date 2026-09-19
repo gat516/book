@@ -122,7 +122,7 @@ func (s *Store) ApproveCharacterName(ctx context.Context, novelID, sourceTerm, t
 			VALUES($1,$2,$3,$4,0,$5)`, novelID, sourceTerm, targetTerm, version, constraintClass)
 		} else {
 			_, err = tx.Exec(ctx, `UPDATE glossary SET target_term=$3,version=$4,locked_at_chapter=0,
-				constraint_class=$5,deleted=false,entity_id=NULL
+				constraint_class=$5,deleted=false
 				WHERE novel_id=$1 AND source_term=$2`, novelID, sourceTerm, targetTerm, version, constraintClass)
 		}
 		if err != nil {

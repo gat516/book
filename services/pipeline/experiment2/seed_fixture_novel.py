@@ -1,7 +1,7 @@
 """Load fixtures/repeat/ as a separate test novel, bypassing ingest (no queue, no provider calls).
 
 Chapters arrive as already translated (translated_by='external'), with a locked glossary,
-so chain.py can be exercised in isolation from the real book. Prints the new novel id.
+so experiments can run in isolation from the real book. Prints the new novel id.
 """
 from __future__ import annotations
 

@@ -65,13 +65,6 @@ def test_context_budget_keeps_source_attribution() -> None:
     assert sources == [{"kind": "chunk", "id": 1, "chapter": 2}]
 
 
-def test_event_context_keeps_exact_evidence() -> None:
-    evidence = {"quote": "Ares handed Abaddon the lotus.", "char_start": 10, "char_end": 41}
-    context, sources = build_context([Source("event", "event-id", 7, "handed (giver: Ares, recipient: Abaddon)", evidence)], 500)
-    assert "[event:event-id ch:7]" in context
-    assert sources[0]["evidence"] == evidence
-
-
 @pytest.mark.asyncio
 async def test_internal_authentication_happens_before_service_call() -> None:
     provider = FakeProvider()
@@ -245,8 +238,7 @@ async def test_ask_uses_book_model_without_env_override_and_can_run_without_embe
     embedding_provider.embed = AsyncMock(side_effect=RuntimeError("disabled"))
     service.embedding_resolver.resolve = AsyncMock(return_value=EmbeddingBinding(embedding_provider, None))
     service._provider_for_novel = AsyncMock(return_value=provider)
-    service._records_status = AsyncMock(return_value={"version": "same", "generation_id": "g"})
-    monkeypatch.setattr(app_module, "retrieve", AsyncMock(return_value=[Source("record", "r", 1, "Visible fact")]))
+    monkeypatch.setattr(app_module, "retrieve", AsyncMock(return_value=[Source("chunk", 1, 1, "Visible text")]))
 
     class Connection:
         async def execute(self, *args): pass

@@ -1,6 +1,6 @@
-import type { WikiFact } from "./types";
+import type { SubjectKind, WikiFact } from "./types";
 
-// A character page is assembled here from their tagged facts; nothing about it is
+// A wiki page is assembled here from its subject's tagged facts; nothing about it is
 // written by a model. Relationship facts are stored as "<A> is <kind> to <B>" with the
 // subjects in that order, so a page can say who the OTHER person is to this character.
 
@@ -85,5 +85,39 @@ export function buildWikiPage(subject: string, facts: WikiFact[], names: Record<
     .filter((group) => group.people.length);
   page.sections = SECTIONS.map(([category, label]) => ({ category, heading: label, entries: byCategory.get(category) ?? [] }))
     .filter((section) => section.entries.length);
+  return page;
+}
+
+// Organization, place and item pages. A fact is about its first named subject; facts
+// that only name this subject are kept as its history, except the ones that say who
+// belongs to an organization or holds an item.
+export interface SubjectPageModel {
+  intro: Entry[];
+  aliases: Entry[];
+  details: Entry[];
+  // Organization: who belongs. Item: who holds it. Empty for places.
+  ties: { heading: string; entries: Entry[] } | null;
+  history: Entry[];
+}
+
+const TIES: Partial<Record<SubjectKind, { category: string; heading: string }>> = {
+  organization: { category: "affiliation", heading: "Members" },
+  item: { category: "item", heading: "Held by" },
+};
+
+export function buildSubjectPage(subject: string, kind: SubjectKind, facts: WikiFact[]): SubjectPageModel {
+  const page: SubjectPageModel = { intro: [], aliases: [], details: [], ties: null, history: [] };
+  const tie = TIES[kind];
+  const ties: Entry[] = [];
+  for (const fact of facts) {
+    const entry = { text: fact.text, chapter: fact.chapter, ref: { chapter: fact.chapter, version: fact.version, ordinal: fact.ordinal } };
+    const about = fact.subjects[0] === subject;
+    if (fact.category === "event" || (!about && fact.category !== tie?.category)) page.history.push(entry);
+    else if (!about) ties.push(entry);
+    else if (fact.category === "intro") page.intro.push(entry);
+    else if (fact.category === "alias") page.aliases.push(entry);
+    else page.details.push(entry);
+  }
+  if (tie && ties.length) page.ties = { heading: tie.heading, entries: ties };
   return page;
 }

@@ -703,8 +703,8 @@ type bootstrapGlossaryResp struct {
 // bootstrapGlossary handles POST /novels/{id}/glossary/bootstrap — a human seeding the
 // glossary from an existing (paired raw + fan-translated) bootstrap paste, before any
 // chapter has actually been through RESOLVE (PLAN.md Phase N6). Each term locks via the
-// same path resolve.py's _lock_glossary itself takes (see glossary.go's
-// BootstrapGlossaryTerm) with entity_id left NULL until RESOLVE creates the real entity.
+// same path the retired resolve.py's _lock_glossary took (see glossary.go's
+// BootstrapGlossaryTerm).
 //
 // Each term is its own BootstrapGlossaryTerm call/transaction (not one all-or-nothing
 // transaction for the whole list) — but this handler still stops at the first failure,

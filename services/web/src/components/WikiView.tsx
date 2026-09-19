@@ -1,16 +1,28 @@
 import { Fragment, useEffect, useState, type ReactNode } from "react";
-import { getWikiPage, getWikiPages, retractFact } from "../api";
+import { getWikiEvents, getWikiPage, getWikiPages, retractFact } from "../api";
 import { useKnowledgeRevision } from "../knowledgeUpdates";
-import type { WikiPageResponse, WikiPagesResponse } from "../types";
-import { buildWikiPage, PAGE_ORDER, type Entry, type FactRef } from "../wikiPage";
+import type { SubjectKind, WikiEventsResponse, WikiPageResponse, WikiPagesResponse } from "../types";
+import { buildSubjectPage, buildWikiPage, PAGE_ORDER, type Entry, type FactRef } from "../wikiPage";
+
+type Shelf = SubjectKind | "events";
+const SHELVES: { shelf: Shelf; label: string; empty: string }[] = [
+  { shelf: "character", label: "Characters", empty: "No characters yet at your chapter. A character appears once a chapter's facts name them." },
+  { shelf: "organization", label: "Organizations", empty: "No organizations yet at your chapter: sects, teams and other factions appear once a chapter's facts name them." },
+  { shelf: "place", label: "Places", empty: "No places yet at your chapter." },
+  { shelf: "item", label: "Items", empty: "No items yet at your chapter." },
+  { shelf: "events", label: "Events", empty: "No events yet at your chapter." },
+];
 
 /**
- * Character pages as of the reader's chapter, assembled from the facts learned so far.
- * Nothing here comes from a chapter the reader hasn't reached.
+ * Wiki pages -- characters, organizations, places, items -- and an events timeline, as
+ * of the reader's chapter, assembled from the facts learned so far. Nothing here comes
+ * from a chapter the reader hasn't reached.
  */
 export function WikiView({ novelId, onClose }: { novelId: string; at: number; onClose: () => void }) {
   const revision = useKnowledgeRevision(novelId);
   const [list, setList] = useState<WikiPagesResponse | null>(null);
+  const [shelf, setShelf] = useState<Shelf>("character");
+  const [events, setEvents] = useState<WikiEventsResponse | null>(null);
   const [subject, setSubject] = useState<string | null>(null);
   const [page, setPage] = useState<WikiPageResponse | null>(null);
   const [tab, setTab] = useState<"page" | "more">("page");
@@ -37,10 +49,24 @@ export function WikiView({ novelId, onClose }: { novelId: string; at: number; on
     getWikiPages(novelId).then((next) => {
       if (gone) return;
       setList(next);
-      setSubject((current) => current && next.pages.some((p) => p.subject === current) ? current : next.pages[0]?.subject ?? null);
     }).catch((reason) => { if (!gone) setError(String(reason)); });
     return () => { gone = true; };
   }, [novelId, revision, reload]);
+
+  // Keep the open page when it is on this shelf; otherwise open the shelf's first page.
+  useEffect(() => {
+    if (!list || shelf === "events") return;
+    const onShelf = list.pages.filter((p) => p.kind === shelf);
+    setSubject((current) => current && onShelf.some((p) => p.subject === current) ? current : onShelf[0]?.subject ?? null);
+  }, [list, shelf]);
+
+  useEffect(() => {
+    if (shelf !== "events") return;
+    let gone = false;
+    getWikiEvents(novelId).then((next) => { if (!gone) setEvents(next); })
+      .catch((reason) => { if (!gone) setError(String(reason)); });
+    return () => { gone = true; };
+  }, [novelId, shelf, revision, reload]);
 
   useEffect(() => {
     if (!subject) { setPage(null); return; }
@@ -52,27 +78,45 @@ export function WikiView({ novelId, onClose }: { novelId: string; at: number; on
 
   useEffect(() => { setTab("page"); setSelected(null); }, [subject]);
 
-  const known = new Set(list?.pages.map((p) => p.subject));
-  const model = page && buildWikiPage(page.subject, page.facts, page.names);
+  const kindOf = new Map(list?.pages.map((p) => [p.subject, p.kind]));
+  const known = new Set(kindOf.keys());
+  // Open another subject's page, on its own shelf.
+  const open = (id: string) => { const kind = kindOf.get(id); if (kind) { setShelf(kind); setSubject(id); } };
+  const current = SHELVES.find((s) => s.shelf === shelf)!;
+  const shelfPages = list?.pages.filter((p) => p.kind === shelf) ?? [];
+  const model = page && page.kind === "character" && page.subject === subject ? buildWikiPage(page.subject, page.facts, page.names) : null;
+  const subjectModel = page && page.kind !== "character" && page.subject === subject ? buildSubjectPage(page.subject, page.kind, page.facts) : null;
   return <section className="wiki">
     <div className="wiki-head">
-      <h2>Characters</h2>
+      <h2>Wiki</h2>
       {list && <span className="wiki-gate">Up to chapter {list.at}</span>}
       <button type="button" onClick={onClose}>Close</button>
     </div>
+    <div className="wiki-shelves wiki-tabs" role="tablist" aria-label="Wiki sections">
+      {SHELVES.map((s) => <button key={s.shelf} type="button" role="tab" aria-selected={shelf === s.shelf}
+        onClick={() => setShelf(s.shelf)}>{s.label}</button>)}
+    </div>
     {error && <p role="alert" className="wiki-error">Could not load the wiki: {error}</p>}
-    {!list ? !error && <p className="wiki-empty">Loading…</p>
-      : !list.pages.length ? <p className="wiki-empty">No characters yet at your chapter. A character appears once a chapter's facts name them.</p>
+    {shelf === "events" ? <Events data={events} empty={current.empty} known={known} onOpen={open} {...pick} />
+      : !list ? !error && <p className="wiki-empty">Loading…</p>
+      : !shelfPages.length ? <p className="wiki-empty">{current.empty}</p>
       : <div className="wiki-body">
-          <nav className="wiki-index" aria-label="Characters">
-            <ul>{list.pages.map((item) => <li key={item.subject}>
+          <nav className="wiki-index" aria-label={current.label}>
+            <ul>{shelfPages.map((item) => <li key={item.subject}>
               <button type="button" aria-current={item.subject === subject ? "page" : undefined} onClick={() => setSubject(item.subject)}>
                 <span>{item.title}</span><small>{item.facts} fact{item.facts === 1 ? "" : "s"}</small>
               </button>
             </li>)}</ul>
           </nav>
           <article className="wiki-page">
-            {!page || !model ? <p className="wiki-empty">Loading page…</p> : <>
+            {subjectModel && page ? <>
+              <h3 className="wiki-title">{page.title}</h3>
+              {subjectModel.intro.length > 0 && <Section heading="Introduction" entries={subjectModel.intro} {...pick} />}
+              {subjectModel.aliases.length > 0 && <Section heading="Also known as" entries={subjectModel.aliases} {...pick} />}
+              {subjectModel.details.length > 0 && <Section heading="Details" entries={subjectModel.details} list {...pick} />}
+              {subjectModel.ties && <Section heading={subjectModel.ties.heading} entries={subjectModel.ties.entries} list {...pick} />}
+              {subjectModel.history.length > 0 && <History entries={subjectModel.history} {...pick} />}
+            </> : !page || !model ? <p className="wiki-empty">Loading page…</p> : <>
               <h3 className="wiki-title">{page.title}</h3>
               <div className="wiki-tabs" role="tablist">
                 <button type="button" role="tab" aria-selected={tab === "page"} onClick={() => setTab("page")}>Page</button>
@@ -91,7 +135,7 @@ export function WikiView({ novelId, onClose }: { novelId: string; at: number; on
                         <dd>{group.people.map((person, i) => <span key={key(person.ref)}>
                           <Fact entry={{ text: "", chapter: person.chapter, ref: person.ref }} title={person.text} {...pick}>
                             {known.has(person.subject)
-                              ? <button type="button" className="wiki-link" onClick={(event) => { event.stopPropagation(); setSubject(person.subject); }}>{person.name}</button>
+                              ? <button type="button" className="wiki-link" onClick={(event) => { event.stopPropagation(); open(person.subject); }}>{person.name}</button>
                               : person.name}
                           </Fact>{i < group.people.length - 1 ? ", " : ""}
                         </span>)}</dd>
@@ -114,6 +158,28 @@ export function WikiView({ novelId, onClose }: { novelId: string; at: number; on
 }
 
 interface Pick { selected: string | null; onSelect: (key: string | null) => void; onRemove: (ref: FactRef) => void }
+
+// The whole book's events, grouped by chapter, each linked to the pages of what it names.
+function Events({ data, empty, known, onOpen, ...pick }:
+  { data: WikiEventsResponse | null; empty: string; known: Set<string>; onOpen: (id: string) => void } & Pick) {
+  if (!data) return <p className="wiki-empty">Loading…</p>;
+  if (!data.facts.length) return <p className="wiki-empty">{empty}</p>;
+  const chapters = [...new Set(data.facts.map((fact) => fact.chapter))];
+  return <article className="wiki-page wiki-events">
+    <div className="wiki-history">{chapters.map((chapter) => <section key={chapter}>
+      <h5>Chapter {chapter}</h5>
+      <ul>{data.facts.filter((fact) => fact.chapter === chapter).map((fact) => {
+        const ref = { chapter: fact.chapter, version: fact.version, ordinal: fact.ordinal };
+        const linked = [...new Set(fact.subjects)].filter((id) => known.has(id));
+        return <li key={key(ref)}>
+          <Fact entry={{ text: fact.text, chapter: fact.chapter, ref }} cite={false} {...pick} />
+          {linked.length > 0 && <span className="wiki-involves">{linked.map((id) =>
+            <button key={id} type="button" className="wiki-link" onClick={() => onOpen(id)}>{data.names[id]}</button>)}</span>}
+        </li>;
+      })}</ul>
+    </section>)}</div>
+  </article>;
+}
 
 function Section({ heading, entries, list = false, ...pick }: { heading: string; entries: Entry[]; list?: boolean } & Pick) {
   return <>

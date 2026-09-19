@@ -11,9 +11,9 @@ test("chapter term summaries keep one row per source/target decision", () => {
     candidates: [],
   });
   const spans = [
-    { char_start: 0, char_end: 2, entity_id: null, rendering: rendering("林", "Lin") },
-    { char_start: 8, char_end: 10, entity_id: null, rendering: rendering("林", "Lin") },
-    { char_start: 16, char_end: 18, entity_id: null, rendering: rendering("林", "Lynn") },
+    { char_start: 0, char_end: 2, rendering: rendering("林", "Lin") },
+    { char_start: 8, char_end: 10, rendering: rendering("林", "Lin") },
+    { char_start: 16, char_end: 18, rendering: rendering("林", "Lynn") },
   ];
   assert.deepEqual(uniqueChapterRenderings(spans), [
     rendering("林", "Lin"),
@@ -22,5 +22,5 @@ test("chapter term summaries keep one row per source/target decision", () => {
 });
 
 test("spans without a rendering do not create a guessed term", () => {
-  assert.deepEqual(uniqueChapterRenderings([{ char_start: 0, char_end: 2, entity_id: null }]), []);
+  assert.deepEqual(uniqueChapterRenderings([{ char_start: 0, char_end: 2 }]), []);
 });

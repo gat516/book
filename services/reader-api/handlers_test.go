@@ -12,10 +12,7 @@ import (
 	"time"
 )
 
-const (
-	testNovelID  = "11111111-1111-4111-8111-111111111111"
-	testEntityID = "22222222-2222-4222-8222-222222222222"
-)
+const testNovelID = "11111111-1111-4111-8111-111111111111"
 
 type fakeStore struct {
 	healthErr       error
@@ -23,18 +20,8 @@ type fakeStore struct {
 	progressErr     error
 	advance         Progress
 	advanceErr      error
-	entity          EntityResponse
-	entityErr       error
-	wiki            WikiResponse
-	wikiErr         error
-	timeline        TimelineResponse
-	timelineErr     error
-	records         RecordsResponse
-	recordsErr      error
-	inspector       RecordsInspectorResponse
-	inspectorErr    error
-	reviews         RecordReviewResponse
-	reviewsErr      error
+	facts           FactsStatus
+	factsErr        error
 	chapter         ChapterView
 	chapterErr      error
 	novels          []NovelSummary
@@ -76,26 +63,12 @@ type fakeIngestClient struct {
 	lastHealthTrack string
 }
 
-func (f *fakeIngestClient) RecordsAction(_ context.Context, _, chapter, action string) (json.RawMessage, int, error) {
+func (f *fakeIngestClient) FactsAction(_ context.Context, _, chapter, action string) (json.RawMessage, int, error) {
 	f.lastBody = json.RawMessage(`{"chapter":"` + chapter + `","action":"` + action + `"}`)
 	return json.RawMessage(`{"ok":true}`), 200, nil
 }
 
-func (f *fakeIngestClient) RecordsRebuildStatus(_ context.Context, _ string) (json.RawMessage, int, error) {
-	return f.response, f.status, f.err
-}
-
-func (f *fakeIngestClient) StopRecordsBuild(_ context.Context, _ string) (json.RawMessage, int, error) {
-	return f.response, f.status, f.err
-}
-
-func (f *fakeIngestClient) DiscardRecordsRebuild(_ context.Context, _ string, body json.RawMessage) (json.RawMessage, int, error) {
-	f.lastBody = body
-	return f.response, f.status, f.err
-}
-
-func (f *fakeIngestClient) ReviewRecord(_ context.Context, _, _ string, body json.RawMessage) (json.RawMessage, int, error) {
-	f.lastBody = body
+func (f *fakeIngestClient) FactsStatus(_ context.Context, _ string) (json.RawMessage, int, error) {
 	return f.response, f.status, f.err
 }
 
@@ -212,58 +185,10 @@ func (f *fakeStore) AdvanceProgress(
 	return f.advance, f.advanceErr
 }
 
-func (f *fakeStore) GetEntity(
-	_ context.Context, _, _ string, at int,
-) (EntityResponse, error) {
-	f.lastAt = at
-	return f.entity, f.entityErr
-}
-
-func (f *fakeStore) ListWiki(
-	_ context.Context, _ string, at int,
-) (WikiResponse, error) {
-	f.lastAt = at
-	return f.wiki, f.wikiErr
-}
-
-func (f *fakeStore) ListTimeline(
-	_ context.Context, _ string, at int,
-) (TimelineResponse, error) {
-	f.lastAt = at
-	return f.timeline, f.timelineErr
-}
-
-func (f *fakeStore) ListRecords(_ context.Context, _ string, chapter, at int) (RecordsResponse, error) {
+func (f *fakeStore) GetFactsStatus(_ context.Context, _ string, chapter, at int) (FactsStatus, error) {
 	f.lastChapter = chapter
 	f.lastAt = at
-	if chapter > at {
-		return RecordsResponse{}, ErrNotFound
-	}
-	out := f.records
-	out.At = at
-	return out, f.recordsErr
-}
-
-func (f *fakeStore) ListRecordsInspector(_ context.Context, _ string, chapter, at int) (RecordsInspectorResponse, error) {
-	f.lastChapter = chapter
-	f.lastAt = at
-	if chapter > at {
-		return RecordsInspectorResponse{}, ErrNotFound
-	}
-	out := f.inspector
-	out.At = at
-	return out, f.inspectorErr
-}
-
-func (f *fakeStore) ListRecordReviews(_ context.Context, _ string, chapter, at int) (RecordReviewResponse, error) {
-	f.lastChapter = chapter
-	f.lastAt = at
-	if chapter > at {
-		return RecordReviewResponse{}, ErrNotFound
-	}
-	out := f.reviews
-	out.At = at
-	return out, f.reviewsErr
+	return f.facts, f.factsErr
 }
 
 func (f *fakeStore) ListNovels(_ context.Context, reader string) ([]NovelSummary, error) {
@@ -336,7 +261,6 @@ func request(t *testing.T, api *API, method, target, body, reader string) *httpt
 }
 
 func readyFake() *fakeStore {
-	entityID := testEntityID
 	return &fakeStore{
 		progress: Progress{
 			NovelID: testNovelID, ReaderID: "reader-a", CurrentChapter: 5, UpdatedAt: time.Now(),
@@ -344,24 +268,13 @@ func readyFake() *fakeStore {
 		advance: Progress{
 			NovelID: testNovelID, ReaderID: "reader-a", CurrentChapter: 5, UpdatedAt: time.Now(),
 		},
-		entity: EntityResponse{
-			NovelID: testNovelID,
-			Entity: EntityView{
-				EntitySummary: EntitySummary{
-					ID: testEntityID, Canonical: "Hero", Kind: "character", FirstSeenChapter: 1,
-				},
-				Aliases: []string{}, Records: []RecordView{}, Renderings: []TermRenderingView{},
-			},
-		},
-		wiki:      WikiResponse{NovelID: testNovelID, At: 5, Entities: []EntitySummary{}, Rows: []RecordView{}},
-		timeline:  TimelineResponse{NovelID: testNovelID, At: 5, Rows: []RecordView{}},
-		records:   RecordsResponse{NovelID: testNovelID, Rows: []RecordView{}},
-		inspector: RecordsInspectorResponse{NovelID: testNovelID, Drops: []RecordDropView{}},
+		facts: FactsStatus{State: "ready"},
 		chapter: ChapterView{
-			Text:      "chapter text",
-			Spans:     []SpanView{{EntityID: &entityID, CharStart: 0, CharEnd: 7}},
-			HasNext:   true,
-			SourceURL: "https://example.com/novel/chapter-3",
+			FactsStatus: FactsStatus{State: "ready"},
+			Text:        "chapter text",
+			Spans:       []SpanView{{CharStart: 0, CharEnd: 7}},
+			HasNext:     true,
+			SourceURL:   "https://example.com/novel/chapter-3",
 		},
 		novels: []NovelSummary{{ID: testNovelID, Title: "Test Novel", SourceLang: "zh", TargetLang: "en"}},
 		novel:  NovelSummary{ID: testNovelID, Title: "Test Novel", SourceLang: "zh", TargetLang: "en"},
@@ -371,7 +284,7 @@ func readyFake() *fakeStore {
 func TestReaderRoutesRequirePrincipal(t *testing.T) {
 	api := &API{store: readyFake()}
 	response := request(t, api, http.MethodGet,
-		"/novels/"+testNovelID+"/wiki", "", "")
+		"/novels/"+testNovelID+"/chapter/2/facts/status", "", "")
 
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body=%s", response.Code, response.Body.String())
@@ -386,9 +299,9 @@ func TestGateValidation(t *testing.T) {
 		name   string
 		target string
 	}{
-		{name: "bad novel", target: "/novels/not-a-uuid/wiki"},
-		{name: "negative at", target: "/novels/" + testNovelID + "/wiki?at=-1"},
-		{name: "malformed at", target: "/novels/" + testNovelID + "/wiki?at=later"},
+		{name: "bad novel", target: "/novels/not-a-uuid/chapter/2/facts/status"},
+		{name: "negative at", target: "/novels/" + testNovelID + "/chapter/2/facts/status?at=-1"},
+		{name: "malformed at", target: "/novels/" + testNovelID + "/chapter/2/facts/status?at=later"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -403,7 +316,7 @@ func TestGateValidation(t *testing.T) {
 func TestRequestedChapterIsCappedAtProgress(t *testing.T) {
 	store := readyFake()
 	response := request(t, &API{store: store}, http.MethodGet,
-		"/novels/"+testNovelID+"/wiki?at=500", "", " reader-a ")
+		"/novels/"+testNovelID+"/chapter/2/facts/status?at=500", "", " reader-a ")
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
@@ -411,70 +324,31 @@ func TestRequestedChapterIsCappedAtProgress(t *testing.T) {
 	if store.lastAt != 5 || store.lastReader != "reader-a" {
 		t.Fatalf("gate = (%q, %d), want (reader-a, 5)", store.lastReader, store.lastAt)
 	}
-	var body WikiResponse
+	var body ChapterFactsStatusResponse
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.At != 5 || body.Entities == nil {
-		t.Fatalf("response = %#v, want effective at and non-null collection", body)
+	if body.At != 5 || body.Status.State != "ready" {
+		t.Fatalf("response = %#v, want effective at", body)
 	}
 }
 
 func TestLowerRequestedChapterIsUsed(t *testing.T) {
 	store := readyFake()
 	response := request(t, &API{store: store}, http.MethodGet,
-		"/novels/"+testNovelID+"/entity/"+testEntityID+"?at=2", "", "reader-a")
+		"/novels/"+testNovelID+"/chapter/2/facts/status?at=2", "", "reader-a")
 	if response.Code != http.StatusOK || store.lastAt != 2 {
 		t.Fatalf("status=%d at=%d body=%s", response.Code, store.lastAt, response.Body.String())
 	}
 }
 
-func TestCollectionEndpointsReturnStableEnvelopes(t *testing.T) {
-	store := readyFake()
-	row := RecordView{ID: "00000000-0000-0000-0000-000000000001", Type: "EVENT", SourceChapter: 2,
-		Values: []RecordValueView{}, Participants: []RecordParticipantView{}, Evidence: []RecordEvidenceView{}}
-	store.timeline = TimelineResponse{NovelID: testNovelID, At: 5, Rows: []RecordView{row}}
-	store.records = RecordsResponse{NovelID: testNovelID, ChapterIndex: 2, Rows: []RecordView{row}}
-	tests := []struct {
-		name   string
-		target string
-	}{
-		{name: "timeline", target: "/novels/" + testNovelID + "/timeline"},
-		{name: "chapter rows", target: "/novels/" + testNovelID + "/chapter/2/rows"},
-		{name: "records inspector", target: "/novels/" + testNovelID + "/chapter/2/records/inspector"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			response := request(t, &API{store: store}, http.MethodGet, test.target, "", "reader-a")
-			if response.Code != http.StatusOK {
-				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-			}
-			var envelope map[string]any
-			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
-				t.Fatal(err)
-			}
-			if envelope["novel_id"] != testNovelID || envelope["at"] != float64(5) {
-				t.Fatalf("envelope = %#v", envelope)
-			}
-		})
-	}
-}
-
-func TestMissingProgressAndHiddenEntityAreNotFound(t *testing.T) {
+func TestMissingProgressIsNotFound(t *testing.T) {
 	missingProgress := readyFake()
 	missingProgress.progressErr = ErrNotFound
 	response := request(t, &API{store: missingProgress}, http.MethodGet,
-		"/novels/"+testNovelID+"/wiki", "", "reader-a")
+		"/novels/"+testNovelID+"/chapter/2/facts/status", "", "reader-a")
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("missing progress status = %d", response.Code)
-	}
-
-	hidden := readyFake()
-	hidden.entityErr = ErrNotFound
-	response = request(t, &API{store: hidden}, http.MethodGet,
-		"/novels/"+testNovelID+"/entity/"+testEntityID, "", "reader-a")
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("hidden entity status = %d", response.Code)
 	}
 }
 
@@ -580,9 +454,9 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { re
 
 func TestStoreErrorsMapToInternalServerError(t *testing.T) {
 	store := readyFake()
-	store.wikiErr = errors.New("database broke")
+	store.factsErr = errors.New("database broke")
 	response := request(t, &API{store: store}, http.MethodGet,
-		"/novels/"+testNovelID+"/wiki", "", "reader-a")
+		"/novels/"+testNovelID+"/chapter/2/facts/status", "", "reader-a")
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", response.Code)
 	}
@@ -619,7 +493,7 @@ func TestGetChapterBeyondProgressIsNotFound(t *testing.T) {
 	}
 }
 
-func TestGetChapterIncludesUnlinkedMentions(t *testing.T) {
+func TestGetChapterIncludesEveryMention(t *testing.T) {
 	store := readyFake()
 	store.chapter.Spans = append(store.chapter.Spans, SpanView{CharStart: 8, CharEnd: 12})
 	api := &API{store: store}
@@ -631,8 +505,8 @@ func TestGetChapterIncludesUnlinkedMentions(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Spans) != 2 || body.Spans[1].EntityID != nil || body.Spans[0].EntityID == nil {
-		t.Fatalf("linked and unlinked mentions must both survive: %#v", body.Spans)
+	if len(body.Spans) != 2 || body.FactsStatus.State != "ready" {
+		t.Fatalf("both mentions and the facts status must survive: %#v", body)
 	}
 }
 
@@ -1073,75 +947,47 @@ func TestDeleteGlossaryRequiresPrincipalAndProxiesBody(t *testing.T) {
 	}
 }
 
-func TestRecordsStatusUsesStoredProgress(t *testing.T) {
+func TestFactsStatusUsesStoredProgress(t *testing.T) {
 	store := readyFake()
-	store.inspector.Parsed = 7
+	facts := 7
+	store.facts.FactsCount = &facts
 	api := &API{store: store}
 	for _, tc := range []struct {
 		chapter string
 		status  int
 	}{{"2", 200}, {"5", 200}, {"6", 404}, {"-1", 400}, {"bad", 400}} {
 		response := request(t, api, http.MethodGet,
-			"/novels/"+testNovelID+"/chapter/"+tc.chapter+"/records/status", "", "reader-a")
+			"/novels/"+testNovelID+"/chapter/"+tc.chapter+"/facts/status", "", "reader-a")
 		if response.Code != tc.status {
 			t.Fatalf("chapter=%s status=%d body=%s", tc.chapter, response.Code, response.Body.String())
 		}
-		if tc.status == http.StatusOK && !strings.Contains(response.Body.String(), `"parsed":7`) {
-			t.Fatalf("chapter=%s returned rows payload instead of inspector: %s", tc.chapter, response.Body.String())
+		if tc.status == http.StatusOK && !strings.Contains(response.Body.String(), `"facts_count":7`) {
+			t.Fatalf("chapter=%s: %s", tc.chapter, response.Body.String())
 		}
 	}
 }
 
-func TestRecordReviewIsGatedAndActorIsServerAssigned(t *testing.T) {
-	store := readyFake()
-	store.reviews = RecordReviewResponse{NovelID: testNovelID, ChapterIndex: 2, Items: []RecordReviewItemView{}}
-	ingest := &fakeIngestClient{response: json.RawMessage(`{"decision":"accepted"}`), status: http.StatusOK}
-	api := &API{store: store, ingest: ingest}
-	if response := request(t, api, http.MethodGet,
-		"/novels/"+testNovelID+"/chapter/2/records/review", "", "reader-a"); response.Code != http.StatusOK {
-		t.Fatalf("review GET status=%d body=%s", response.Code, response.Body.String())
-	}
-	if response := request(t, api, http.MethodPatch,
-		"/novels/"+testNovelID+"/chapter/2/records/review", `{"row_id":"`+testEntityID+`","decision":"accepted","reason":"looks right","request_id":"req-1","actor":"spoof"}`, "reader-a"); response.Code != http.StatusOK {
-		t.Fatalf("review PATCH status=%d body=%s", response.Code, response.Body.String())
-	}
-	if !strings.Contains(string(ingest.lastBody), `"actor":"reader-a"`) || strings.Contains(string(ingest.lastBody), `"actor":"spoof"`) {
-		t.Fatalf("review actor was not overwritten: %s", ingest.lastBody)
-	}
-}
-
-func TestDiscardRecordRebuildProxiesBoundedAction(t *testing.T) {
-	ingest := &fakeIngestClient{response: json.RawMessage(`{"discarded":true}`), status: http.StatusOK}
+func TestFactsStatusProxiesMetadata(t *testing.T) {
+	ingest := &fakeIngestClient{response: json.RawMessage(`{"running":true,"missing_chapters":2}`), status: http.StatusOK}
 	api := &API{store: readyFake(), ingest: ingest}
-	response := request(t, api, http.MethodPost,
-		"/novels/"+testNovelID+"/records/rebuild/discard", `{"generation_id":"33333333-3333-4333-8333-333333333333"}`, "")
-	if response.Code != http.StatusOK || string(ingest.lastBody) == "" {
-		t.Fatalf("discard status=%d body=%s forwarded=%s", response.Code, response.Body.String(), ingest.lastBody)
-	}
-}
-
-func TestRecordsRebuildStatusProxiesMetadata(t *testing.T) {
-	ingest := &fakeIngestClient{response: json.RawMessage(`{"discardable":true,"missing_chapters":2}`), status: http.StatusOK}
-	api := &API{store: readyFake(), ingest: ingest}
-	response := request(t, api, http.MethodGet,
-		"/novels/"+testNovelID+"/records/rebuild/status", "", "")
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"discardable":true`) {
+	response := request(t, api, http.MethodGet, "/novels/"+testNovelID+"/facts/status", "", "")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"running":true`) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
-func TestNovelWideRecordsActionsProxyDistinctIntents(t *testing.T) {
-	for _, action := range []string{"extract", "rebuild"} {
+func TestFactsActionsProxyDistinctIntents(t *testing.T) {
+	for _, tc := range []struct{ path, want string }{
+		{"/facts/extract", `{"chapter":"","action":"extract"}`},
+		{"/facts/stop", `{"chapter":"","action":"stop"}`},
+		{"/chapter/3/facts/retry", `{"chapter":"3","action":"retry"}`},
+		{"/chapter/3/facts/discard", `{"chapter":"3","action":"discard"}`},
+	} {
 		ingest := &fakeIngestClient{}
 		api := &API{store: readyFake(), ingest: ingest}
-		response := request(t, api, http.MethodPost, "/novels/"+testNovelID+"/records/"+action, "", "")
-		if response.Code != http.StatusOK {
-			t.Fatalf("%s: status=%d body=%s", action, response.Code, response.Body.String())
-		}
-		// Continuing the graph and replacing it are different operations; routing one to
-		// the other would silently throw away every published chapter.
-		if want := `{"chapter":"","action":"` + action + `"}`; string(ingest.lastBody) != want {
-			t.Fatalf("%s proxied as %s", action, ingest.lastBody)
+		response := request(t, api, http.MethodPost, "/novels/"+testNovelID+tc.path, "", "")
+		if response.Code != http.StatusOK || string(ingest.lastBody) != tc.want {
+			t.Fatalf("%s: status=%d proxied as %s", tc.path, response.Code, ingest.lastBody)
 		}
 	}
 }
@@ -1174,6 +1020,11 @@ func TestEmbeddingSettingsProxy(t *testing.T) {
 
 func (f *fakeStore) ListWikiPages(context.Context, string, int) ([]WikiPageSummary, error) {
 	return []WikiPageSummary{}, nil
+}
+
+func (f *fakeStore) ListWikiEvents(_ context.Context, novelID string, at int) (WikiEventsResponse, error) {
+	f.lastAt = at
+	return WikiEventsResponse{NovelID: novelID, At: at, Facts: []WikiFact{}}, nil
 }
 
 func (f *fakeStore) GetWikiPage(context.Context, string, string, int) (WikiPageResponse, error) {

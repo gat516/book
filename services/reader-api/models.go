@@ -5,99 +5,26 @@ import (
 	"time"
 )
 
-type RecordsStatus struct {
-	GenerationID     string     `json:"generation_id"`
-	Version          string     `json:"version"`
-	ExtractionStatus string     `json:"extraction_status"`
-	RenderingStatus  string     `json:"rendering_status"`
-	WarningCount     int        `json:"warning_count"`
+// FactsStatus is one chapter's FACTS progress. State is pending, processing (a retry is
+// scheduled), failed, or ready (its facts are written, 0110). Never fact text (§0).
+type FactsStatus struct {
+	State            string     `json:"state"`
 	FailureDetail    *string    `json:"failure_detail,omitempty"`
 	RetryAttempts    int        `json:"retry_attempts,omitempty"`
 	RetryMaxAttempts int        `json:"retry_max_attempts,omitempty"`
 	RetryAt          *time.Time `json:"retry_at,omitempty"`
 	RetryCategory    *string    `json:"retry_category,omitempty"`
-	// Set only when the status was asked for one chapter. A discarded chapter has no run
-	// row, so without this its extraction is indistinguishable from "queued".
+	// A paused chapter has no work coming; without this it reads as "queued".
 	Discarded bool `json:"discarded"`
-	// The earliest readable chapter before this one with no published run, when there is
-	// one. Chapters publish in order (who's-who resolves against earlier chapters), so a
-	// retry of this chapter cannot succeed until that one is done. Single-chapter only;
-	// it can only name an earlier chapter, so it reveals nothing past the reader's gate.
-	WaitingOnChapter *int `json:"waiting_on_chapter,omitempty"`
-	// Facts FACTS wrote for this chapter; nil until the stage has run. Single-chapter only.
-	FactsCount       *int              `json:"facts_count,omitempty"`
-	Stages           map[string]string `json:"stages,omitempty"`
-	SelectionOutcome string            `json:"selection_outcome,omitempty"`
-	Counts           *KnowledgeCounts  `json:"counts,omitempty"`
+	// Facts FACTS wrote for this chapter; nil until the stage has run.
+	FactsCount *int `json:"facts_count,omitempty"`
 }
 
-// KnowledgeCounts keeps selection accounting separate from published outputs. An
-// all-rejected chapter is distinct from a valid chapter with no candidates.
-type KnowledgeCounts struct {
-	Discovered    int `json:"discovered"`
-	Selected      int `json:"selected"`
-	Omitted       int `json:"omitted"`
-	Consolidated  int `json:"consolidated"`
-	Rejected      int `json:"rejected"`
-	Unrepresented int `json:"unrepresented"`
-	Published     int `json:"published"`
-}
-
-type RecordParticipantView struct {
-	Field       string  `json:"field"`
-	Surface     string  `json:"surface"`
-	EntityID    *string `json:"entity_id,omitempty"`
-	ReferenceID *string `json:"reference_id,omitempty"`
-}
-type RecordEvidenceView struct {
-	PassageID string  `json:"passage_id"`
-	RunID     string  `json:"run_id,omitempty"`
-	Quote     *string `json:"quote,omitempty"`
-	Text      string  `json:"text"`
-	CharStart int     `json:"char_start"`
-	CharEnd   int     `json:"char_end"`
-	Ordinal   int     `json:"ordinal"`
-	Chapter   int     `json:"chapter,omitempty"`
-}
-type RecordValueView struct {
-	Field        string `json:"field"`
-	Source       string `json:"source"`
-	Rendered     string `json:"rendered"`
-	RenderStatus string `json:"render_status"`
-}
-type RecordView struct {
-	ID                   string                  `json:"id"`
-	RunID                string                  `json:"run_id,omitempty"`
-	Type                 string                  `json:"type"`
-	OriginalIndex        int                     `json:"original_index"`
-	SourceChapter        int                     `json:"source_chapter"`
-	ValidFromChapter     *int                    `json:"valid_from_chapter,omitempty"`
-	TemporalQualifier    *string                 `json:"temporal_qualifier,omitempty"`
-	Values               []RecordValueView       `json:"values"`
-	Participants         []RecordParticipantView `json:"participants"`
-	Evidence             []RecordEvidenceView    `json:"evidence"`
-	Polarity             *string                 `json:"polarity,omitempty"`
-	Attribution          *string                 `json:"attribution,omitempty"`
-	SourceValue          *string                 `json:"source_value,omitempty"`
-	Condition            *string                 `json:"condition,omitempty"`
-	SubjectRef           *string                 `json:"subject_ref,omitempty"`
-	SrcRef               *string                 `json:"src_ref,omitempty"`
-	DstRef               *string                 `json:"dst_ref,omitempty"`
-	Relation             *string                 `json:"relation,omitempty"`
-	Action               *string                 `json:"action,omitempty"`
-	Arguments            json.RawMessage         `json:"arguments,omitempty"`
-	Conditions           json.RawMessage         `json:"conditions,omitempty"`
-	LiteralArguments     json.RawMessage         `json:"literal_arguments,omitempty"`
-	UnresolvedReferences []string                `json:"unresolved_references,omitempty"`
-}
-type RecordsResponse struct {
-	NovelID      string `json:"novel_id"`
-	ChapterIndex int    `json:"chapter_index"`
-	// At is the reader's stored progress, the same cache key every other reader surface
-	// uses; ChapterIndex is which chapter's records these are.
-	At     int           `json:"at"`
-	Status RecordsStatus `json:"status"`
-	Rows   []RecordView  `json:"rows"`
+type ChapterFactsStatusResponse struct {
+	NovelID      string      `json:"novel_id"`
+	ChapterIndex int         `json:"chapter_index"`
+	At           int         `json:"at"`
+	Status       FactsStatus `json:"status"`
 }
 
 type Progress struct {
@@ -105,22 +32,6 @@ type Progress struct {
 	ReaderID       string    `json:"reader_id"`
 	CurrentChapter int       `json:"current_chapter"`
 	UpdatedAt      time.Time `json:"updated_at"`
-}
-
-type EntitySummary struct {
-	ID               string `json:"id"`
-	Canonical        string `json:"canonical"`
-	Kind             string `json:"kind"`
-	FirstSeenChapter int    `json:"first_seen_chapter"`
-}
-
-type EntityView struct {
-	EntitySummary
-	// Aliases carry their own first_seen_chapter in the database; only the ones a reader
-	// at this chapter could have met are listed here.
-	Aliases    []string            `json:"aliases"`
-	Records    []RecordView        `json:"records"`
-	Renderings []TermRenderingView `json:"renderings"`
 }
 
 // TermRenderingView puts the terminology decision next to the prose that uses it.
@@ -134,80 +45,11 @@ type TermRenderingView struct {
 	Candidates []CharacterNameCandidate `json:"candidates"`
 }
 
-type EntityResponse struct {
-	NovelID string     `json:"novel_id"`
-	At      int        `json:"at"`
-	Entity  EntityView `json:"entity"`
-}
-
-type WikiResponse struct {
-	NovelID  string          `json:"novel_id"`
-	At       int             `json:"at"`
-	Status   RecordsStatus   `json:"status"`
-	Entities []EntitySummary `json:"entities"`
-	Rows     []RecordView    `json:"rows"`
-}
-
-// TimelineResponse orders by knowledge chapter, then passage order. A record that
-// recounts something older keeps its temporal qualifier rather than being given a made-up
-// story time (§0.2: source_chapter is when the reader learned it).
-type TimelineResponse struct {
-	NovelID string        `json:"novel_id"`
-	At      int           `json:"at"`
-	Status  RecordsStatus `json:"status"`
-	Rows    []RecordView  `json:"rows"`
-}
-
-// RecordsInspectorResponse is the operator view of one chapter's extraction: what the
-// checks kept, what they rejected and why, and what identity stayed unresolved.
-type RecordsInspectorResponse struct {
-	NovelID           string            `json:"novel_id"`
-	ChapterIndex      int               `json:"chapter_index"`
-	At                int               `json:"at"`
-	Status            RecordsStatus     `json:"status"`
-	Parsed            int               `json:"parsed"`
-	Retained          int               `json:"retained"`
-	Dropped           int               `json:"dropped"`
-	Unresolved        int               `json:"unresolved"`
-	RenderingFailures int               `json:"rendering_failures"`
-	Drops             []RecordDropView  `json:"drops"`
-	Counts            *KnowledgeCounts  `json:"counts,omitempty"`
-	SelectionOutcome  string            `json:"selection_outcome,omitempty"`
-	Stages            map[string]string `json:"stages,omitempty"`
-}
-
-type RecordReviewDecisionView struct {
-	Decision  string    `json:"decision"`
-	Actor     string    `json:"actor"`
-	Reason    string    `json:"reason"`
-	RequestID string    `json:"request_id"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-type RecordReviewItemView struct {
-	Row      RecordView                `json:"row"`
-	Decision *RecordReviewDecisionView `json:"decision,omitempty"`
-}
-
-type RecordReviewResponse struct {
-	NovelID      string                 `json:"novel_id"`
-	ChapterIndex int                    `json:"chapter_index"`
-	At           int                    `json:"at"`
-	Status       RecordsStatus          `json:"status"`
-	Items        []RecordReviewItemView `json:"items"`
-}
-
-type RecordDropView struct {
-	OriginalIndex int      `json:"original_index"`
-	Reasons       []string `json:"reasons"`
-}
-
 type GlossaryTermView struct {
-	EntityID        *string `json:"entity_id,omitempty"`
-	SourceTerm      string  `json:"source_term"`
-	TargetTerm      string  `json:"target_term"`
-	Version         int     `json:"version"`
-	LockedAtChapter int     `json:"locked_at_chapter"`
+	SourceTerm      string `json:"source_term"`
+	TargetTerm      string `json:"target_term"`
+	Version         int    `json:"version"`
+	LockedAtChapter int    `json:"locked_at_chapter"`
 }
 
 type GlossaryResponse struct {
@@ -271,11 +113,8 @@ type SpanView struct {
 	MentionID        string             `json:"mention_id"`
 	Rendering        *TermRenderingView `json:"rendering,omitempty"`
 	KnownFromChapter *int               `json:"known_from_chapter"`
-	EnrichmentStatus string             `json:"enrichment_status"`
-	// NULL is a named mention whose identity is not yet linked; it still gets a card.
-	EntityID  *string `json:"entity_id"`
-	CharStart int     `json:"char_start"`
-	CharEnd   int     `json:"char_end"`
+	CharStart        int                `json:"char_start"`
+	CharEnd          int                `json:"char_end"`
 }
 
 // ChapterListItem is one row of the chapter index — navigation/ingestion metadata only,
@@ -392,10 +231,9 @@ type TranslationHealth struct {
 }
 
 type ChapterView struct {
-	RecordsStatus      RecordsStatus
+	FactsStatus        FactsStatus
 	Text               string
 	Spans              []SpanView
-	RecordRows         []RecordView
 	HasNext            bool
 	SiteChapterNo      string // "" when this chapter has none (a plain paste, not a scrape)
 	SourceURL          string // persisted provenance; "" for legacy/plain pasted chapters
@@ -404,9 +242,9 @@ type ChapterView struct {
 }
 
 type ChapterResponse struct {
-	RecordsStatus RecordsStatus `json:"records_status"`
-	NovelID       string        `json:"novel_id"`
-	ChapterIndex  int           `json:"chapter_index"`
+	FactsStatus  FactsStatus `json:"facts_status"`
+	NovelID      string      `json:"novel_id"`
+	ChapterIndex int         `json:"chapter_index"`
 	// SiteChapterNo is the source site's own printed chapter label (e.g. "第4610章"),
 	// distinct from ChapterIndex — our own sequential counter for THIS ingestion batch,
 	// not the novel's overall chapter number (instructions.md §3.1: chapter_index is the
@@ -424,21 +262,18 @@ type ChapterResponse struct {
 	// gate protects against learning the future relative to what's been read, not against
 	// carrying already-learned knowledge backward. This is also the exact value the client
 	// must use as the hover-card cache key's `at` (PLAN.md §5.3/§6.1).
-	At    int        `json:"at"`
-	Text  string     `json:"text"`
-	Spans []SpanView `json:"spans"`
-	// RecordRows holds the records this chapter established, so the reader sees what was
-	// learned here next to the prose that established it. Earlier chapters' records stay
-	// where they were — on the entity page, fetched on demand.
-	RecordRows         []RecordView        `json:"record_rows"`
+	At                 int                 `json:"at"`
+	Text               string              `json:"text"`
+	Spans              []SpanView          `json:"spans"`
 	HasNext            bool                `json:"has_next"`
 	TranslationWarning *TranslationWarning `json:"translation_warning"`
 }
 
-// WikiPageSummary is a character a reader at `at` has met who has at least one fact.
+// WikiPageSummary is a subject a reader at `at` has met that has at least one fact.
 type WikiPageSummary struct {
-	Subject string `json:"subject"` // the character's ID
+	Subject string `json:"subject"` // the subject's ID
 	Title   string `json:"title"`   // the name's current spelling
+	Kind    string `json:"kind"`    // character, organization, place or item (0115)
 	Facts   int    `json:"facts"`
 }
 
@@ -460,13 +295,24 @@ type WikiFact struct {
 	Ordinal int    `json:"ordinal"`
 }
 
-// WikiPageResponse is everything the reader may know about one character; the client
-// groups the facts into page sections.
+// WikiPageResponse is everything the reader may know about one subject; the client
+// groups the facts into page sections. Names and Kinds cover every subject the facts name.
 type WikiPageResponse struct {
 	NovelID string            `json:"novel_id"`
 	At      int               `json:"at"`
 	Subject string            `json:"subject"`
 	Title   string            `json:"title"`
+	Kind    string            `json:"kind"`
 	Facts   []WikiFact        `json:"facts"`
 	Names   map[string]string `json:"names"`
+	Kinds   map[string]string `json:"kinds"`
+}
+
+// WikiEventsResponse is the Events timeline: every event fact up to `at`, in story order.
+type WikiEventsResponse struct {
+	NovelID string            `json:"novel_id"`
+	At      int               `json:"at"`
+	Facts   []WikiFact        `json:"facts"`
+	Names   map[string]string `json:"names"`
+	Kinds   map[string]string `json:"kinds"`
 }

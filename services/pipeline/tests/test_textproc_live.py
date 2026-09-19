@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from types import SimpleNamespace
 
 import grpc
 import pytest
@@ -11,7 +10,6 @@ from grpc_health.v1 import health_pb2, health_pb2_grpc
 
 from pipeline import textproc_pb2, textproc_pb2_grpc
 from pipeline.mentions import Alias, MentionScanRequest
-from pipeline.stages.scan import ScanStage
 from pipeline.textproc import GrpcTextProcClient, textproc_from_config
 
 ADDRESS = os.getenv("TEXTPROC_TEST_ADDR")
@@ -20,33 +18,13 @@ GOLDEN_CASES = Path(__file__).parents[2] / "textproc" / "tests" / "scan_cases.js
 pytestmark = pytest.mark.skipif(not ADDRESS, reason="TEXTPROC_TEST_ADDR is not set")
 
 
-class _AliasRows:
-    async def fetchall(self):
-        return [("hero", "Li Xiaoyao"), ("sect", "青云宗")]
-
-
-class _AliasDB:
-    async def execute(self, query, params):
-        assert "FROM alias" in query
-        assert params == ("novel", 7)
-        return _AliasRows()
-
-
-async def _run_scan_stage(client):
-    state = SimpleNamespace(
-        envelope=SimpleNamespace(
-            raw_text="Li Xiaoyao抵达青云宗。",
-            chapter_index=7,
-        ),
-        mentions=[],
+async def _scan(client):
+    request = MentionScanRequest(
+        text="Li Xiaoyao抵达青云宗。",
+        aliases=[Alias(alias_id="hero", surface="Li Xiaoyao"), Alias(alias_id="sect", surface="青云宗")],
+        lang="zh",
     )
-    context = SimpleNamespace(
-        db=_AliasDB(),
-        novel=SimpleNamespace(id="novel", source_lang="zh"),
-        textproc=client,
-    )
-    await ScanStage().run(context, state)
-    return [span.model_dump() for span in state.mentions]
+    return [span.model_dump() for span in (await client.scan(request)).spans]
 
 
 @pytest.mark.asyncio
@@ -103,7 +81,7 @@ async def test_live_rust_service_contract() -> None:
         grpc_stage = textproc_from_config("grpc", ADDRESS, 5)
         python_stage = textproc_from_config("python", "unused", 5)
         try:
-            assert await _run_scan_stage(grpc_stage) == await _run_scan_stage(python_stage)
+            assert await _scan(grpc_stage) == await _scan(python_stage)
         finally:
             await grpc_stage.aclose()
             await python_stage.aclose()

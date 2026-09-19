@@ -223,7 +223,6 @@ textarea {
 .graph-advanced summary { cursor: pointer; color: #666; font-size: .9em; }
 .graph-advanced[open] { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem .7rem; }
 .graph-advanced[open] summary { flex-basis: 100%; }
-.reader-records-progress { flex-basis: 100%; width: 100%; height: .35rem; }
 
 .graph-error, .reader-records-error { color: #7c3029; background: #f8e5e2; border-radius: 5px; padding: .5rem .7rem; margin: .55rem 0; }
 .graph-error button, .reader-records-error button { margin-left: .4rem; }
@@ -268,20 +267,7 @@ textarea {
 /* Chapter-level knowledge status. Built exactly like the processing-queue bar -- neutral
    container, bold label, then the shared status pill carrying the colour -- so the two
    read as one instrument at different scopes rather than two unrelated notices. */
-.reader-records-status {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: .5rem;
-  margin: .55rem 0;
-  padding: .6rem .75rem;
-  border: 1px solid #d8dce3;
-  border-radius: 8px;
-  background: #f7f9fc;
-}
-.reader-records-label { font-size: 1rem; }
-.reader-records-status button { margin-left: auto; }
-.reader-records-waiting { margin-left: auto; color: #666; }
+
 .reader-records-dot {
   flex: none;
   width: .6rem;
@@ -291,16 +277,7 @@ textarea {
   box-shadow: 0 0 0 0 rgb(47 125 74 / 45%);
   animation: pipeline-pulse 1.8s infinite;
 }
-.record-review-panel { margin-top: 1rem; padding: .8rem; border: 1px solid #d8d0bf; border-radius: 6px; background: #fcfbf7; }
-.record-review-panel > h3 { margin-top: 0; }
-.record-review-item { margin: .8rem 0; padding: .65rem; border: 1px solid #e1dccf; border-radius: 5px; }
-.record-review-item.record-review-rejected { border-color: #d9aaa4; background: #fff7f5; }
-.record-review-item.record-review-accepted { border-color: #b8d2b8; }
-.record-review-item .record-list { border: 0; padding: 0; }
-.record-review-item label { display: flex; flex-direction: column; gap: .3rem; margin-top: .6rem; font-weight: 600; }
-.record-review-item textarea { min-height: 3.5rem; padding: .45rem; font: inherit; font-weight: 400; }
-.record-review-actions { display: flex; gap: .5rem; margin-top: .5rem; }
-.record-review-decision { font-size: .9rem; }
+
 .rebuild-discard { margin-top: .7rem; padding-top: .7rem; border-top: 1px solid #ddd4c2; }
 .rebuild-discard p { margin-top: 0; }
 
@@ -345,7 +322,6 @@ textarea {
   vertical-align: top;
 }
 
-.record-list > h3,
 .term-list > h3 { margin: 0.7rem 0 0.35rem; font-size: 0.98rem; }
 .term-list { margin: 0.75rem 0; white-space: normal; }
 .term-list ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.3rem; }
@@ -354,8 +330,7 @@ textarea {
 .term-target { font-weight: 600; }
 .term-list small { color: #666; }
 .term-empty { color: #666; margin: 0; }
-.chapter-record-diagnostics { margin-top: 1rem; white-space: normal; }
-.chapter-record-diagnostics > summary { cursor: pointer; font-weight: 650; }
+
 .chapter-terms-review { margin-top: 1rem; padding-top: .75rem; border-top: 1px solid #e3dfd3; }
 .chapter-terms-list { display: grid; gap: .65rem; }
 .chapter-term-row { padding: .65rem .75rem; background: #faf8f2; border-radius: 6px; }
@@ -1424,17 +1399,7 @@ textarea {
 .mention-button { border: 0; border-radius: 2px; font: inherit; color: inherit; display: inline; text-align: inherit; }
 .mention-button:hover { background: #ffe581; }
 .mention-button:focus-visible { outline: 2px solid #775600; outline-offset: 2px; }
-.entity-inspector { width: min(720px, calc(100vw - 3rem)); max-height: calc(100dvh - 3rem); box-sizing: border-box; padding: 1.25rem; border: 1px solid #ccc; border-radius: 10px; background: white; color: #222; white-space: normal; font-size: 1rem; overflow-y: auto; }
-.entity-inspector::backdrop { background: rgb(0 0 0 / 35%); }
-.entity-inspector-header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
-.entity-inspector-header h2 { margin: 0; overflow-wrap: anywhere; }
-.entity-inspector-context { color: #666; font-size: 0.85rem; margin-top: 0.25rem; }
-.entity-facts-wrap { overflow-x: auto; }
-.entity-facts { border-collapse: collapse; width: 100%; text-align: left; }
-.entity-facts th, .entity-facts td { padding: 0.4rem; border-bottom: 1px solid #eee; vertical-align: top; }
-.entity-inspector-edit { margin: 1rem 0; }
-.entity-inspector .glossary-view { border-top: 1px solid #ddd; }
-.entity-inspector input:not([type="checkbox"]) { box-sizing: border-box; max-width: 100%; }
+
 .mention-anchor { position: relative; }
 .mention-unlinked { text-decoration: underline dotted; text-underline-offset: 3px; }
 /* A confirmed spelling remains an accessible button so the reader can revise it, but
@@ -1543,7 +1508,7 @@ textarea {
 
 /* One chapter control panel; retain the top status bar's visual treatment. */
 .reader-features-panel { background: #f7f9fc; border-color: #d8dce3; border-radius: 8px; }
-.reader-features-panel > .reader-records-status { flex: 1 1 100%; margin: 0; padding: 0; border: 0; background: transparent; }
+
 .reader-features-panel > .knowledge-actions { align-items: center; margin-left: 0; }
 .reader-features-panel > small { flex-basis: 100%; }
 
@@ -1700,6 +1665,8 @@ textarea {
 .wiki-tabs { display: flex; gap: 0.3rem; margin: 0.4rem 0 0.2rem; }
 .wiki-tabs button { padding: 0.15rem 0.7rem; font-size: 0.86rem; border-radius: 999px; }
 .wiki-tabs button[aria-selected="true"] { background: #3f3421; border-color: #3f3421; color: #fff; }
+.wiki-shelves { flex-wrap: wrap; margin: 0.8rem 0 0; }
+.wiki-involves { display: inline-flex; flex-wrap: wrap; gap: 0.5rem; margin-left: 0.5rem; font-size: 0.85rem; }
 .wiki-relations { margin: 0 0 0.8rem; }
 .wiki-relations > div { display: grid; grid-template-columns: 7.5rem 1fr; gap: 0.6rem; padding: 0.25rem 0; }
 .wiki-relations dt { color: #6b6152; font-size: 0.9rem; }

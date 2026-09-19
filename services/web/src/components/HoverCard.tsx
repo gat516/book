@@ -1,30 +1,20 @@
-import { useEffect, useState } from "react";
-import { confirmGlossaryTerm, getEntity } from "../api";
+import { useState } from "react";
+import { confirmGlossaryTerm } from "../api";
 import { saveRendering } from "../termActions";
-import type { EntityView, TermRenderingView, TermRole } from "../types";
-import { RecordList } from "./RecordList";
-import { TermList } from "./TermList";
+import type { TermRenderingView, TermRole } from "../types";
 
 interface Props {
   novelId: string;
-  entityId: string | null;
   rendering?: TermRenderingView;
-  status?: string;
   mention: string;
+  // Always the server-supplied ChapterResponse.at, already spoiler-safe (§0.3).
   at: number;
-  // Keyed by entityId only, because the Map itself is recreated whenever (novelId, at)
-  // changes (see ReaderPane's `useMemo(() => new Map(), [novelId, at])`) — that recreation
-  // IS the (novel_id, entity_id, at) cache key from PLAN.md §5.3/§6.1, enforced by
-  // construction rather than by string-concatenating a key by hand. No bucketing, no
-  // rounding: `at` is always the server-supplied ChapterResponse.at, already spoiler-safe.
-  cache: Map<string, EntityView>;
   onRenderingChanged?: (rendering: TermRenderingView) => void;
-  onEntity?: (id: string, surface: string) => void;
   onClose: () => void;
 }
 
-export function HoverCard({ novelId, entityId, rendering, status, mention, at, cache, onRenderingChanged, onEntity, onClose }: Props) {
-  const [entity, setEntity] = useState<EntityView | null>(entityId ? cache.get(entityId) ?? null : null);
+/** A name's spelling: confirm the provisional one, correct it, or map an unknown name. */
+export function HoverCard({ novelId, rendering, mention, at, onRenderingChanged, onClose }: Props) {
   const [spanRendering, setSpanRendering] = useState<TermRenderingView | null>(rendering ?? null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
@@ -32,28 +22,6 @@ export function HoverCard({ novelId, entityId, rendering, status, mention, at, c
   const [sourceDraft, setSourceDraft] = useState(rendering?.source_term ?? "");
   const [targetDraft, setTargetDraft] = useState(mention);
   const [roleDraft, setRoleDraft] = useState<TermRole>(rendering?.term_role || "semantic_term");
-
-  useEffect(() => {
-    if (!entityId) { setEntity(null); return; }
-    const cached = cache.get(entityId);
-    if (cached) {
-      setEntity(cached);
-      return;
-    }
-    let cancelled = false;
-    getEntity(novelId, entityId, at)
-      .then((response) => {
-        if (cancelled) return;
-        cache.set(entityId, response.entity);
-        setEntity(response.entity);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(String(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [novelId, entityId, at, cache]);
 
   async function chooseRendering(rendering: TermRenderingView, targetTerm: string) {
     if (!targetTerm) return;
@@ -67,17 +35,6 @@ export function HoverCard({ novelId, entityId, rendering, status, mention, at, c
     try {
       const updatedRendering = await saveRendering(novelId, rendering, targetTerm, at);
       setSpanRendering(updatedRendering);
-      setEntity((current) => {
-        if (!current) return current;
-        const updated = {
-          ...current,
-          renderings: current.renderings.map((item) => item.source_term === rendering.source_term
-            ? updatedRendering
-            : item),
-        };
-        if (entityId) cache.set(entityId, updated);
-        return updated;
-      });
       onRenderingChanged?.(updatedRendering);
       setNotice(`Now shown as “${targetTerm}” in mapped chapters. Future translations will use it too.`);
     } catch (err) {
@@ -121,26 +78,10 @@ export function HoverCard({ novelId, entityId, rendering, status, mention, at, c
   return (
     <div className="hover-card" onMouseLeave={onClose}>
       {error && <p className="hover-card-error">{error}</p>}
-      {!entityId && <><h3>{mention}</h3><p>{status === "repair" ? "This name is being relinked while reader features are refreshed." : status === "failed" ? "Reader features could not be built for this name." : status === "processing" || status === "pending" ? "Character details are still being prepared." : "This name is not linked to a character yet. You can still choose how it should be translated."}</p></>}
-      {entityId && !error && !entity && <p>Loading…</p>}
-      {entity && (
-        <>
-          <h3>{entity.canonical}</h3>
-          <p className="hover-card-kind">{entity.kind}</p>
-          {entity.aliases.length > 0 && (
-            <p className="hover-card-aliases">Also known as: {entity.aliases.join(", ")}</p>
-          )}
-          {entity.renderings.map((item) => <RenderingControl key={item.source_term}
-            rendering={item} displayed={mention} saving={saving === item.source_term}
-            onChoose={chooseRendering} onLeave={onClose} />)}
-          {notice && <p className="hover-card-notice" role="status">{notice}</p>}
-          <RecordList rows={entity.records ?? []} title="Story details" onEntity={onEntity} />
-          <TermList renderings={entity.renderings} title="Terms" />
-        </>
-      )}
-      {!entity && spanRendering && <RenderingControl rendering={spanRendering} displayed={mention}
+      <h3>{mention}</h3>
+      {spanRendering && <RenderingControl rendering={spanRendering} displayed={mention}
         saving={saving === spanRendering.source_term} onChoose={chooseRendering} onLeave={onClose} />}
-      {!(entity ? entity.renderings.length > 0 : spanRendering) && <form className="hover-card-rendering" onSubmit={(event) => {
+      {!spanRendering && <form className="hover-card-rendering" onSubmit={(event) => {
         event.preventDefault();
         void confirmUnmapped();
       }}>
@@ -159,7 +100,7 @@ export function HoverCard({ novelId, entityId, rendering, status, mention, at, c
           <button type="button" disabled={!!saving} onClick={onClose}>Leave it for now</button>
         </div>
       </form>}
-      {!entity && notice && <p className="hover-card-notice" role="status">{notice}</p>}
+      {notice && <p className="hover-card-notice" role="status">{notice}</p>}
     </div>
   );
 }

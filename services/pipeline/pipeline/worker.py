@@ -36,8 +36,6 @@ from pipeline.provider_config import (
 )
 from pipeline import queue
 from pipeline.failures import error_code, failure_category, record_failure
-from pipeline.records_publish import publish_records
-from pipeline.records_generation import EarlierChapterPending
 from pipeline.stages import DEFAULT_STAGES
 from pipeline.stages.translate import TranslateStage
 from pipeline.textproc import textproc_from_config
@@ -296,8 +294,6 @@ class Worker:
                 # a Redis claim or sleep for minutes. Release the claim now; the reaper's
                 # due-retry sweep will enqueue it after provider_retry_at.
                 msg = QueueMessage.model_validate_json(raw)
-                if getattr(exc, "record_generation_id", None):
-                    msg.record_generation_id = exc.record_generation_id
                 await self._record_provider_rejection(
                     msg, exc
                 )
@@ -306,11 +302,6 @@ class Worker:
                     getattr(exc, "category", "rate_limited"), exc.retry_after_s,
                     getattr(exc, "rate_limit_details", {}),
                 )
-            except EarlierChapterPending as exc:
-                msg = QueueMessage.model_validate_json(raw)
-                await self._defer_for_earlier_chapter(msg, exc)
-                log.info("chapter %s/%s waiting for chapter %d", msg.novel_id,
-                         msg.chapter_index, exc.chapter)
             except ProviderConfigChanged:
                 msg = QueueMessage.model_validate_json(raw)
                 await self._clear_preview(msg.novel_id, msg.chapter_index)
@@ -318,26 +309,7 @@ class Worker:
                 log.info("provider config changed; returning chapter %s/%s to pending",
                          msg.novel_id, msg.chapter_index)
             except ChapterDiscarded:
-                # Stop/Discard is terminal until the explicit Retry control. Close any
-                # fact-first prefix that already checkpointed successfully so status
-                # cannot look like an in-flight run after the Redis claim is dropped.
-                msg = QueueMessage.model_validate_json(raw)
-                await self.db.execute(
-                    """UPDATE fact_first_run SET status='discarded',
-                       diagnostics=diagnostics || jsonb_build_object('lifecycle','discarded')
-                       WHERE novel_id=%s AND chapter_index=%s AND status='processing'
-                         AND generation_id=COALESCE(%s::uuid,
-                             (SELECT active_record_generation FROM novel WHERE id=%s))""",
-                    (msg.novel_id, msg.chapter_index, msg.record_generation_id, msg.novel_id),
-                )
-                await self.db.execute(
-                    """UPDATE record_run SET status='failed',
-                       diagnostics=diagnostics || jsonb_build_object('lifecycle','discarded')
-                       WHERE novel_id=%s AND chapter_index=%s AND status='processing'
-                         AND generation_id=COALESCE(%s::uuid,
-                             (SELECT active_record_generation FROM novel WHERE id=%s))""",
-                    (msg.novel_id, msg.chapter_index, msg.record_generation_id, msg.novel_id),
-                )
+                # Stop/Discard is terminal until the explicit Retry control.
                 log.info("chapter graph attempt discarded; dropping claim")
             except ChapterFailed:
                 # The outcome is recorded on the chapter row, so this job is not lost and
@@ -365,16 +337,15 @@ class Worker:
         """Nothing runs below chapter work any more.
 
         The graph/event rebuild lifecycles and the repair queue they served were retired
-        with the legacy graph: a records generation is rebuilt by re-enriching chapters
-        in order, which is ordinary chapter work and goes through the normal queue.
+        with the legacy graph; all work is ordinary chapter work on the normal queue.
         """
         return
 
     async def _handle_claim(self, raw: str) -> None:
         msg = QueueMessage.model_validate_json(raw)
         # Embeddings are an optional retrieval index. They must never gate the durable
-        # translation/records/display path: records_publish() stores NULL for a failed
-        # or unavailable vector and retrieval simply excludes that row (§0 append-only).
+        # translation/display path: CHUNK_INDEX stores NULL for a failed or unavailable
+        # vector and retrieval simply excludes that row (§0 append-only).
         work = asyncio.create_task(self._handle(raw))
         owner = asyncio.create_task(self._watch_novel(msg.novel_id, msg))
         try:
@@ -399,7 +370,7 @@ class Worker:
         # can run for many minutes (or, before CooldownProvider stopped sleeping on
         # quota, park for half an hour), and the stage-boundary checks in _handle cannot
         # see a change made in between. So the same poll also cancels on:
-        #   - a discarded graph attempt or a rolled-back rebuild generation -> drop claim
+        #   - a discarded facts attempt                                    -> drop claim
         #   - a changed provider config/credential                          -> requeue
         polls = 0
         while True:
@@ -410,7 +381,7 @@ class Worker:
                     while True:
                         async with asyncio.timeout(5):
                             row = await (await monitor.execute(
-                                "SELECT n.active_record_generation::text, c.enrichment_discarded "
+                                "SELECT c.enrichment_discarded "
                                 "FROM novel n LEFT JOIN chapter c ON c.novel_id=n.id "
                                 "AND c.chapter_index=%s WHERE n.id=%s",
                                 (msg.chapter_index if msg else -1, novel_id),
@@ -418,11 +389,7 @@ class Worker:
                         if row is None:
                             raise NovelDeleted(novel_id)
                         if msg is not None:
-                            active_generation, discarded = row
-                            if msg.enrichment and discarded:
-                                raise ChapterDiscarded()
-                            if (msg.record_generation_id
-                                    and active_generation != msg.record_generation_id):
+                            if msg.enrichment and row[0]:
                                 raise ChapterDiscarded()
                             # Skip the first poll: _handle refreshes a cached provider
                             # moments after the claim, and comparing before that would
@@ -564,8 +531,7 @@ class Worker:
         if msg.priority or msg.retranslate:
             await self._reset_provider_retry(msg)
             await self.db.execute(
-                "UPDATE chapter SET enrichment_attempts=0,enrichment_retry_at=NULL,"
-                "enrichment_retry_generation_id=NULL "
+                "UPDATE chapter SET enrichment_attempts=0,enrichment_retry_at=NULL "
                 "WHERE novel_id=%s AND chapter_index=%s",
                 (msg.novel_id, msg.chapter_index),
             )
@@ -579,21 +545,6 @@ class Worker:
             await self._clear_preview(msg.novel_id, msg.chapter_index)
             return
         source_lang, target_lang, ontology = novel
-        if msg.record_generation_id:
-            # Rebuild/retry pointers are generation-fenced at dequeue time as well as
-            # inside prepare_generation. Dropping a pointer for a discarded rebuild is
-            # safe; retrying it against the current generation would mix identities.
-            active_generation = await self._fetch_one(
-                "SELECT active_record_generation::text FROM novel WHERE id=%s",
-                (msg.novel_id,),
-            )
-            if active_generation is None or str(active_generation[0]) != msg.record_generation_id:
-                log.warning(
-                    "dropping stale records pointer for %s/%s: expected generation %s, active %s",
-                    msg.novel_id, msg.chapter_index, msg.record_generation_id,
-                    active_generation[0] if active_generation else None,
-                )
-                return
         (provider, batch_manager, provider_id, names_provider, resolve_provider,
          model_override) = await self._provider_for_novel(msg.novel_id)
 
@@ -633,13 +584,12 @@ class Worker:
         )
         state = PipelineState(
             envelope=envelope,
-            expected_record_generation_id=msg.record_generation_id,
             respell=[(r.old, r.new) for r in msg.respell] if msg.retranslate else [],
         )
         stage_name = ""
         try:
             for stage in DEFAULT_STAGES:
-                if msg.enrichment and stage.name in {"records", "display_scan", "facts"}:
+                if msg.enrichment and stage.name in {"display_scan", "facts"}:
                     discarded_row = await self._fetch_one(
                         "SELECT enrichment_discarded FROM chapter WHERE novel_id=%s AND chapter_index=%s",
                         (msg.novel_id, msg.chapter_index),
@@ -708,37 +658,7 @@ class Worker:
                 finally:
                     if streaming:
                         _set_stream_sink(provider, None)
-            # Records publication owns the generation/run transaction and chunk rebuild.
-            # It is intentionally after translation so an untranslated chapter can become
-            # readable early and enrichment is retried as a low-priority queue message.
-            if state.records is not None:
-                if msg.enrichment:
-                    discarded_row = await self._fetch_one(
-                        "SELECT enrichment_discarded FROM chapter WHERE novel_id=%s AND chapter_index=%s",
-                        (msg.novel_id, msg.chapter_index),
-                    )
-                    if discarded_row and discarded_row[0]:
-                        raise ChapterDiscarded()
-                stage_name = "publish"
-                await self.redis.eval(
-                    PUBLISH_STAGE,
-                    2,
-                    PROCESSING_STAGE,
-                    PROCESSING_STAGE_STARTED,
-                    raw,
-                    stage_name,
-                    str(time.time()),
-                )
-                await self.db.execute(
-                    """UPDATE fact_first_run SET diagnostics=jsonb_set(
-                       COALESCE(diagnostics,'{}'::jsonb), '{stages}',
-                       COALESCE(diagnostics->'stages','{}'::jsonb) || '{\"publication\":\"processing\"}'::jsonb, true)
-                       WHERE novel_id=%s AND generation_id=%s AND chapter_index=%s
-                         AND status='processing'""",
-                    (msg.novel_id, state.record_generation_id, msg.chapter_index),
-                )
-                await publish_records(ctx, state)
-        except (TranslationPublished, EarlierChapterPending):
+        except TranslationPublished:
             raise
         except ChapterDiscarded:
             # §0: an operator stop is terminal until an explicit retry. In particular,
@@ -746,10 +666,6 @@ class Worker:
             raise
         except AdmissionRejected as exc:
             # The outer loop requeues without turning capacity pressure into a job error.
-            # Preserve the generation selected by RECORDS so the outer claim handler can
-            # persist it with provider backoff; the raw queue pointer may predate the pin.
-            if state.record_generation_id and not getattr(exc, "record_generation_id", None):
-                exc.record_generation_id = state.record_generation_id
             raise
         except Exception as exc:
             # Deletion can win the race with a stage write before the watcher polls.
@@ -758,35 +674,6 @@ class Worker:
                 raise NovelDeleted(msg.novel_id) from exc
             async with self.db.transaction():
                 await record_failure(self.db, msg.novel_id, msg.chapter_index, stage_name, exc)
-                if stage_name in {"records", "publish"}:
-                    # The run row is the reader-facing progress surface for this chapter.
-                    # Without this it stays 'processing' forever and a failed extraction or
-                    # publication is indistinguishable from a slow one. Only the bounded
-                    # category from failures.py is stored -- never the exception text
-                    # (§0, migration 0046).
-                    run_generation = state.record_generation_id
-                    if run_generation:
-                        await self.db.execute(
-                            "UPDATE record_run SET status='failed',"
-                            "diagnostics=diagnostics || jsonb_build_object('failure',%s::text) "
-                            "WHERE novel_id=%s AND generation_id=%s AND chapter_index=%s "
-                            "AND status='processing'",
-                            (error_code(exc), msg.novel_id, run_generation, msg.chapter_index))
-                        await self.db.execute(
-                            "UPDATE fact_first_run SET status='failed',"
-                            "diagnostics=diagnostics || jsonb_build_object('failure',%s::text) "
-                            "WHERE novel_id=%s AND generation_id=%s AND chapter_index=%s "
-                            "AND status='processing'",
-                            (error_code(exc), msg.novel_id, run_generation, msg.chapter_index))
-                        if stage_name == "publish":
-                            await self.db.execute(
-                                """UPDATE fact_first_run SET diagnostics=jsonb_set(
-                                   COALESCE(diagnostics,'{}'::jsonb), '{stages}',
-                                   COALESCE(diagnostics->'stages','{}'::jsonb) || '{\"publication\":\"failed\"}'::jsonb, true)
-                                   WHERE novel_id=%s AND generation_id=%s AND chapter_index=%s
-                                     AND status <> 'published'""",
-                                (msg.novel_id, run_generation, msg.chapter_index),
-                            )
                 await self._set_status(msg, "name_repair_error" if msg.retranslate else "error")
                 # Schedule a retry for ANY recorded failure. This used to be guarded by
                 # `if readable`, which silently made every pre-TRANSLATE failure terminal:
@@ -804,8 +691,7 @@ class Worker:
                 )).fetchone()
                 enrichment_attempts = int(retry_row[0]) if retry_row else 0
                 next_attempt = enrichment_attempts + 1
-                retry_generation = state.record_generation_id or msg.record_generation_id
-                # An operator's graph retry (records.go retryRecords: priority+enrichment)
+                # An operator's facts retry (ingest-api facts.go: priority+enrichment)
                 # is the retry. If it fails, the operator is watching and decides what
                 # happens next; quietly scheduling another attempt behind their back put an
                 # automatic countdown on a chapter they had just taken over by hand.
@@ -816,16 +702,14 @@ class Worker:
                     "UPDATE chapter SET enrichment_attempts=%s,"
                     "enrichment_retry_at = CASE WHEN %s "
                     "THEN now() + (%s * interval '1 second') ELSE NULL END,"
-                    "enrichment_retry_generation_id=CASE WHEN %s THEN %s::uuid ELSE NULL END,"
                     "provider_retry_attempts=0,provider_retry_at=NULL,"
-                    "provider_retry_category=NULL,provider_retry_generation_id=NULL "
+                    "provider_retry_category=NULL "
                     "WHERE novel_id=%s AND chapter_index=%s AND enrichment_attempts < %s "
                     "AND NOT enrichment_discarded",
                     (next_attempt,
                      schedule,
                      min(GENERIC_RETRY_BASE_SECONDS * (2 ** max(next_attempt - 1, 0)),
                          GENERIC_RETRY_CAP_SECONDS),
-                     schedule, retry_generation,
                      msg.novel_id, msg.chapter_index, MAX_ENRICHMENT_ATTEMPTS))
             # Re-raise as ChapterFailed so the drain loop knows the outcome was recorded
             # and the claim can be dropped rather than left for the reaper to retry.
@@ -834,23 +718,13 @@ class Worker:
         await self._set_status(msg, "done")
         await self.db.execute(
             "UPDATE chapter SET translation_ready=true, enrichment_retry_at=NULL,"
-            "enrichment_attempts=0,enrichment_retry_generation_id=NULL "
+            "enrichment_attempts=0 "
             "WHERE novel_id=%s AND chapter_index=%s", (msg.novel_id, msg.chapter_index))
         await self._reset_provider_retry(msg)
         # The chapter is readable from the object store now, so the in-flight preview would
         # only ever be a stale, partial copy of it.
         await self._clear_preview(msg.novel_id, msg.chapter_index)
         log.info("chapter %s/%s done", msg.novel_id, msg.chapter_index)
-
-    async def _defer_for_earlier_chapter(self, msg: QueueMessage, exc: EarlierChapterPending) -> None:
-        # A dependency wait spends no provider call or failure attempt. The due sweep
-        # checks publication before requeueing, so waiting chapters cannot churn (§0).
-        await self.db.execute(
-            "UPDATE chapter SET enrichment_retry_at=now(),enrichment_retry_generation_id=%s,"
-            "status=CASE WHEN translation_ready THEN 'done' ELSE status END "
-            "WHERE novel_id=%s AND chapter_index=%s AND NOT enrichment_discarded",
-            (exc.generation_id, msg.novel_id, msg.chapter_index),
-        )
 
     async def _retry_enrichment(self) -> None:
         assert self.db is not None
@@ -860,9 +734,8 @@ class Worker:
             # A discarded enrichment must not suppress a prose retry. For a chapter
             # without durable translation, requeue ordinary reader-critical work; only
             # an already-translated chapter resumes as low-priority enrichment (§0).
-            "SELECT c.novel_id::text, c.chapter_index, c.status, "
-            "COALESCE(c.enrichment_retry_generation_id::text, "
-            "c.provider_retry_generation_id::text), c.translation_ready FROM chapter c "
+            "SELECT c.novel_id::text, c.chapter_index, c.status, c.translation_ready "
+            "FROM chapter c "
             # needs_name_review is included because nothing produces it any more: the
             # character-name gate no longer blocks translation, so a chapter still parked
             # at that status is stranded exactly the way pre-TRANSLATE failures were before
@@ -872,18 +745,16 @@ class Worker:
             "AND provider_retry_attempts < %s) OR (provider_retry_at <= now() "
             "AND provider_retry_attempts < %s "
             "AND (NOT c.translation_ready OR NOT c.enrichment_discarded))) "
-            # No chapter-order gate: RECORDS waited for every earlier chapter's published
-            # record_run, which nothing produces now. FACTS is per chapter
-            # (.claude/plans/facts-stage.md), so a due chapter is simply re-queued.
+            # No chapter-order gate: FACTS is per chapter, so a due chapter is simply
+            # re-queued.
             "ORDER BY LEAST(COALESCE(enrichment_retry_at, 'infinity'::timestamptz), "
             "COALESCE(provider_retry_at, 'infinity'::timestamptz)) LIMIT 20",
             (MAX_ENRICHMENT_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS),
         )).fetchall()
-        for novel_id, chapter, status, generation_id, translation_ready in rows:
+        for novel_id, chapter, status, translation_ready in rows:
             msg = QueueMessage(novel_id=novel_id, chapter_index=chapter,
                                enrichment=bool(translation_ready),
-                               retranslate=status == "name_repair_error",
-                               record_generation_id=generation_id)
+                               retranslate=status == "name_repair_error")
             await self.redis.eval(queue.ENQUEUE_ENRICHMENT, len(queue.KEYS), *queue.KEYS,
                                   novel_id, chapter, msg.model_dump_json())
 
@@ -911,8 +782,7 @@ class Worker:
             if not shared and attempt >= MAX_PROVIDER_RETRY_ATTEMPTS:
                 await self.db.execute(
                     "UPDATE chapter SET provider_retry_attempts=%s,provider_retry_at=NULL,"
-                    "provider_retry_category=%s,provider_retry_generation_id=NULL,"
-                    "enrichment_retry_at=NULL,enrichment_retry_generation_id=NULL,"
+                    "provider_retry_category=%s,enrichment_retry_at=NULL,"
                     "status=CASE WHEN translation_ready THEN status ELSE 'error' END "
                     "WHERE novel_id=%s AND chapter_index=%s",
                     (attempt, category, msg.novel_id, msg.chapter_index),
@@ -921,14 +791,6 @@ class Worker:
                     self.db, msg.novel_id, msg.chapter_index, "provider",
                     ProviderRetryExhausted(),
                 )
-                for table in ("record_run", "fact_first_run"):
-                    await self.db.execute(
-                        f"UPDATE {table} SET status='failed', "
-                        "diagnostics=diagnostics || jsonb_build_object('failure','provider_retry_exhausted') "
-                        "WHERE novel_id=%s AND chapter_index=%s AND status='processing' "
-                        "AND generation_id=(SELECT active_record_generation FROM novel WHERE id=%s)",
-                        (msg.novel_id, msg.chapter_index, msg.novel_id),
-                    )
                 return
             delay = max(float(exc.retry_after_s), 0.0) if shared else max(
                 PROVIDER_RETRY_BASE_SECONDS * (2 ** (attempt - 1)),
@@ -937,19 +799,18 @@ class Worker:
             await self.db.execute(
                 "UPDATE chapter SET provider_retry_attempts=%s,"
                 "provider_retry_at=now() + (%s * interval '1 second'),"
-                "provider_retry_category=%s,provider_retry_generation_id=%s,"
+                "provider_retry_category=%s,"
                 # §6.2: provider admission owns the next retry. A stale generic due
                 # timestamp must not bypass this cooldown or its exhaustion limit.
-                "enrichment_retry_at=NULL,enrichment_retry_generation_id=NULL "
+                "enrichment_retry_at=NULL "
                 "WHERE novel_id=%s AND chapter_index=%s",
-                (attempt, delay, category, getattr(msg, "record_generation_id", None),
-                 msg.novel_id, msg.chapter_index),
+                (attempt, delay, category, msg.novel_id, msg.chapter_index),
             )
 
     async def _reset_provider_retry(self, msg: QueueMessage) -> None:
         await self.db.execute(
             "UPDATE chapter SET provider_retry_attempts=0,provider_retry_at=NULL,"
-            "provider_retry_category=NULL,provider_retry_generation_id=NULL "
+            "provider_retry_category=NULL "
             "WHERE novel_id=%s AND chapter_index=%s",
             (msg.novel_id, msg.chapter_index),
         )

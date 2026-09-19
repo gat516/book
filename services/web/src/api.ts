@@ -1,4 +1,4 @@
-import { failureExplanation } from "./recordStatus";
+import { failureExplanation } from "./factsStatus";
 import { readerId } from "./readerId";
 import type {
   AskResponse,
@@ -11,7 +11,6 @@ import type {
   CorrectGlossaryTermResponse,
   CreateNovelRequest,
   CreateNovelResponse,
-  EntityResponse,
   GlossaryResponse,
   NovelListResponse,
   NovelSummary,
@@ -26,13 +25,8 @@ import type {
   Progress,
   ScrapeJobView,
   StartScrapeRequest,
-  RecordsResponse,
-  RecordsInspectorResponse,
-  RecordReviewRequest,
-  RecordReviewResponse,
-  RecordReviewResult,
-  RecordsRebuildStatus,
-  WikiResponse,
+  BookFactsStatus,
+  ChapterFactsStatusResponse,
 } from "./types";
 
 class ApiError extends Error {
@@ -115,11 +109,8 @@ export function getChapter(novelId: string, n: number): Promise<ChapterResponse>
   return request(`/novels/${novelId}/chapter/${n}`);
 }
 
-export function getRecords(novelId: string, chapter: number): Promise<RecordsResponse> {
-  return request(`/novels/${novelId}/chapter/${chapter}/rows`);
-}
-export function getRecordsInspector(novelId: string, chapter: number): Promise<RecordsInspectorResponse> {
-  return request(`/novels/${novelId}/chapter/${chapter}/records/status`);
+export function getChapterFactsStatus(novelId: string, chapter: number): Promise<ChapterFactsStatusResponse> {
+  return request(`/novels/${novelId}/chapter/${chapter}/facts/status`);
 }
 export function getWikiPages(novelId: string): Promise<import("./types").WikiPagesResponse> {
   return request(`/novels/${novelId}/wiki/pages`);
@@ -129,6 +120,10 @@ export function getWikiPage(novelId: string, subject: string): Promise<import(".
   return request(`/novels/${novelId}/wiki/pages/${encodeURIComponent(subject)}`);
 }
 
+export function getWikiEvents(novelId: string): Promise<import("./types").WikiEventsResponse> {
+  return request(`/novels/${novelId}/wiki/events`);
+}
+
 export function retractFact(novelId: string, fact: { chapter: number; version: string; ordinal: number }): Promise<{ retracted: boolean }> {
   return request(`/novels/${novelId}/wiki/facts/retract`, {
     method: "POST",
@@ -136,48 +131,20 @@ export function retractFact(novelId: string, fact: { chapter: number; version: s
   });
 }
 
-export function getWiki(novelId: string, at: number): Promise<WikiResponse> {
-  return request(`/novels/${novelId}/wiki?at=${at}`);
+export function retryFacts(novelId: string, chapter: number): Promise<{ retried: boolean; chapter_index: number }> {
+  return request(`/novels/${novelId}/chapter/${chapter}/facts/retry`, { method: "POST" });
 }
-export function retryRecords(novelId: string, chapter: number): Promise<{ status: string; run_id?: string }> {
-  return request(`/novels/${novelId}/chapter/${chapter}/records/retry`, { method: "POST" });
+// Finds missing facts: every readable chapter without them is queued in order; chapters
+// that already have facts are left alone.
+export function extractFacts(novelId: string): Promise<{ chapters_enqueued: number }> {
+  return request(`/novels/${novelId}/facts/extract`, { method: "POST" });
 }
-export function discardRecordsChapter(novelId: string, chapter: number): Promise<{ discarded: boolean; chapter_index: number }> {
-  return request(`/novels/${novelId}/chapter/${chapter}/records/discard`, { method: "POST" });
+// Pauses the whole book's facts work. Finished chapters keep their facts.
+export function stopFacts(novelId: string): Promise<{ stopped: boolean; chapters_stopped: number }> {
+  return request(`/novels/${novelId}/facts/stop`, { method: "POST" });
 }
-export function retryRecordRendering(novelId: string, chapter: number): Promise<{ status: string }> {
-  return request(`/novels/${novelId}/chapter/${chapter}/records/render-retry`, { method: "POST" });
-}
-// Continues the book's graph in place: unfinished chapters resume in order and published
-// chapters are left alone. rebuildRecords is the from-scratch alternative.
-export function extractRecords(novelId: string): Promise<{ chapters_enqueued: number }> {
-  return request(`/novels/${novelId}/records/extract`, { method: "POST" });
-}
-export function rebuildRecords(novelId: string): Promise<{ generation_id: string; status: string }> {
-  return request(`/novels/${novelId}/records/rebuild`, { method: "POST" });
-}
-// Pauses the whole book's graph build. Unlike discardRecordsRebuild this needs no
-// generation to roll back to, so it also reaches a first build that has never finished.
-export function stopRecordsBuild(novelId: string): Promise<{ stopped: boolean; chapters_stopped: number }> {
-  return request(`/novels/${novelId}/records/stop`, { method: "POST" });
-}
-export function getRecordsRebuildStatus(novelId: string): Promise<RecordsRebuildStatus> {
-  return request(`/novels/${novelId}/records/rebuild/status`);
-}
-export function discardRecordsRebuild(novelId: string, generationId: string): Promise<{ discarded: boolean; generation_id: string }> {
-  return request(`/novels/${novelId}/records/rebuild/discard`, {
-    method: "POST",
-    body: JSON.stringify({ generation_id: generationId }),
-  });
-}
-export function getRecordReviews(novelId: string, chapter: number): Promise<RecordReviewResponse> {
-  return request(`/novels/${novelId}/chapter/${chapter}/records/review`);
-}
-export function patchRecordReview(novelId: string, chapter: number, body: RecordReviewRequest): Promise<RecordReviewResult> {
-  return request(`/novels/${novelId}/chapter/${chapter}/records/review`, {
-    method: "PATCH",
-    body: JSON.stringify(body),
-  });
+export function getFactsStatus(novelId: string): Promise<BookFactsStatus> {
+  return request(`/novels/${novelId}/facts/status`);
 }
 
 export function listChapters(novelId: string, limit: number, offset: number): Promise<ChapterListResponse> {
@@ -224,10 +191,6 @@ export function updateQueueControl(patch: { mode?: QueueMode; focus_novel_id?: s
   }));
   queueUpdates = update.catch(() => undefined);
   return update;
-}
-
-export function getEntity(novelId: string, entityId: string, at: number): Promise<EntityResponse> {
-  return request(`/novels/${novelId}/entity/${entityId}?at=${at}`);
 }
 
 export function ask(novelId: string, question: string, at: number): Promise<AskResponse> {

@@ -129,12 +129,9 @@ class PipelineState:
 
     envelope: ChapterEnvelope
     chunks: list[Chunk] = field(default_factory=list)  # chunk stage (1.4)
-    mentions: "list[Span]" = field(default_factory=list)  # scan stage (1.6)
 
     # display-scan stage (Phase 5.2): mentions against the DISPLAY text (translated, or
-    # source if untranslated), for the reader UI's highlighting. Offsets here are NOT
-    # comparable to `mentions` above when the novel is translated — different text.
-    # An empty alias_id denotes a literal named mention with no entity binding; the
+    # source if untranslated), for the reader UI's highlighting. An empty alias_id denotes a literal named mention with no entity binding; the
     # database stores it as NULL. Never use these spans to bind graph facts.
     display_spans: "list[Span]" = field(default_factory=list)
     # Exact source-term -> display-span alignments. Derived terminology metadata only;
@@ -146,21 +143,4 @@ class PipelineState:
     # (old, new) spellings from a respell pointer; TRANSLATE applies them to the saved text.
     respell: list[tuple[str, str]] = field(default_factory=list)
 
-    # resolve stage (1.6): the AUTHORITATIVE occurrence-ID -> entity_id map (revision pipeline). Every stage that
-    # needs to turn a name into an id reads this and nothing else — a surface absent from
-    # it is an unresolved mention, not an invitation to bind by exact match (that was the
-    # 1.5 placeholder, and exact matching is the entity-drift bug §12 risk #2 describes).
-    resolutions: dict[str, str] = field(default_factory=dict)
-
     translation: str | None = None  # translate stage
-
-    # Records enrichment output: parsed records, check results, the authoritative
-    # who's-who resolution and renderings. ``None`` means the stage did not run, which
-    # is NOT the same as a chapter that legitimately yielded nothing — the publisher
-    # writes a completed empty run for the second and nothing at all for the first.
-    records: dict[str, Any] | None = None
-    # Generation pin selected before RECORDS candidate lookup. Publication must verify
-    # this exact id/config remains active; it may never silently switch generations.
-    expected_record_generation_id: str | None = None
-    record_generation_id: str | None = None
-    record_generation_config: dict[str, Any] | None = None

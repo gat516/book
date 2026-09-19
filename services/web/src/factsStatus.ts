@@ -1,4 +1,4 @@
-import type { RecordsStatus } from "./types";
+import type { FactsStatus } from "./types";
 
 export function retryCategoryLabel(category?: string | null): string {
   if (!category) return "a processing error";
@@ -31,7 +31,7 @@ export function retryCategoryLabel(category?: string | null): string {
   return labels[category] ?? "a processing error";
 }
 
-export function failureExplanation(status: Pick<RecordsStatus, "retry_category" | "failure_detail">): string {
+export function failureExplanation(status: Pick<FactsStatus, "retry_category" | "failure_detail">): string {
   const rawCategory = status.retry_category ?? status.failure_detail;
   const aliases: Record<string, string> = {
     provider_http_400: "provider_bad_request", provider_http_422: "provider_bad_request",
@@ -69,7 +69,7 @@ export function failureExplanation(status: Pick<RecordsStatus, "retry_category" 
   return `${messages[category ?? ""] ?? "An unexpected processing error occurred"}.`;
 }
 
-export function scheduledRetryMessage(status: RecordsStatus): string {
+export function scheduledRetryMessage(status: FactsStatus): string {
   const attempts = status.retry_attempts ?? 0;
   const max = status.retry_max_attempts ?? 0;
   const count = max > 0 ? `${attempts} of ${max} attempts failed` : `${attempts} attempts failed`;
@@ -83,8 +83,8 @@ export function retryTimeLabel(value?: string | null): string {
   return date.toLocaleString();
 }
 
-export function retriesExhausted(status: RecordsStatus): boolean {
-  return status.extraction_status === "failed" &&
+export function retriesExhausted(status: FactsStatus): boolean {
+  return status.state === "failed" &&
     !status.retry_at &&
     (status.retry_max_attempts ?? 0) > 0 &&
     (status.retry_attempts ?? 0) >= (status.retry_max_attempts ?? 0);
@@ -106,17 +106,17 @@ export interface ChapterStatusState {
  * written its facts (migration 0110); name highlighting runs just before it in the same
  * pass, so "ready" covers both.
  */
-export function chapterStatusState(status: RecordsStatus | null): ChapterStatusState {
+export function chapterStatusState(status: FactsStatus | null): ChapterStatusState {
   if (status === null) return { tone: "quiet", text: "Checking…", retryable: false };
   if (status.discarded) return { tone: "quiet", text: "Paused", retryable: true };
   if (status.retry_at) return { tone: "warn", text: scheduledRetryMessage(status), retryable: false };
-  if (retriesExhausted(status) || status.extraction_status === "failed") {
+  if (retriesExhausted(status) || status.state === "failed") {
     return { tone: "bad", text: `${failureExplanation(status)}.`, retryable: true };
   }
-  if (status.extraction_status === "processing") {
+  if (status.state === "processing") {
     return { tone: "live", text: "Finding names and facts…", retryable: false };
   }
-  if (status.extraction_status !== "ready") {
+  if (status.state !== "ready") {
     return { tone: "live", text: "Waiting to find names and facts…", retryable: false };
   }
   const facts = status.facts_count;

@@ -1,8 +1,8 @@
 # reader-api (Go)
 
 Reader-facing spoiler gate for the novel engine (Phase 2). The service stores each
-reader's maximum cleared chapter and exposes entity, wiki, timeline, and relationship
-views that cannot read beyond that boundary.
+reader's maximum cleared chapter and exposes chapter, wiki, glossary, facts-status and
+Ask AI views that cannot read beyond that boundary.
 
 ## Security model
 
@@ -61,16 +61,10 @@ curl -X PUT localhost:8081/novels/<novel-id>/progress \
 curl localhost:8081/novels/<novel-id>/chapter/1 \
   -H 'X-Reader-ID: local-reader'
 
-curl localhost:8081/novels/<novel-id>/wiki?at=3 \
+# Wiki: characters the reader has met, and one character's page, from tagged facts.
+curl localhost:8081/novels/<novel-id>/wiki/pages \
   -H 'X-Reader-ID: local-reader'
-
-curl localhost:8081/novels/<novel-id>/entity/<entity-id>?at=3 \
-  -H 'X-Reader-ID: local-reader'
-
-curl localhost:8081/novels/<novel-id>/timeline?at=3 \
-  -H 'X-Reader-ID: local-reader'
-
-curl localhost:8081/novels/<novel-id>/relationships/<entity-id>?at=3 \
+curl localhost:8081/novels/<novel-id>/wiki/pages/<character-id> \
   -H 'X-Reader-ID: local-reader'
 
 curl -X POST localhost:8081/novels/<novel-id>/ask \
@@ -101,59 +95,32 @@ value supports rereading without lowering the durable clearance ceiling.
 
 `GET /chapter/{n}` has no `?at=` — chapter `n` *is* the resource, gated by `n <= stored
 progress` (404 otherwise). Its response `at` field is always the stored progress, not
-`n`; the web client uses that value as the entity-hover cache key for spans on that
-chapter (see `services/web/`).
+`n`; the web client uses that value as `at` for everything it does on that chapter
+(see `services/web/`).
 
-## Records status and maintenance
+## Facts status and controls
 
-Knowledge is a **records generation**: one immutable extraction configuration per novel,
-filled chapter by chapter. `novel.active_record_generation` says which one readers see.
+FACTS writes a chapter's tagged facts in one call (see `services/pipeline/README.md`).
 
 ```bash
-# One chapter's records, plus the status envelope every records surface carries.
-curl "localhost:8081/novels/<novel-id>/chapter/3/rows" -H 'X-Reader-ID: local-reader'
-
-# What the deterministic checks rejected, and which names stayed unresolved.
-curl "localhost:8081/novels/<novel-id>/chapter/3/records/inspector" -H 'X-Reader-ID: local-reader'
+# One chapter's facts status: gated like every reader view (404 past stored progress).
+curl "localhost:8081/novels/<novel-id>/chapter/3/facts/status" -H 'X-Reader-ID: local-reader'
 ```
 
-`status` reports `extraction_status` (`pending`, `processing`, `ready`, `failed`),
-`rendering_status` (`pending`, `ready`, `failed`), a bounded `failure_detail`, a warning
-count, and durable provider retry metadata (`retry_attempts`, `retry_max_attempts`,
-`retry_at`, `retry_category`) when admission is backing off. The version is derived only from runs at or below the
-reader's own chapter, so publishing chapter 40 never invalidates a chapter-3 reader's
-cache token.
+`status.state` is `pending`, `processing` (a retry is scheduled), `failed` (retries
+exhausted), or `ready` (the chapter's facts are written), with `facts_count`, `discarded`,
+a bounded `failure_detail`, and durable retry metadata (`retry_attempts`,
+`retry_max_attempts`, `retry_at`, `retry_category`). Never fact text.
 
-Rendering is separate on purpose: a failed English rendering publishes the source records
-with `render_status=failed` and the UI falls back to source-language values, rather than
-discarding an extraction over a display problem.
+The controls proxy to ingest-api behind its internal token, so the browser never holds it:
 
-Three maintenance actions replace the old repair panel. All proxy to ingest-api behind its
-internal token, so the browser never holds it:
-
-- `POST /novels/{id}/chapter/{n}/records/retry` — re-run a failed chapter. Published runs
-  are untouched.
-- `POST /novels/{id}/chapter/{n}/records/render-retry` — retry rendering by opening a
-  fresh generation and re-enriching saved chapters in order. Published runs, including
-  their child renderings, stay frozen; the chapter in the path identifies the operator
-  request but the safe repair is generation-wide.
-- `POST /novels/{id}/records/rebuild` — open a new generation and re-enrich every saved
-  chapter in order. Published extraction content is immutable, so a prompt, ontology or
-  model change is a new generation rather than an edit. The new generation becomes active
-  immediately and starts empty: readers see pending knowledge while it fills, instead of a
-  mix of two generations' identity decisions.
-- `GET /novels/{id}/records/rebuild/status` — reload-safe operational metadata (active and
-  predecessor generation ids, eligible/published/missing counts, and `discardable`). It
-  contains no chapter text and is not spoiler-gated.
-- `POST /novels/{id}/records/rebuild/discard` — body `{"generation_id":"..."}` restores
-  that rebuild's exact predecessor while it is unfinished. Published replacement runs
-  remain immutable history; stale or complete generations are rejected.
-- `GET /novels/{id}/chapter/{n}/records/review` — spoiler-gated review items. Unreviewed
-  rows remain visible; rejected rows are excluded from ordinary records/entity/Ask-AI
-  reads but remain in this review projection so they can be restored.
-- `PATCH /novels/{id}/chapter/{n}/records/review` — body
-  `{"row_id":"...","decision":"accepted|rejected","reason":"...","request_id":"..."}`.
-  The server supplies the audit actor and request IDs make retries idempotent.
+- `POST /novels/{id}/facts/extract` — queue every readable chapter that has no facts, in
+  order. Chapters that already have facts are untouched.
+- `POST /novels/{id}/facts/stop` — pause the book's unfinished facts work; finished
+  chapters keep their facts, and translation is never cancelled.
+- `POST /novels/{id}/chapter/{n}/facts/retry` / `.../discard` — re-run or pause one chapter.
+- `GET /novels/{id}/facts/status` — book-wide counts (eligible/done/missing) and whether
+  work is running. Metadata only, not spoiler-gated.
 
 Failure classes stay a bounded vocabulary: `pipeline/failures.py` classifies an exception
 at the moment it is raised and stores only the class, so freeform provider text or source
@@ -185,11 +152,6 @@ Clicking Next checks its status: a finished chapter advances progress and opens;
 an unfinished one opens its preview and requests priority. This does not advance
 progress or unlock graph reads until the chapter finishes. The pending view has a
 focused priority/retry button, and successful retry resumes status polling.
-
-Glossary rows may include `entity_id` for the clickable reader inspector. This is
-optional: unbound seeds omit it, and a seed linked to a future entity also omits it
-until `entity.first_seen_chapter <= at`. A left join under the reader role preserves
-the visible glossary seed without exposing a future entity identifier.
 
 ## Independent translation readiness
 

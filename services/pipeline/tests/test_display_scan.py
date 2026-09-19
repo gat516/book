@@ -1,9 +1,8 @@
 """DISPLAY SCAN (instructions.md §5 step 6; PLAN.md Phase 5.2).
 
-Two branches, tested separately: translated novels scan the LOCKED GLOSSARY TERMS
-against the translated text (a different string from the source, so a fresh scan is
-required); untranslated novels reuse the extraction-time scan verbatim, since the
-displayed text and the source text are byte-identical.
+DISPLAY SCAN finds LOCKED GLOSSARY TERMS in the displayed text: the translation, or the
+source itself for a same-language novel. Spans are terminology only and never carry an
+entity id.
 
 Needs a live Postgres for the glossary query — skipped cleanly via db_conn when
 unreachable, same as test_resolve.py.
@@ -12,16 +11,14 @@ unreachable, same as test_resolve.py.
 from __future__ import annotations
 
 import json
-import uuid
 
 import pytest
-from fixtures import FakeProvider, FakeRedis, delete_novel, make_config, make_novel, seed_entities
+from fixtures import FakeProvider, FakeRedis, delete_novel, make_config, make_novel
 
 from pipeline.batch import BatchManager
 from pipeline.cache import LLMCache
 from pipeline.context import NovelMeta, PipelineState, StageContext, language_profile_for
 from pipeline.envelope import ChapterEnvelope, SourceMeta
-from pipeline.mentions import Span
 from pipeline.stages.display_scan import DisplayScanStage
 
 pytestmark = pytest.mark.db
@@ -73,38 +70,17 @@ async def novel(db_conn):
         await delete_novel(db_conn, novel_id)
 
 
-async def _link_term(db_conn, novel, *, entity_chapter: int = 1, locked_at: int = 1,
-                     generation=None) -> str:
-    """Lock 青云宗 -> Azure Cloud Sect and give it an identity in one generation.
-
-    DISPLAY_SCAN links a glossary term to an entity through ``alias.surface`` now, not
-    through the retired ``glossary_binding`` ledger: an alias is what says "this surface
-    is that character", and it is scoped to the record generation that decided it.
-    """
-    if generation is None:
-        generation = (await (await db_conn.execute(
-            "SELECT active_record_generation FROM novel WHERE id=%s", (novel,))).fetchone())[0]
-    entity_id = str(uuid.uuid4())
+async def _lock_term(db_conn, novel, *, locked_at: int = 1, source: str = "青云宗",
+                     target: str = "Azure Cloud Sect") -> None:
     await db_conn.execute(
-        "INSERT INTO entity (id, novel_id, record_generation_id, kind, canonical, first_seen_chapter) "
-        "VALUES (%s, %s, %s, 'sect', 'Azure Cloud Sect', %s)",
-        (entity_id, novel, generation, entity_chapter),
+        "INSERT INTO glossary (novel_id, source_term, target_term, locked_at_chapter) "
+        "VALUES (%s, %s, %s, %s)",
+        (novel, source, target, locked_at),
     )
-    await db_conn.execute(
-        "INSERT INTO alias (entity_id, surface, lang, first_seen_chapter, record_generation_id) "
-        "VALUES (%s, '青云宗', 'zh', %s, %s)",
-        (entity_id, entity_chapter, generation),
-    )
-    await db_conn.execute(
-        "INSERT INTO glossary (novel_id, source_term, target_term, entity_id, locked_at_chapter) "
-        "VALUES (%s, '青云宗', 'Azure Cloud Sect', %s, %s)",
-        (novel, entity_id, locked_at),
-    )
-    return entity_id
 
 
 async def test_translated_novel_scans_the_translated_text_against_the_glossary(db_conn, novel):
-    entity_id = await _link_term(db_conn, novel)
+    await _lock_term(db_conn, novel)
 
     ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
     translated = "He returned to the Azure Cloud Sect."
@@ -113,53 +89,25 @@ async def test_translated_novel_scans_the_translated_text_against_the_glossary(d
     await DisplayScanStage().run(ctx, state)
 
     [span] = state.display_spans
-    assert span.alias_id == entity_id
+    assert span.alias_id == ""
     assert translated[span.char_start : span.char_end] == "Azure Cloud Sect"
 
 
-async def test_translated_novel_keeps_glossary_rows_with_no_bound_entity_as_placeholders(db_conn, novel):
-    """A pre-identity glossary row still supplies a display span, but no entity link."""
-    await db_conn.execute(
-        "INSERT INTO glossary (novel_id, source_term, target_term, locked_at_chapter) "
-        "VALUES (%s, '青云宗', 'Azure Cloud Sect', 1)",
-        (novel,),
-    )
-    ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
-    state = _state(source_lang="zh", translation="He returned to the Azure Cloud Sect.")
-
-    await DisplayScanStage().run(ctx, state)
-
-    [span] = state.display_spans
-    assert span.alias_id == ""
-    assert state.translation[span.char_start : span.char_end] == "Azure Cloud Sect"
-
-
-async def test_glossary_links_are_knowledge_time_gated(db_conn, novel):
-    """A term locked at chapter 10 still renders at chapter 9 -- but unlinked.
-
-    The identity behind it was learned at chapter 10, so naming it to a chapter-9 reader
-    would be a spoiler in the §0 sense: the gate is knowledge-time, and it applies to who
-    a name refers to just as much as to what happened.
-    """
-    await db_conn.execute(
-        "INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta,status) "
-        "VALUES (%s,9,%s,'raw/early.txt','{}','done')",
-        (novel, f"sha256:{novel}:early"),
-    )
-    entity_id = await _link_term(db_conn, novel, entity_chapter=10, locked_at=9)
+async def test_glossary_terms_are_knowledge_time_gated(db_conn, novel):
+    """A term locked at chapter 10 is not a searchable surface for chapter 9."""
+    await _lock_term(db_conn, novel, locked_at=10)
     ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
 
     early = _state(source_lang="zh", translation="He returned to the Azure Cloud Sect.",
                    chapter_index=9)
     await DisplayScanStage().run(ctx, early)
-    [early_span] = early.display_spans
-    assert early_span.alias_id == ""
+    assert [s for s in early.display_spans if s.char_start == 19] == []
 
     eligible = _state(source_lang="zh", translation="He returned to the Azure Cloud Sect.",
                       chapter_index=12)
     await DisplayScanStage().run(ctx, eligible)
-    [eligible_span] = eligible.display_spans
-    assert eligible_span.alias_id == entity_id
+    [span] = eligible.display_spans
+    assert eligible.translation[span.char_start:span.char_end] == "Azure Cloud Sect"
 
 
 async def test_translate_skipped_leaves_no_display_spans(db_conn, novel):
@@ -171,18 +119,19 @@ async def test_translate_skipped_leaves_no_display_spans(db_conn, novel):
     assert state.display_spans == []
 
 
-async def test_untranslated_novel_reuses_the_extraction_time_scan(db_conn, novel):
-    ctx = _ctx(db_conn, novel, source_lang="en", target_lang="en")
-    state = _state(source_lang="en")
-    ids = await seed_entities(db_conn, novel, {"他回": "character"})
-    state.mentions = [Span(alias_id=ids["他回"], byte_start=0, byte_end=6, char_start=0, char_end=2)]
+async def test_untranslated_novel_scans_its_source_text(db_conn, novel):
+    await _lock_term(db_conn, novel, source="青云宗", target="青云宗")
+    ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="zh")
+    state = _state(source_lang="zh")
 
     await DisplayScanStage().run(ctx, state)
 
-    assert state.display_spans == state.mentions
+    [span] = state.display_spans
+    assert span.alias_id == ""
+    assert state.envelope.raw_text[span.char_start:span.char_end] == "青云宗"
 
 
-async def test_unlinked_names_publish_before_facts_and_do_not_create_entities(db_conn, novel):
+async def test_discovered_names_publish_before_facts(db_conn, novel):
     ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
     ctx.provider.response = lambda _prompt, system: (
         '{"alignments":[{"display_term":"Ling Feng","source_term":"他"},'
@@ -193,15 +142,14 @@ async def test_unlinked_names_publish_before_facts_and_do_not_create_entities(db
     await DisplayScanStage().run(ctx, state)
     await DisplayScanStage().run(ctx, state)
     rows = await (await db_conn.execute(
-        "SELECT entity_id, char_start, char_end FROM mention_span WHERE novel_id=%s ORDER BY char_start",
+        "SELECT char_start, char_end FROM mention_span WHERE novel_id=%s ORDER BY char_start",
         (novel,),
     )).fetchall()
-    assert rows == [(None, 0, 9), (None, 22, 33)]
+    assert rows == [(0, 9), (22, 33)]
     aligned = await (await db_conn.execute(
         "SELECT source_term,display_term,char_start,char_end FROM term_rendering_occurrence "
         "WHERE novel_id=%s ORDER BY char_start", (novel,))).fetchall()
     assert aligned == [("他", "Ling Feng", 0, 9), ("青云宗", "Black Tower", 22, 33)]
-    assert await (await db_conn.execute("SELECT count(*) FROM entity WHERE novel_id=%s", (novel,))).fetchone() == (0,)
     assert len(ctx.provider.calls) == 2  # one discovery + one alignment; rerun is cached
 
 
@@ -216,13 +164,13 @@ async def test_primed_names_are_found_by_exact_search_without_a_model_call(db_co
     state.source_names_primed = True
     await DisplayScanStage().run(ctx, state)
     rows = await (await db_conn.execute(
-        "SELECT entity_id, char_start, char_end FROM mention_span WHERE novel_id=%s", (novel,))).fetchall()
-    assert rows == [(None, 19, 35)]
+        "SELECT char_start, char_end FROM mention_span WHERE novel_id=%s", (novel,))).fetchall()
+    assert rows == [(19, 35)]
     assert ctx.provider.calls == []  # no discovery, no alignment
 
 
-async def test_discovery_preserves_verified_link_and_does_not_link_other_names(db_conn, novel):
-    entity_id = await _link_term(db_conn, novel)
+async def test_discovery_keeps_glossary_spans_and_links_no_names(db_conn, novel):
+    await _lock_term(db_conn, novel)
     ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
     ctx.provider.response = lambda _prompt, system: (
         '{"alignments":[]}' if "Map each offered" in system
@@ -230,53 +178,39 @@ async def test_discovery_preserves_verified_link_and_does_not_link_other_names(d
     state = _state(source_lang="zh", translation="Ling Feng joined Azure Cloud Sect.")
     await DisplayScanStage().run(ctx, state)
     assert [(s.alias_id, state.translation[s.char_start:s.char_end]) for s in state.display_spans] == [
-        ("", "Ling Feng"), (entity_id, "Azure Cloud Sect")]
+        ("", "Ling Feng"), ("", "Azure Cloud Sect")]
 
 
-async def test_links_follow_the_active_record_generation_only(db_conn, novel):
-    """Identity belongs to the generation that decided it.
-
-    A retired generation's entity is not an authority over today's display: after a
-    rebuild the old entity ids may name different characters entirely, so a span must
-    fall back to an unlinked placeholder rather than carry a stale id forward.
-    """
-    retired = (await (await db_conn.execute(
-        """INSERT INTO record_generation (novel_id, ontology, prompt_version, checks_version,
-             extraction_model, source_lang, target_lang, state, retired_at)
-           VALUES (%s, %s, 'v0', 'v0', 'test-model', 'zh', 'en', 'retired', now())
-           RETURNING id""", (novel, json.dumps(ONTOLOGY)))).fetchone())[0]
-    active_entity = await _link_term(db_conn, novel)
-    ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
-
-    async def scan() -> str:
-        state = _state(source_lang="zh", translation="He returned to the Azure Cloud Sect.")
-        await DisplayScanStage().run(ctx, state)
-        [span] = state.display_spans
-        return span.alias_id
-
-    assert await scan() == active_entity
-
-    # Point the novel at the retired generation: its identity has no entity of its own
-    # for this surface, so the term still renders but names nobody.
-    current = (await (await db_conn.execute(
-        "SELECT active_record_generation FROM novel WHERE id=%s", (novel,))).fetchone())[0]
+async def test_mentions_are_chapter_gated_by_rls(db_conn, novel):
     await db_conn.execute(
-        "UPDATE novel SET active_record_generation=%s WHERE id=%s", (retired, novel))
-    assert await scan() == ""
-
-    await db_conn.execute(
-        "UPDATE novel SET active_record_generation=%s WHERE id=%s", (current, novel))
-    assert await scan() == active_entity
-
-
-async def test_unlinked_mentions_are_still_chapter_gated_by_rls(db_conn, novel):
-    await db_conn.execute(
-        "INSERT INTO mention_span(novel_id,chapter_index,entity_id,char_start,char_end) VALUES (%s,12,NULL,0,3)",
+        "INSERT INTO mention_span(novel_id,chapter_index,char_start,char_end) VALUES (%s,12,0,3)",
         (novel,),
     )
-    for at, expected in [(11, []), (12, [(None,)])]:
+    for at, expected in [(11, []), (12, [(0,)])]:
         async with db_conn.transaction():
             await db_conn.execute("SET LOCAL ROLE rls_reader")
             await db_conn.execute("SELECT set_config('app.novel_id', %s, true), set_config('app.current_chapter', %s, true)", (novel, str(at)))
-            rows = await (await db_conn.execute("SELECT entity_id FROM mention_span WHERE novel_id=%s", (novel,))).fetchall()
+            rows = await (await db_conn.execute("SELECT char_start FROM mention_span WHERE novel_id=%s", (novel,))).fetchall()
             assert rows == expected
+
+
+async def test_two_terms_with_one_spelling_make_one_span(db_conn, novel):
+    """A variant pair (東皇鐘 / 東皇鍾) can share an English spelling. The span is written
+    once -- a second one at the same offsets broke the chapter on every retry."""
+    await _lock_term(db_conn, novel, source="青云宗", target="Azure Cloud Sect")
+    await db_conn.execute("""INSERT INTO character_name_review
+        (novel_id,source_term,first_seen_chapter,source_hash,char_start,char_end,quote,candidates,reason,term_role)
+        VALUES(%s,'青雲宗',1,'h',0,1,'q','[{"target_term": "Azure Cloud Sect"}]','test','semantic_term')""", (novel,))
+    ctx = _ctx(db_conn, novel, source_lang="zh", target_lang="en")
+    state = _state(source_lang="zh", translation="He returned to the Azure Cloud Sect.")
+    state.envelope = state.envelope.model_copy(update={"raw_text": "他回到了青云宗和青雲宗。"})
+    state.source_names_primed = True
+
+    await DisplayScanStage().run(ctx, state)
+
+    [span] = state.display_spans
+    [rendering] = state.term_renderings
+    assert rendering.source_term == "青云宗"  # the locked term keeps it
+    rows = await (await db_conn.execute(
+        "SELECT count(*) FROM term_rendering_occurrence WHERE novel_id=%s", (novel,))).fetchone()
+    assert rows == (1,)

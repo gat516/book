@@ -222,10 +222,7 @@ func (s *Store) changeGlossaryTerm(ctx context.Context, novelID, sourceTerm, new
 // BootstrapGlossaryTerm seeds a locked glossary term before any chapter has been
 // translated (PLAN.md Phase N6): a human supplies (source_term, target_term) pairs
 // alongside a paired raw+already-translated bootstrap paste. It takes the exact same
-// "original insert" path resolve.py's _lock_glossary itself takes — entity_id starts
-// NULL (no entity exists yet) and gets backfilled by _lock_glossary's own NULL-entity_id
-// case the first time RESOLVE actually creates the entity for this surface (see that
-// function's comment). locked_at_chapter is always 0 here: "locked before any chapter is
+// "original insert" path the retired resolve.py's _lock_glossary took. locked_at_chapter is always 0 here: "locked before any chapter is
 // read", never a chapter-specific correction (that's CorrectGlossaryTerm's job).
 //
 // ON CONFLICT DO NOTHING + a target-match check on conflict, mirroring _lock_glossary
@@ -357,7 +354,7 @@ func (s *Store) insertGlossaryTerm(ctx context.Context, novelID, sourceTerm, tar
 		 VALUES ($1, $2, $3, $4, $5, $6)
 		 ON CONFLICT (novel_id, source_term) DO UPDATE
 		 SET target_term = EXCLUDED.target_term, version = EXCLUDED.version,
-		     deleted = false, entity_id = NULL, locked_at_chapter = EXCLUDED.locked_at_chapter,
+		     deleted = false, locked_at_chapter = EXCLUDED.locked_at_chapter,
 		     constraint_class = EXCLUDED.constraint_class
 		 WHERE glossary.deleted
 		 RETURNING true`,

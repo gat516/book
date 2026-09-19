@@ -1,14 +1,12 @@
 import { useKnowledgeRevision } from "../knowledgeUpdates";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, getChapter, getRecords, putProgress } from "../api";
-import type { ChapterResponse, EntityView, TermRenderingView } from "../types";
+import { useEffect, useRef, useState } from "react";
+import { ApiError, getChapter, getChapterFactsStatus, putProgress } from "../api";
+import type { ChapterResponse, FactsStatus, TermRenderingView } from "../types";
 import { HoverCard } from "./HoverCard";
-import { EntityInspector } from "./EntityInspector";
 import { usePolling } from "../usePolling";
 import { applyRenderingChoices, segment } from "../readerSegments";
-import type { RecordsResponse } from "../types";
 import { uniqueChapterRenderings } from "../recordPresentation";
-import { recordPollInterval, recordsTerminal } from "../recordPolling";
+import { factsPollInterval, factsTerminal } from "../factsPolling";
 import { ChapterStatus } from "./ChapterStatus";
 import { ChapterNames } from "./ChapterNames";
 
@@ -28,20 +26,14 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
   const [chapter, setChapter] = useState<ChapterResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hovered, setHovered] = useState<number | null>(null);
-  const [selected, setSelected] = useState<{ id: string | null; mention: string } | null>(null);
-  const [records, setRecords] = useState<RecordsResponse | null>(null);
-  const [recordsError, setRecordsError] = useState<string | null>(null);
+  const [facts, setFacts] = useState<FactsStatus | null>(null);
+  const [factsError, setFactsError] = useState<string | null>(null);
   const [showNames, setShowNames] = useState(false);
 
-  // Both hover and click views share only the exact novel/chapter/clearance cache.
-  // The server's `at` becomes known on load; changing it discards earlier entity data.
-  const cache = useMemo(() => new Map<string, EntityView>(), [novelId, chapterIndex, chapter?.at, records?.status.generation_id, records?.status.version]);
-
   useEffect(() => {
-    setSelected(null);
     setHovered(null);
-    setRecords(null);
-    setRecordsError(null);
+    setFacts(null);
+    setFactsError(null);
     setShowNames(false);
   }, [novelId, chapterIndex, clickableEntities]);
 
@@ -87,16 +79,9 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
           return;
         }
         setChapter(response);
-        // The chapter response already carries the records introduced at this exact
-        // source chapter. Use that payload for the first paint; the rows endpoint is
-        // only needed while extraction/rendering is still in flight.
-        setRecords(response.records_status ? {
-          novel_id: response.novel_id,
-          chapter_index: response.chapter_index,
-          at: response.at,
-          status: response.records_status,
-          rows: response.record_rows ?? [],
-        } : null);
+        // The chapter response carries its facts status for the first paint; the status
+        // endpoint is only polled while FACTS is still in flight.
+        setFacts(response.facts_status ?? null);
         onChapterLoaded(response);
       })
       .catch((err) => {
@@ -111,16 +96,15 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
   useEffect(() => {
     if (knowledgeRevision === 0) return;
     let cancelled = false;
-    cache.clear(); setSelected(null); setHovered(null); setRecords(null);
-    setChapter(previous => previous ? { ...previous, spans: previous.spans.map(span => ({ ...span, entity_id: null })) } : previous);
-    Promise.all([getChapter(novelId, chapterIndex), getRecords(novelId, chapterIndex)])
-      .then(([nextChapter, nextRecords]) => {
+    setHovered(null);
+    getChapter(novelId, chapterIndex)
+      .then((nextChapter) => {
         if (cancelled) return;
-        setChapter(nextChapter); setRecords(nextRecords); setRecordsError(null);
+        setChapter(nextChapter); setFacts(nextChapter.facts_status ?? null); setFactsError(null);
         onChapterLoaded(nextChapter);
-      }).catch(reason => { if (!cancelled) setRecordsError(errorMessage(reason)); });
+      }).catch(reason => { if (!cancelled) setFactsError(errorMessage(reason)); });
     return () => { cancelled = true; };
-    // The revision invalidates knowledge; cache changes must not reload prose.
+    // The revision invalidates knowledge; only these keys reload prose.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [novelId, chapterIndex, knowledgeRevision]);
 
@@ -131,29 +115,22 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
     if (!chapter || polling.current) return;
     const current = generation.current;
     polling.current = true;
-    getRecords(novelId, chapterIndex).then(async (recordStatus) => {
+    getChapterFactsStatus(novelId, chapterIndex).then(async (response) => {
       if (current !== generation.current) return;
-      const previous = records?.status;
-      setRecords(recordStatus);
-      setRecordsError(null);
-      const extractionBecameReady = recordStatus.status.extraction_status === "ready" && previous?.extraction_status !== "ready";
-      const renderingBecameReady = recordStatus.status.rendering_status === "ready" && previous?.rendering_status !== "ready";
-      const recordsVersionChanged = !!previous && (
-        recordStatus.status.generation_id !== previous.generation_id ||
-        recordStatus.status.version !== previous.version
-      );
-      if (!extractionBecameReady && !renderingBecameReady && !recordsVersionChanged) return;
-      // Close old cards immediately; late responses cannot repopulate the new cache.
-      cache.clear(); setSelected(null); setHovered(null);
-      setChapter(previous => previous ? {...previous, spans: previous.spans.map(span => ({...span, entity_id: null}))} : previous);
+      const becameReady = response.status.state === "ready" && facts?.state !== "ready";
+      setFacts(response.status);
+      setFactsError(null);
+      if (!becameReady) return;
+      // Names are relinked in the same pass, so refresh the prose's spans once.
+      setHovered(null);
       const refreshed = await getChapter(novelId, chapterIndex);
       if (current !== generation.current) return;
       setChapter(refreshed); onChapterLoaded(refreshed);
     }).catch((reason) => {
-      if (current === generation.current) setRecordsError(errorMessage(reason));
+      if (current === generation.current) setFactsError(errorMessage(reason));
     })
       .finally(() => { polling.current = false; });
-  }, recordPollInterval(records), chapter !== null && recordsError === null && !recordsTerminal(records));
+  }, factsPollInterval(facts), chapter !== null && factsError === null && !factsTerminal(facts));
 
   if (error) return <p className="reader-pane-error">Could not load chapter: {error}</p>;
   if (!chapter) return <p>Loading chapter…</p>;
@@ -196,16 +173,17 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
           )}
         </p>
         <div className="chapter-head-tools">
-          <ChapterStatus novelId={novelId} chapter={chapterIndex} status={records?.status ?? null} />
+          <ChapterStatus novelId={novelId} chapter={chapterIndex} status={facts} />
           <button type="button" className="chapter-names-toggle" aria-expanded={showNames} onClick={() => setShowNames((open) => !open)}>
             Names{toReview > 0 ? <span className="chapter-names-count">{toReview} to review</span> : null}
           </button>
         </div>
       </header>
-      {recordsError && <p role="alert" className="reader-records-error">
-        Could not load this chapter’s status: {recordsError} <button type="button" onClick={() => {
-          setRecordsError(null);
-          void getRecords(novelId, chapterIndex).then(setRecords).catch((reason) => setRecordsError(errorMessage(reason)));
+      {factsError && <p role="alert" className="reader-records-error">
+        Could not load this chapter’s status: {factsError} <button type="button" onClick={() => {
+          setFactsError(null);
+          void getChapterFactsStatus(novelId, chapterIndex).then((response) => setFacts(response.status))
+            .catch((reason) => setFactsError(errorMessage(reason)));
         }}>Retry</button>
       </p>}
       {showNames && <ChapterNames novelId={novelId} at={chapter.at} renderings={renderings} onChanged={applyRendering} />}
@@ -216,25 +194,21 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
         if (!piece.mention) return <span key={index}>{piece.text}</span>;
         return (
           <span className="mention-anchor" key={index}
-            onMouseEnter={() => { if (!clickableEntities && !selected) setHovered(index); }}
+            onMouseEnter={() => { if (!clickableEntities) setHovered(index); }}
             onMouseLeave={() => setHovered((current) => current === index ? null : current)}>
             <button
               type="button"
-              className={`mention mention-button${piece.entityId ? "" : " mention-unlinked"}${piece.rendering?.status === "locked" ? " mention-confirmed" : ""}`}
+              className={`mention mention-button mention-unlinked${piece.rendering?.status === "locked" ? " mention-confirmed" : ""}`}
               aria-haspopup="dialog"
               aria-label={`Inspect ${piece.text}`}
-              onClick={() => { setHovered(null); setSelected({ id: piece.entityId, mention: piece.text }); }}
+              onClick={() => setHovered((current) => current === index ? null : index)}
             >{piece.text}</button>
             {hovered === index && (
               <HoverCard
                 novelId={novelId}
-                entityId={piece.entityId}
                 rendering={piece.rendering}
-                status={records?.status.extraction_status}
                 mention={piece.text}
                 at={chapter.at}
-                cache={cache}
-                onEntity={(id, surface) => { setHovered(null); setSelected({ id, mention: surface }); }}
                 onRenderingChanged={(updatedRendering) => applyRendering(updatedRendering, piece.text)}
                 onClose={() => setHovered(null)}
               />
@@ -242,16 +216,6 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
           </span>
         );
       })}
-      {selected && <EntityInspector
-        key={`${novelId}:${chapterIndex}:${chapter.at}:${selected.id}`}
-        novelId={novelId}
-        entityId={selected.id}
-        status={records?.status.extraction_status}
-        mention={selected.mention}
-        at={chapter.at}
-        cache={cache}
-        onClose={() => setSelected(null)}
-      />}
     </div>
   );
 }

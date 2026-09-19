@@ -43,3 +43,26 @@ test("a fact that only mentions a character is not filed as theirs", () => {
   assert.equal(page.history.length, 1);
   assert.equal(page.mentions.length, 2);
 });
+
+test("an organization page files members apart from its own facts and history", async () => {
+  const { buildSubjectPage } = await import("../src/wikiPage.ts");
+  const page = buildSubjectPage("o", "organization", [
+    fact("intro", ["o"]),                     // the sect itself
+    fact("affiliation", ["a", "o"]),          // Abaddon joined it: a member
+    fact("affiliation", ["o", "x"]),          // its alliance with another group: a detail
+    fact("event", ["a", "o"], null, 2),       // anything that happened: history
+    fact("ability", ["a", "o"], null, 3),     // only mentions it: history
+  ]);
+  assert.equal(page.intro.length, 1);
+  assert.equal(page.details.length, 1);
+  assert.deepEqual(page.ties && [page.ties.heading, page.ties.entries.length], ["Members", 1]);
+  assert.deepEqual(page.history.map((e) => e.chapter), [2, 3]);
+});
+
+test("a place page has no ties section", async () => {
+  const { buildSubjectPage } = await import("../src/wikiPage.ts");
+  const page = buildSubjectPage("p", "place", [fact("place", ["p"]), fact("affiliation", ["a", "p"])]);
+  assert.equal(page.ties, null);
+  assert.equal(page.details.length, 1);
+  assert.equal(page.history.length, 1);
+});

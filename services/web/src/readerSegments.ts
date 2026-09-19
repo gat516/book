@@ -3,7 +3,6 @@ import type { SpanView } from "./types";
 export interface Segment {
   text: string;
   mention: boolean;
-  entityId: string | null;
   rendering?: SpanView["rendering"];
 }
 
@@ -48,16 +47,15 @@ export function segment(text: string, spans: SpanView[]): Segment[] {
     if (!Number.isInteger(span.char_start) || !Number.isInteger(span.char_end) ||
         span.char_start < cursor || span.char_end <= span.char_start || span.char_end > chars.length) continue;
     if (span.char_start > cursor) {
-      segments.push({ text: chars.slice(cursor, span.char_start).join(""), mention: false, entityId: null });
+      segments.push({ text: chars.slice(cursor, span.char_start).join(""), mention: false });
     }
     segments.push({
       text: chars.slice(span.char_start, span.char_end).join(""),
       mention: true,
-      entityId: span.entity_id,
       ...(span.rendering ? { rendering: span.rendering } : {}),
     });
     cursor = span.char_end;
   }
-  if (cursor < chars.length) segments.push({ text: chars.slice(cursor).join(""), mention: false, entityId: null });
+  if (cursor < chars.length) segments.push({ text: chars.slice(cursor).join(""), mention: false });
   return segments;
 }

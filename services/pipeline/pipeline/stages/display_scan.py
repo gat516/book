@@ -1,28 +1,15 @@
-"""Stage 6: DISPLAY SCAN (instructions.md §5 step 6; PLAN.md Phase 5.2).
+"""DISPLAY SCAN (instructions.md §5 step 6; PLAN.md Phase 5.2).
 
 Produces the mention spans the reader UI highlights and a durable source-term → exact
-display-span ledger. These are a **separate** pass from
-the extraction-time scan (``ScanStage``, step 2): that pass finds aliases in the SOURCE
-text so RESOLVE can bind them; this one finds locked glossary links in the DISPLAY
-text and independently discovers named mentions that have no identity yet. For translated
-novels, these are different strings in different scripts — source-text offsets do not slice the
-translated text (§0.5, §5 step 6), so reusing ``state.mentions`` there would highlight
-nonsense ranges.
+display-span ledger. The searchable surface set is ``glossary.target_term`` (the locked
+English forms TRANSLATE primed into the prose) plus pending name choices, scanned over
+the DISPLAY text -- source-text offsets do not slice a translation (§0.5).
 
-``glossary.target_term`` (not ``entity``/``alias``) is the searchable surface set here,
-because it is exactly "the locked English surface forms" — the same discipline TRANSLATE
-relies on to keep terms stable chapter to chapter. A target may be locked before RESOLVE
-has created its entity, so every target is scanned and such a span is written as a
-presentation placeholder. An entity id is copied into the legacy presentation table only
-when a matching ``glossary_binding`` belongs to the novel's active, trusted legacy
-revision. Managed graph identity stays in revision-scoped ``display_mention``/
-``mention_binding``; it must never be copied into the legacy ``mention_span`` row (§0.3).
-The ledger records terminology alignment only; it never creates or binds an entity.
+Spans carry no entity id: identity is not decided here. Wiki pages link names to
+characters (migration 0112); a span is terminology, never identity (§0.3).
 
-No chapter gate removes glossary targets from the scan, for the same reason ``ScanStage``
-has none: ingestion is not a read path (§0.3 governs reads, not writes). Knowledge-time
-still gates entity links: a target may receive a legacy entity id only after both its
-glossary lock and its revision binding are known by the chapter being processed.
+No chapter gate removes glossary targets from the scan: ingestion is not a read path
+(§0.3 governs reads, not writes).
 """
 
 from __future__ import annotations
@@ -81,87 +68,54 @@ class DisplayScanStage:
                  sum(not span.alias_id for span in state.display_spans))
 
     async def _linked_mentions(self, ctx: StageContext, state: PipelineState) -> None:
-        if ctx.novel.source_lang == ctx.novel.target_lang:
-            # Displayed text IS the source text, unchanged — the step-2 scan already
-            # computed correct offsets against it. Re-scanning would be redundant work
-            # producing an identical result.
-            # SCAN already matched against the active generation's aliases, which are
-            # written only by who's-who publication, so those ids are authoritative
-            # identity rather than a spelling match made here.
-            if await self._active_generation(ctx) is not None:
-                state.display_spans = state.mentions
-            else:
-                state.display_spans = [span.model_copy(update={"alias_id": ""})
-                                       for span in state.mentions]
+        # Same-language novels display their source text unchanged.
+        text = state.envelope.raw_text if ctx.novel.source_lang == ctx.novel.target_lang \
+            else state.translation
+        if text is None:
+            # TRANSLATE was skipped or hasn't run; leave nothing to highlight rather than
+            # scan the wrong text.
             return
 
-        if state.translation is None:
-            # TRANSLATE was skipped or hasn't run (shouldn't happen once source_lang !=
-            # target_lang is pinned, but leave nothing to highlight rather than scan the
-            # wrong text).
-            return
-
-        # The target term remains useful presentation data even while its source term
-        # has no entity. Identity comes from the generation's own alias ledger, and only
-        # when that ledger is unambiguous: a source term that two entities answer to is
-        # left unbound rather than guessed. glossary.entity_id is never consulted --
-        # terminology wording and identity are separate decisions (§0.3).
-        generation = await self._active_generation(ctx)
         rows = await (
             await ctx.db.execute(
-                """
-                SELECT g.source_term, g.target_term,
-                       CASE WHEN count(DISTINCT e.id) = 1
-                            THEN min(e.id::text) END AS entity_id
-                  FROM glossary g
-                  LEFT JOIN alias a
-                    ON a.surface = g.source_term
-                   AND a.record_generation_id = %s::uuid
-                   AND a.first_seen_chapter <= %s
-                  LEFT JOIN entity e
-                    ON e.id = a.entity_id
-                   AND e.novel_id = g.novel_id
-                   AND e.record_generation_id = %s::uuid
-                   AND e.first_seen_chapter <= %s
-                 WHERE g.novel_id = %s AND NOT g.deleted AND g.locked_at_chapter <= %s
-                 GROUP BY g.source_term, g.target_term
-                """,
-                (generation, state.envelope.chapter_index, generation,
-                 state.envelope.chapter_index, ctx.novel.id,
-                 state.envelope.chapter_index),
+                "SELECT source_term, target_term FROM glossary "
+                "WHERE novel_id = %s AND NOT deleted AND locked_at_chapter <= %s",
+                (ctx.novel.id, state.envelope.chapter_index),
             )
         ).fetchall()
         # Pending choices are primed into translation exactly like locked terms, so their
         # spellings are in the prose verbatim. Only terms this chapter's source contains:
         # an unrelated phrase that happens to match a pending spelling is not a mention.
-        locked = {source for source, _, _ in rows}
+        locked = {source for source, _ in rows}
         pending = await (await ctx.db.execute(
             "SELECT source_term, candidates->0->>'target_term' FROM character_name_review "
             "WHERE novel_id=%s AND status='pending' AND first_seen_chapter <= %s "
             "AND jsonb_array_length(candidates) > 0",
             (ctx.novel.id, state.envelope.chapter_index),
         )).fetchall()
-        rows = list(rows) + [(source, target, None) for source, target in pending
+        rows = list(rows) + [(source, target) for source, target in pending
                              if source not in locked and target and source in state.envelope.raw_text]
+        # One search per spelling. Two source terms can share a spelling (a traditional/
+        # variant pair, or a name and a longer title built on it); scanning it twice would
+        # put two spans on the same text. A locked term comes first, so it keeps the span.
+        spelled: set[str] = set()
+        rows = [(source, target) for source, target in rows
+                if not (target in spelled or spelled.add(target))]
 
         request = MentionScanRequest(
-            text=state.translation,
+            text=text,
             aliases=[
                 Alias(alias_id=str(index), surface=target_term)
-                for index, (_, target_term, _entity_id) in enumerate(rows)
+                for index, (_, target_term) in enumerate(rows)
             ],
             lang=ctx.novel.target_lang,
         )
         response = await ctx.textproc.scan(request) if ctx.textproc else scan_mentions(request)
         state.display_spans = []
         for span in response.spans:
-            source_term, target_term, entity_id = rows[int(span.alias_id)]
-            # Empty alias ids are intentional placeholders. GraphWriter stores them as
-            # NULL, while term_renderings preserves the source/display ledger for later
-            # managed revision materialization.
-            state.display_spans.append(span.model_copy(update={
-                "alias_id": str(entity_id) if entity_id is not None else "",
-            }))
+            source_term, target_term = rows[int(span.alias_id)]
+            # An empty alias id is stored as a NULL entity: spans are terminology only.
+            state.display_spans.append(span.model_copy(update={"alias_id": ""}))
             state.term_renderings.append(TermRenderingOccurrence(
                 source_term, target_term, span.char_start, span.char_end, "glossary"))
 
@@ -172,16 +126,3 @@ class DisplayScanStage:
             len(rows),
             len(state.display_spans),
         )
-
-    async def _active_generation(self, ctx: StageContext) -> str | None:
-        """The generation whose identity decisions may be attached to display spans.
-
-        A novel mid-reset has no active generation; spans are still published so prose
-        stays readable and highlightable, they simply carry no entity id (§0.5).
-        """
-        row = await (
-            await ctx.db.execute(
-                "SELECT active_record_generation FROM novel WHERE id = %s", (ctx.novel.id,)
-            )
-        ).fetchone()
-        return str(row[0]) if row and row[0] else None

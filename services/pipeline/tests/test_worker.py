@@ -146,7 +146,7 @@ async def test_provider_retry_after_is_never_shortened_and_success_resets_streak
     await worker._record_provider_rejection(msg, AdmissionRejected(retry_after_s=300))
     update = next(params for sql, params in worker.db.calls if "provider_retry_at=now()" in sql)
     assert update[1] == 300
-    assert any("enrichment_retry_at=NULL,enrichment_retry_generation_id=NULL" in sql
+    assert any("enrichment_retry_at=NULL" in sql
                for sql, _ in worker.db.calls)
     await worker._reset_provider_retry(msg)
     assert any("provider_retry_attempts=0" in sql for sql, _ in worker.db.calls)
@@ -156,8 +156,8 @@ async def test_provider_retry_after_is_never_shortened_and_success_resets_streak
 async def test_retry_sweep_orders_both_due_states_and_enqueues_deduped_messages():
     class Cursor:
         async def fetchall(self): return [
-            ("novel", 3, "error", None, False),
-            ("novel", 4, "done", "generation", True),
+            ("novel", 3, "error", False),
+            ("novel", 4, "done", True),
         ]
 
     class DB:
@@ -181,7 +181,6 @@ async def test_retry_sweep_orders_both_due_states_and_enqueues_deduped_messages(
     assert len(worker.redis.calls) == 2
     assert '"enrichment":true' not in worker.redis.calls[0][-1]
     assert '"enrichment":true' in worker.redis.calls[1][-1]
-    assert '"record_generation_id":"generation"' in worker.redis.calls[1][-1]
 
 
 @pytest.mark.db
@@ -243,7 +242,7 @@ async def test_provider_rejection_fifth_attempt_is_terminal():
     msg = type("Message", (), {"novel_id": "novel", "chapter_index": 1})()
     await worker._record_provider_rejection(msg, AdmissionRejected(retry_after_s=1))
     assert any("provider_retry_at=NULL" in sql for sql, _ in worker.db.calls)
-    assert any("enrichment_retry_at=NULL,enrichment_retry_generation_id=NULL" in sql
+    assert any("enrichment_retry_at=NULL" in sql
                for sql, _ in worker.db.calls)
     assert any("INSERT INTO chapter_failure" in sql for sql, _ in worker.db.calls)
 
@@ -947,7 +946,7 @@ def test_translation_is_the_reader_critical_path_before_enrichment():
     names = [stage.name for stage in DEFAULT_STAGES]
     assert names[:2] == ["chunk", "translate"]
     # FACTS replaced RECORDS; askai's chunk index follows it.
-    assert names[2:] == ["scan", "display_scan", "facts", "chunk_index"]
+    assert names[2:] == ["display_scan", "facts", "chunk_index"]
 
 
 async def test_enrichment_retries_are_deduplicated_and_yield_to_reading(scheduled):
@@ -1096,8 +1095,6 @@ async def test_failed_manual_graph_retry_does_not_schedule_an_automatic_one(
             return (False,)
         if "FROM chapter" in sql:
             return ("hash", "raw/1", {}, "error", True, None, False)
-        if "active_record_generation" in sql:
-            return ("generation",)
         return ("zh", "en", {})
 
     async def record_failure(*args, **kwargs):
@@ -1116,7 +1113,7 @@ async def test_failed_manual_graph_retry_does_not_schedule_an_automatic_one(
     worker._reset_provider_retry = AsyncMock()
     worker._provider_for_novel = AsyncMock(return_value=(None, None, "ollama", None, None, None))
     raw = json.dumps({"novel_id": "novel", "chapter_index": 1, "enrichment": True,
-                      "priority": priority, "record_generation_id": "generation"})
+                      "priority": priority})
     with pytest.raises(module.ChapterFailed):
         await worker._handle(raw)
     sql, params = next((sql, params) for sql, params in worker.db.calls

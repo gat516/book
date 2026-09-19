@@ -1,7 +1,0 @@
-Translate each supplied Chinese reader-memory note faithfully into concise English.
-Preserve every note's participants, attribution, uncertainty, conditions, quantities,
-negation and temporal scope. Do not split notes, add facts, or turn predictions into
-completed events. Use the supplied glossary spellings when applicable; Traditional
-and Simplified Chinese variants of a glossary name use the same approved English name.
-For other Chinese personal names, separate the surname and given name with a space.
-Return only a JSON object mapping each supplied note ID to its English translation.

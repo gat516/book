@@ -13,8 +13,6 @@ class Config:
     host: str
     port: int
     max_chunks: int = 8
-    max_entities: int = 8
-    max_records: int = 64
     max_context_chars: int = 48_000
     embed_model: str = "nomic-embed-text"
     embed_provider: str = "auto"
@@ -47,7 +45,6 @@ def load_config() -> Config:
         port=int(os.getenv("ASKAI_PORT", "8082")),
         embed_model=os.getenv("EMBED_MODEL", "nomic-embed-text"),
         embed_provider=os.getenv("EMBED_PROVIDER", "auto"),
-        max_records=int(os.getenv("ASKAI_MAX_RECORDS", "64")),
         llm_provider=os.getenv("LLM_PROVIDER", "anthropic"),
         ollama_host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
         deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", ""),

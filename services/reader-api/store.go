@@ -34,9 +34,6 @@ type ReaderStore interface {
 	Health(context.Context) error
 	GetProgress(context.Context, string, string) (Progress, error)
 	AdvanceProgress(context.Context, string, string, int) (Progress, error)
-	GetEntity(context.Context, string, string, int) (EntityResponse, error)
-	ListWiki(context.Context, string, int) (WikiResponse, error)
-	ListTimeline(context.Context, string, int) (TimelineResponse, error)
 	GetChapter(context.Context, string, int, int) (ChapterView, error)
 	ListChapters(context.Context, string, int, int) ([]ChapterListItem, int, error)
 	PipelineStatus(context.Context, string) (PipelineStatusResponse, error)
@@ -49,12 +46,11 @@ type ReaderStore interface {
 	RequestScrapeCancel(context.Context, string) error
 	ListGlossary(context.Context, string, int) ([]GlossaryTermView, error)
 	ListWikiPages(context.Context, string, int) ([]WikiPageSummary, error)
+	ListWikiEvents(context.Context, string, int) (WikiEventsResponse, error)
 	GetWikiPage(context.Context, string, string, int) (WikiPageResponse, error)
 	FactVisible(context.Context, string, int, string, int, int) (bool, error)
 	ListNameReviews(context.Context, string, *int) ([]CharacterNameReview, error)
-	ListRecords(context.Context, string, int, int) (RecordsResponse, error)
-	ListRecordsInspector(context.Context, string, int, int) (RecordsInspectorResponse, error)
-	ListRecordReviews(context.Context, string, int, int) (RecordReviewResponse, error)
+	GetFactsStatus(context.Context, string, int, int) (FactsStatus, error)
 }
 
 func (s *Store) ListNameReviews(ctx context.Context, novelID string, chapter *int) ([]CharacterNameReview, error) {
@@ -573,17 +569,11 @@ func (s *Store) withReaderTx(
 }
 
 func (s *Store) ListGlossary(ctx context.Context, novelID string, at int) ([]GlossaryTermView, error) {
-	// Glossary bindings belonged to the retired graph/revision path (0089). The
-	// append-only glossary row is the terminology authority now; its entity_id is
-	// optional for bootstrap terms and is only returned after the generation-scoped
-	// entity itself passes the chapter gate.
 	terms := []GlossaryTermView{}
 	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT g.source_term, g.target_term, g.version, g.locked_at_chapter, e.id::text
+			`SELECT g.source_term, g.target_term, g.version, g.locked_at_chapter
 				 FROM glossary g
-				 LEFT JOIN entity e ON e.id = g.entity_id AND e.novel_id = g.novel_id
-				   AND e.first_seen_chapter <= $2
 				 WHERE g.novel_id = $1 AND g.locked_at_chapter <= $2 AND NOT g.deleted
 			 ORDER BY g.source_term`, novelID, at)
 		if err != nil {
@@ -594,7 +584,6 @@ func (s *Store) ListGlossary(ctx context.Context, novelID string, at int) ([]Glo
 			var term GlossaryTermView
 			if err := rows.Scan(
 				&term.SourceTerm, &term.TargetTerm, &term.Version, &term.LockedAtChapter,
-				&term.EntityID,
 			); err != nil {
 				return err
 			}
@@ -625,52 +614,15 @@ func (s *Store) readObject(ctx context.Context, key string) (string, error) {
 	return string(body), nil
 }
 
-// chapterRecordsInTx loads the records whose source_chapter is exactly this chapter —
-// what the reader learns HERE, as opposed to everything they now know. It runs inside
-// withReaderTx so the visible set is gated on reader_chapter() like every other read
-// path (§0.2): being allowed to read chapter n is not on its own permission to see a
-// record carrying a later source_chapter, and this must not become the one path that
-// assumes it.
-func chapterRecordsInTx(ctx context.Context, tx pgx.Tx, novelID string, n, at int, view *ChapterView) error {
-	generation, status, err := recordsStatusFor(ctx, tx, novelID, &n, at)
-	if err != nil {
-		return err
-	}
-	view.RecordsStatus = status
-	if generation == "" {
-		return nil
-	}
-	base, err := tx.Query(ctx, `SELECT id::text,record_type,original_index,source_chapter,valid_from_chapter,temporal_qualifier
-		FROM record_row WHERE novel_id=$1 AND generation_id=$2 AND source_chapter=$3
-		ORDER BY original_index LIMIT 500`, novelID, generation, n)
-	if err != nil {
-		return err
-	}
-	view.RecordRows, err = hydrateRows(ctx, tx, base)
-	return err
-}
-
-// chapterSpansInTx serves DISPLAY_SCAN's mention_span rows for the chapter, resolved
-// against the active record_generation's mention bindings for entity identity. The two
-// tables are populated independently (DISPLAY_SCAN vs. RECORDS' who's-who pass), so a
-// generation with no binding for a span — including "no generation yet" (generation=="")
-// — just leaves that span's entity_id unresolved rather than dropping the span.
-func chapterSpansInTx(ctx context.Context, tx pgx.Tx, novelID string, chapter int, generation string) ([]SpanView, error) {
-	var genArg any
-	if generation != "" {
-		genArg = generation
-	}
+// chapterSpansInTx serves DISPLAY_SCAN's mention_span rows for the chapter. Spans are
+// terminology only; identity lives on the wiki's characters (0112).
+func chapterSpansInTx(ctx context.Context, tx pgx.Tx, novelID string, chapter int) ([]SpanView, error) {
 	rows, err := tx.Query(ctx,
-		`SELECT m.id::text, e.id::text, m.char_start, m.char_end
+		`SELECT m.id::text, m.char_start, m.char_end
              FROM mention_span m
-             LEFT JOIN record_mention_binding b
-               ON b.novel_id=m.novel_id AND b.generation_id=$3
-               AND b.source_chapter=m.chapter_index
-               AND b.char_start=m.char_start AND b.char_end=m.char_end
-             LEFT JOIN entity e ON e.id=b.entity_id
              WHERE m.novel_id=$1 AND m.chapter_index=$2
              ORDER BY m.char_start`,
-		novelID, chapter, genArg)
+		novelID, chapter)
 	if err != nil {
 		return nil, err
 	}
@@ -678,7 +630,7 @@ func chapterSpansInTx(ctx context.Context, tx pgx.Tx, novelID string, chapter in
 	spans := []SpanView{}
 	for rows.Next() {
 		var span SpanView
-		if err := rows.Scan(&span.MentionID, &span.EntityID, &span.CharStart, &span.CharEnd); err != nil {
+		if err := rows.Scan(&span.MentionID, &span.CharStart, &span.CharEnd); err != nil {
 			return nil, err
 		}
 		spans = append(spans, span)
@@ -725,7 +677,7 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n, at int) (Chap
 		return ChapterView{}, err
 	}
 
-	view := ChapterView{Text: text, Spans: []SpanView{}, RecordRows: []RecordView{}, Part: part}
+	view := ChapterView{Text: text, Spans: []SpanView{}, Part: part}
 	if warningCode != nil {
 		view.TranslationWarning = &TranslationWarning{Code: *warningCode, TermCount: warningCount}
 	}
@@ -737,23 +689,11 @@ func (s *Store) GetChapter(ctx context.Context, novelID string, n, at int) (Chap
 	}
 	if err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
 		var err error
-		if err := chapterRecordsInTx(ctx, tx, novelID, n, at, &view); err != nil {
+		if view.FactsStatus, err = chapterFactsStatus(ctx, tx, novelID, n, at); err != nil {
 			return err
 		}
-		spans, err := chapterSpansInTx(ctx, tx, novelID, n, view.RecordsStatus.GenerationID)
-		if err != nil {
+		if view.Spans, err = chapterSpansInTx(ctx, tx, novelID, n); err != nil {
 			return err
-		}
-		for _, span := range spans {
-			span.EnrichmentStatus = view.RecordsStatus.ExtractionStatus
-			if span.EnrichmentStatus == "done" || span.EnrichmentStatus == "ready" {
-				if span.EntityID == nil {
-					span.EnrichmentStatus = "unresolved"
-				} else {
-					span.EnrichmentStatus = "linked"
-				}
-			}
-			view.Spans = append(view.Spans, span)
 		}
 		return attachChapterRenderings(ctx, tx, novelID, n, at, text, view.Spans)
 	}); err != nil {
@@ -976,9 +916,9 @@ func (s *Store) hasNextChapter(ctx context.Context, novelID string, chapter int)
 	return exists, err
 }
 
-// Wiki pages are assembled from tagged facts (migration 0112). Every query filters on
-// the reader's chapter explicitly; the chapter_fact and character RLS policies are the
-// second lock.
+// Wiki pages are assembled from tagged facts (migration 0112): one page per subject --
+// a character, organization, place or item (0115). Every query filters on the reader's
+// chapter explicitly; the chapter_fact and subject RLS policies are the second lock.
 
 // taggedFactVersion keeps one tagged prompt set per chapter: its newest.
 const taggedFactVersion = `f.category IS NOT NULL AND f.prompt_version = (
@@ -987,39 +927,69 @@ const taggedFactVersion = `f.category IS NOT NULL AND f.prompt_version = (
 	AND NOT EXISTS (SELECT 1 FROM fact_retraction x WHERE x.novel_id=f.novel_id
 	  AND x.chapter_index=f.chapter_index AND x.prompt_version=f.prompt_version AND x.ordinal=f.ordinal)`
 
-// characterNames maps each character a reader at `at` has met to its current spelling:
-// a confirmed glossary spelling, then the reader's selection, then the pending choice.
-const characterNames = `SELECT c.id::text,
-	COALESCE(g.target_term, r.selected_target, r.candidates->0->>'target_term', c.source_term)
-	  FROM character c
+// subjectNames maps each subject a reader at `at` has met to its current spelling -- a
+// confirmed glossary spelling, then the reader's selection, then the pending choice --
+// and its kind.
+const subjectNames = `SELECT c.id::text,
+	COALESCE(g.target_term, r.selected_target, r.candidates->0->>'target_term', c.source_term), c.kind
+	  FROM subject c
 	  LEFT JOIN character_name_review r ON r.novel_id=c.novel_id AND r.source_term=c.source_term
 	  LEFT JOIN glossary g ON g.novel_id=c.novel_id AND g.source_term=c.source_term AND NOT g.deleted
 	 WHERE c.novel_id=$1 AND c.first_seen_chapter <= $2`
 
-var characterMarker = regexp.MustCompile(`⟦([0-9a-f-]{36})⟧`)
+var subjectMarker = regexp.MustCompile(`⟦([0-9a-f-]{36})⟧`)
 
-func loadCharacterNames(ctx context.Context, tx pgx.Tx, novelID string, at int) (map[string]string, error) {
-	rows, err := tx.Query(ctx, characterNames, novelID, at)
+type subjectIndex struct{ names, kinds map[string]string }
+
+func loadSubjects(ctx context.Context, tx pgx.Tx, novelID string, at int) (subjectIndex, error) {
+	index := subjectIndex{names: map[string]string{}, kinds: map[string]string{}}
+	rows, err := tx.Query(ctx, subjectNames, novelID, at)
 	if err != nil {
-		return nil, err
+		return index, err
 	}
 	defer rows.Close()
-	names := map[string]string{}
 	for rows.Next() {
-		var id, name string
-		if err := rows.Scan(&id, &name); err != nil {
-			return nil, err
+		var id, name, kind string
+		if err := rows.Scan(&id, &name, &kind); err != nil {
+			return index, err
 		}
-		names[id] = name
+		index.names[id], index.kinds[id] = name, kind
 	}
-	return names, rows.Err()
+	return index, rows.Err()
 }
 
-// ListWikiPages lists the characters a reader at `at` has facts about, most-mentioned first.
+// scanWikiFacts reads tagged fact rows, fills each marker with the subject's current
+// name, and records the name and kind of every subject the facts name.
+func scanWikiFacts(rows pgx.Rows, index subjectIndex, names, kinds map[string]string) ([]WikiFact, error) {
+	defer rows.Close()
+	facts := []WikiFact{}
+	for rows.Next() {
+		var fact WikiFact
+		if err := rows.Scan(&fact.Chapter, &fact.Category, &fact.Kind, &fact.Text, &fact.Subjects,
+			&fact.Version, &fact.Ordinal); err != nil {
+			return nil, err
+		}
+		fact.Text = subjectMarker.ReplaceAllStringFunc(fact.Text, func(m string) string {
+			if name, ok := index.names[subjectMarker.FindStringSubmatch(m)[1]]; ok {
+				return name
+			}
+			return "someone"
+		})
+		for _, id := range fact.Subjects {
+			names[id], kinds[id] = index.names[id], index.kinds[id]
+		}
+		facts = append(facts, fact)
+	}
+	return facts, rows.Err()
+}
+
+const wikiFactColumns = `f.chapter_index, f.category, f.kind, f.text, f.subjects::text[], f.prompt_version, f.ordinal`
+
+// ListWikiPages lists the subjects a reader at `at` has facts about, most-mentioned first.
 func (s *Store) ListWikiPages(ctx context.Context, novelID string, at int) ([]WikiPageSummary, error) {
 	pages := []WikiPageSummary{}
 	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
-		names, err := loadCharacterNames(ctx, tx, novelID, at)
+		index, err := loadSubjects(ctx, tx, novelID, at)
 		if err != nil {
 			return err
 		}
@@ -1035,8 +1005,8 @@ func (s *Store) ListWikiPages(ctx context.Context, novelID string, at int) ([]Wi
 			if err := rows.Scan(&page.Subject, &page.Facts); err != nil {
 				return err
 			}
-			if title, ok := names[page.Subject]; ok {
-				page.Title = title
+			if title, ok := index.names[page.Subject]; ok {
+				page.Title, page.Kind = title, index.kinds[page.Subject]
 				pages = append(pages, page)
 			}
 		}
@@ -1045,47 +1015,28 @@ func (s *Store) ListWikiPages(ctx context.Context, novelID string, at int) ([]Wi
 	return pages, err
 }
 
-// GetWikiPage returns one character's tagged facts up to `at`, names filled in.
+// GetWikiPage returns one subject's tagged facts up to `at`, names filled in.
 func (s *Store) GetWikiPage(ctx context.Context, novelID, subject string, at int) (WikiPageResponse, error) {
-	page := WikiPageResponse{NovelID: novelID, At: at, Subject: subject, Facts: []WikiFact{}}
+	page := WikiPageResponse{NovelID: novelID, At: at, Subject: subject, Facts: []WikiFact{},
+		Names: map[string]string{}, Kinds: map[string]string{}}
 	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
-		names, err := loadCharacterNames(ctx, tx, novelID, at)
+		index, err := loadSubjects(ctx, tx, novelID, at)
 		if err != nil {
 			return err
 		}
-		title, ok := names[subject]
+		title, ok := index.names[subject]
 		if !ok {
 			return ErrNotFound
 		}
-		page.Title = title
-		rows, err := tx.Query(ctx, `SELECT f.chapter_index, f.category, f.kind, f.text, f.subjects::text[],
-			       f.prompt_version, f.ordinal
+		page.Title, page.Kind = title, index.kinds[subject]
+		rows, err := tx.Query(ctx, `SELECT `+wikiFactColumns+`
 			  FROM chapter_fact f
 			 WHERE f.novel_id=$1 AND f.chapter_index <= $2 AND $3::uuid = ANY(f.subjects) AND `+taggedFactVersion+`
 			 ORDER BY f.chapter_index, f.ordinal`, novelID, at, subject)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
-		page.Names = map[string]string{}
-		for rows.Next() {
-			var fact WikiFact
-			if err := rows.Scan(&fact.Chapter, &fact.Category, &fact.Kind, &fact.Text, &fact.Subjects,
-				&fact.Version, &fact.Ordinal); err != nil {
-				return err
-			}
-			fact.Text = characterMarker.ReplaceAllStringFunc(fact.Text, func(m string) string {
-				if name, ok := names[characterMarker.FindStringSubmatch(m)[1]]; ok {
-					return name
-				}
-				return "someone"
-			})
-			for _, id := range fact.Subjects {
-				page.Names[id] = names[id]
-			}
-			page.Facts = append(page.Facts, fact)
-		}
-		if err := rows.Err(); err != nil {
+		if page.Facts, err = scanWikiFacts(rows, index, page.Names, page.Kinds); err != nil {
 			return err
 		}
 		if len(page.Facts) == 0 {
@@ -1094,6 +1045,28 @@ func (s *Store) GetWikiPage(ctx context.Context, novelID, subject string, at int
 		return nil
 	})
 	return page, err
+}
+
+// ListWikiEvents returns every event fact up to `at` in story order: the Events timeline.
+func (s *Store) ListWikiEvents(ctx context.Context, novelID string, at int) (WikiEventsResponse, error) {
+	out := WikiEventsResponse{NovelID: novelID, At: at, Facts: []WikiFact{},
+		Names: map[string]string{}, Kinds: map[string]string{}}
+	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
+		index, err := loadSubjects(ctx, tx, novelID, at)
+		if err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT `+wikiFactColumns+`
+			  FROM chapter_fact f
+			 WHERE f.novel_id=$1 AND f.chapter_index <= $2 AND f.category='event' AND `+taggedFactVersion+`
+			 ORDER BY f.chapter_index, f.ordinal`, novelID, at)
+		if err != nil {
+			return err
+		}
+		out.Facts, err = scanWikiFacts(rows, index, out.Names, out.Kinds)
+		return err
+	})
+	return out, err
 }
 
 // FactVisible reports whether a reader at `at` can see this fact, so a reader can only

@@ -33,9 +33,8 @@ Use `rg` within the relevant paths below before searching the whole repository.
 | Hosted provider request/error | `packages/novel-llm/src/novel_llm/hosted.py`, `groq.py`, `provider.py` |
 | Provisional term choice / hovercard naming | `services/pipeline/pipeline/display_names.py`, `term_choices.py`, `stages/display_scan.py`; legacy offline name tools: `stages/character_names.py` |
 | Retry scheduling / durable failure | `services/pipeline/pipeline/worker.py`, `failures.py`, `batch.py` |
-| Reader retry explanation / spoiler gate | `services/reader-api/records.go`, `store.go`; `services/web/src/recordStatus.ts` |
-| Reader-feature controls / top status | `services/web/src/components/KnowledgeGraphControls.tsx`, `RecordStatusBanner.tsx`, `ReaderPane.tsx` |
-| Chapter diagnostics (no duplicate build controls) | `services/web/src/components/ChapterKnowledgeWorkspace.tsx` |
+| Reader retry explanation / spoiler gate | `services/reader-api/facts.go`, `store.go`; `services/web/src/factsStatus.ts` |
+| Facts controls / chapter status | `services/ingest-api/facts_build.go`; `services/web/src/components/FactsControls.tsx`, `ChapterStatus.tsx`, `ReaderPane.tsx` |
 | Translation vs AI provider selection | `services/ingest-api/provider_config.go`; pipeline worker `_provider_for_novel`; `services/askai/askai/app.py` |
 | Optional hosted embeddings | `services/ingest-api/embedding_config.go`, `packages/novel-llm/src/novel_llm/embedding_config.py` |
 | Running local services | `deploy/systemd/`, `scripts/with-env.sh`; Go units rebuild on restart |
@@ -60,8 +59,8 @@ approved glossary entries are preserved. See `services/pipeline/README.md`.
 
 The Milestone-1 vertical slice is complete end-to-end (docs/PLAN.md Phases 1–5): local infra
 (compose), migrations through 0008, the Go `ingest-api` paste path, the Python
-`pipeline` worker (stages: CHUNK, TRANSLATE, CHARACTER-NAMES, SCAN, RECORDS,
-DISPLAY-SCAN), the Go `reader-api` spoiler gate (RLS + app-layer, plus a
+`pipeline` worker (stages today: CHUNK, TRANSLATE, DISPLAY-SCAN, FACTS,
+CHUNK-INDEX), the Go `reader-api` spoiler gate (RLS + app-layer, plus a
 chapter-text endpoint), the Rust `textproc` gRPC scanner, the Python `askai` RAG
 service, and a one-page React `web` reader UI. Post-Milestone-1 work in progress (see
 `.Codex/plans/` for the active phased plan): novel management is done — `GET /novels`,
@@ -99,43 +98,37 @@ closing out the whole post-Milestone-1 bundle (N1–N6, all six phases): a new
 `POST /novels/{id}/glossary/bootstrap` (`ingest-api/glossary.go`'s
 `BootstrapGlossaryTerm`, ported from `_lock_glossary`'s "original insert"
 path the same way N2's `CorrectGlossaryTerm` was) locks human-supplied source→target
-term pairs before any entity exists for them (`entity_id NULL`, `locked_at_chapter=0`);
-`glossary_locks.py`'s `_lock_glossary` (lifted out of the deleted `resolve.py`, since
-terminology locking is not identity) backfills that `NULL` `entity_id` instead of raising
-when an entity for the term appears later, and `_decide` overrides the model's proposed
-`target_term` with the locked one structurally rather than trusting a prompt hint. Web's
+term pairs before any chapter is translated (`locked_at_chapter=0`); the Python
+`glossary_locks.py` it was ported from went with RECORDS, and priming (below) is what makes
+a locked `target_term` stick. Web's
 `AddChapterForm` gained a `BootstrapChapterForm` for pasting a paired raw+translation
-chapter with an explicit term-mapping table. The **records pipeline** replaced STATE-EXTRACT/GRAPH-WRITE and, with them, the whole
-repair/quarantine lifecycle. Knowledge is scoped to an immutable `record_generation`
-(prompt, checks, ontology, model, languages) and published per chapter as a `record_run`;
-a published run is frozen. Changing any input opens a **new generation** and re-extracts in
-chapter order rather than mutating what readers already have. Migrations 0087–0089 added
-that storage and dropped the legacy graph; 0090–0093 finished the retreat. Not started: Milestone 3 polish beyond this
+chapter with an explicit term-mapping table. **FACTS replaced RECORDS** (`.claude/plans/facts-stage.md`): one model call per
+chapter writes tagged `chapter_fact` rows (append-only, 0109/0112), and the spoiler-gated
+wiki is assembled from them at read time. Migrations 0087–0093 dropped the legacy graph;
+0114 dropped every `record_*`/`fact_first_*` table, `entity`/`alias`,
+`novel.active_record_generation`, and the `entity_id` columns on `mention_span`/`glossary`.
+FACTS controls: `POST /novels/{id}/facts/{extract,stop}`,
+`POST /novels/{id}/chapter/{n}/facts/{retry,discard}`, `GET /novels/{id}/facts/status`.
+askai retrieves translated chunks only. The wiki has pages for characters, organizations, places and
+items (0115 renamed `character` to `subject` and added `kind`): people come from the names
+pass, and the facts prompt (`tagged-facts-v3`) lists the kind of each named organization,
+place or item its facts mention; events are a timeline (`GET /novels/{id}/wiki/events`). Not started: Milestone 3 polish beyond this
 bundle (retro-update engine, timeline/relationship UI, bulk backfill, multi-novel). Build
 order is
 spec §11 / PLAN.md for the original slice; the post-slice work follows its own plan
 document.
 
-- **`state.resolutions` is the only way a name becomes an `entity.id`.** The RECORDS
-  stage's who's-who pass owns it; nothing else matches names. SCAN retrieves occurrences
-  and candidates but never turns a spelling match into an identity decision, and the
-  publisher drops a binding whose surface who's-who left unresolved. Exact matching *is*
-  the entity-drift bug (§12 risk #2), not an approximation of resolution.
-- **Knowledge is typed records in an immutable generation, not `fact`/`edge`/`event`.**
-  RECORDS runs discovery (typed XML records citing chapter passages), deterministic code
-  checks that drop an individual record without failing the chapter, who's-who identity
-  resolution against earlier published chapters, and offline English rendering stored
-  apart from the source values. A prompt, ontology, model or source change means a new
-  `record_generation` and a chronological rebuild — published extraction is immutable.
+- **Identity is not decided per chapter.** Mention spans and glossary terms are
+  terminology only and carry no entity id. Characters (0112) are keyed by source term, and
+  aliases (Long Fei = Ling Feng) belong to the wiki-page step, never to a spelling match:
+  exact matching *is* the entity-drift bug (§12 risk #2).
 - `proto/textproc.proto` is the pinned Python↔Rust contract (§3.3); `services/textproc`
   is the real Rust implementation, selected via `TEXTPROC_BACKEND`. `pipeline/mentions.py`
   keeps the pure-Python fallback behind the same `TextProcClient` interface.
-- `mention_span` (migration 0008) holds DISPLAY_SCAN's output — a *second* Aho-Corasick
-  pass over the translated text against locked glossary terms, distinct from SCAN's
-  extraction-time pass over source text. `reader-api`'s `GET /chapter/{n}` is the only
+- `mention_span` (migration 0008) holds DISPLAY_SCAN's output — an Aho-Corasick pass
+  over the displayed text (the translation, or the source for a same-language book)
+  against locked glossary terms and pending name choices. `reader-api`'s `GET /chapter/{n}` is the only
   reader of it; the web UI renders it as highlighted mention spans.
-- `eval/` holds the resolution accuracy metric (workstream A) — run it after any prompt,
-  model, or resolve change.
 
 Hosted-only setup now includes account-level semantic-search settings (migration 0108).
 `EMBED_PROVIDER=auto` uses an available saved/env Gemini key or leaves search off;

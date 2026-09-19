@@ -175,19 +175,15 @@ func TestBootstrapGlossaryTermUsesNovelWideVersionCounterAndLeavesEntityNull(t *
 	}
 
 	var target string
-	var entityID *string
 	var lockedAt int
 	if err := store.db.QueryRow(ctx,
-		"SELECT target_term, entity_id, locked_at_chapter FROM glossary WHERE novel_id = $1 AND source_term = $2",
+		"SELECT target_term, locked_at_chapter FROM glossary WHERE novel_id = $1 AND source_term = $2",
 		novelID, "陈枫",
-	).Scan(&target, &entityID, &lockedAt); err != nil {
+	).Scan(&target, &lockedAt); err != nil {
 		t.Fatalf("read back: %v", err)
 	}
 	if target != "Chen Feng" {
 		t.Fatalf("target_term = %q, want %q", target, "Chen Feng")
-	}
-	if entityID != nil {
-		t.Fatalf("entity_id = %v, want NULL (PLAN.md Phase N6: no entity exists until RESOLVE creates one)", *entityID)
 	}
 	if lockedAt != 0 {
 		t.Fatalf("locked_at_chapter = %d, want 0 (locked before any chapter is read)", lockedAt)
