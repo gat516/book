@@ -60,7 +60,7 @@ export function WikiView({ novelId, onClose }: { novelId: string; at: number; on
               <h3 className="wiki-title">{page.title}</h3>
               <div className="wiki-tabs" role="tablist">
                 <button type="button" role="tab" aria-selected={tab === "page"} onClick={() => setTab("page")}>Page</button>
-                <button type="button" role="tab" aria-selected={tab === "more"} onClick={() => setTab("more")}>More{model.more.length ? ` (${model.more.length})` : ""}</button>
+                <button type="button" role="tab" aria-selected={tab === "more"} onClick={() => setTab("more")}>More{model.more.length + model.mentions.length ? ` (${model.more.length + model.mentions.length})` : ""}</button>
               </div>
               {tab === "page" ? <>
                 {model.aliases.length > 0 && <Section heading="Also known as" entries={model.aliases} />}
@@ -79,9 +79,10 @@ export function WikiView({ novelId, onClose }: { novelId: string; at: number; on
                 </>}
                 {model.sections.map((section) => <Section key={section.heading} heading={section.heading} entries={section.entries} list />)}
                 {model.history.length > 0 && <Section heading="History" entries={model.history} />}
-              </> : model.more.length
-                ? <Section heading="Other relationships" entries={model.more} list />
-                : <p className="wiki-empty">Nothing else yet.</p>}
+              </> : model.more.length + model.mentions.length ? <>
+                {model.more.length > 0 && <Section heading="Other relationships" entries={model.more} list />}
+                {model.mentions.length > 0 && <Section heading="Mentioned in" entries={model.mentions} list />}
+              </> : <p className="wiki-empty">Nothing else yet.</p>}
             </>}
           </article>
         </div>}

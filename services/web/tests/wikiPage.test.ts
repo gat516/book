@@ -30,3 +30,16 @@ test("a page groups facts into sections, six relationship headings, and More", (
   assert.deepEqual(page.history.map((e) => e.chapter), [2, 3]);
   assert.equal(page.more.length, 1, "mentor from the mentor's own side goes to More");
 });
+
+test("a fact that only mentions a character is not filed as theirs", () => {
+  const page = buildWikiPage("m", [
+    fact("intro", ["h", "m", "a"]),   // about Long Hao; Metatron only mentioned
+    fact("intro", ["m"]),              // about Metatron
+    fact("ability", ["l", "m"]),       // about Ling Feng
+    fact("event", ["f", "m"]),         // an event naming Metatron: his history too
+  ], names);
+  assert.equal(page.intro.length, 1);
+  assert.equal(page.sections.length, 0);
+  assert.equal(page.history.length, 1);
+  assert.equal(page.mentions.length, 2);
+});

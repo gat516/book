@@ -13,6 +13,7 @@ export interface WikiPageModel {
   sections: { heading: string; entries: Entry[] }[];
   history: Entry[];
   more: Entry[];
+  mentions: Entry[];
 }
 
 // The relationship headings a page shows, in order. Any other kind the model names is
@@ -50,14 +51,19 @@ export function otherIs(fact: WikiFact, subject: string): { other: string; kind:
 }
 
 export function buildWikiPage(subject: string, facts: WikiFact[], names: Record<string, string>): WikiPageModel {
-  const page: WikiPageModel = { intro: [], aliases: [], relationships: [], sections: [], history: [], more: [] };
+  const page: WikiPageModel = { intro: [], aliases: [], relationships: [], sections: [], history: [], more: [], mentions: [] };
   const byHeading = new Map<string, Relation[]>();
   const byCategory = new Map<string, Entry[]>();
   for (const fact of facts) {
     const entry = { text: fact.text, chapter: fact.chapter };
-    if (fact.category === "intro") page.intro.push(entry);
+    // A fact is about its first named character ("<A> holds ...", "<A> is <kind> to <B>").
+    // Events and places belong to everyone they name; any other fact that only mentions
+    // this character is kept apart, not filed as their intro or ability.
+    const about = fact.subjects[0] === subject;
+    if (fact.category === "event" || fact.category === "place") page.history.push(entry);
+    else if (fact.category !== "relationship" && !about) page.mentions.push(entry);
+    else if (fact.category === "intro") page.intro.push(entry);
     else if (fact.category === "alias") page.aliases.push(entry);
-    else if (fact.category === "event" || fact.category === "place") page.history.push(entry);
     else if (fact.category === "relationship") {
       const read = otherIs(fact, subject);
       const label = read && heading(read.kind);
