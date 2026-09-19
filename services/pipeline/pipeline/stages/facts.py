@@ -21,18 +21,26 @@ from pipeline.llm.provider import Class
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "story-facts-v1.txt"
+PROMPT_VERSION = "story-facts-v2.txt"
 SYSTEM = (Path(__file__).resolve().parent.parent / "prompts" / PROMPT_VERSION).read_text()
 
 # Groq's free tier caps Qwen3.8 at 1,000 output tokens a minute and refuses any request
 # whose max_tokens could exceed it. A chapter's facts ran ~460-500 tokens in testing.
-MAX_OUTPUT_TOKENS = 950
+GROQ_MAX_OUTPUT_TOKENS = 950
+# Elsewhere thinking tokens count against the budget too: DeepSeek at "low" wrote 2.6k-6.4k
+# per chapter and one ran past 8k, so leave generous room.
+MAX_OUTPUT_TOKENS = 16000
 
 
 def _least_thinking(provider_id: str, model: str) -> str | None:
-    """Facts are summaries, not reasoning: ask for the lowest thinking each backend has."""
+    """The thinking level for facts on each backend.
+
+    DeepSeek thinks at "low": with thinking off it attached a title to the wrong person
+    (a subordinate written as "the First Divine Throne"), and one wrong fact becomes a
+    wrong alias on a wiki page. Elsewhere the lowest setting each backend has.
+    """
     if provider_id == "deepseek":
-        return "none"
+        return "low"
     if provider_id == "groq":
         return "none" if "qwen" in model.lower() else "low"  # gpt-oss cannot switch off
     if provider_id == "openrouter":
@@ -70,7 +78,8 @@ class FactsStage:
         effort = _least_thinking(ctx.provider_id or ctx.cfg.llm_provider, model)
         completion = await ctx.provider.complete(
             text, system=SYSTEM, cls=Class.BATCH, model=model,
-            max_output_tokens=MAX_OUTPUT_TOKENS, **({"reasoning_effort": effort} if effort else {}))
+            max_output_tokens=GROQ_MAX_OUTPUT_TOKENS if (ctx.provider_id or ctx.cfg.llm_provider) == "groq"
+            else MAX_OUTPUT_TOKENS, **({"reasoning_effort": effort} if effort else {}))
         facts = parse_facts(completion.text)
         if not facts:
             # Nothing is written, so the next pass over this chapter tries again. Only a

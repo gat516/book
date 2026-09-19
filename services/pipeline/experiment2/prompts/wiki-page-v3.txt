@@ -1,0 +1,23 @@
+Write a wiki page about the character named below, using only the facts given. Each fact
+starts with the chapter it comes from. Keep the page under 450 words.
+
+Use this layout, and leave out any section the facts don't support:
+
+# <the character's name>
+Also known as: <other names this character goes by, each followed by the chapter of the
+fact that says so, like "Long Fei (ch. 10)". Only names a fact uses for this character.>
+<Two or three sentences on who they are.>
+
+## History
+<Their story so far, in story order: the events that matter, not every detail. A few
+sentences per chapter at most. End each sentence with its chapter, like (ch. 3).>
+
+## Abilities and possessions
+<Notable powers, cultivation, techniques and treasures, one per bullet. Skip money and
+everyday items.>
+
+## Relationships
+<One bullet per person who matters to them: **Name**: how they are connected.>
+
+Merge facts that say the same thing. Leave out facts that aren't about this character.
+Reply with the page only.

@@ -1,0 +1,7 @@
+List the important facts in this chapter: short summaries of what happened.
+
+Call each person by their name. A title belongs to the person who holds it: never write a
+title as another person's name. If the Sect Master's envoy arrives, the envoy is not the
+Sect Master.
+
+Write `## Facts` and then one fact per line.

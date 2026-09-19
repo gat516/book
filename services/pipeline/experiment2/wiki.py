@@ -64,6 +64,35 @@ def mentions(name: str, facts: list[tuple[int, str]], people: list[str]) -> int:
     return count
 
 
+_CHAPTER_REF = r"ch\.?\s*\d+(?:\s*[–-]\s*\d+)?"
+_CITATION = re.compile(rf"\(\s*{_CHAPTER_REF}(?:\s*[,;]\s*(?:{_CHAPTER_REF}|\d+(?:\s*[–-]\s*\d+)?))*\s*\)")
+
+
+def tidy_citations(page: str) -> str:
+    """One citation style: "(ch4, ch5)" and "(ch. 3-4)" become "(ch. 4, 5)" and "(ch. 3–4)"."""
+    def one(match: re.Match) -> str:
+        parts = re.findall(r"\d+(?:\s*[–-]\s*\d+)?", match.group(0))
+        return "(ch. " + ", ".join(re.sub(r"\s*[–-]\s*", "–", part) for part in parts) + ")"
+    return _CITATION.sub(one, page)
+
+
+def checked_aliases(page: str, name: str, facts: list[tuple[int, str]]) -> str:
+    """Keep an "Also known as" name only if a fact from the chapter it cites names both it
+    and this character. Titles the model made up, or read into the wrong fact, go."""
+    def says(chapter: int, alias: str) -> bool:
+        return any(c == chapter and alias.lower() in text.lower() and name.lower() in text.lower()
+                   for c, text in facts)
+
+    def one(match: re.Match) -> str:
+        kept = []
+        for item in re.split(r"[;,](?![^()]*\))", match.group(1)):
+            found = re.match(r"\s*(.+?)\s*\(ch\.\s*(\d+)[^)]*\)\s*$", item)
+            if found and says(int(found.group(2)), found.group(1).strip("\"' ")):
+                kept.append(f"{found.group(1).strip()} (ch. {found.group(2)})")
+        return f"Also known as: {', '.join(kept)}\n" if kept else ""
+    return re.sub(r"^Also known as:(.*)\n?", one, page, count=1, flags=re.M)
+
+
 async def write_page(provider, args, name: str, facts: list[tuple[int, str]]):
     prompt = f"CHARACTER: {name}\n\nFACTS (chapters 1-{args.at}):\n" + "\n".join(
         f"[ch{chapter}] {text}" for chapter, text in facts)
@@ -71,12 +100,13 @@ async def write_page(provider, args, name: str, facts: list[tuple[int, str]]):
         prompt, system=(HERE / "prompts" / args.prompt).read_text(), cls=Class.BATCH,
         model=args.model, max_output_tokens=args.max_output_tokens,
         **({"reasoning_effort": args.reasoning_effort} if args.reasoning_effort else {}))
+    page = checked_aliases(tidy_citations(completion.text), name, facts)
     out = HERE / "results" / f"wiki-{args.novel[:8]}-ch{args.at}"
     out.mkdir(parents=True, exist_ok=True)
-    (out / f"{name.replace(' ', '_')}-{args.prompt.removesuffix('.txt')}.md").write_text(completion.text)
+    (out / f"{name.replace(' ', '_')}-{args.prompt.removesuffix('.txt')}.md").write_text(page)
     print(f"--- {name}: {len(facts)} facts sent | {completion.input_tokens} in / "
           f"{completion.output_tokens} out | {completion.served_model}\n")
-    print(completion.text, "\n")
+    print(page, "\n")
 
 
 async def main(args):
@@ -109,7 +139,7 @@ if __name__ == "__main__":
     who.add_argument("--list", action="store_true", help="rank the people met by fact count")
     who.add_argument("--character")
     who.add_argument("--top", type=int, help="write pages for the N most-mentioned people")
-    parser.add_argument("--prompt", default="wiki-page-v1.txt")
+    parser.add_argument("--prompt", default="wiki-page-v3.txt")
     parser.add_argument("--provider", choices=["book", "deepseek", "local"], default="book")
     parser.add_argument("--model")
     parser.add_argument("--max-output-tokens", type=int, default=1200)
