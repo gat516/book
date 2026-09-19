@@ -50,6 +50,7 @@ type ReaderStore interface {
 	ListGlossary(context.Context, string, int) ([]GlossaryTermView, error)
 	ListWikiPages(context.Context, string, int) ([]WikiPageSummary, error)
 	GetWikiPage(context.Context, string, string, int) (WikiPageResponse, error)
+	FactVisible(context.Context, string, int, string, int, int) (bool, error)
 	ListNameReviews(context.Context, string, *int) ([]CharacterNameReview, error)
 	ListRecords(context.Context, string, int, int) (RecordsResponse, error)
 	ListRecordsInspector(context.Context, string, int, int) (RecordsInspectorResponse, error)
@@ -982,7 +983,9 @@ func (s *Store) hasNextChapter(ctx context.Context, novelID string, chapter int)
 // taggedFactVersion keeps one tagged prompt set per chapter: its newest.
 const taggedFactVersion = `f.category IS NOT NULL AND f.prompt_version = (
 	SELECT max(g.prompt_version) FROM chapter_fact g
-	 WHERE g.novel_id=f.novel_id AND g.chapter_index=f.chapter_index AND g.category IS NOT NULL)`
+	 WHERE g.novel_id=f.novel_id AND g.chapter_index=f.chapter_index AND g.category IS NOT NULL)
+	AND NOT EXISTS (SELECT 1 FROM fact_retraction x WHERE x.novel_id=f.novel_id
+	  AND x.chapter_index=f.chapter_index AND x.prompt_version=f.prompt_version AND x.ordinal=f.ordinal)`
 
 // characterNames maps each character a reader at `at` has met to its current spelling:
 // a confirmed glossary spelling, then the reader's selection, then the pending choice.
@@ -1055,7 +1058,8 @@ func (s *Store) GetWikiPage(ctx context.Context, novelID, subject string, at int
 			return ErrNotFound
 		}
 		page.Title = title
-		rows, err := tx.Query(ctx, `SELECT f.chapter_index, f.category, f.kind, f.text, f.subjects::text[]
+		rows, err := tx.Query(ctx, `SELECT f.chapter_index, f.category, f.kind, f.text, f.subjects::text[],
+			       f.prompt_version, f.ordinal
 			  FROM chapter_fact f
 			 WHERE f.novel_id=$1 AND f.chapter_index <= $2 AND $3::uuid = ANY(f.subjects) AND `+taggedFactVersion+`
 			 ORDER BY f.chapter_index, f.ordinal`, novelID, at, subject)
@@ -1066,7 +1070,8 @@ func (s *Store) GetWikiPage(ctx context.Context, novelID, subject string, at int
 		page.Names = map[string]string{}
 		for rows.Next() {
 			var fact WikiFact
-			if err := rows.Scan(&fact.Chapter, &fact.Category, &fact.Kind, &fact.Text, &fact.Subjects); err != nil {
+			if err := rows.Scan(&fact.Chapter, &fact.Category, &fact.Kind, &fact.Text, &fact.Subjects,
+				&fact.Version, &fact.Ordinal); err != nil {
 				return err
 			}
 			fact.Text = characterMarker.ReplaceAllStringFunc(fact.Text, func(m string) string {
@@ -1089,4 +1094,16 @@ func (s *Store) GetWikiPage(ctx context.Context, novelID, subject string, at int
 		return nil
 	})
 	return page, err
+}
+
+// FactVisible reports whether a reader at `at` can see this fact, so a reader can only
+// retract a fact from a chapter they have reached.
+func (s *Store) FactVisible(ctx context.Context, novelID string, chapter int, version string, ordinal, at int) (bool, error) {
+	visible := false
+	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM chapter_fact
+			WHERE novel_id=$1 AND chapter_index=$2 AND prompt_version=$3 AND ordinal=$4 AND chapter_index <= $5)`,
+			novelID, chapter, version, ordinal, at).Scan(&visible)
+	})
+	return visible, err
 }

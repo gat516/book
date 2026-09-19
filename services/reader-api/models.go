@@ -455,6 +455,9 @@ type WikiFact struct {
 	Kind     *string  `json:"kind,omitempty"`
 	Text     string   `json:"text"`
 	Subjects []string `json:"subjects"`
+	// Which fact this is, so a reader can retract it (0113).
+	Version string `json:"version"`
+	Ordinal int    `json:"ordinal"`
 }
 
 // WikiPageResponse is everything the reader may know about one character; the client

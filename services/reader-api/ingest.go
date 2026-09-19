@@ -32,6 +32,7 @@ type IngestClient interface {
 	StopRecordsBuild(ctx context.Context, novelID string) (json.RawMessage, int, error)
 	DiscardRecordsRebuild(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	ReviewRecord(ctx context.Context, novelID, chapter string, body json.RawMessage) (json.RawMessage, int, error)
+	RetractFact(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
 	CreateNovel(ctx context.Context, body json.RawMessage) (json.RawMessage, int, error)
 	DeleteNovel(ctx context.Context, novelID string) (json.RawMessage, int, error)
 	PasteChapter(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error)
@@ -74,6 +75,10 @@ func (c *ingestHTTPClient) StopRecordsBuild(ctx context.Context, novelID string)
 
 func (c *ingestHTTPClient) DiscardRecordsRebuild(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
 	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/records/rebuild/discard", body, true)
+}
+
+func (c *ingestHTTPClient) RetractFact(ctx context.Context, novelID string, body json.RawMessage) (json.RawMessage, int, error) {
+	return c.send(ctx, http.MethodPost, "/novels/"+novelID+"/facts/retract", body, true)
 }
 
 func (c *ingestHTTPClient) ReviewRecord(ctx context.Context, novelID, chapter string, body json.RawMessage) (json.RawMessage, int, error) {

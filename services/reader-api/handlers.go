@@ -34,6 +34,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /novels/{id}/wiki", a.getWiki)
 	mux.HandleFunc("GET /novels/{id}/wiki/pages", a.getWikiPages)
 	mux.HandleFunc("GET /novels/{id}/wiki/pages/{subject}", a.getWikiPage)
+	mux.HandleFunc("POST /novels/{id}/wiki/facts/retract", a.retractFact)
 	mux.HandleFunc("GET /novels/{id}/timeline", a.getTimeline)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}", a.getChapter)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}/rows", a.getRecords)
@@ -1162,4 +1163,45 @@ func (a *API) getWikiPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
+}
+
+// retractFact removes a bad fact from every reader's wiki (0113). The reader may only
+// retract a fact from a chapter they have reached; ingest records who did it.
+func (a *API) retractFact(w http.ResponseWriter, r *http.Request) {
+	reader, novelID, at, ok := a.gate(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Chapter int    `json:"chapter"`
+		Version string `json:"version"`
+		Ordinal int    `json:"ordinal"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, paramsRequestLimit)).Decode(&req); err != nil ||
+		req.Version == "" || req.Chapter < 0 || req.Ordinal < 0 {
+		writeError(w, http.StatusBadRequest, "chapter, version and ordinal are required")
+		return
+	}
+	visible, err := a.store.FactVisible(r.Context(), novelID, req.Chapter, req.Version, req.Ordinal, at)
+	if err != nil {
+		log.Printf("fact visible: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not check the fact")
+		return
+	}
+	if !visible {
+		writeError(w, http.StatusNotFound, "fact not found")
+		return
+	}
+	body, _ := json.Marshal(map[string]any{
+		"chapter_index": req.Chapter, "prompt_version": req.Version, "ordinal": req.Ordinal, "actor": reader,
+	})
+	result, status, err := a.ingest.RetractFact(r.Context(), novelID, body)
+	if err != nil {
+		log.Printf("retract fact: %v", err)
+		writeError(w, http.StatusBadGateway, "ingest-api unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(result)
 }

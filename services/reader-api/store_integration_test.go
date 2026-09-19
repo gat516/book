@@ -680,3 +680,42 @@ func TestWikiPageIsGatedAtTheReadersChapter(t *testing.T) {
 		t.Fatalf("another novel's reader saw the page: %v", err)
 	}
 }
+
+// A retracted fact drops out of pages and counts; the fact row itself stays. A reader
+// can only reach (and so retract) a fact from a chapter they have read.
+func TestRetractedFactLeavesTheWiki(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	fixture := seedIntegrationFixture(t, admin)
+	ctx := context.Background()
+	var hero string
+	if err := admin.QueryRow(ctx, `INSERT INTO character (novel_id, source_term, first_seen_chapter)
+		VALUES ($1, 'hero-source', 1) RETURNING id::text`, fixture.novelID).Scan(&hero); err != nil {
+		t.Fatalf("seed character: %v", err)
+	}
+	for ordinal, text := range []string{"kept", "retracted"} {
+		if _, err := admin.Exec(ctx, `INSERT INTO chapter_fact
+			(novel_id, chapter_index, prompt_version, ordinal, text, category, subjects, source_hash, requested_model)
+			VALUES ($1, 1, 'tagged-facts-v2.txt', $2, $3, 'event', ARRAY[$4::uuid], 'h', 'm')`,
+			fixture.novelID, ordinal, text, hero); err != nil {
+			t.Fatalf("seed fact: %v", err)
+		}
+	}
+	if visible, err := store.FactVisible(ctx, fixture.novelID, 1, "tagged-facts-v2.txt", 1, 0); err != nil || visible {
+		t.Fatalf("a chapter-1 fact was visible at chapter 0: %v, %v", visible, err)
+	}
+	if visible, err := store.FactVisible(ctx, fixture.novelID, 1, "tagged-facts-v2.txt", 1, 1); err != nil || !visible {
+		t.Fatalf("a chapter-1 fact was not visible at chapter 1: %v, %v", visible, err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO fact_retraction (novel_id, chapter_index, prompt_version, ordinal, retracted_by)
+		VALUES ($1, 1, 'tagged-facts-v2.txt', 1, 'reader')`, fixture.novelID); err != nil {
+		t.Fatalf("retract: %v", err)
+	}
+	page, err := store.GetWikiPage(ctx, fixture.novelID, hero, 1)
+	if err != nil || len(page.Facts) != 1 || page.Facts[0].Text != "kept" || page.Facts[0].Ordinal != 0 {
+		t.Fatalf("page = %+v, %v; want only the kept fact", page, err)
+	}
+	pages, err := store.ListWikiPages(ctx, fixture.novelID, 1)
+	if err != nil || len(pages) != 1 || pages[0].Facts != 1 {
+		t.Fatalf("pages = %+v, %v; want a count of one", pages, err)
+	}
+}

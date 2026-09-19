@@ -1179,3 +1179,11 @@ func (f *fakeStore) ListWikiPages(context.Context, string, int) ([]WikiPageSumma
 func (f *fakeStore) GetWikiPage(context.Context, string, string, int) (WikiPageResponse, error) {
 	return WikiPageResponse{}, ErrNotFound
 }
+
+func (f *fakeStore) FactVisible(context.Context, string, int, string, int, int) (bool, error) {
+	return false, nil
+}
+
+func (f *fakeIngestClient) RetractFact(context.Context, string, json.RawMessage) (json.RawMessage, int, error) {
+	return json.RawMessage(`{"retracted":true}`), http.StatusOK, nil
+}
