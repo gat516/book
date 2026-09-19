@@ -130,6 +130,13 @@ export function getWikiPage(novelId: string, subject: string): Promise<import(".
   return request(`/novels/${novelId}/wiki/pages/${encodeURIComponent(subject)}`);
 }
 
+export function retractFact(novelId: string, fact: { chapter: number; version: string; ordinal: number }): Promise<{ retracted: boolean }> {
+  return request(`/novels/${novelId}/wiki/facts/retract`, {
+    method: "POST",
+    body: JSON.stringify({ chapter: fact.chapter, version: fact.version, ordinal: fact.ordinal }),
+  });
+}
+
 export function getWiki(novelId: string, at: number): Promise<WikiResponse> {
   return request(`/novels/${novelId}/wiki?at=${at}`);
 }

@@ -934,5 +934,5 @@ export interface RepairReviewDocument {
 // characters met so far, and one character's tagged facts with names filled in.
 export interface WikiPageSummary { subject: string; title: string; facts: number; }
 export interface WikiPagesResponse { novel_id: string; at: number; pages: WikiPageSummary[]; }
-export interface WikiFact { chapter: number; category: string; kind?: string | null; text: string; subjects: string[]; }
+export interface WikiFact { chapter: number; category: string; kind?: string | null; text: string; subjects: string[]; version: string; ordinal: number; }
 export interface WikiPageResponse { novel_id: string; at: number; subject: string; title: string; facts: WikiFact[]; names: Record<string, string>; }

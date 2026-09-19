@@ -1706,3 +1706,12 @@ textarea {
 .wiki-relations dd { margin: 0; }
 .wiki-link { padding: 0; border: 0; background: none; color: #775600; text-decoration: underline; text-underline-offset: 2px; }
 .wiki-link:hover:not(:disabled) { background: none; color: #3f3421; }
+.wiki-remove {
+  margin-left: 0.15rem; padding: 0 0.3rem; border: 0; background: none; color: #b3a78f;
+  font-size: 0.85rem; line-height: 1; opacity: 0; transition: opacity 0.1s;
+}
+.wiki-page li:hover .wiki-remove, .wiki-page span:hover > .wiki-remove, .wiki-remove:focus-visible { opacity: 1; }
+.wiki-remove:hover:not(:disabled) { background: none; color: #9c1c2c; }
+@media (hover: none) { .wiki-remove { opacity: 1; } }
+.wiki-remove-ask { margin-left: 0.3rem; font-size: 0.82rem; color: #9c1c2c; white-space: nowrap; }
+.wiki-remove-ask button { margin-left: 0.25rem; padding: 0 0.45rem; font-size: 0.8rem; }

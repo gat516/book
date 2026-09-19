@@ -4,8 +4,10 @@ import type { WikiFact } from "./types";
 // written by a model. Relationship facts are stored as "<A> is <kind> to <B>" with the
 // subjects in that order, so a page can say who the OTHER person is to this character.
 
-export interface Entry { text: string; chapter: number }
-export interface Relation { name: string; subject: string; chapter: number; text: string }
+// Which stored fact an entry came from, so a reader can retract it.
+export interface FactRef { chapter: number; version: string; ordinal: number }
+export interface Entry { text: string; chapter: number; ref: FactRef }
+export interface Relation { name: string; subject: string; chapter: number; text: string; ref: FactRef }
 export interface WikiPageModel {
   intro: Entry[];
   aliases: Entry[];
@@ -55,7 +57,8 @@ export function buildWikiPage(subject: string, facts: WikiFact[], names: Record<
   const byHeading = new Map<string, Relation[]>();
   const byCategory = new Map<string, Entry[]>();
   for (const fact of facts) {
-    const entry = { text: fact.text, chapter: fact.chapter };
+    const ref = { chapter: fact.chapter, version: fact.version, ordinal: fact.ordinal };
+    const entry = { text: fact.text, chapter: fact.chapter, ref };
     // A fact is about its first named character ("<A> holds ...", "<A> is <kind> to <B>").
     // Events and places belong to everyone they name; any other fact that only mentions
     // this character is kept apart, not filed as their intro or ability.
@@ -69,7 +72,7 @@ export function buildWikiPage(subject: string, facts: WikiFact[], names: Record<
       const label = read && heading(read.kind);
       if (read && label) {
         const people = byHeading.get(label) ?? [];
-        people.push({ name: names[read.other] ?? "Someone", subject: read.other, chapter: fact.chapter, text: fact.text });
+        people.push({ name: names[read.other] ?? "Someone", subject: read.other, chapter: fact.chapter, text: fact.text, ref });
         byHeading.set(label, people);
       } else page.more.push(entry);
     } else (byCategory.get(fact.category) ?? byCategory.set(fact.category, []).get(fact.category)!).push(entry);

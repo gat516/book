@@ -4,7 +4,7 @@ import { buildWikiPage, otherIs } from "../src/wikiPage.ts";
 
 const names = { a: "Abaddon", m: "Metatron", l: "Ling Feng", s: "Si You", y: "Yan" };
 const fact = (category: string, subjects: string[], kind: string | null = null, chapter = 1) =>
-  ({ chapter, category, kind, text: `${category} ${subjects.join(",")}`, subjects });
+  ({ chapter, category, kind, text: `${category} ${subjects.join(",")}`, subjects, version: "v", ordinal: 0 });
 
 test("a relationship reads from either side", () => {
   const subordinate = fact("relationship", ["a", "m"], "subordinate");  // Abaddon is subordinate to Metatron
