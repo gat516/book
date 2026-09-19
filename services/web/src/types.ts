@@ -930,7 +930,9 @@ export interface RepairReviewDocument {
   facts: { id: number; correct: boolean }[];
 }
 
-// A character's wiki page as of the reader's chapter (reader-api /wiki/pages).
-export interface WikiPageSummary { subject: string; title: string; chapter_index: number; }
+// A character's wiki page as of the reader's chapter (reader-api /wiki/pages): the
+// characters met so far, and one character's tagged facts with names filled in.
+export interface WikiPageSummary { subject: string; title: string; facts: number; }
 export interface WikiPagesResponse { novel_id: string; at: number; pages: WikiPageSummary[]; }
-export interface WikiPageResponse extends WikiPageSummary { novel_id: string; at: number; body: string; }
+export interface WikiFact { chapter: number; category: string; kind?: string | null; text: string; subjects: string[]; }
+export interface WikiPageResponse { novel_id: string; at: number; subject: string; title: string; facts: WikiFact[]; names: Record<string, string>; }

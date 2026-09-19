@@ -1697,3 +1697,12 @@ textarea {
   .wiki-index ul { position: static; display: flex; flex-wrap: wrap; gap: 0.3rem; }
   .wiki-index button { width: auto; }
 }
+.wiki-tabs { display: flex; gap: 0.3rem; margin: 0.4rem 0 0.2rem; }
+.wiki-tabs button { padding: 0.15rem 0.7rem; font-size: 0.86rem; border-radius: 999px; }
+.wiki-tabs button[aria-selected="true"] { background: #3f3421; border-color: #3f3421; color: #fff; }
+.wiki-relations { margin: 0 0 0.8rem; }
+.wiki-relations > div { display: grid; grid-template-columns: 7.5rem 1fr; gap: 0.6rem; padding: 0.25rem 0; }
+.wiki-relations dt { color: #6b6152; font-size: 0.9rem; }
+.wiki-relations dd { margin: 0; }
+.wiki-link { padding: 0; border: 0; background: none; color: #775600; text-decoration: underline; text-underline-offset: 2px; }
+.wiki-link:hover:not(:disabled) { background: none; color: #3f3421; }
