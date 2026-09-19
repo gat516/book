@@ -82,3 +82,23 @@ def test_chinese_names_take_letters_from_pinyin_and_spacing_from_the_model(
 def test_a_mixed_form_keeps_the_models_spelling():
     plan = provisional_plan("诺顿·威尔森", "Norton Wilson", "chinese_person", "en")
     assert plan.candidates[0].target_term == "Norton Wilson"
+
+
+@pytest.mark.db
+async def test_a_title_built_on_a_name_is_not_its_own_term(db_conn):
+    novel = await make_novel(db_conn)
+    try:
+        ctx = SimpleNamespace(db=db_conn, provider=AsyncMock(), novel=SimpleNamespace(
+            id=novel, source_lang="zh", target_lang="en"))
+        state = SimpleNamespace(envelope=SimpleNamespace(raw_text="龍飛爺爺看著秩序之神。", chapter_index=1))
+        await record_term_choices(ctx, state, [
+            TermRenderingOccurrence("龍飛", "Long Fei", 0, 2, term_role="chinese_person"),
+            TermRenderingOccurrence("龍飛爺爺", "Grandpa Long Fei", 0, 4, term_role="personal_title"),
+            TermRenderingOccurrence("秩序之神", "God of Order", 6, 10, term_role="personal_title"),
+        ])
+        terms = [row[0] for row in await (await db_conn.execute(
+            "SELECT source_term FROM character_name_review WHERE novel_id=%s ORDER BY 1", (novel,))).fetchall()]
+        # The name inside the title is the term; a title with no name in it still is one.
+        assert terms == ["秩序之神", "龍飛"]
+    finally:
+        await delete_novel(db_conn, novel)

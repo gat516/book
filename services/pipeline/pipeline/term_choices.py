@@ -136,8 +136,19 @@ def provisional_plan(surface: str, display: str, role: str, target_lang: str):
 async def record_term_choices(ctx, state, occurrences: list[TermRenderingOccurrence]) -> None:
     if ctx.novel.source_lang.split("-")[0] != "zh" or ctx.novel.source_lang == ctx.novel.target_lang:
         return
+    # A title built on a person's name ("Grandpa Long Fei", 龍飛爺爺) is not a term of its
+    # own: only the name inside it is. Otherwise the title gets its own spelling, review
+    # entry and highlight, and wins the leftmost-longest scan over the name it contains.
+    people = {o.source_term for o in occurrences if o.term_role in ("chinese_person", "foreign_person")}
+    rows = await (await ctx.db.execute(
+        "SELECT source_term FROM character_name_review WHERE novel_id=%s "
+        "AND term_role IN ('chinese_person','foreign_person')", (ctx.novel.id,))).fetchall()
+    people.update(row[0] for row in rows)
     seen = set()
     for occurrence in occurrences:
+        if occurrence.term_role == "personal_title" and any(
+                name != occurrence.source_term and name in occurrence.source_term for name in people):
+            continue
         # "aligned" comes from display alignment, "source_names" from the pre-translation
         # source pass; glossary-scan occurrences are already decided and never re-proposed.
         if occurrence.source_term in seen or occurrence.method not in ("aligned", "source_names"):
