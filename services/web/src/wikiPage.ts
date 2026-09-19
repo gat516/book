@@ -12,7 +12,7 @@ export interface WikiPageModel {
   intro: Entry[];
   aliases: Entry[];
   relationships: { heading: string; people: Relation[] }[];
-  sections: { heading: string; entries: Entry[] }[];
+  sections: { category: string; heading: string; entries: Entry[] }[];
   history: Entry[];
   more: Entry[];
   mentions: Entry[];
@@ -30,6 +30,10 @@ const FAMILY = new Set(["family", "parent", "child", "sibling", "mother", "fathe
 // character's side ("<this> is subordinate to <other>" makes <other> a superior).
 const INVERSE: Record<string, string> = { subordinate: "superior", superior: "subordinate" };
 const SYMMETRIC = new Set(["friend", "enemy", "lover", "family", "sibling", "brother", "sister"]);
+
+// The order a page shows its parts: what places a character first, the long story last.
+export const PAGE_ORDER = ["intro", "alias", "status", "affiliation", "relationships", "ability", "item", "history"] as const;
+export type PagePart = typeof PAGE_ORDER[number];
 
 const SECTIONS: [string, string][] = [
   ["ability", "Abilities"], ["item", "Possessions"], ["affiliation", "Affiliations"], ["status", "Status"],
@@ -79,7 +83,7 @@ export function buildWikiPage(subject: string, facts: WikiFact[], names: Record<
   }
   page.relationships = HEADINGS.map(([, label]) => ({ heading: label, people: byHeading.get(label) ?? [] }))
     .filter((group) => group.people.length);
-  page.sections = SECTIONS.map(([category, label]) => ({ heading: label, entries: byCategory.get(category) ?? [] }))
+  page.sections = SECTIONS.map(([category, label]) => ({ category, heading: label, entries: byCategory.get(category) ?? [] }))
     .filter((section) => section.entries.length);
   return page;
 }

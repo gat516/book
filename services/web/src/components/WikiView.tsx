@@ -1,8 +1,8 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { getWikiPage, getWikiPages, retractFact } from "../api";
 import { useKnowledgeRevision } from "../knowledgeUpdates";
 import type { WikiPageResponse, WikiPagesResponse } from "../types";
-import { buildWikiPage, type Entry, type FactRef } from "../wikiPage";
+import { buildWikiPage, PAGE_ORDER, type Entry, type FactRef } from "../wikiPage";
 
 /**
  * Character pages as of the reader's chapter, assembled from the facts learned so far.
@@ -79,23 +79,30 @@ export function WikiView({ novelId, onClose }: { novelId: string; at: number; on
                 <button type="button" role="tab" aria-selected={tab === "more"} onClick={() => setTab("more")}>More{model.more.length + model.mentions.length ? ` (${model.more.length + model.mentions.length})` : ""}</button>
               </div>
               {tab === "page" ? <>
-                {model.aliases.length > 0 && <Section heading="Also known as" entries={model.aliases} {...pick} />}
-                {model.intro.length > 0 && <Section heading="Introduction" entries={model.intro} {...pick} />}
-                {model.relationships.length > 0 && <>
-                  <h4>Relationships</h4>
-                  <dl className="wiki-relations">{model.relationships.map((group) => <div key={group.heading}>
-                    <dt>{group.heading}</dt>
-                    <dd>{group.people.map((person, i) => <span key={key(person.ref)}>
-                      <Fact entry={{ text: "", chapter: person.chapter, ref: person.ref }} title={person.text} {...pick}>
-                        {known.has(person.subject)
-                          ? <button type="button" className="wiki-link" onClick={(event) => { event.stopPropagation(); setSubject(person.subject); }}>{person.name}</button>
-                          : person.name}
-                      </Fact>{i < group.people.length - 1 ? ", " : ""}
-                    </span>)}</dd>
-                  </div>)}</dl>
-                </>}
-                {model.sections.map((section) => <Section key={section.heading} heading={section.heading} entries={section.entries} list {...pick} />)}
-                {model.history.length > 0 && <Section heading="History" entries={model.history} {...pick} />}
+                {PAGE_ORDER.map((part) => {
+                  switch (part) {
+                    case "intro": return model.intro.length > 0 && <Section key={part} heading="Introduction" entries={model.intro} {...pick} />;
+                    case "alias": return model.aliases.length > 0 && <Section key={part} heading="Also known as" entries={model.aliases} {...pick} />;
+                    case "history": return model.history.length > 0 && <Section key={part} heading="History" entries={model.history} {...pick} />;
+                    case "relationships": return model.relationships.length > 0 && <Fragment key={part}>
+                      <h4>Relationships</h4>
+                      <dl className="wiki-relations">{model.relationships.map((group) => <div key={group.heading}>
+                        <dt>{group.heading}</dt>
+                        <dd>{group.people.map((person, i) => <span key={key(person.ref)}>
+                          <Fact entry={{ text: "", chapter: person.chapter, ref: person.ref }} title={person.text} {...pick}>
+                            {known.has(person.subject)
+                              ? <button type="button" className="wiki-link" onClick={(event) => { event.stopPropagation(); setSubject(person.subject); }}>{person.name}</button>
+                              : person.name}
+                          </Fact>{i < group.people.length - 1 ? ", " : ""}
+                        </span>)}</dd>
+                      </div>)}</dl>
+                    </Fragment>;
+                    default: {
+                      const section = model.sections.find((s) => s.category === part);
+                      return section && <Section key={part} heading={section.heading} entries={section.entries} list {...pick} />;
+                    }
+                  }
+                })}
               </> : model.more.length + model.mentions.length ? <>
                 {model.more.length > 0 && <Section heading="Other relationships" entries={model.more} list {...pick} />}
                 {model.mentions.length > 0 && <Section heading="Mentioned in" entries={model.mentions} list {...pick} />}
