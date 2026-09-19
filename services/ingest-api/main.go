@@ -58,6 +58,7 @@ func main() {
 	mux.Handle("GET /novels/{id}/records/rebuild/status", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsRebuildStatus)))
 	mux.Handle("POST /novels/{id}/records/rebuild/discard", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordsRebuildDiscard)))
 	mux.Handle("PATCH /novels/{id}/chapter/{n}/records/review", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.recordReview)))
+	mux.Handle("POST /novels/{id}/facts/retract", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.retractFact)))
 	mux.HandleFunc("PATCH /novels/{id}/settings", api.patchNovelSettings)
 	mux.HandleFunc("GET /novels/{id}/provider-config", api.getProviderConfig)
 	mux.HandleFunc("PATCH /novels/{id}/provider-config", api.putProviderConfig)
