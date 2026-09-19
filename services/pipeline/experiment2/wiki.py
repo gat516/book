@@ -139,7 +139,7 @@ if __name__ == "__main__":
     who.add_argument("--list", action="store_true", help="rank the people met by fact count")
     who.add_argument("--character")
     who.add_argument("--top", type=int, help="write pages for the N most-mentioned people")
-    parser.add_argument("--prompt", default="wiki-page-v3.txt")
+    parser.add_argument("--prompt", default="wiki-page-v4.txt")
     parser.add_argument("--provider", choices=["book", "deepseek", "local"], default="book")
     parser.add_argument("--model")
     parser.add_argument("--max-output-tokens", type=int, default=1200)

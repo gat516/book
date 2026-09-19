@@ -17,7 +17,6 @@ from downstream_trial import LocalCalls, save
 from pipeline.config import Config
 from pipeline.fact_first import _source_passages
 from pipeline.llm.provider import AdmissionRejected
-from pipeline.name_renderings import conventional_english_names
 from pipeline.provider_config import build_provider, resolve_provider_config
 from pipeline.term_choices import provisional_plan
 
@@ -258,11 +257,8 @@ def mark_terms(notes, linked, glossary):
               for nid, n in notes.items()}
     spellings = {}
     for tid, surface in terms.items():
-        known = conventional_english_names(surface)
         if surface in glossary:
             spellings[tid] = glossary[surface]
-        elif known:
-            spellings[tid] = known[0]
     return marked, terms, spellings
 
 

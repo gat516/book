@@ -15,7 +15,6 @@ from psycopg.types.json import Jsonb
 from pipeline.context import PipelineState, StageContext
 from pipeline.display_names import TermRenderingOccurrence
 from pipeline.evidence import digest, stable_id
-from pipeline.name_renderings import conventional_english_names
 
 log = logging.getLogger(__name__)
 
@@ -125,8 +124,7 @@ def provisional_plan(surface: str, display: str, role: str, target_lang: str):
     }.get(role)
     if rendering is None:
         return None
-    # Conventional foreign-name restoration; titles and semantic terms keep the model's
-    # translated wording.
+    # Foreign names, titles and semantic terms keep the model's own wording.
     plan = _rendering_plan(surface, rendering, [display], target_lang)
     if not plan.candidates:
         return None
@@ -161,12 +159,6 @@ async def record_term_choices(ctx, state, occurrences: list[TermRenderingOccurre
 
 
 def _rendering_plan(surface: str, rendering: str, targets: list[str], target_lang: str = "en") -> NamePlan:
-    conventional = conventional_english_names(surface) if target_lang.split("-")[0] == "en" else ()
-    if conventional:
-        suggestions = tuple(targets) if rendering == "foreign_personal" else ()
-        candidates = tuple(NameCandidate(target, (), "", "restored_name")
-                           for target in dict.fromkeys(conventional + suggestions))[:8]
-        return NamePlan(candidates, "restored_name", "foreign_person", "restored_name")
     if rendering == "semantic_term":
         candidates = tuple(NameCandidate(target, (), "", "semantic_translation")
                            for target in dict.fromkeys(targets))

@@ -38,12 +38,12 @@ words, numbers and generic ranks.
 Return JSON: {"names": [{"source_term": copied exactly from the chapter, "display_term":
 its English form, "term_role": one of chinese_person, foreign_person, personal_title,
 semantic_term}]}.
-Chinese personal names use Pinyin with the surname separated, even when their
-characters have a meaning: 凌峰 is Ling Feng, and 白雪 is Bai Xue, not White Snow.
-Foreign names transcribed into Chinese use their usual English spelling: 勞倫斯 is
-Lawrence. A personal_title is a person's name with a title: translate only the title
-and keep the name in Pinyin, so 凌峰大人 is Lord Ling Feng. Other names are translated
-by meaning: 秩序神殿 is Order Temple."""
+Chinese personal names use Pinyin, with the surname as its own word and the given name
+as one word; never translate a personal name's meaning, even when its characters have
+one. Foreign names transcribed into Chinese use the name's usual English spelling, not
+Pinyin. Don't list a title that contains a person's name; list the name on its own.
+Other names are translated by meaning, in plain everyday English words rather than
+formal or unusual ones."""
 
 _CJK = re.compile(r"[㐀-鿿豈-﫿]")
 
@@ -55,7 +55,9 @@ class SourceNames(BaseModel):
 def _usable(source: str, item: TermAlignment) -> str | None:
     """The term as written in the source (either script), or None if the pair is unusable."""
     term, english = item.source_term.strip(), item.display_term
-    if not term or len(term) > 40 or not english.strip() or len(english) > 80 or _CJK.search(english):
+    # A number or address ("117", "27號") is never a name, whatever the model says.
+    if not term or len(term) > 40 or not english.strip() or len(english) > 80 or _CJK.search(english) \
+            or re.search(r"\d", term):
         return None
     return source_form(term, source)
 

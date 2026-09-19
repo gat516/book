@@ -15,7 +15,7 @@ from pipeline.stages.translate import _glossary
     ("凌峰", "Ling Feng", "chinese_person", "Ling Feng", "pinyin"),
     ("龍飛", "Long Fei", "chinese_person", "Long Fei", "pinyin"),
     ("水寒", "Water Cold", "chinese_person", "Shuihan", "pinyin"),
-    ("契科夫", "Chekov", "foreign_person", "Chekhov", "restored_name"),
+    ("契科夫", "Chekov", "foreign_person", "Chekov", "restored_name"),  # the model's spelling stands
     ("白衣剑圣", "White-Robed Sword Saint", "personal_title", "White-Robed Sword Saint", "translated_title"),
     ("天庭", "Heavenly Court", "semantic_term", "Heavenly Court", "semantic_translation"),
 ])
