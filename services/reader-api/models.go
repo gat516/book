@@ -435,12 +435,11 @@ type ChapterResponse struct {
 	TranslationWarning *TranslationWarning `json:"translation_warning"`
 }
 
-// WikiPageSummary is one character's page as a reader at `at` may see it: the newest
-// version built at or before that chapter.
+// WikiPageSummary is a character a reader at `at` has met who has at least one fact.
 type WikiPageSummary struct {
-	Subject      string `json:"subject"`
-	Title        string `json:"title"`
-	ChapterIndex int    `json:"chapter_index"`
+	Subject string `json:"subject"` // the character's ID
+	Title   string `json:"title"`   // the name's current spelling
+	Facts   int    `json:"facts"`
 }
 
 type WikiPagesResponse struct {
@@ -449,9 +448,22 @@ type WikiPagesResponse struct {
 	Pages   []WikiPageSummary `json:"pages"`
 }
 
+// WikiFact is one tagged fact with its character markers already replaced by names.
+type WikiFact struct {
+	Chapter  int      `json:"chapter"`
+	Category string   `json:"category"`
+	Kind     *string  `json:"kind,omitempty"`
+	Text     string   `json:"text"`
+	Subjects []string `json:"subjects"`
+}
+
+// WikiPageResponse is everything the reader may know about one character; the client
+// groups the facts into page sections.
 type WikiPageResponse struct {
-	NovelID string `json:"novel_id"`
-	At      int    `json:"at"`
-	WikiPageSummary
-	Body string `json:"body"`
+	NovelID string            `json:"novel_id"`
+	At      int               `json:"at"`
+	Subject string            `json:"subject"`
+	Title   string            `json:"title"`
+	Facts   []WikiFact        `json:"facts"`
+	Names   map[string]string `json:"names"`
 }

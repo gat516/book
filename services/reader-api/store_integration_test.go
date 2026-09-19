@@ -637,35 +637,46 @@ func TestChapterRenderingExposesOneProvisionalChoiceAndRespectsGate(t *testing.T
 	check(false)
 }
 
-// A wiki page is shown as of the reader's chapter: the newest version built at or before
-// it, never a later one, and nothing from another novel.
+// A character page is assembled from tagged facts up to the reader's chapter: never a
+// later fact, never a character met later, nothing from another novel, and the name is
+// filled in with its current spelling.
 func TestWikiPageIsGatedAtTheReadersChapter(t *testing.T) {
 	store, admin := integrationDatabase(t)
 	fixture := seedIntegrationFixture(t, admin)
 	ctx := context.Background()
+	var hero string
+	if err := admin.QueryRow(ctx, `INSERT INTO character (novel_id, source_term, first_seen_chapter)
+		VALUES ($1, 'hero-source', 1) RETURNING id::text`, fixture.novelID).Scan(&hero); err != nil {
+		t.Fatalf("seed character: %v", err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO glossary (novel_id, source_term, target_term, version, locked_at_chapter)
+		VALUES ($1, 'hero-source', 'Hero', 99, 0)`, fixture.novelID); err != nil {
+		t.Fatalf("seed spelling: %v", err)
+	}
 	for _, row := range []struct {
 		chapter int
-		body    string
-	}{{1, "as of chapter one"}, {3, "as of chapter three"}} {
-		if _, err := admin.Exec(ctx, `INSERT INTO wiki_page
-			(novel_id, subject, chapter_index, prompt_version, title, body, facts_used)
-			VALUES ($1, 'hero-term', $2, 'wiki-update-v1.txt', 'Hero', $3, 1)`,
-			fixture.novelID, row.chapter, row.body); err != nil {
-			t.Fatalf("seed wiki page: %v", err)
+		text    string
+	}{{1, "⟦" + hero + "⟧ left home."}, {3, "⟦" + hero + "⟧ came back."}} {
+		if _, err := admin.Exec(ctx, `INSERT INTO chapter_fact
+			(novel_id, chapter_index, prompt_version, ordinal, text, category, subjects, source_hash, requested_model)
+			VALUES ($1, $2, 'tagged-facts-v1.txt', 0, $3, 'event', ARRAY[$4::uuid], 'h', 'm')`,
+			fixture.novelID, row.chapter, row.text, hero); err != nil {
+			t.Fatalf("seed fact: %v", err)
 		}
 	}
 
 	if pages, err := store.ListWikiPages(ctx, fixture.novelID, 0); err != nil || len(pages) != 0 {
 		t.Fatalf("chapter 0 pages = %+v, %v; want none", pages, err)
 	}
-	if _, body, err := store.GetWikiPage(ctx, fixture.novelID, "hero-term", 2); err != nil || body != "as of chapter one" {
-		t.Fatalf("chapter 2 page = %q, %v; want the chapter 1 version", body, err)
+	page, err := store.GetWikiPage(ctx, fixture.novelID, hero, 2)
+	if err != nil || page.Title != "Hero" || len(page.Facts) != 1 || page.Facts[0].Text != "Hero left home." {
+		t.Fatalf("chapter 2 page = %+v, %v; want only the chapter 1 fact, named", page, err)
 	}
 	pages, err := store.ListWikiPages(ctx, fixture.novelID, 3)
-	if err != nil || len(pages) != 1 || pages[0].ChapterIndex != 3 {
-		t.Fatalf("chapter 3 pages = %+v, %v; want the chapter 3 version", pages, err)
+	if err != nil || len(pages) != 1 || pages[0].Facts != 2 {
+		t.Fatalf("chapter 3 pages = %+v, %v; want one character with two facts", pages, err)
 	}
-	if _, _, err := store.GetWikiPage(ctx, fixture.otherNovelID, "hero-term", 99); !errors.Is(err, ErrNotFound) {
+	if _, err := store.GetWikiPage(ctx, fixture.otherNovelID, hero, 99); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("another novel's reader saw the page: %v", err)
 	}
 }

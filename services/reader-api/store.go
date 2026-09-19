@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -48,7 +49,7 @@ type ReaderStore interface {
 	RequestScrapeCancel(context.Context, string) error
 	ListGlossary(context.Context, string, int) ([]GlossaryTermView, error)
 	ListWikiPages(context.Context, string, int) ([]WikiPageSummary, error)
-	GetWikiPage(context.Context, string, string, int) (WikiPageSummary, string, error)
+	GetWikiPage(context.Context, string, string, int) (WikiPageResponse, error)
 	ListNameReviews(context.Context, string, *int) ([]CharacterNameReview, error)
 	ListRecords(context.Context, string, int, int) (RecordsResponse, error)
 	ListRecordsInspector(context.Context, string, int, int) (RecordsInspectorResponse, error)
@@ -974,48 +975,118 @@ func (s *Store) hasNextChapter(ctx context.Context, novelID string, chapter int)
 	return exists, err
 }
 
-// wikiPageVersion picks the newest prompt set a reader at `at` can see; within it, each
-// subject's newest version at or before `at`. The explicit chapter predicate is the
-// first lock; wiki_page's RLS policy (0111) is the second.
-const wikiPageVersion = `SELECT max(prompt_version) FROM wiki_page WHERE novel_id=$1 AND chapter_index <= $2`
+// Wiki pages are assembled from tagged facts (migration 0112). Every query filters on
+// the reader's chapter explicitly; the chapter_fact and character RLS policies are the
+// second lock.
 
-// ListWikiPages lists the character pages a reader at `at` may see.
+// taggedFactVersion keeps one tagged prompt set per chapter: its newest.
+const taggedFactVersion = `f.category IS NOT NULL AND f.prompt_version = (
+	SELECT max(g.prompt_version) FROM chapter_fact g
+	 WHERE g.novel_id=f.novel_id AND g.chapter_index=f.chapter_index AND g.category IS NOT NULL)`
+
+// characterNames maps each character a reader at `at` has met to its current spelling:
+// a confirmed glossary spelling, then the reader's selection, then the pending choice.
+const characterNames = `SELECT c.id::text,
+	COALESCE(g.target_term, r.selected_target, r.candidates->0->>'target_term', c.source_term)
+	  FROM character c
+	  LEFT JOIN character_name_review r ON r.novel_id=c.novel_id AND r.source_term=c.source_term
+	  LEFT JOIN glossary g ON g.novel_id=c.novel_id AND g.source_term=c.source_term AND NOT g.deleted
+	 WHERE c.novel_id=$1 AND c.first_seen_chapter <= $2`
+
+var characterMarker = regexp.MustCompile(`⟦([0-9a-f-]{36})⟧`)
+
+func loadCharacterNames(ctx context.Context, tx pgx.Tx, novelID string, at int) (map[string]string, error) {
+	rows, err := tx.Query(ctx, characterNames, novelID, at)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	names := map[string]string{}
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		names[id] = name
+	}
+	return names, rows.Err()
+}
+
+// ListWikiPages lists the characters a reader at `at` has facts about, most-mentioned first.
 func (s *Store) ListWikiPages(ctx context.Context, novelID string, at int) ([]WikiPageSummary, error) {
 	pages := []WikiPageSummary{}
 	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT subject, title, chapter_index FROM (
-			SELECT DISTINCT ON (subject) subject, title, chapter_index FROM wiki_page
-			 WHERE novel_id=$1 AND chapter_index <= $2 AND prompt_version = (`+wikiPageVersion+`)
-			 ORDER BY subject, chapter_index DESC) latest ORDER BY title`, novelID, at)
+		names, err := loadCharacterNames(ctx, tx, novelID, at)
+		if err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT subject::text, count(*) FROM chapter_fact f, unnest(f.subjects) subject
+			 WHERE f.novel_id=$1 AND f.chapter_index <= $2 AND `+taggedFactVersion+`
+			 GROUP BY subject ORDER BY count(*) DESC, subject`, novelID, at)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var page WikiPageSummary
-			if err := rows.Scan(&page.Subject, &page.Title, &page.ChapterIndex); err != nil {
+			if err := rows.Scan(&page.Subject, &page.Facts); err != nil {
 				return err
 			}
-			pages = append(pages, page)
+			if title, ok := names[page.Subject]; ok {
+				page.Title = title
+				pages = append(pages, page)
+			}
 		}
 		return rows.Err()
 	})
 	return pages, err
 }
 
-// GetWikiPage returns one character's page as a reader at `at` may see it.
-func (s *Store) GetWikiPage(ctx context.Context, novelID, subject string, at int) (WikiPageSummary, string, error) {
-	var page WikiPageSummary
-	var body string
+// GetWikiPage returns one character's tagged facts up to `at`, names filled in.
+func (s *Store) GetWikiPage(ctx context.Context, novelID, subject string, at int) (WikiPageResponse, error) {
+	page := WikiPageResponse{NovelID: novelID, At: at, Subject: subject, Facts: []WikiFact{}}
 	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, `SELECT subject, title, chapter_index, body FROM wiki_page
-			 WHERE novel_id=$1 AND chapter_index <= $2 AND subject=$3 AND prompt_version = (`+wikiPageVersion+`)
-			 ORDER BY chapter_index DESC LIMIT 1`, novelID, at, subject).
-			Scan(&page.Subject, &page.Title, &page.ChapterIndex, &body)
-		if errors.Is(err, pgx.ErrNoRows) {
+		names, err := loadCharacterNames(ctx, tx, novelID, at)
+		if err != nil {
+			return err
+		}
+		title, ok := names[subject]
+		if !ok {
 			return ErrNotFound
 		}
-		return err
+		page.Title = title
+		rows, err := tx.Query(ctx, `SELECT f.chapter_index, f.category, f.kind, f.text, f.subjects::text[]
+			  FROM chapter_fact f
+			 WHERE f.novel_id=$1 AND f.chapter_index <= $2 AND $3::uuid = ANY(f.subjects) AND `+taggedFactVersion+`
+			 ORDER BY f.chapter_index, f.ordinal`, novelID, at, subject)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		page.Names = map[string]string{}
+		for rows.Next() {
+			var fact WikiFact
+			if err := rows.Scan(&fact.Chapter, &fact.Category, &fact.Kind, &fact.Text, &fact.Subjects); err != nil {
+				return err
+			}
+			fact.Text = characterMarker.ReplaceAllStringFunc(fact.Text, func(m string) string {
+				if name, ok := names[characterMarker.FindStringSubmatch(m)[1]]; ok {
+					return name
+				}
+				return "someone"
+			})
+			for _, id := range fact.Subjects {
+				page.Names[id] = names[id]
+			}
+			page.Facts = append(page.Facts, fact)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if len(page.Facts) == 0 {
+			return ErrNotFound
+		}
+		return nil
 	})
-	return page, body, err
+	return page, err
 }

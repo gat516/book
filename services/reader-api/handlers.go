@@ -1146,7 +1146,12 @@ func (a *API) getWikiPage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	page, body, err := a.store.GetWikiPage(r.Context(), novelID, r.PathValue("subject"), at)
+	subject, ok := pathUUID(r, "subject")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid character id")
+		return
+	}
+	page, err := a.store.GetWikiPage(r.Context(), novelID, subject, at)
 	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "no page for this character at your chapter")
 		return
@@ -1156,5 +1161,5 @@ func (a *API) getWikiPage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load wiki page")
 		return
 	}
-	writeJSON(w, http.StatusOK, WikiPageResponse{NovelID: novelID, At: at, WikiPageSummary: page, Body: body})
+	writeJSON(w, http.StatusOK, page)
 }

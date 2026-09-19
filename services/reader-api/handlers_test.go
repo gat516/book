@@ -1176,6 +1176,6 @@ func (f *fakeStore) ListWikiPages(context.Context, string, int) ([]WikiPageSumma
 	return []WikiPageSummary{}, nil
 }
 
-func (f *fakeStore) GetWikiPage(context.Context, string, string, int) (WikiPageSummary, string, error) {
-	return WikiPageSummary{}, "", ErrNotFound
+func (f *fakeStore) GetWikiPage(context.Context, string, string, int) (WikiPageResponse, error) {
+	return WikiPageResponse{}, ErrNotFound
 }
