@@ -83,7 +83,7 @@ export function WikiView({ novelId, onClose }: { novelId: string; at: number; on
                   switch (part) {
                     case "intro": return model.intro.length > 0 && <Section key={part} heading="Introduction" entries={model.intro} {...pick} />;
                     case "alias": return model.aliases.length > 0 && <Section key={part} heading="Also known as" entries={model.aliases} {...pick} />;
-                    case "history": return model.history.length > 0 && <Section key={part} heading="History" entries={model.history} {...pick} />;
+                    case "history": return model.history.length > 0 && <History key={part} entries={model.history} {...pick} />;
                     case "relationships": return model.relationships.length > 0 && <Fragment key={part}>
                       <h4>Relationships</h4>
                       <dl className="wiki-relations">{model.relationships.map((group) => <div key={group.heading}>
@@ -124,14 +124,28 @@ function Section({ heading, entries, list = false, ...pick }: { heading: string;
   </>;
 }
 
+// History grows every chapter, so it's a timeline: one group per chapter, one bullet
+// per fact, with the chapter shown once on the group instead of after every fact.
+function History({ entries, ...pick }: { entries: Entry[] } & Pick) {
+  const chapters = [...new Set(entries.map((entry) => entry.chapter))];
+  return <>
+    <h4>History</h4>
+    <div className="wiki-history">{chapters.map((chapter) => <section key={chapter}>
+      <h5>Chapter {chapter}</h5>
+      <ul>{entries.filter((entry) => entry.chapter === chapter).map((entry) =>
+        <li key={key(entry.ref)}><Fact entry={entry} cite={false} {...pick} /></li>)}</ul>
+    </section>)}</div>
+  </>;
+}
+
 function key(ref: FactRef): string {
   return `${ref.chapter}:${ref.version}:${ref.ordinal}`;
 }
 
 // A fact is selected by clicking it (or Enter/Space); a selected fact offers Remove,
 // which retracts it for every reader, and Keep. Escape or a second click deselects.
-function Fact({ entry, title, children, selected, onSelect, onRemove }:
-  { entry: Entry; title?: string; children?: ReactNode } & Pick) {
+function Fact({ entry, title, children, cite = true, selected, onSelect, onRemove }:
+  { entry: Entry; title?: string; children?: ReactNode; cite?: boolean } & Pick) {
   const id = key(entry.ref);
   const isSelected = selected === id;
   const toggle = () => onSelect(isSelected ? null : id);
@@ -142,7 +156,7 @@ function Fact({ entry, title, children, selected, onSelect, onRemove }:
         if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); }
         else if (event.key === "Escape") onSelect(null);
       }}>
-      {children ?? entry.text}<Cite chapter={entry.chapter} />
+      {children ?? entry.text}{cite && <Cite chapter={entry.chapter} />}
     </span>
     {isSelected && <span className="wiki-fact-actions">
       <button type="button" className="btn-danger" onClick={() => onRemove(entry.ref)}>Remove</button>

@@ -1712,3 +1712,6 @@ textarea {
 .wiki-fact.is-selected { background: #f8e5e2; box-shadow: 0 0 0 1px #d9aaa4; }
 .wiki-fact-actions { display: inline-flex; gap: 0.3rem; margin-left: 0.4rem; vertical-align: 0.05em; }
 .wiki-fact-actions button { padding: 0 0.55rem; font-size: 0.8rem; }
+.wiki-history section { margin-bottom: 0.6rem; }
+.wiki-history h5 { margin: 0 0 0.2rem; font-size: 0.82rem; font-weight: 600; color: #8a7f6b; }
+.wiki-history ul { margin: 0; }
