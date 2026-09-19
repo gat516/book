@@ -26,7 +26,6 @@ import type {
   Progress,
   ScrapeJobView,
   StartScrapeRequest,
-  TimelineResponse,
   RecordsResponse,
   RecordsInspectorResponse,
   RecordReviewRequest,
@@ -373,11 +372,6 @@ export function prioritizeChapter(novelId: string, chapter: number): Promise<{ p
     method: "POST", body: JSON.stringify({ from: chapter, count: 1, priority: true }),
   });
 }
-
-export function getTimeline(novelId: string, at?: number): Promise<TimelineResponse> {
-  return request(`/novels/${novelId}/timeline${at === undefined ? "" : `?at=${at}`}`);
-}
-
 
 // null (not a thrown 404) when the novel has no provider_config row: "inheriting the
 // server default" is an ordinary state for a novel, not an error the caller must catch.

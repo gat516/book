@@ -10,7 +10,6 @@ import { NovelPicker } from "./components/NovelPicker";
 import { ProgressControls } from "./components/ProgressControls";
 import { ReaderPane } from "./components/ReaderPane";
 import { TranslationNotice } from "./components/TranslationNotice";
-import { TimelineView } from "./components/TimelineView";
 import { WikiView } from "./components/WikiView";
 import { BookSettingsView } from "./components/BookSettingsView";
 import { SettingsView } from "./components/SettingsView";
@@ -65,7 +64,6 @@ export default function App() {
   // ChapterPending for it holds them here and polls until it's readable.
   const [pending, setPending] = useState<PendingChapter | null>(null);
   const [showGlossary, setShowGlossary] = useState(false);
-  const [showTimeline, setShowTimeline] = useState(false);
   const [showWiki, setShowWiki] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   // Book-level settings (provider/model config, knowledge repair) — separate from the
@@ -133,7 +131,6 @@ export default function App() {
     setPending(null);
     setLookingForMore(false);
     setShowGlossary(false);
-    setShowTimeline(false);
     setShowWiki(false);
     setShowBookSettings(false);
     setShowChapters(true);
@@ -149,7 +146,6 @@ export default function App() {
     setPending(null);
     setLookingForMore(false);
     setShowGlossary(false);
-    setShowTimeline(false);
     setShowWiki(false);
     setShowBookSettings(false);
     setShowChapters(true);
@@ -162,7 +158,6 @@ export default function App() {
     setPending(null);
     setAddingChapter(false);
     setShowGlossary(false);
-    setShowTimeline(false);
     setShowWiki(false);
     setShowChapters(true);
   }
@@ -197,7 +192,6 @@ export default function App() {
     setPending(null);
     setShowChapters(false);
     setShowGlossary(false);
-    setShowTimeline(false);
     setShowWiki(false);
   }
 
@@ -224,7 +218,6 @@ export default function App() {
       setChapterIndex(index);
       setShowChapters(false);
       setShowGlossary(false);
-      setShowTimeline(false);
       return;
     }
     await putProgress(novelId!, index);
@@ -341,25 +334,20 @@ export default function App() {
         <h1>{novel?.title ?? "Book"}</h1>
         <p>{showGlossary
           ? "Review and correct the names used in this translation."
-          : showTimeline
-            ? "Follow what has happened up to your current chapter."
-            : showWiki
+          : showWiki
               ? "Browse people and places you have encountered so far."
               : showChapters
                 ? "Browse chapters and processing status."
                 : `Reading from chapter ${chapterIndex}.`}</p>
       </header>
       <nav className="app-nav" aria-label="Book navigation">
-        <button className="app-toggle-glossary" aria-pressed={showChapters && !showGlossary && !showTimeline && !showWiki} onClick={backToChapters}>
+        <button className="app-toggle-glossary" aria-pressed={showChapters && !showGlossary && !showWiki} onClick={backToChapters}>
           Chapters
         </button>
-        <button className="app-toggle-glossary" aria-pressed={showGlossary} onClick={() => { setShowGlossary((v) => !v); setShowTimeline(false); setShowWiki(false); }}>
+        <button className="app-toggle-glossary" aria-pressed={showGlossary} onClick={() => { setShowGlossary((v) => !v); setShowWiki(false); }}>
           Glossary
         </button>
-        <button className="app-toggle-glossary" aria-pressed={showTimeline} onClick={() => { setShowTimeline((v) => !v); setShowGlossary(false); setShowWiki(false); }}>
-          Timeline
-        </button>
-        <button className="app-toggle-glossary" aria-pressed={showWiki} onClick={() => { setShowWiki((v) => !v); setShowGlossary(false); setShowTimeline(false); }}>
+        <button className="app-toggle-glossary" aria-pressed={showWiki} onClick={() => { setShowWiki((v) => !v); setShowGlossary(false); }}>
           Wiki
         </button>
         {/* Grouped so the pair wraps as one unit. Pushing each button individually to the
@@ -376,9 +364,8 @@ export default function App() {
       </nav>
       <QueueControls novelId={novelId} />
       {showGlossary && <GlossaryView key={novelId} novelId={novelId} at={chapter?.at} />}
-      {showTimeline && <TimelineView key={`timeline-${novelId}`} novelId={novelId} at={chapter?.at ?? chapterIndex} onClose={() => setShowTimeline(false)} />}
       {showWiki && <WikiView key={`wiki-${novelId}`} novelId={novelId} at={chapter?.at ?? chapterIndex} onClose={() => setShowWiki(false)} />}
-      <div hidden={showGlossary || showTimeline || showWiki}>
+      <div hidden={showGlossary || showWiki}>
         {navigationError && <p role="alert" className="chapter-list-error">{navigationError}</p>}
         {addingChapter ? (
           <AddChapterForm
