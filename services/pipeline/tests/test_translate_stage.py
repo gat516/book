@@ -307,3 +307,45 @@ async def test_nonempty_original_is_saved_with_warning_when_retry_still_misses(d
         assert redis.store=={},"warning output must never enter the response cache"
     finally:
         if novel_id: await delete_novel(db_conn,novel_id)
+
+
+async def _run_untranslated_case(db_conn, retry_output: str):
+    novel_id = await make_novel(db_conn, source_lang="zh", target_lang="en", ontology=json.dumps(ONTOLOGY))
+    await db_conn.execute("""INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta)
+        VALUES(%s,%s,%s,'raw/test.txt','{}')""", (novel_id, CHAPTER, RAW_HASH))
+    half_chinese = "The gates opened. " + SOURCE * 5  # 50 Chinese characters left in
+
+    def respond(prompt, system):
+        return retry_output if "Leave no Chinese text" in system else half_chinese
+    provider = FakeProvider(respond)
+    objects = FakeObjects(); redis = FakeRedis(); cfg = make_config()
+    ctx = StageContext(novel=NovelMeta(id=novel_id, source_lang="zh", target_lang="en", ontology=ONTOLOGY),
+        language_profile=language_profile_for("zh"), provider=provider, batch_manager=BatchManager(provider),
+        embed_provider=provider, db=db_conn, objects=objects, cfg=cfg, cache=LLMCache(redis))
+    return novel_id, ctx, _state(novel_id), provider
+
+
+async def test_half_chinese_translation_is_retried_once_with_a_firmer_instruction(db_conn):
+    novel_id = None
+    try:
+        novel_id, ctx, state, provider = await _run_untranslated_case(db_conn, TRANSLATION)
+        await TranslateStage().run(ctx, state)
+        assert state.translation == TRANSLATION
+        assert len(provider.calls) == 3  # names, translation, retry
+    finally:
+        if novel_id: await delete_novel(db_conn, novel_id)
+
+
+async def test_translation_still_mostly_chinese_after_retry_fails_the_chapter(db_conn):
+    from pipeline.translation import UntranslatedOutput
+    novel_id = None
+    try:
+        novel_id, ctx, state, provider = await _run_untranslated_case(db_conn, "Still " + SOURCE * 5)
+        with pytest.raises(UntranslatedOutput):
+            await TranslateStage().run(ctx, state)
+        row = await (await db_conn.execute(
+            "SELECT translated_uri FROM chapter WHERE novel_id=%s AND chapter_index=%s",
+            (novel_id, CHAPTER))).fetchone()
+        assert row[0] is None, "a half-Chinese chapter must not be published as readable"
+    finally:
+        if novel_id: await delete_novel(db_conn, novel_id)

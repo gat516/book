@@ -261,3 +261,12 @@ def test_glossary_validation_ignores_terms_absent_from_chapter():
         "Li Xiaoyao smiled.",
         [("青云宗", "Azure Cloud Sect")],
     )
+
+
+def test_leftover_chinese_beyond_a_stray_term_fails_the_check():
+    from pipeline.translation import UntranslatedOutput, check_fully_translated
+    check_fully_translated("Ling Feng bowed to 大人.", "zh", "en")  # a stray term is tolerated
+    check_fully_translated("青云宗" * 20, "zh", "zh")  # same-language books are not checked
+    with pytest.raises(UntranslatedOutput) as caught:
+        check_fully_translated("The gates opened. " + "青云宗的大门打开了" * 5, "zh-Hant", "en")
+    assert caught.value.count == 45

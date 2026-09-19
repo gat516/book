@@ -26,6 +26,7 @@ export function retryCategoryLabel(category?: string | null): string {
     model_unreachable: "an unreachable model service",
     model_not_installed: "a model that is not installed",
     model_changed: "changed model settings",
+    untranslated_output: "a translation left partly in Chinese",
   };
   return labels[category] ?? "a processing error";
 }
@@ -52,6 +53,7 @@ export function failureExplanation(status: Pick<RecordsStatus, "retry_category" 
     model_not_available: "The selected AI model is unavailable",
     model_not_installed: "The selected model is not installed on the model server",
     model_changed: "The model settings changed during processing",
+    untranslated_output: "The translation left part of the chapter in Chinese, even after a retry",
     provider_timeout: "The AI request timed out",
     timeout: "The AI request timed out",
     provider_connection: "The connection to the AI provider failed",

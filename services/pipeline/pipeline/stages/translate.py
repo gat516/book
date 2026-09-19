@@ -26,7 +26,9 @@ from pipeline.translation import (
     GlossaryViolation,
     build_system_prompt,
     build_user_prompt,
+    check_fully_translated,
     lint_translation,
+    UntranslatedOutput,
     prime_glossary_terms,
     protect_glossary_terms,
     respell_names,
@@ -330,27 +332,25 @@ class TranslateStage:
             state.translation = translated
             return
 
+        # Locked terms are substituted into the source before the model sees it, so
+        # terminology is carried through rather than recalled. validate_glossary_
+        # constraints below still checks the ORIGINAL raw_text: what a term is
+        # required by is the chapter as written, not the primed copy we sent.
+        primed = prime_glossary_terms(state.envelope.raw_text, glossary)
+        system = build_system_prompt(
+            source_lang=ctx.novel.source_lang,
+            target_lang=ctx.novel.target_lang,
+            ontology=ctx.novel.ontology,
+            glossary=glossary,
+        )
         cached = await ctx.cache.get(key)
         if cached is not None:
             translated = cached
             served_provider = requested_provider
             served_model = requested_model
         else:
-            # Locked terms are substituted into the source before the model sees it, so
-            # terminology is carried through rather than recalled. validate_glossary_
-            # constraints below still checks the ORIGINAL raw_text: what a term is
-            # required by is the chapter as written, not the primed copy we sent.
-            primed = prime_glossary_terms(state.envelope.raw_text, glossary)
             translated, served_provider, served_model = await _complete_translation(
-                ctx,
-                root_key=key,
-                source_text=primed,
-                system=build_system_prompt(
-                    source_lang=ctx.novel.source_lang,
-                    target_lang=ctx.novel.target_lang,
-                    ontology=ctx.novel.ontology,
-                    glossary=glossary,
-                ),
+                ctx, root_key=key, source_text=primed, system=system,
                 requested_model=requested_model,
             )
 
@@ -358,6 +358,26 @@ class TranslateStage:
         # otherwise fail the glossary check and every later exact match (highlights,
         # name search) even though the name is spelled correctly.
         translated = lint_translation(translated)
+        try:
+            check_fully_translated(translated, ctx.novel.source_lang, ctx.novel.target_lang)
+        except UntranslatedOutput as untranslated:
+            # A model can stop translating partway and copy the rest through. One fresh
+            # attempt with a firmer instruction; a second failure fails the chapter
+            # instead of publishing half-Chinese prose as readable.
+            log.warning("translate: chapter=%s left %s Chinese characters; retrying once",
+                        chapter, untranslated.count)
+            if cached is not None:
+                await ctx.cache.delete(key)
+                cached = None
+            translated, served_provider, served_model = await _complete_translation(
+                ctx,
+                root_key=hashlib.sha256(f"{key}\x1funtranslated-retry-v1".encode()).hexdigest(),
+                source_text=primed,
+                system=system + "\nTranslate every sentence completely. Leave no Chinese text.",
+                requested_model=requested_model,
+            )
+            translated = lint_translation(translated)
+            check_fully_translated(translated, ctx.novel.source_lang, ctx.novel.target_lang)
         translated_by = f"{served_provider}:{served_model}"
         if not served_provider or not served_model:
             raise RuntimeError("translation provider returned an empty served identity")

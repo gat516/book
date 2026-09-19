@@ -133,6 +133,31 @@ _LINT = str.maketrans({
 })
 
 
+_SOURCE_SCRIPT = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+# A finished chapter has none; a stray term or two is tolerable. One stored chapter came
+# back with 2,868 of its 5,931 characters still Chinese, and nothing noticed.
+MAX_UNTRANSLATED_CHARS = 30
+
+
+class UntranslatedOutput(ValueError):
+    """A translation left a large part of a Chinese chapter in Chinese."""
+
+    category = "untranslated_output"
+
+    def __init__(self, count: int) -> None:
+        super().__init__(f"translation still contains {count} Chinese characters")
+        self.count = count
+
+
+def check_fully_translated(text: str, source_lang: str, target_lang: str) -> None:
+    """Raise UntranslatedOutput when Chinese source text was left untranslated."""
+    if source_lang.split("-")[0] != "zh" or target_lang.split("-")[0] == "zh":
+        return
+    count = len(_SOURCE_SCRIPT.findall(text))
+    if count > MAX_UNTRANSLATED_CHARS:
+        raise UntranslatedOutput(count)
+
+
 def lint_translation(text: str) -> str:
     """Normalize look-alike spaces and hyphens so stored prose matches plain spellings."""
     return text.translate(_LINT)

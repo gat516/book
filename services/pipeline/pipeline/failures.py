@@ -21,6 +21,7 @@ def error_code(exc: Exception) -> str:
         "output_limit": "output_limit",
         "provider_content_filtered": "provider_content_filtered",
         "model_changed": "model_changed",
+        "untranslated_output": "untranslated_output",
     }
     if category in normalized:
         return normalized[category]
