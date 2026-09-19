@@ -1,9 +1,10 @@
-"""FACTS: one call per chapter writes its important facts as short story summaries.
+"""FACTS: one call per chapter writes its important facts, each tagged for the wiki.
 
-Replaces RECORDS (.claude/plans/facts-stage.md). Facts are untagged plain sentences,
-stored per chapter in ``chapter_fact`` and hidden from readers; wiki pages are written
-from them later, and that later step decides identities. Because nothing here depends on
-another chapter's output, chapters run independently: no ordering wait, no generation.
+Replaces RECORDS (.claude/plans/facts-stage.md). Each fact carries a category (intro,
+relationship, ability, ...) and the characters it names: code finds known spellings and
+stores a marker with the character's ID in their place (migration 0112), so a later
+spelling correction reaches every fact. Wiki pages are assembled from these when read.
+Because nothing here depends on another chapter's output, chapters run independently.
 
 Append-only (§0): a prompt is versioned by its file name, and a chapter that already has
 facts for this prompt and source hash is skipped. A new prompt adds a new set.
@@ -12,16 +13,16 @@ facts for this prompt and source hash is skipped. A new prompt adds a new set.
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 
 from pipeline.context import PipelineState, StageContext
 from pipeline.jobs import model_for_stage
 from pipeline.llm.provider import Class
+from pipeline.tagged_facts import mark_names, marker, parse_tagged, says_none
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "story-facts-v2.txt"
+PROMPT_VERSION = "tagged-facts-v2.txt"
 SYSTEM = (Path(__file__).resolve().parent.parent / "prompts" / PROMPT_VERSION).read_text()
 
 # Groq's free tier caps Qwen3.8 at 1,000 output tokens a minute and refuses any request
@@ -48,12 +49,38 @@ def _least_thinking(provider_id: str, model: str) -> str | None:
     return None  # Ollama, Anthropic, custom: no such argument
 
 
-def parse_facts(text: str) -> list[str]:
-    """Lines after the last `## ` heading, with bullets or numbering stripped."""
-    headings = list(re.finditer(r"^## .*$", text, re.M))
-    body = text[headings[-1].end():] if headings else text
-    lines = (re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", raw).strip() for raw in body.splitlines())
-    return [line for line in lines if line]
+async def _mark_characters(ctx: StageContext, chapter: int, facts) -> list[tuple[str, list[str]]]:
+    """Each fact's text with known people replaced by character markers, and the IDs of
+    the characters it names in order. A character is created for a person's source term
+    the first time a fact names them."""
+    rows = await (await ctx.db.execute(
+        """SELECT r.source_term, r.first_seen_chapter,
+                  COALESCE(g.target_term, r.selected_target, r.candidates->0->>'target_term')
+             FROM character_name_review r
+             LEFT JOIN glossary g ON g.novel_id=r.novel_id AND g.source_term=r.source_term AND NOT g.deleted
+            WHERE r.novel_id=%s AND r.first_seen_chapter <= %s
+              AND r.term_role IN ('chinese_person','foreign_person')""",
+        (ctx.novel.id, chapter))).fetchall()
+    first_seen = {term: seen for term, seen, _ in rows}
+    spellings = {term: spelling for term, _, spelling in rows if spelling}
+    marked = [mark_names(fact.text, spellings) for fact in facts]
+    named = sorted({term for _, terms in marked for term in terms})
+    ids: dict[str, str] = {}
+    if named:
+        async with ctx.db.cursor() as cur:
+            await cur.executemany(
+                """INSERT INTO character (novel_id, source_term, first_seen_chapter) VALUES (%s,%s,%s)
+                   ON CONFLICT (novel_id, source_term) DO NOTHING""",
+                [(ctx.novel.id, term, first_seen[term]) for term in named])
+        ids = {term: str(cid) for cid, term in await (await ctx.db.execute(
+            "SELECT id, source_term FROM character WHERE novel_id=%s AND source_term = ANY(%s)",
+            (ctx.novel.id, named))).fetchall()}
+    result = []
+    for text, terms in marked:
+        for term in terms:
+            text = text.replace(marker(term), marker(ids[term]))
+        result.append((text, [ids[term] for term in terms]))
+    return result
 
 
 class FactsStage:
@@ -80,7 +107,14 @@ class FactsStage:
             text, system=SYSTEM, cls=Class.BATCH, model=model,
             max_output_tokens=GROQ_MAX_OUTPUT_TOKENS if (ctx.provider_id or ctx.cfg.llm_provider) == "groq"
             else MAX_OUTPUT_TOKENS, **({"reasoning_effort": effort} if effort else {}))
-        facts = parse_facts(completion.text)
+        facts = parse_tagged(completion.text)
+        if not facts and says_none(completion.text):
+            # An explicit "no important facts" is an answer: the chapter is done with 0.
+            await ctx.db.execute(
+                "UPDATE chapter SET facts_count=0 WHERE novel_id=%s AND chapter_index=%s",
+                (ctx.novel.id, chapter))
+            log.info("stage facts chapter=%s facts=0 (none important)", chapter)
+            return
         if not facts:
             # Nothing is written, so the next pass over this chapter tries again. Only a
             # count is logged: model text never reaches a log or read path (§0).
@@ -88,14 +122,16 @@ class FactsStage:
                         completion.output_tokens)
             return
         async with ctx.db.transaction():
+            marked = await _mark_characters(ctx, chapter, facts)
             async with ctx.db.cursor() as cur:
                 await cur.executemany(
                     """INSERT INTO chapter_fact (novel_id, chapter_index, prompt_version, ordinal, text,
-                                                 source_hash, requested_model, served_provider, served_model)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
-                    [(ctx.novel.id, chapter, PROMPT_VERSION, i, fact, source_hash, model,
-                      completion.served_provider, completion.served_model)
-                     for i, fact in enumerate(facts)])
+                                                 category, kind, subjects, source_hash, requested_model,
+                                                 served_provider, served_model)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
+                    [(ctx.novel.id, chapter, PROMPT_VERSION, i, text, fact.category, fact.kind, subjects,
+                      source_hash, model, completion.served_provider, completion.served_model)
+                     for i, (fact, (text, subjects)) in enumerate(zip(facts, marked))])
             # The reader-visible "enrichment done" marker (migration 0110): a count only,
             # never fact text.
             await ctx.db.execute(

@@ -1,0 +1,85 @@
+List the most important things this chapter establishes, reveals, or permanently changes about its characters, places, groups, items, and world.
+
+Focus on facts that are likely to matter in later chapters or that significantly update the reader's understanding of the story.
+
+Skip moment-to-moment action, dialogue, temporary positions, minor observations, and details that matter only within the current scene.
+
+Before including a fact, ask:
+
+**Would a reader benefit from remembering this several chapters later?**
+
+If not, leave it out.
+
+Usually output 3–5 facts. Use 6–8 only when the chapter contains unusually many important developments. Do not fill the quota with minor facts.
+
+Each fact should describe one durable piece of story knowledge in one short sentence.
+
+Call each person by their name. A title belongs to the person who holds it: never write a title as another person's name.
+
+Allowed categories:
+
+* intro: who someone or something is, including role, origin, species, occupation, title, appearance, personality, or defining traits
+* alias: another name, identity, disguise, codename, or hidden identity
+* relationship: a meaningful bond or hierarchy between two characters
+* ability: a skill, power, technique, capability, rank, level, or lasting change in what someone can do
+* item: an important object, weapon, artifact, tool, resource, or possession
+* affiliation: membership, allegiance, leadership, employment, rank, or position within a group or organization
+* status: death, injury, imprisonment, disappearance, recovery, transformation, or another major condition change
+* place: an important fact about a location, territory, settlement, building, or region
+* event: another major development, discovery, decision, conflict, revelation, or world-building fact likely to matter later
+
+For relationship facts, use a specific directional relationship word and write the sentence in this form:
+
+<Character> is <relationship> to <Character>.
+
+Examples:
+Li Wei is subordinate to Elder Chen.
+Mira is daughter to Alaric.
+Jonas is mentor to Rhea.
+Kael is rival to Daren.
+Sera is ally to Rowan.
+
+Use specific relationship words such as:
+subordinate, superior, sibling, parent, child, mentor, student, enemy, ally, spouse, partner, rival, servant, master, friend
+
+Do not use vague relationship descriptions such as:
+
+* knows
+* is connected to
+* has a relationship with
+* is associated with
+
+Do not include:
+
+* ordinary attacks, movement, travel, or conversation
+* temporary emotions or reactions
+* minor injuries or short-lived conditions
+* routine use of an already-known skill, ability, or item
+* facts already established earlier unless this chapter meaningfully changes them
+* minor setting details with no likely future importance
+* several facts describing the same development when they can be combined
+
+Use exactly this output format:
+
+## Facts
+
+intro | <fact>
+ability | <fact>
+item | <fact>
+relationship: <relationship> | <Character> is <relationship> to <Character>.
+place | <fact>
+event | <fact>
+
+Formatting rules:
+
+* One fact per line.
+* No bullets or numbering.
+* No commentary before or after the facts.
+* Do not add categories that are not listed above.
+* Use `relationship: <relationship>` only for relationship facts.
+* Relationship facts must name both characters and use the form `<Character> is <relationship> to <Character>`.
+* If there are no important facts, output exactly:
+
+## Facts
+
+None
