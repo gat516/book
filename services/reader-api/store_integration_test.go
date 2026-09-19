@@ -636,3 +636,36 @@ func TestChapterRenderingExposesOneProvisionalChoiceAndRespectsGate(t *testing.T
 	}
 	check(false)
 }
+
+// A wiki page is shown as of the reader's chapter: the newest version built at or before
+// it, never a later one, and nothing from another novel.
+func TestWikiPageIsGatedAtTheReadersChapter(t *testing.T) {
+	store, admin := integrationDatabase(t)
+	fixture := seedIntegrationFixture(t, admin)
+	ctx := context.Background()
+	for _, row := range []struct {
+		chapter int
+		body    string
+	}{{1, "as of chapter one"}, {3, "as of chapter three"}} {
+		if _, err := admin.Exec(ctx, `INSERT INTO wiki_page
+			(novel_id, subject, chapter_index, prompt_version, title, body, facts_used)
+			VALUES ($1, 'hero-term', $2, 'wiki-update-v1.txt', 'Hero', $3, 1)`,
+			fixture.novelID, row.chapter, row.body); err != nil {
+			t.Fatalf("seed wiki page: %v", err)
+		}
+	}
+
+	if pages, err := store.ListWikiPages(ctx, fixture.novelID, 0); err != nil || len(pages) != 0 {
+		t.Fatalf("chapter 0 pages = %+v, %v; want none", pages, err)
+	}
+	if _, body, err := store.GetWikiPage(ctx, fixture.novelID, "hero-term", 2); err != nil || body != "as of chapter one" {
+		t.Fatalf("chapter 2 page = %q, %v; want the chapter 1 version", body, err)
+	}
+	pages, err := store.ListWikiPages(ctx, fixture.novelID, 3)
+	if err != nil || len(pages) != 1 || pages[0].ChapterIndex != 3 {
+		t.Fatalf("chapter 3 pages = %+v, %v; want the chapter 3 version", pages, err)
+	}
+	if _, _, err := store.GetWikiPage(ctx, fixture.otherNovelID, "hero-term", 99); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another novel's reader saw the page: %v", err)
+	}
+}

@@ -32,6 +32,8 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("PUT /novels/{id}/progress", a.putProgress)
 	mux.HandleFunc("GET /novels/{id}/entity/{eid}", a.getEntity)
 	mux.HandleFunc("GET /novels/{id}/wiki", a.getWiki)
+	mux.HandleFunc("GET /novels/{id}/wiki/pages", a.getWikiPages)
+	mux.HandleFunc("GET /novels/{id}/wiki/pages/{subject}", a.getWikiPage)
 	mux.HandleFunc("GET /novels/{id}/timeline", a.getTimeline)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}", a.getChapter)
 	mux.HandleFunc("GET /novels/{id}/chapter/{n}/rows", a.getRecords)
@@ -1087,4 +1089,72 @@ func (a *API) embeddingConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(result)
+}
+
+// readerAt resolves the chapter a reader may see: their progress, lowered by ?at= when
+// asked. Before the first readable chapter it is 0, which shows nothing.
+func (a *API) readerAt(w http.ResponseWriter, r *http.Request) (string, int, bool) {
+	prepareReaderResponse(w)
+	reader, ok := readerID(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "X-Reader-ID is required")
+		return "", 0, false
+	}
+	novelID, ok := pathUUID(r, "id")
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid novel id")
+		return "", 0, false
+	}
+	requested, err := requestedAt(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return "", 0, false
+	}
+	progress, err := a.store.GetProgress(r.Context(), reader, novelID)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, "could not resolve reader progress")
+		return "", 0, false
+	}
+	at := 0
+	if err == nil {
+		at = progress.CurrentChapter
+	}
+	if requested != nil {
+		at = min(at, *requested)
+	}
+	return novelID, at, true
+}
+
+// getWikiPages lists the character pages a reader may see at their chapter.
+func (a *API) getWikiPages(w http.ResponseWriter, r *http.Request) {
+	novelID, at, ok := a.readerAt(w, r)
+	if !ok {
+		return
+	}
+	pages, err := a.store.ListWikiPages(r.Context(), novelID, at)
+	if err != nil {
+		log.Printf("list wiki pages: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load wiki pages")
+		return
+	}
+	writeJSON(w, http.StatusOK, WikiPagesResponse{NovelID: novelID, At: at, Pages: pages})
+}
+
+// getWikiPage returns one character's page as of the reader's chapter.
+func (a *API) getWikiPage(w http.ResponseWriter, r *http.Request) {
+	novelID, at, ok := a.readerAt(w, r)
+	if !ok {
+		return
+	}
+	page, body, err := a.store.GetWikiPage(r.Context(), novelID, r.PathValue("subject"), at)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "no page for this character at your chapter")
+		return
+	}
+	if err != nil {
+		log.Printf("get wiki page: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load wiki page")
+		return
+	}
+	writeJSON(w, http.StatusOK, WikiPageResponse{NovelID: novelID, At: at, WikiPageSummary: page, Body: body})
 }

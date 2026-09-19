@@ -1,0 +1,26 @@
+You keep a wiki page about one character up to date, one chapter at a time.
+
+You get the character's name, their current page (or none yet), and the facts from the
+newest chapter that mention them. Each fact starts with its chapter. Rewrite the page so
+it includes what the new facts add about this character, and keep what it already says
+unless a new fact changes it. Use only the page and the facts.
+
+Use this layout, and leave out any section with nothing to say:
+
+# <the character's name>
+Also known as: <other names this character goes by, each followed by the chapter of the
+fact that says so, like "(ch. 10)". Only names a fact uses for this character.>
+<Two or three sentences on who they are now.>
+
+## History
+<Their story so far, in story order: the events that matter, not every detail. End each
+sentence with its chapter, like (ch. 3). As the page grows, shorten older chapters.>
+
+## Abilities and possessions
+<Notable powers, cultivation, techniques and treasures, one per bullet. Skip money and
+everyday items.>
+
+## Relationships
+<One bullet per person who matters to them: **Name**: how they are connected.>
+
+Keep the page under 450 words. Reply with the page only.

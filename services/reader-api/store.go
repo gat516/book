@@ -47,6 +47,8 @@ type ReaderStore interface {
 	LatestScrapeJob(context.Context, string) (ScrapeJobView, error)
 	RequestScrapeCancel(context.Context, string) error
 	ListGlossary(context.Context, string, int) ([]GlossaryTermView, error)
+	ListWikiPages(context.Context, string, int) ([]WikiPageSummary, error)
+	GetWikiPage(context.Context, string, string, int) (WikiPageSummary, string, error)
 	ListNameReviews(context.Context, string, *int) ([]CharacterNameReview, error)
 	ListRecords(context.Context, string, int, int) (RecordsResponse, error)
 	ListRecordsInspector(context.Context, string, int, int) (RecordsInspectorResponse, error)
@@ -970,4 +972,50 @@ func (s *Store) hasNextChapter(ctx context.Context, novelID string, chapter int)
 	var exists bool
 	err := s.progressDB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM chapter WHERE novel_id=$1 AND chapter_index=$2)`, novelID, chapter+1).Scan(&exists)
 	return exists, err
+}
+
+// wikiPageVersion picks the newest prompt set a reader at `at` can see; within it, each
+// subject's newest version at or before `at`. The explicit chapter predicate is the
+// first lock; wiki_page's RLS policy (0111) is the second.
+const wikiPageVersion = `SELECT max(prompt_version) FROM wiki_page WHERE novel_id=$1 AND chapter_index <= $2`
+
+// ListWikiPages lists the character pages a reader at `at` may see.
+func (s *Store) ListWikiPages(ctx context.Context, novelID string, at int) ([]WikiPageSummary, error) {
+	pages := []WikiPageSummary{}
+	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT subject, title, chapter_index FROM (
+			SELECT DISTINCT ON (subject) subject, title, chapter_index FROM wiki_page
+			 WHERE novel_id=$1 AND chapter_index <= $2 AND prompt_version = (`+wikiPageVersion+`)
+			 ORDER BY subject, chapter_index DESC) latest ORDER BY title`, novelID, at)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var page WikiPageSummary
+			if err := rows.Scan(&page.Subject, &page.Title, &page.ChapterIndex); err != nil {
+				return err
+			}
+			pages = append(pages, page)
+		}
+		return rows.Err()
+	})
+	return pages, err
+}
+
+// GetWikiPage returns one character's page as a reader at `at` may see it.
+func (s *Store) GetWikiPage(ctx context.Context, novelID, subject string, at int) (WikiPageSummary, string, error) {
+	var page WikiPageSummary
+	var body string
+	err := s.withReaderTx(ctx, novelID, at, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT subject, title, chapter_index, body FROM wiki_page
+			 WHERE novel_id=$1 AND chapter_index <= $2 AND subject=$3 AND prompt_version = (`+wikiPageVersion+`)
+			 ORDER BY chapter_index DESC LIMIT 1`, novelID, at, subject).
+			Scan(&page.Subject, &page.Title, &page.ChapterIndex, &body)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	})
+	return page, body, err
 }

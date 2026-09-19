@@ -929,3 +929,8 @@ export interface RepairReviewDocument {
   mentions: { id: string; correct: boolean; unambiguous: boolean }[];
   facts: { id: number; correct: boolean }[];
 }
+
+// A character's wiki page as of the reader's chapter (reader-api /wiki/pages).
+export interface WikiPageSummary { subject: string; title: string; chapter_index: number; }
+export interface WikiPagesResponse { novel_id: string; at: number; pages: WikiPageSummary[]; }
+export interface WikiPageResponse extends WikiPageSummary { novel_id: string; at: number; body: string; }

@@ -434,3 +434,24 @@ type ChapterResponse struct {
 	HasNext            bool                `json:"has_next"`
 	TranslationWarning *TranslationWarning `json:"translation_warning"`
 }
+
+// WikiPageSummary is one character's page as a reader at `at` may see it: the newest
+// version built at or before that chapter.
+type WikiPageSummary struct {
+	Subject      string `json:"subject"`
+	Title        string `json:"title"`
+	ChapterIndex int    `json:"chapter_index"`
+}
+
+type WikiPagesResponse struct {
+	NovelID string            `json:"novel_id"`
+	At      int               `json:"at"`
+	Pages   []WikiPageSummary `json:"pages"`
+}
+
+type WikiPageResponse struct {
+	NovelID string `json:"novel_id"`
+	At      int    `json:"at"`
+	WikiPageSummary
+	Body string `json:"body"`
+}

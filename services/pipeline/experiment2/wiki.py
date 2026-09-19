@@ -109,7 +109,89 @@ async def write_page(provider, args, name: str, facts: list[tuple[int, str]]):
     print(page, "\n")
 
 
+async def people_with_spellings(db, novel: str, at: int) -> dict[str, str]:
+    """Source term -> current spelling for the people met by chapter `at`: a live glossary
+    lock first, then the reader's selection, then the pending choice."""
+    rows = await (await db.execute(
+        """SELECT r.source_term, COALESCE(g.target_term, r.selected_target, r.candidates->0->>'target_term')
+             FROM character_name_review r
+             LEFT JOIN glossary g ON g.novel_id=r.novel_id AND g.source_term=r.source_term AND NOT g.deleted
+            WHERE r.novel_id=%s AND r.first_seen_chapter <= %s AND r.term_role = ANY(%s)""",
+        (novel, at, ["chinese_person", "foreign_person"]))).fetchall()
+    return {term: spelling for term, spelling in rows if spelling}
+
+
+def named_in(text: str, spellings: dict[str, str]) -> list[str]:
+    """Source terms whose spelling names someone in `text`, leftmost-longest: a spelling
+    inside a longer known one is not a separate mention."""
+    found = []
+    for term, spelling in sorted(spellings.items(), key=lambda item: -len(item[1])):
+        pattern = re.compile(rf"(?<![\w-]){re.escape(spelling)}(?![\w-])")
+        if pattern.search(text):
+            found.append(term)
+            text = pattern.sub(" ", text)
+    return found
+
+
+async def build(args):
+    """Update each named character's page chapter by chapter, storing every version."""
+    version = args.prompt
+    system = (HERE / "prompts" / version).read_text()
+    cfg = Config.load()
+    async with await psycopg.AsyncConnection.connect(cfg.database_url, autocommit=True) as db:
+        facts = await load_facts(db, args.novel, args.to)
+        row = await resolve_provider_config(db, args.novel, cfg.llm_provider)
+        provider = None if args.dry else make_provider(args, row, cfg)
+        spent_in = spent_out = 0
+        try:
+            for chapter in sorted({c for c, _ in facts}):
+                spellings = await people_with_spellings(db, args.novel, chapter)
+                about: dict[str, list[str]] = {}
+                for c, text in facts:
+                    if c == chapter:
+                        for term in named_in(text, spellings):
+                            about.setdefault(term, []).append(text)
+                for term, lines in sorted(about.items(), key=lambda item: -len(item[1])):
+                    title = spellings[term]
+                    done = await (await db.execute(
+                        "SELECT 1 FROM wiki_page WHERE novel_id=%s AND prompt_version=%s AND subject=%s AND chapter_index=%s",
+                        (args.novel, version, term, chapter))).fetchone()
+                    if done:
+                        continue
+                    if args.dry:
+                        print(f"ch{chapter}: {title} ({len(lines)} facts)")
+                        continue
+                    previous = await (await db.execute(
+                        """SELECT body FROM wiki_page WHERE novel_id=%s AND prompt_version=%s AND subject=%s
+                             AND chapter_index < %s ORDER BY chapter_index DESC LIMIT 1""",
+                        (args.novel, version, term, chapter))).fetchone()
+                    prompt = (f"CHARACTER: {title}\n\nCURRENT PAGE:\n{previous[0] if previous else '(none yet)'}"
+                              f"\n\nNEW FACTS:\n" + "\n".join(f"[ch{chapter}] {line}" for line in lines))
+                    completion = await provider.complete(
+                        prompt, system=system, cls=Class.BATCH, model=args.model,
+                        max_output_tokens=args.max_output_tokens,
+                        **({"reasoning_effort": args.reasoning_effort} if args.reasoning_effort else {}))
+                    page = checked_aliases(tidy_citations(completion.text),
+                                           title, [f for f in facts if f[0] <= chapter])
+                    await db.execute(
+                        """INSERT INTO wiki_page (novel_id, subject, chapter_index, prompt_version, title, body,
+                                                  facts_used, served_model)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
+                        (args.novel, term, chapter, version, title, page, len(lines), completion.served_model))
+                    spent_in += completion.input_tokens
+                    spent_out += completion.output_tokens
+                    print(f"ch{chapter}: {title} ({len(lines)} facts) {completion.input_tokens} in / "
+                          f"{completion.output_tokens} out")
+        finally:
+            if provider:
+                await provider.aclose()
+    if not args.dry:
+        print(f"total {spent_in} in / {spent_out} out")
+
+
 async def main(args):
+    if args.build:
+        return await build(args)
     cfg = Config.load()
     async with await psycopg.AsyncConnection.connect(cfg.database_url) as db:
         facts = await load_facts(db, args.novel, args.at)
@@ -134,8 +216,12 @@ async def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--novel", required=True)
-    parser.add_argument("--at", type=int, required=True, help="the reader's chapter")
+    parser.add_argument("--at", type=int, help="the reader's chapter (--list/--character/--top)")
+    parser.add_argument("--to", type=int, help="--build: last chapter to build through")
+    parser.add_argument("--dry", action="store_true", help="--build: show the plan, no model calls")
     who = parser.add_mutually_exclusive_group(required=True)
+    who.add_argument("--build", action="store_true",
+                     help="update pages chapter by chapter into wiki_page (use --prompt wiki-update-v1.txt)")
     who.add_argument("--list", action="store_true", help="rank the people met by fact count")
     who.add_argument("--character")
     who.add_argument("--top", type=int, help="write pages for the N most-mentioned people")

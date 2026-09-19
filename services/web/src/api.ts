@@ -122,6 +122,14 @@ export function getRecords(novelId: string, chapter: number): Promise<RecordsRes
 export function getRecordsInspector(novelId: string, chapter: number): Promise<RecordsInspectorResponse> {
   return request(`/novels/${novelId}/chapter/${chapter}/records/status`);
 }
+export function getWikiPages(novelId: string): Promise<import("./types").WikiPagesResponse> {
+  return request(`/novels/${novelId}/wiki/pages`);
+}
+
+export function getWikiPage(novelId: string, subject: string): Promise<import("./types").WikiPageResponse> {
+  return request(`/novels/${novelId}/wiki/pages/${encodeURIComponent(subject)}`);
+}
+
 export function getWiki(novelId: string, at: number): Promise<WikiResponse> {
   return request(`/novels/${novelId}/wiki?at=${at}`);
 }

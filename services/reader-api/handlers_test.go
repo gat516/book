@@ -1171,3 +1171,11 @@ func TestEmbeddingSettingsProxy(t *testing.T) {
 		t.Fatalf("got %d", got.Code)
 	}
 }
+
+func (f *fakeStore) ListWikiPages(context.Context, string, int) ([]WikiPageSummary, error) {
+	return []WikiPageSummary{}, nil
+}
+
+func (f *fakeStore) GetWikiPage(context.Context, string, string, int) (WikiPageSummary, string, error) {
+	return WikiPageSummary{}, "", ErrNotFound
+}
