@@ -12,9 +12,12 @@ export interface RenderedChapter {
   spans: SpanView[];
 }
 
-// Apply chosen terminology (provisional or confirmed) as a presentation overlay instead of mutating the saved
-// translation (§0.2). Recalculate every downstream codepoint offset so a longer or shorter
-// preferred spelling cannot move hover anchors onto unrelated prose.
+// Apply CONFIRMED spellings as a presentation overlay instead of mutating the saved
+// translation (§0.2), so a correction shows at once while its respell is pending. A
+// pending guess is never painted over the text: the translator may have written the
+// right name ("Ares") where the guess was wrong ("Aruisi"). Recalculate every downstream
+// codepoint offset so a longer or shorter spelling cannot move hover anchors onto
+// unrelated prose.
 export function applyRenderingChoices(text: string, spans: SpanView[]): RenderedChapter {
   const chars = Array.from(text);
   const output: string[] = [];
@@ -25,7 +28,7 @@ export function applyRenderingChoices(text: string, spans: SpanView[]): Rendered
         span.char_start < cursor || span.char_end <= span.char_start || span.char_end > chars.length) continue;
     output.push(...chars.slice(cursor, span.char_start));
     const start = output.length;
-    const replacement = (span.rendering?.status === "pending" || span.rendering?.status === "locked") && span.rendering.target_term
+    const replacement = span.rendering?.status === "locked" && span.rendering.target_term
       ? Array.from(span.rendering.target_term)
       : chars.slice(span.char_start, span.char_end);
     output.push(...replacement);
@@ -57,27 +60,4 @@ export function segment(text: string, spans: SpanView[]): Segment[] {
   }
   if (cursor < chars.length) segments.push({ text: chars.slice(cursor).join(""), mention: false, entityId: null });
   return segments;
-}
-
-// Reduce a chapter's spans to ONE per distinct thing: its last mention.
-//
-// Every occurrence used to be a button, which turned ordinary prose into a wall of
-// clickable text and made the highlighting worthless as a signal — if everything is
-// marked, nothing is. Keeping the LAST mention rather than the first means the anchor sits
-// where the chapter has finished saying whatever it had to say about that thing, which is
-// also where a fact learned here is most likely to have just been established.
-//
-// Unlinked mentions have no entity to group by, so they group by their surface text: two
-// separate names stay separately reachable, while repeats of one name collapse like any
-// other entity. Offsets are Unicode codepoints, matching segment() above.
-export function lastMentionPerEntity(text: string, spans: SpanView[]): SpanView[] {
-  const chars = Array.from(text);
-  const latest = new Map<string, SpanView>();
-  for (const span of spans) {
-    const surface = chars.slice(span.char_start, span.char_end).join("");
-    const key = span.entity_id ? `id:${span.entity_id}` : `text:${surface}`;
-    const held = latest.get(key);
-    if (!held || span.char_start > held.char_start) latest.set(key, span);
-  }
-  return [...latest.values()].sort((a, b) => a.char_start - b.char_start);
 }

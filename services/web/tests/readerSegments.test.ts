@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyRenderingChoices, lastMentionPerEntity, segment } from "../src/readerSegments.ts";
+import { applyRenderingChoices, segment } from "../src/readerSegments.ts";
 
 test("unlinked names remain mentions, including codepoint offsets after emoji", () => {
   const pieces = segment("😀 Ling Feng met Ann.", [
@@ -25,68 +25,19 @@ test("invalid and overlapping offsets do not duplicate or lose prose", () => {
   assert.equal(pieces.filter(p => p.mention).length, 1);
 });
 
-test("only the last mention of each entity survives", () => {
-  const text = "Ling Feng struck. Ling Feng turned to the Hall.";
-  const kept = lastMentionPerEntity(text, [
-    { char_start: 0, char_end: 9, entity_id: "lf" },
-    { char_start: 18, char_end: 27, entity_id: "lf" },
-    { char_start: 41, char_end: 45, entity_id: "hall" },
-  ]);
-  assert.deepEqual(kept.map(s => [s.char_start, s.entity_id]), [[18, "lf"], [41, "hall"]]);
-});
-
-test("unlinked mentions collapse by surface, so distinct names stay reachable", () => {
-  const text = "Ann met Bo. Ann waved at Bo.";
-  const kept = lastMentionPerEntity(text, [
-    { char_start: 0, char_end: 3, entity_id: null },
-    { char_start: 8, char_end: 10, entity_id: null },
-    { char_start: 12, char_end: 15, entity_id: null },
-    { char_start: 25, char_end: 27, entity_id: null },
-  ]);
-  // One anchor per distinct name, each at its final occurrence — not one per occurrence,
-  // and not a single anchor swallowing both names.
-  assert.deepEqual(kept.map(s => [s.char_start, text.slice(s.char_start, s.char_end)]),
-    [[12, "Ann"], [25, "Bo"]]);
-});
-
-test("last mention is chosen by codepoint offset, not array order", () => {
-  const kept = lastMentionPerEntity("😀 Ann met Ann.", [
-    { char_start: 10, char_end: 13, entity_id: "ann" },
-    { char_start: 2, char_end: 5, entity_id: "ann" },
-  ]);
-  assert.deepEqual(kept.map(s => s.char_start), [10]);
-});
-
-test("the surviving spans still segment cleanly", () => {
-  const text = "Ann met Ann.";
-  const spans = [
-    { char_start: 0, char_end: 3, entity_id: "ann" },
-    { char_start: 8, char_end: 11, entity_id: "ann" },
-  ];
-  const pieces = segment(text, lastMentionPerEntity(text, spans));
-  assert.equal(pieces.map(p => p.text).join(""), text);
-  assert.deepEqual(pieces.filter(p => p.mention).map(p => p.text), ["Ann"]);
-});
-
-test("rendering choices survive last-mention reduction and segmentation", () => {
+test("every mention of a name stays interactive and carries its rendering", () => {
   const rendering = {
-    source_term: "契科夫",
-    target_term: null,
-    status: "pending" as const,
-    term_role: "foreign_person" as const,
-    candidates: [
-      { target_term: "Chekhov", pronunciation: [], segmentation: "", method: "restored_name" as const },
-      { target_term: "Chekov", pronunciation: [], segmentation: "", method: "restored_name" as const },
-    ],
+    source_term: "契科夫", target_term: null, status: "pending" as const,
+    term_role: "foreign_person" as const, candidates: [],
   };
   const text = "Chekov spoke. Chekov left.";
-  const pieces = segment(text, lastMentionPerEntity(text, [
+  const pieces = segment(text, [
     { char_start: 0, char_end: 6, entity_id: null, rendering },
     { char_start: 14, char_end: 20, entity_id: null, rendering },
-  ]));
-  const mention = pieces.find(piece => piece.mention);
-  assert.equal(mention?.text, "Chekov");
-  assert.deepEqual(mention?.rendering, rendering);
+  ]);
+  assert.equal(pieces.map(p => p.text).join(""), text);
+  assert.deepEqual(pieces.filter(p => p.mention).map(p => p.text), ["Chekov", "Chekov"]);
+  assert.ok(pieces.filter(p => p.mention).every(p => p.rendering === rendering));
 });
 
 test("confirmed spellings overlay every occurrence and adjust later offsets", () => {
@@ -109,16 +60,15 @@ test("confirmed spellings overlay every occurrence and adjust later offsets", ()
   assert.equal(segment(rendered.text, rendered.spans).map(piece => piece.text).join(""), rendered.text);
 });
 
-test("provisional spellings overlay display while unknown spellings remain untouched", () => {
-  const text = "Chekov spoke.";
-  for (const status of ["pending", "unlocked"] as const) {
+test("only a confirmed spelling is painted over the text; a pending guess is not", () => {
+  const text = "Ares spoke.";
+  for (const status of ["pending", "unlocked", "locked"] as const) {
     const rendered = applyRenderingChoices(text, [{
-      char_start: 0, char_end: 6, entity_id: null,
-      rendering: { source_term: "契科夫", target_term: "Chekhov", status,
+      char_start: 0, char_end: 4, entity_id: null,
+      rendering: { source_term: "阿瑞斯", target_term: "Aruisi", status,
         term_role: "foreign_person", candidates: [] },
     }]);
-    assert.equal(rendered.text, status === "pending" ? "Chekhov spoke." : text);
-    assert.equal(rendered.spans[0].char_end, status === "pending" ? 7 : 6);
+    assert.equal(rendered.text, status === "locked" ? "Aruisi spoke." : text);
     assert.equal(rendered.spans[0].rendering?.status, status);
   }
 });

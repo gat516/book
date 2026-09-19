@@ -5,7 +5,7 @@ import type { ChapterResponse, EntityView, TermRenderingView } from "../types";
 import { HoverCard } from "./HoverCard";
 import { EntityInspector } from "./EntityInspector";
 import { usePolling } from "../usePolling";
-import { applyRenderingChoices, lastMentionPerEntity, segment } from "../readerSegments";
+import { applyRenderingChoices, segment } from "../readerSegments";
 import type { RecordsResponse } from "../types";
 import { uniqueChapterRenderings } from "../recordPresentation";
 import { recordPollInterval, recordsTerminal } from "../recordPolling";
@@ -158,10 +158,10 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
   if (error) return <p className="reader-pane-error">Could not load chapter: {error}</p>;
   if (!chapter) return <p>Loading chapter…</p>;
 
-  // Render every confirmed occurrence with the preferred spelling, while keeping only one
-  // interactive anchor per distinct thing. The stored translation remains unchanged.
+  // Every occurrence of a name is interactive: highlighted while it awaits review, plain
+  // but still hoverable once confirmed. The stored translation remains unchanged.
   const rendered = applyRenderingChoices(chapter.text, chapter.spans);
-  const segments = segment(rendered.text, lastMentionPerEntity(rendered.text, rendered.spans));
+  const segments = segment(rendered.text, rendered.spans);
   const renderings = uniqueChapterRenderings(chapter.spans);
   const toReview = new Set(renderings.filter((item) => item.status !== "locked").map((item) => item.source_term)).size;
   // A spelling saved from the names list or a hover card applies to every span of it.
