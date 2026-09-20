@@ -109,7 +109,13 @@ func (w *Worker) Loop(ctx context.Context) error {
 			if err := w.handle(ctx, jobID); err != nil {
 				log.Printf("scrape job %d failed: %v", jobID, err)
 			}
-			w.redis.LRem(context.WithoutCancel(ctx), processingQueue, 1, raw)
+			// Only a job that actually finished gives up its claim. On shutdown the claim
+			// stays in the processing queue on purpose: it is what RecoverProcessing
+			// requeues on the next start. Dropping it here left the row saying "running"
+			// with no pointer anywhere, and the scrape simply stopped.
+			if ctx.Err() == nil {
+				w.redis.LRem(ctx, processingQueue, 1, raw)
+			}
 		}()
 	}
 }
@@ -134,9 +140,10 @@ func (w *Worker) loadJob(ctx context.Context, jobID int64) (jobRow, error) {
 	return row, err
 }
 
-// RecoverProcessing returns queue pointers stranded by a scraper restart to pending.
-// A scrape can safely resume from its start URL because content-hash dedup skips pages
-// already stored; terminal jobs are discarded rather than accidentally replayed.
+// RecoverProcessing returns interrupted scrapes to the pending queue: the claims a
+// restart stranded in the processing queue, and any job the database still calls live
+// that no queue holds at all. A scrape can safely resume because content-hash dedup skips
+// pages already stored; terminal jobs are discarded rather than accidentally replayed.
 func (w *Worker) RecoverProcessing(ctx context.Context) error {
 	raws, err := w.redis.LRange(ctx, processingQueue, 0, -1).Result()
 	if err != nil {
@@ -164,6 +171,43 @@ func (w *Worker) RecoverProcessing(ctx context.Context) error {
 			return err
 		}
 		log.Printf("requeued interrupted scrape job %d", jobID)
+	}
+	return w.recoverOrphans(ctx)
+}
+
+// recoverOrphans requeues live jobs that no queue holds. A claim can be lost to a crash
+// between the Redis and Postgres steps -- or to a bug in the shutdown path, which is how
+// this was found -- and the row then says "running" forever while nothing fetches. The
+// job row is the durable record; the queue is only a pointer to it.
+func (w *Worker) recoverOrphans(ctx context.Context) error {
+	queued := map[string]bool{}
+	for _, key := range []string{pendingQueue, processingQueue} {
+		raws, err := w.redis.LRange(ctx, key, 0, -1).Result()
+		if err != nil {
+			return err
+		}
+		for _, raw := range raws {
+			queued[raw] = true
+		}
+	}
+	rows, err := w.db.Query(ctx,
+		`SELECT id FROM scrape_job WHERE status IN ('pending', 'running') ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		raw := strconv.FormatInt(id, 10)
+		if queued[raw] {
+			continue
+		}
+		if err := w.redis.LPush(ctx, pendingQueue, raw).Err(); err != nil {
+			return err
+		}
+		log.Printf("requeued scrape job %d: the database had it running with nothing queued", id)
 	}
 	return nil
 }
