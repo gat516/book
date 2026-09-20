@@ -39,10 +39,13 @@ Commit milestones:
 
 ## Rollout inputs and remaining external checks
 
+The chosen site is **https://qireadr.com**, with domain/DNS at Namecheap and application
+hosting on AWS. Google callback: `https://qireadr.com/api/auth/callback`.
 Region is **us-east-1**. Initial owner is **charlesj.gatchalian@gmail.com**, superseding
 the earlier email. No invitation has been sent and no public AWS resources have been
-provisioned by this implementation. Domain, Google OAuth client/secret, AWS access and
-a current reviewed cost estimate remain necessary. Localhost remains usable without
+provisioned by this implementation. AWS and Google Cloud accounts have been created;
+Google OAuth client/secret, deployment access and a current reviewed cost estimate
+remain necessary. Localhost remains usable without
 Google login; its existing services were not restarted for this work.
 
 Follow [the hosted runbook](../deploy/hosted/README.md), then verify DNS/TLS, actual

@@ -6,6 +6,15 @@ The files are ready for operator configuration; no AWS deployment or invitation 
 implied by their presence. [Implementation status](../../docs/HOSTED_IMPLEMENTATION.md)
 records what has been tested.
 
+The initial site is **https://qireadr.com**, with domain/DNS at Namecheap and application
+hosting in AWS `us-east-1`. Google OAuth's authorized redirect URI is exactly
+`https://qireadr.com/api/auth/callback`; `APP_ORIGIN` is `https://qireadr.com`.
+These values are saved in the ignored `operator.env`. Export its settings in the operator
+shell before following the commands below (`set -a; source deploy/hosted/operator.env;
+set +a`). They do not change the local `.env` or enable login on localhost.
+After AWS provisioning, point Namecheap's apex A record (Host `@`) at Terraform's
+`public_ip` output. The initial release serves the apex hostname; `www` is not configured.
+
 ## Layout and operating limits
 
 | Component | Location / purpose |
