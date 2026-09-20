@@ -104,7 +104,7 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
         <label>
           Provider for this book{" "}
           {!hostedSession() && <span className="novel-create-form-hint">(leave as default to use the server's)</span>}
-          <select value={provider} onChange={(e) => chooseProvider(e.target.value as ProviderName | "")}>
+          <select value={provider} required={hostedSession()} onChange={(e) => chooseProvider(e.target.value as ProviderName | "")}>
             <option value="" disabled={hostedSession()}>{hostedSession() ? "Choose a provider" : "Server default"}</option>
             <option value="deepseek">DeepSeek</option>
             <option value="anthropic">Anthropic</option>
@@ -218,7 +218,7 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
         <button
           type="submit"
           className="btn-primary"
-          disabled={pending || !title.trim() || (provider === "custom" && (!model.trim() || !baseURL.trim()))}
+          disabled={pending || !title.trim() || (hostedSession() && !provider) || (provider === "custom" && (!model.trim() || !baseURL.trim()))}
         >
           {pending ? "Creating…" : "Create book"}
         </button>

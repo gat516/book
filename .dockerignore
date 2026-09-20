@@ -1,0 +1,25 @@
+.git
+.env*
+**/.venv
+**/node_modules
+**/target
+**/dist
+**/__pycache__
+**/*.pyc
+.Codex
+.claude
+notes
+services/pipeline/experiments
+services/pipeline/pipeline/prompts/story-facts-v3.txt
+ts *
+
+.backups
+**/*.tfstate*
+**/.terraform
+deploy/hosted/operator.env
+deploy/hosted/generated
+**/terraform.tfvars
+**/*.tfplan
+services/reader-api/reader-api
+services/ingest-api/ingest-api
+services/scraper/scraper

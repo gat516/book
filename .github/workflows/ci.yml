@@ -1,0 +1,84 @@
+name: checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        path: [packages/novel-platform, services/reader-api, services/ingest-api, services/scraper]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.6'
+          cache-dependency-path: ${{ matrix.path }}/go.sum
+      - run: go vet ./... && go test ./... && go build ./...
+        working-directory: ${{ matrix.path }}
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: pip install -c deploy/hosted/python-constraints.txt -e 'packages/novel-llm[dev]' -e 'services/pipeline[dev]' -e 'services/askai[dev]'
+      - run: pytest -q packages/novel-llm/tests
+      - run: pytest -q tests
+        working-directory: services/askai
+      - run: pytest -q -m 'not db' tests/test_worker.py tests/test_batch.py tests/test_provider_from_env.py tests/test_job_scope.py
+        working-directory: services/pipeline
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: services/web/package-lock.json
+      - run: npm ci && npm test && npm run build
+        working-directory: services/web
+  hosted:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.6'
+          cache-dependency-path: '**/go.sum'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.13.3'
+      - run: pip install -c deploy/hosted/python-constraints.txt -e 'packages/novel-llm[dev]' -e 'services/pipeline[dev]' PyYAML
+      - run: |
+          for service in reader-api ingest-api scraper; do
+            image="$service"
+            if [ "$service" = reader-api ]; then image=reader; fi
+            if [ "$service" = ingest-api ]; then image=ingest; fi
+            docker build -f deploy/hosted/Dockerfile.go --build-arg SERVICE="$service" -t "book-$image-hosted:test" .
+          done
+          docker build -f deploy/hosted/Dockerfile.python -t book-python-hosted:test .
+          docker build -f deploy/hosted/Dockerfile.web -t book-web-hosted:test .
+          docker build --target test -f services/textproc/Dockerfile .
+      - run: PYTHON_BIN=python bash tests/hosted/run.sh
+      - run: |
+          terraform fmt -check
+          terraform init -backend=false
+          terraform validate
+        working-directory: deploy/hosted/terraform
+      - run: |
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.8.0
+          python deploy/hosted/render.py --domain books.example.test --registry registry.example.test/private-books --tag "$GITHUB_SHA" --bucket example-books --email operator@example.test --rds-ca deploy/hosted/certs/rds-global.pem > /tmp/release.yaml
+          kubeconform -strict -summary -skip HelmChartConfig /tmp/release.yaml

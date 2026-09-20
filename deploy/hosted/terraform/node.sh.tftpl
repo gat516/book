@@ -1,0 +1,24 @@
+#!/bin/bash
+set -euo pipefail
+dnf install -y curl jq python3-pip awscli2
+# Wait for Terraform to attach the data disk; never format a device with a filesystem.
+redis_device=/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${redis_volume}
+for attempt in $(seq 1 180); do [ -b "$redis_device" ] && break; sleep 2; done
+[ -b "$redis_device" ]
+if ! blkid "$redis_device" >/dev/null; then mkfs.ext4 "$redis_device"; fi
+mkdir -p /var/lib/book-redis
+redis_uuid=$(blkid -s UUID -o value "$redis_device")
+printf 'UUID=%s /var/lib/book-redis ext4 defaults,nofail 0 2\n' "$redis_uuid" >> /etc/fstab
+mount /var/lib/book-redis
+chown 999:999 /var/lib/book-redis
+mkdir -p /etc/rancher/k3s
+cat >/etc/rancher/k3s/config.yaml <<'EOF'
+node-name: book-node
+write-kubeconfig-mode: "0600"
+secrets-encryption: true
+kube-apiserver-arg:
+  - "anonymous-auth=false"
+EOF
+curl -sfL https://get.k3s.io -o /tmp/install-k3s.sh
+INSTALL_K3S_VERSION='${k3s_version}' sh /tmp/install-k3s.sh
+rm -f /tmp/install-k3s.sh

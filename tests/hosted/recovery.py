@@ -5,6 +5,7 @@ TEST_ADMIN_DATABASE_URL must point to a test PostgreSQL cluster. OBJECT_STORE_* 
 TEST_REDIS_URL must point to disposable infrastructure. No production defaults.
 Run in the Python production image (includes PostgreSQL 16 tools).
 """
+import base64
 import hashlib
 import io
 import json
@@ -22,12 +23,16 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 import redis
 from minio.deleteobjects import DeleteObject
 from minio.versioningconfig import ENABLED, VersioningConfig
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from novel_llm.accounts import credential_aad
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'scripts'))
 from backup_private import create,restore
 from cleanup_accounts import sweep
 from ops_common import objects
+from migrate_private_library import migrate
+from rotate_credentials import main as rotate
 
 
 def main():
@@ -39,6 +44,8 @@ def main():
     buckets=['recovery-source-'+suffix,'recovery-target-'+suffix,'recovery-journal-'+suffix]
     login='recovery_backup_'+suffix;password=secrets.token_urlsafe(24)
     accounts=[uuid.uuid4(),uuid.uuid4()];novels=[uuid.uuid4(),uuid.uuid4()]
+    key=secrets.token_bytes(32)
+    os.environ['PROVIDER_CONFIG_ENCRYPTION_KEY']=base64.b64encode(key).decode()
     def url(db,**kwargs):return make_conninfo(**{**conninfo_to_dict(admin_url),'dbname':db,**kwargs})
     with psycopg.connect(admin_url,autocommit=True) as operator, tempfile.TemporaryDirectory() as tmp:
         try:
@@ -56,9 +63,18 @@ def main():
                     db.execute("INSERT INTO novel(id,owner_id,title,source_lang,target_lang,ontology) VALUES(%s,%s,%s,'zh','en','{}')",(novel,account,f'Private {i}'))
                     db.execute("INSERT INTO chapter(novel_id,chapter_index,raw_hash,raw_uri,source_meta) VALUES(%s,1,'hash','test','{}')",(novel,))
                     db.execute("INSERT INTO chapter_fact(novel_id,chapter_index,prompt_version,ordinal,text,source_hash,requested_model) VALUES(%s,1,'test',1,'Private fact','hash','test')",(novel,))
+                    nonce=secrets.token_bytes(12)
+                    cipher=AESGCM(key).encrypt(nonce,b'fake-private-key',None)
+                    db.execute("INSERT INTO provider_credential(account_id,provider,api_key_cipher,api_key_nonce,key_version) VALUES(%s,'gemini',%s,%s,0)",(account,cipher,nonce))
+                    db.execute("INSERT INTO reader_progress(reader_id,novel_id,current_chapter) VALUES('old-browser',%s,1)",(novel,))
                     for content in [b'old private prose',b'current private prose']:
                         client.put_object(buckets[0],f'novels/{novel}/raw.txt',io.BytesIO(content),len(content))
                 db.execute("INSERT INTO account_session(token_hash,account_id,csrf_token,expires_at) VALUES(%s,%s,'test',now()+interval '1 day')",(hashlib.sha256(b'test').hexdigest(),accounts[0]))
+                with db.transaction():migrate(db)
+                for account,cipher,nonce,version in db.execute('SELECT account_id,api_key_cipher,api_key_nonce,key_version FROM provider_credential'):
+                    assert version==1
+                    assert AESGCM(key).decrypt(bytes(nonce),bytes(cipher),credential_aad(str(account),'gemini',None))==b'fake-private-key'
+                assert {r[0] for r in db.execute('SELECT reader_id FROM reader_progress')}=={str(a) for a in accounts}
             operator.execute(sql.SQL('CREATE ROLE {} LOGIN NOINHERIT PASSWORD {}').format(sql.Identifier(login),sql.Literal(password)))
             operator.execute(sql.SQL('GRANT book_backup TO {}').format(sql.Identifier(login)))
             os.environ['DATABASE_URL']=url(source,user=login,password=password)
@@ -71,6 +87,15 @@ def main():
             archive=Path(tmp)/'snapshot.tar.gz'
             create(archive)
             assert archive.stat().st_mode & 0o077 == 0
+            os.environ['DATABASE_URL']=url(source)
+            next_key=secrets.token_bytes(32)
+            os.environ['ROTATION_NEW_KEY']=base64.b64encode(next_key).decode()
+            os.environ['ROTATION_NEW_VERSION']='2'
+            rotate()
+            with psycopg.connect(url(source)) as db:
+                for account,cipher,nonce,version in db.execute('SELECT account_id,api_key_cipher,api_key_nonce,key_version FROM provider_credential'):
+                    assert version==2
+                    assert AESGCM(next_key).decrypt(bytes(nonce),bytes(cipher),credential_aad(str(account),'gemini',None))==b'fake-private-key'
             # Delete B after the snapshot. Its erasure must survive restoring the old DB.
             with psycopg.connect(url(source),autocommit=True) as db:
                 db.execute('SELECT request_account_deletion(%s)',(accounts[1],))
@@ -102,7 +127,7 @@ def main():
             response=client.get_object(buckets[1],restored[0].object_name)
             try:assert response.read()==b'current private prose'
             finally:response.close();response.release_conn()
-            print('PASS: restricted backup, restore permissions, private prose hashes, session revocation, version erasure, deletion replay.')
+            print('PASS: progress/key migration, rotation, restricted backup, restore permissions, private prose hashes, session revocation, version erasure, deletion replay.')
         finally:
             for db in [source,target]:operator.execute(sql.SQL('DROP DATABASE IF EXISTS {} WITH (FORCE)').format(sql.Identifier(db)))
             operator.execute(sql.SQL('DROP ROLE IF EXISTS {}').format(sql.Identifier(login)))

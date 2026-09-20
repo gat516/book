@@ -9,6 +9,7 @@ import base64,hashlib,os,secrets,socket,subprocess,sys,time,uuid
 from pathlib import Path
 import httpx
 import psycopg
+import redis
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict,make_conninfo
 from minio import Minio
@@ -34,10 +35,11 @@ def main():
          'INGEST_INTERNAL_TOKEN':secrets.token_urlsafe(32),'ASKAI_INTERNAL_TOKEN':secrets.token_urlsafe(32),
          'INGEST_PROVIDER_CONFIG_KEY':base64.b64encode(secrets.token_bytes(32)).decode(),
          'GOOGLE_CLIENT_ID':'smoke-test','GOOGLE_CLIENT_SECRET':'smoke-test',
+         'LLM_MODEL_ASK':'smoke-test-model','LLM_MODEL_EXTRACT':'smoke-test-model',
          'INGEST_API_URL':f'http://127.0.0.1:{ingest_port}'}
-    def start(name,image,extra):
+    def start(name,image,extra,command=()):
         values={**env,**extra};container='book-smoke-'+name+'-'+suffix
-        docker('run','-d','--name',container,'--network','host',*[arg for key in values for arg in ['-e',key]],image,env={**os.environ,**values})
+        docker('run','-d','--name',container,'--network','host',*[arg for key in values for arg in ['-e',key]],image,*command,env={**os.environ,**values})
         services[name]=container
     def wait(url):
         for _ in range(60):
@@ -52,7 +54,7 @@ def main():
             client.make_bucket(bucket)
             subprocess.run([sys.executable,str(ROOT/'db/migrate.py'),'--bootstrap'],check=True,env={**os.environ,'DATABASE_URL':dsn()})
             connections={}
-            for service,roles in {'reader':['rls_reader','reader_progress_writer'],'auth':['book_auth'],'ingest':['ingest_writer']}.items():
+            for service,roles in {'reader':['rls_reader','reader_progress_writer'],'auth':['book_auth'],'ingest':['ingest_writer'],'pipeline':['book_worker'],'askai':['rls_reader']}.items():
                 name='smoke_'+service+'_'+suffix;password=secrets.token_urlsafe(24);logins.append(name)
                 operator.execute(sql.SQL('CREATE ROLE {} LOGIN NOINHERIT PASSWORD {}').format(sql.Identifier(name),sql.Literal(password)))
                 for role in roles:operator.execute(sql.SQL('GRANT {} TO {}').format(sql.Identifier(role),sql.Identifier(name)))
@@ -91,6 +93,19 @@ def main():
             assert request('GET','/queue').json()['mode']=='paused'
             assert request('GET','/queue',1).json()['mode']=='all'
             assert httpx.get(f'http://127.0.0.1:{ingest_port}/provider-credentials').status_code==401
+            # Exercise real Python startup with the worker/Ask AI database roles.
+            cache=redis.Redis.from_url(os.environ['TEST_REDIS_URL'])
+            cache.delete('jobs:worker:heartbeat')
+            start('pipeline','book-python-hosted:test',{'DATABASE_URL':connections['pipeline'],
+                'TEXTPROC_BACKEND':'python','PROVIDER_CONFIG_ENCRYPTION_KEY':env['INGEST_PROVIDER_CONFIG_KEY']})
+            for _ in range(30):
+                if cache.exists('jobs:worker:heartbeat'):break
+                time.sleep(1)
+            else:raise AssertionError('restricted worker did not start')
+            ask_port=port()
+            start('askai','book-python-hosted:test',{'DATABASE_URL':connections['askai'],'ASKAI_PORT':str(ask_port),
+                'PROVIDER_CONFIG_ENCRYPTION_KEY':env['INGEST_PROVIDER_CONFIG_KEY']},('python','-m','askai'))
+            wait(f'http://127.0.0.1:{ask_port}/healthz')
             # Local mode works on the new schema with no OAuth session or browser actor.
             start('local','book-reader-hosted:test',{'BOOK_MODE':'local','DATABASE_URL':connections['reader'],'READER_LISTEN_ADDR':f':{local_port}'})
             wait(f'http://127.0.0.1:{local_port}/healthz')
@@ -102,7 +117,9 @@ def main():
             assert request('GET','/novels',1).status_code==200
             print('PASS: hosted HTTP isolation, forged headers, CSRF, private creation/keys/queue, account deletion, localhost without login.')
         except Exception:
-            for name,container in services.items():print(name,docker('logs','--tail','15',container),file=sys.stderr)
+            for name,container in services.items():
+                print(name,file=sys.stderr)
+                subprocess.run(['docker','logs','--tail','15',container],check=False)
             raise
         finally:
             for container in services.values():docker('rm','-f',container)

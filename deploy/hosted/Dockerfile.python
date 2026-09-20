@@ -1,0 +1,16 @@
+FROM postgres:16-bookworm AS postgres_tools
+FROM python:3.14-slim-trixie
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+RUN apt-get update && apt-get install -y --no-install-recommends libpq5 liblz4-1 libzstd1 zlib1g ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=postgres_tools /usr/lib/postgresql/16/bin/pg_dump /usr/lib/postgresql/16/bin/pg_restore /usr/local/bin/
+WORKDIR /app
+COPY deploy/hosted/python-constraints.txt /app/constraints.txt
+COPY packages/novel-llm /app/packages/novel-llm
+COPY services/pipeline /app/services/pipeline
+COPY services/askai /app/services/askai
+RUN pip install -c /app/constraints.txt /app/packages/novel-llm /app/services/pipeline /app/services/askai
+COPY scripts /app/scripts
+COPY db /app/db
+RUN useradd --uid 10001 --create-home book && chown -R book:book /app
+USER 10001:10001
+CMD ["python","-m","pipeline.worker"]

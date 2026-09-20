@@ -324,6 +324,16 @@ def create_app(service: Service) -> FastAPI:
 
     app = FastAPI(lifespan=lifespan)
 
+    @app.get("/healthz")
+    async def health():
+        # §15: readiness checks infrastructure, never spend a user's model quota.
+        try:
+            async with service.pool.connection() as conn:
+                await conn.execute("SELECT 1")
+        except Exception:
+            raise HTTPException(status_code=503, detail="database unavailable")
+        return {"status": "ok"}
+
     @app.post("/ask", response_model=AskResponse)
     async def ask(request: AskRequest, authorization: Annotated[str | None, Header()] = None, x_account_id: Annotated[str | None, Header()] = None) -> AskResponse:
         expected = f"Bearer {service.config.internal_token}"
