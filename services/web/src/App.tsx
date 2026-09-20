@@ -13,6 +13,7 @@ import { TranslationNotice } from "./components/TranslationNotice";
 import { WikiView } from "./components/WikiView";
 import { BookSettingsView } from "./components/BookSettingsView";
 import { SettingsView } from "./components/SettingsView";
+import { ThemePicker } from "./components/ThemePicker";
 import { QueueControls } from "./components/QueueControls";
 import { usePolling } from "./usePolling";
 import type { ChapterListItem, ChapterResponse, NovelSummary } from "./types";
@@ -354,6 +355,7 @@ export default function App() {
             trailing edge let the first claim the row's last slot and stranded the second
             on a line of its own. */}
         <span className="app-nav-settings-group">
+          <ThemePicker />
           <button className="app-nav-settings" onClick={() => setShowBookSettings(true)}>
             Book settings
           </button>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, cancelScrape, getScrapeStatus, startScrape } from "../api";
-import type { ScrapeJobView } from "../types";
+import { ApiError, cancelScrape, getScrapeStatus, previewScrape, startScrape } from "../api";
+import type { ScrapeJobView, ScrapePreview } from "../types";
 import { usePolling } from "../usePolling";
 
 interface Props {
@@ -13,17 +13,32 @@ interface Props {
 // while competing with the other live views on the page.
 const POLL_INTERVAL_MS = 5000;
 
-// Two real sources this was built and tested against (PLAN.md Phase N5):
-//   - an already-translated site (mode "bootstrap" — fetched text needs no LLM call)
-//   - a raw source-language site (mode "translate" — the pipeline machine-translates it)
-// The scraper infers which site a URL belongs to from its host; mode only controls
-// whether fetched text is treated as already-translated or not.
+// Any site can be tried: hosts without an adapter of their own are read by the generic
+// reader (scraper/generic.go), which works out where the chapter and the next link are.
+// That is a guess, so "Check this page" previews one page first -- what it extracted, how
+// much of it, and where it would go next -- before a scrape runs on the strength of it.
+// Mode only controls whether fetched text is treated as already-translated.
+
+// Acknowledging responsibility for a source is a one-time thing per browser, not a
+// per-scrape nag; the notice itself stays visible either way.
+const ACK_KEY = "novel-engine:source-responsibility";
+
+function storedAck(): boolean {
+  try {
+    return localStorage.getItem(ACK_KEY) === "yes";
+  } catch {
+    return false; // private mode or blocked storage: ask again rather than assume
+  }
+}
 export function ScrapeForm({ novelId, onDone }: Props) {
   const [startURL, setStartURL] = useState("");
   const [mode, setMode] = useState<"translate" | "bootstrap">("translate");
   const [job, setJob] = useState<ScrapeJobView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [preview, setPreview] = useState<ScrapePreview | null>(null);
+  const [acked, setAcked] = useState(storedAck);
 
   useEffect(() => {
     // Pick up an already-running job for this novel (e.g. after a page reload) rather
@@ -56,6 +71,29 @@ export function ScrapeForm({ novelId, onDone }: Props) {
   // can't be left running by a missed stopPolling() call.
   const active = job !== null && (job.status === "pending" || job.status === "running");
   usePolling(poll, POLL_INTERVAL_MS, active && error === null);
+
+  function acknowledge(next: boolean) {
+    setAcked(next);
+    try {
+      localStorage.setItem(ACK_KEY, next ? "yes" : "no");
+    } catch { /* storage is a convenience here; the checkbox still governs this session */ }
+  }
+
+  async function check() {
+    if (!startURL.trim()) return;
+    setChecking(true);
+    setError(null);
+    setPreview(null);
+    try {
+      const result = await previewScrape(novelId, startURL.trim());
+      setPreview(result);
+      if (result.suggested_mode) setMode(result.suggested_mode);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setChecking(false);
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -113,11 +151,18 @@ export function ScrapeForm({ novelId, onDone }: Props) {
           <input
             type="url"
             value={startURL}
-            onChange={(e) => setStartURL(e.target.value)}
+            onChange={(e) => { setStartURL(e.target.value); setPreview(null); }}
             placeholder="https://example.com/novel/x/chapter-1"
             required
           />
         </label>
+        <div className="scrape-check">
+          <button type="button" onClick={() => void check()} disabled={checking || !startURL.trim()}>
+            {checking ? "Reading the page…" : "Check this page"}
+          </button>
+          <small>Reads one page and shows what would be saved.</small>
+        </div>
+        {preview && <ScrapePreviewPanel preview={preview} />}
         <fieldset>
           <legend>This site's text is</legend>
           <label>
@@ -129,7 +174,15 @@ export function ScrapeForm({ novelId, onDone }: Props) {
             translated
           </label>
         </fieldset>
-        <button type="submit" className="btn-primary" disabled={pending || !startURL.trim()}>
+        <label className="scrape-ack">
+          <input type="checkbox" checked={acked} onChange={(event) => acknowledge(event.target.checked)} />
+          <span>
+            I have the right to read this source and I am responsible for how this copy is used.
+            Chapters stay in my own library; the scraper follows each site's robots.txt and fetches
+            slowly.
+          </span>
+        </label>
+        <button type="submit" className="btn-primary" disabled={pending || !startURL.trim() || !acked}>
           {pending ? "Starting…" : "Start scrape"}
         </button>
       </form>
@@ -140,4 +193,35 @@ export function ScrapeForm({ novelId, onDone }: Props) {
 
 function errorMessage(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason);
+}
+
+// What the preview found, in the order it answers a reader's questions: did it read the
+// right thing, how much of it, and where would it go next.
+function ScrapePreviewPanel({ preview }: { preview: ScrapePreview }) {
+  if (preview.error) {
+    return <div className="scrape-preview is-bad" role="alert">
+      <strong>{preview.host || "That URL"} didn’t read as a chapter.</strong>
+      <p>{preview.error}</p>
+    </div>;
+  }
+  return <div className="scrape-preview">
+    <p className="scrape-preview-head">
+      <strong>{preview.title || "Untitled page"}</strong>
+      <span>{preview.text_chars.toLocaleString()} characters · {preview.paragraphs} paragraph{preview.paragraphs === 1 ? "" : "s"}</span>
+    </p>
+    <blockquote>{preview.excerpt}…</blockquote>
+    <ul className="scrape-preview-facts">
+      <li>{preview.reader === "built-in"
+        ? `Read by the adapter written for ${preview.host}.`
+        : `Read by the generic reader, which works out this site's layout per page.`}</li>
+      <li>{preview.next_url
+        ? (preview.continues
+          ? "The next link continues this same chapter; both pages become one chapter."
+          : "The next link goes to the following chapter.")
+        : "No next link found, so a scrape would stop after this page."}</li>
+      <li>{preview.suggested_mode === "bootstrap"
+        ? "Reads as already translated."
+        : "Reads as source-language text to translate."}</li>
+    </ul>
+  </div>;
 }

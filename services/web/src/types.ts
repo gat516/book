@@ -83,6 +83,22 @@ export interface StartScrapeRequest {
   mode?: "translate" | "bootstrap";
 }
 
+// What one page extracts to, read by the scraper exactly as a scrape would (scraper/preview.go).
+export interface ScrapePreview {
+  url: string;
+  host: string;
+  reader: "built-in" | "generic" | string;
+  robots_allowed: boolean;
+  excerpt?: string;
+  title?: string;
+  text_chars: number;
+  paragraphs: number;
+  next_url?: string;
+  continues: boolean;
+  suggested_mode?: "translate" | "bootstrap";
+  error?: string;
+}
+
 export interface ScrapeJobView {
   id: number;
   novel_id: string;

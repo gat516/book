@@ -200,6 +200,10 @@ export function ask(novelId: string, question: string, at: number): Promise<AskR
   });
 }
 
+export function previewScrape(novelId: string, url: string): Promise<import("./types").ScrapePreview> {
+  return request(`/novels/${novelId}/scrape/preview`, { method: "POST", body: JSON.stringify({ url }) });
+}
+
 export function startScrape(novelId: string, body: StartScrapeRequest): Promise<{ id: number }> {
   return request(`/novels/${novelId}/scrape`, { method: "POST", body: JSON.stringify(body) });
 }

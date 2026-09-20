@@ -130,59 +130,42 @@ export function ChapterList({ novelId, currentChapter, onOpen, onClose, onAdd }:
         {chapters && chapters.length > 0 && (
           <>
             <p className="chapter-list-count">Showing {shownFrom}–{shownTo} of {total}</p>
-            <p className="chapter-list-status-help">
-              <strong>Reading</strong> shows when chapter text is ready. <strong>Reader features</strong> are built afterward for character cards, the timeline, and AskAI.
-            </p>
-            <table>
-              <thead>
-                <tr><th>#</th><th>Source chapter</th><th>Reading</th><th>Reader features</th><th>Actions</th></tr>
-              </thead>
-              <tbody>
-                {chapters.map((chapter) => {
-                  const active = processing.includes(chapter.chapter_index);
-                  const reading = readingState(chapter, active);
-                  const features = readerFeaturesState(chapter, active);
-                  return <tr key={chapter.chapter_index} className={chapter.chapter_index === currentChapter ? "chapter-list-current" : undefined}>
-                    <td>
-                      {chapter.chapter_index}
-                      {chapter.chapter_index === currentChapter && (
-                        <span className="chapter-list-current-label">Current</span>
-                      )}
-                    </td>
-                    <td className="chapter-list-source">
-                      <span className="chapter-list-source-title" title={chapter.site_chapter_no || undefined}>
-                        {chapter.site_chapter_no ?? "—"}
-                      </span>
-                      {chapter.part > 1 && <span className="chapter-list-part"> · Part {chapter.part}</span>}
-                      {chapter.source_url && <>
-                        {" · "}<a href={chapter.source_url} target="_blank" rel="noreferrer">Source ↗</a>
-                      </>}
-                    </td>
-                    <td className="chapter-list-status-cell">
-                      <span className={`status-pill status-pill-${reading.tone}`}>
-                        {reading.label === "Preparing" && <span className="reader-records-dot" aria-hidden="true" />}
-                        {reading.label}
-                      </span>
-                      {chapter.status === "error" && chapter.failure_category && (
-                        <small>{providerFailureDetail(chapter.failure_category)}</small>
-                      )}
-                      {chapter.status === "done" && chapter.translation_warning && <small>Some saved names need review</small>}
-                    </td>
-                    <td className="chapter-list-status-cell">
-                      <span className={`status-pill status-pill-${features.tone}`}>
-                        {features.tone === "live" && features.label === "Building" && <span className="reader-records-dot" aria-hidden="true" />}
-                        {features.label}
-                      </span>
-                    </td>
-                    <td className="chapter-list-action">
-                      <button onClick={() => onOpen(chapter)} aria-label={`${chapter.status === "done" ? "Read" : "View status for"} chapter ${chapter.chapter_index}`}>
-                        Open
-                      </button>
-                    </td>
-                  </tr>;
-                })}
-              </tbody>
-            </table>
+            <ul className="chapter-rows">
+              {chapters.map((chapter) => {
+                const active = processing.includes(chapter.chapter_index);
+                const reading = readingState(chapter, active);
+                const features = readerFeaturesState(chapter, active);
+                const isCurrent = chapter.chapter_index === currentChapter;
+                // One chip: the text's own state. What is still being built for the wiki
+                // is a quiet second line, and only while it is not finished -- two
+                // columns of "Ready" needed a paragraph above the table to explain them.
+                const note = chapter.status === "error" && chapter.failure_category
+                  ? providerFailureDetail(chapter.failure_category)
+                  : chapter.status === "done" && chapter.translation_warning
+                    ? "Some saved names need review"
+                    : reading.label === "Ready to read" && features.label !== "Ready"
+                      ? `Names and facts: ${features.label.toLowerCase()}`
+                      : null;
+                return <li key={chapter.chapter_index} className={`chapter-row${isCurrent ? " is-current" : ""}`}>
+                  <button type="button" className="chapter-row-open" onClick={() => onOpen(chapter)}
+                    aria-label={`${chapter.status === "done" ? "Read" : "View status for"} chapter ${chapter.chapter_index}: ${reading.label}`}>
+                    <span className="chapter-row-index">{chapter.chapter_index}</span>
+                    <span className="chapter-row-title" title={chapter.site_chapter_no || undefined}>
+                      {chapter.site_chapter_no ?? `Chapter ${chapter.chapter_index}`}
+                      {chapter.part > 1 && <span className="chapter-row-part"> · part {chapter.part}</span>}
+                    </span>
+                    {isCurrent && <span className="chapter-row-current">Current</span>}
+                    <span className={`status-pill status-pill-${reading.tone}`}>
+                      {reading.tone === "live" && <span className="reader-records-dot" aria-hidden="true" />}
+                      {reading.label}
+                    </span>
+                  </button>
+                  {chapter.source_url && <a className="chapter-row-source" href={chapter.source_url}
+                    target="_blank" rel="noreferrer" aria-label={`Open chapter ${chapter.chapter_index} on the source site`}>Source ↗</a>}
+                  {note && <p className="chapter-row-note">{note}</p>}
+                </li>;
+              })}
+            </ul>
           </>
         )}
       </section>
