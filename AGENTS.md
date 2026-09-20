@@ -65,8 +65,14 @@ approved glossary entries are preserved. See `services/pipeline/README.md`.
 
 Private hosting (§15) now has account RLS, invited Google sessions, BYOK isolation,
 fair scheduling, durable deletion, portable recovery, and AWS/k3s deployment files.
-This is an implementation, **not an already provisioned public website**. Follow
-`docs/HOSTED_IMPLEMENTATION.md` for validation and remaining rollout inputs.
+AWS resources and the initial hosted app are provisioned for **qireadr.com** in
+`us-east-1` (Elastic IP `3.221.223.180`). Follow `docs/HOSTED_IMPLEMENTATION.md` for
+actual rollout status, remaining DNS/TLS checks, resource IDs, and operator tool paths.
+Preserve the ignored Terraform state; do not provision a second stack. Hosted starts
+with an empty library; local books/services are untouched. The Free-plan overrides
+are `m7i-flex.large`, `db.t4g.micro`, and one-day RDS retention. Application pod specs
+disable Kubernetes service links to prevent the injected `ASKAI_PORT` from breaking
+Ask AI startup. Never commit `deploy/hosted/generated/` or invitation/credential files.
 
 **Keep localhost usable.** `BOOK_MODE=local` (default) assigns the fixed local account
 without Google login. Vite development opens the library directly; production builds

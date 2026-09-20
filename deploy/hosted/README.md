@@ -2,9 +2,10 @@
 
 This directory implements spec §15: invited Google accounts, private per-user books,
 and each user's own model keys. Local development still opens directly at localhost.
-The files are ready for operator configuration; no AWS deployment or invitation is
-implied by their presence. [Implementation status](../../docs/HOSTED_IMPLEMENTATION.md)
-records what has been tested.
+The initial AWS stack and application are deployed; see
+[implementation status](../../docs/HOSTED_IMPLEMENTATION.md) for the live resource IDs,
+validation, and remaining public DNS/TLS work. Reuse the existing private Terraform
+state instead of provisioning a second stack.
 
 The initial site is **https://qireadr.com**, with domain/DNS at Namecheap and application
 hosting in AWS `us-east-1`. Google OAuth's authorized redirect URI is exactly
