@@ -69,6 +69,7 @@ def main():
                     db.execute("INSERT INTO reader_progress(reader_id,novel_id,current_chapter) VALUES('old-browser',%s,1)",(novel,))
                     for content in [b'old private prose',b'current private prose']:
                         client.put_object(buckets[0],f'novels/{novel}/raw.txt',io.BytesIO(content),len(content))
+                        client.put_object(buckets[0],f'translated/{novel}/1/saved.txt',io.BytesIO(content),len(content))
                 db.execute("INSERT INTO account_session(token_hash,account_id,csrf_token,expires_at) VALUES(%s,%s,'test',now()+interval '1 day')",(hashlib.sha256(b'test').hexdigest(),accounts[0]))
                 with db.transaction():migrate(db)
                 for account,cipher,nonce,version in db.execute('SELECT account_id,api_key_cipher,api_key_nonce,key_version FROM provider_credential'):
@@ -103,6 +104,7 @@ def main():
                 db.execute('SET ROLE book_cleanup')
                 sweep(db,client,buckets[0],cache)
                 assert not list(client.list_objects(buckets[0],prefix=f'novels/{novels[1]}/',recursive=True,include_version=True))
+                assert not list(client.list_objects(buckets[0],prefix=f'translated/{novels[1]}/',recursive=True,include_version=True))
                 assert len(list(client.list_objects(buckets[0],prefix=f'novels/{novels[0]}/',recursive=True,include_version=True)))==2
                 db.execute('UPDATE account_cleanup SET retry_at=now() WHERE account_id=%s',(accounts[1],))
                 sweep(db,client,buckets[0],cache)
@@ -123,10 +125,11 @@ def main():
                 db.execute("SELECT set_config('app.account_id',%s,false)",(str(accounts[1]),))
                 assert not db.execute('SELECT id FROM novel').fetchall()
             restored=list(client.list_objects(buckets[1],recursive=True))
-            assert [obj.object_name for obj in restored]==[f'novels/{novels[0]}/raw.txt']
-            response=client.get_object(buckets[1],restored[0].object_name)
-            try:assert response.read()==b'current private prose'
-            finally:response.close();response.release_conn()
+            assert {obj.object_name for obj in restored}=={f'novels/{novels[0]}/raw.txt',f'translated/{novels[0]}/1/saved.txt'}
+            for obj in restored:
+                response=client.get_object(buckets[1],obj.object_name)
+                try:assert response.read()==b'current private prose'
+                finally:response.close();response.release_conn()
             print('PASS: progress/key migration, rotation, restricted backup, restore permissions, private prose hashes, session revocation, version erasure, deletion replay.')
         finally:
             for db in [source,target]:operator.execute(sql.SQL('DROP DATABASE IF EXISTS {} WITH (FORCE)').format(sql.Identifier(db)))

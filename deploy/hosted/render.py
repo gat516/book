@@ -9,9 +9,10 @@ from pathlib import Path
 import yaml
 
 
-def render(domain,registry,tag,bucket,region,email,ca):
+def render(domain,registry,tag,bucket,region,email,ca,maintenance_tag=None):
     if not re.fullmatch(r'[a-zA-Z0-9.-]+',domain) or '.' not in domain:raise ValueError('public domain required')
     if tag in {'latest','main','master',''}:raise ValueError('immutable release tag required')
+    if maintenance_tag in {'latest','main','master',''}:raise ValueError('immutable maintenance tag required')
     ns='book';resources=[]
     def add(kind,name,spec=None,api='v1',**rest):
         obj={'apiVersion':api,'kind':kind,'metadata':{'name':name,'namespace':ns},**rest}
@@ -76,9 +77,11 @@ def render(domain,registry,tag,bucket,region,email,ca):
             'volumeMounts':[{'name':'data','mountPath':'/data'}]}],'volumes':[{'name':'data','persistentVolumeClaim':{'claimName':'redis-data'}}]}}},api='apps/v1')
     add('Service','redis',{'selector':{'app':'redis'},'ports':[{'port':6379}]})
     cleanup=pod('cleanup','python','cleanup',['python','/app/scripts/cleanup_accounts.py'])
+    if maintenance_tag:cleanup['containers'][0]['image']=f'{registry}/python:{maintenance_tag}'
     cleanup['restartPolicy']='OnFailure'
     add('CronJob','account-cleanup',{'suspend':False,'schedule':'*/5 * * * *','concurrencyPolicy':'Forbid','successfulJobsHistoryLimit':1,'failedJobsHistoryLimit':3,'jobTemplate':{'spec':{'backoffLimit':3,'activeDeadlineSeconds':240,'template':{'metadata':{'labels':{'app':'cleanup'}},'spec':cleanup}}}},api='batch/v1')
     backup=pod('backup','python','backup',['python','/app/scripts/snapshot_job.py'],memory='1024Mi')
+    if maintenance_tag:backup['containers'][0]['image']=f'{registry}/python:{maintenance_tag}'
     backup['automountServiceAccountToken']=True
     backup['serviceAccountName']='snapshot'
     backup['restartPolicy']='Never'
@@ -105,12 +108,16 @@ def render(domain,registry,tag,bucket,region,email,ca):
     add('Ingress','book',{'ingressClassName':'traefik','tls':[{'hosts':[domain]}],'rules':[{'host':domain,'http':{'paths':[{'path':'/','pathType':'Prefix','backend':{'service':{'name':'web','port':{'number':8080}}}}]}}]},api='networking.k8s.io/v1')
     resources[-1]['metadata']['annotations']={'traefik.ingress.kubernetes.io/router.entrypoints':'websecure','traefik.ingress.kubernetes.io/router.tls':'true','traefik.ingress.kubernetes.io/router.tls.certresolver':'letsencrypt'}
     resources.append({'apiVersion':'helm.cattle.io/v1','kind':'HelmChartConfig','metadata':{'name':'traefik','namespace':'kube-system'},'spec':{'valuesContent':yaml.safe_dump({
-        'additionalArguments':[f'--certificatesresolvers.letsencrypt.acme.email={email}','--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json','--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web','--entrypoints.web.http.redirections.entrypoint.to=websecure','--entrypoints.web.http.redirections.entrypoint.scheme=https'],
+        # §15: clients use public 443; the chart's websecure listener is internal 8443.
+        'additionalArguments':[f'--certificatesresolvers.letsencrypt.acme.email={email}','--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json','--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web','--entrypoints.web.http.redirections.entrypoint.to=:443','--entrypoints.web.http.redirections.entrypoint.scheme=https'],
+        # §15 accepts ingress maintenance: ACME state/challenges belong to one process.
+        'updateStrategy':{'type':'Recreate'},
         'persistence':{'enabled':True,'size':'1Gi','storageClass':'local-path'}})}})
     return resources
 
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     for name in ['domain','registry','tag','bucket','email','rds-ca']:p.add_argument('--'+name,required=True)
+    p.add_argument('--maintenance-tag',help='optional immutable Python tag for backup and cleanup only')
     p.add_argument('--region',default='us-east-1');a=p.parse_args()
-    print(yaml.safe_dump_all(render(a.domain,a.registry,a.tag,a.bucket,a.region,a.email,Path(a.rds_ca).read_text()),sort_keys=False))
+    print(yaml.safe_dump_all(render(a.domain,a.registry,a.tag,a.bucket,a.region,a.email,Path(a.rds_ca).read_text(),a.maintenance_tag),sort_keys=False))

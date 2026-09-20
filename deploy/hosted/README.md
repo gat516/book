@@ -7,8 +7,10 @@ The initial AWS stack and application are deployed; see
 validation, and remaining public DNS/TLS work. Reuse the existing private Terraform
 state instead of provisioning a second stack.
 
-The initial site is **https://qireadr.com**, with domain/DNS at Namecheap and application
-hosting in AWS `us-east-1`. Google OAuth's authorized redirect URI is exactly
+The site is **https://qireadr.com**, with registration at Namecheap and application
+hosting in AWS `us-east-1`. The Cloudflare DNS/frontend cutover is documented in
+[the Cloudflare runbook](../cloudflare/README.md); consult the implementation status
+before assuming the cutover is complete. Google OAuth's authorized redirect URI is exactly
 `https://qireadr.com/api/auth/callback`; `APP_ORIGIN` is `https://qireadr.com`.
 These values are saved in the ignored `operator.env`. Export its settings in the operator
 shell before following the commands below (`set -a; source deploy/hosted/operator.env;
@@ -220,3 +222,48 @@ the SQL ownership/spoiler tests, real restricted-role HTTP smoke, full versioned
 deletion/restore, shared auth tests and UI mode tests. No paid model requests are needed.
 After configuration, additionally verify real Google consent/callback, DNS/TLS issuance,
 RDS connectivity, node IAM, scheduled snapshots, and a second invited account in AWS.
+
+### Copy into an already claimed hosted account
+
+Do not restore the full local database over a hosted account that has already signed
+in. `scripts/transfer_library.py` copies library data into that account while preserving
+its Google identity, invitations and sessions. It requires an empty target library,
+provider credentials and embedding settings, preserves novel UUIDs/object names and
+saved prose, consolidates existing chapter clearance, and re-encrypts keys for the
+hosted account/key. The local source remains usable.
+
+1. Take a pre-import snapshot inside AWS (or the deployment's approved backup store).
+   Stop local application writers for export and resume exactly the previously active
+   services afterward. Set all `OBJECT_STORE_*` values explicitly: unlike application
+   configuration, operator scripts do not supply local MinIO credential/bucket defaults.
+2. With source operator/backup credentials, run
+   `python scripts/transfer_library.py export /private/path/library.tar.gz`.
+   Archives are mode 0600 and contain private content and encrypted provider keys;
+   retain them only in private storage, outside source control.
+3. Set target operator/object-store configuration and its existing encryption key.
+   Supply the source key separately in `TRANSFER_SOURCE_KEY`; never put either key in
+   command arguments or the archive. Temporary S3 credentials additionally support
+   `OBJECT_STORE_SESSION_TOKEN`.
+4. Run `python scripts/transfer_library.py import /private/path/library.tar.gz
+   --email owner@example.com` for the read-only preflight. Rehearse against disposable
+   infrastructure first. Add `--apply` only after verifying the plan and backup.
+5. Verify row counts, provider-key decryption, object hashes, owner RLS and chapter
+   gates. Imported scraping claims are cancelled and account processing is paused;
+   resume work explicitly through the reader after checking the provider/model.
+
+The original local ledger has no checksums and includes the source-only historical
+label `0079_chapter_knowledge.sql`. The September 20 transfer used the explicit
+`--source-only-migration 0079_chapter_knowledge.sql` exception after checking all 24
+transferred tables' column types/order/nullability against the portable schema and
+rehearsing the complete import. This does not edit either ledger, permit changed
+recorded checksums, or permit missing target migrations. Unknown discrepancies fail.
+An interrupted object upload can be retried when existing objects match all hashes;
+a second import after the database commit refuses to overwrite the populated account.
+
+Pipeline translations live under `translated/<novel>/`; ingested source and bootstrap
+translations live under `novels/<novel>/`. Backup, restore and durable deletion cover
+both prefixes, including all versions for deletion. A maintenance-only image can be
+built with `Dockerfile.maintenance` on a pinned existing Python release. Pass its tag
+as `render.py --maintenance-tag ...` to retain that release on both CronJobs while
+keeping the application services on their existing tag. Normal full Python image
+releases include the same scripts.

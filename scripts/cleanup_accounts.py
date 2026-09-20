@@ -12,13 +12,13 @@ import os
 import psycopg
 import redis
 from minio.deleteobjects import DeleteObject
-from ops_common import objects
+from ops_common import objects, novel_prefixes
 
 log=logging.getLogger(__name__)
 
 
 def purge_objects(client,bucket,novel):
-    for prefix in [f'novels/{novel}/']:
+    for prefix in novel_prefixes(novel):
         versions=client.list_objects(bucket,prefix=prefix,recursive=True,include_version=True)
         errors=list(client.remove_objects(bucket,(DeleteObject(o.object_name,o.version_id) for o in versions)))
         if errors:raise RuntimeError('object deletion incomplete')

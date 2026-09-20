@@ -1,0 +1,5 @@
+# A maintenance-only release can retain the already validated application image.
+# §15.3: both source and translated object prefixes need backup and erasure coverage.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+COPY --chown=10001:10001 scripts/ops_common.py scripts/backup_private.py scripts/cleanup_accounts.py /app/scripts/

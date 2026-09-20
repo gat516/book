@@ -8,7 +8,7 @@ The credential encryption key is stored separately, never in this archive.
 import argparse,hashlib,io,json,os,subprocess,tarfile,tempfile
 from pathlib import Path
 import psycopg
-from ops_common import objects
+from ops_common import objects, object_novel
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -26,7 +26,9 @@ def create(output):
         work=Path(tmp);manifest={'format':1,'objects':[]}
         pg('pg_dump','--enable-row-security','--role=book_backup','--format=custom','--no-owner','--no-acl','--file',str(work/'database.dump'))
         (work/'objects').mkdir()
-        for obj in client.list_objects(bucket,prefix='novels/',recursive=True):
+        # Pipeline output uses translated/<novel>/; bootstrap prose uses novels/.
+        # Both prefixes are private library content (§15.3), including saved versions.
+        for obj in (obj for prefix in ('novels/','translated/') for obj in client.list_objects(bucket,prefix=prefix,recursive=True)):
             filename=hashlib.sha256(obj.object_name.encode()).hexdigest()
             dest=work/'objects'/filename
             client.fget_object(bucket,obj.object_name,str(dest),version_id=obj.version_id)
@@ -50,7 +52,8 @@ def restore(archive,journal):
             if manifest.get('format')!=1:raise RuntimeError('unsupported snapshot')
             if hashlib.sha256((work/'database.dump').read_bytes()).hexdigest()!=manifest['database_sha256']:raise RuntimeError('database checksum mismatch')
             for obj in manifest['objects']:
-                if not obj['key'].startswith('novels/') or '/' in obj['file']:raise RuntimeError('invalid object manifest')
+                object_novel(obj['key'])
+                if obj['file'] != hashlib.sha256(obj['key'].encode()).hexdigest():raise RuntimeError('invalid object manifest')
                 path=work/'objects'/obj['file']
                 if hashlib.sha256(path.read_bytes()).hexdigest()!=obj['sha256']:raise RuntimeError('object checksum mismatch')
             db.execute((ROOT/'db/hosted/roles.sql').read_text())
@@ -66,7 +69,7 @@ def restore(archive,journal):
                 db.execute('DELETE FROM novel WHERE id=%s',(novel,))
             live={str(r[0]) for r in db.execute("SELECT n.id FROM novel n JOIN account a ON a.id=n.owner_id WHERE a.status='active'")}
             for obj in manifest['objects']:
-                if obj['key'].split('/')[1] in live:client.fput_object(bucket,obj['key'],str(work/'objects'/obj['file']))
+                if object_novel(obj['key']) in live:client.fput_object(bucket,obj['key'],str(work/'objects'/obj['file']))
             # Sessions and stale claims must never survive a restore.
             db.execute('DELETE FROM account_session;DELETE FROM account_oauth_state')
     print('Restored snapshot; sessions revoked. Reconcile queues and run isolation tests before serving.')

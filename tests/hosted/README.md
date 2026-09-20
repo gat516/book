@@ -27,3 +27,9 @@ deletion intent, and restricted-role pipeline/Ask AI startup.
 environment variables. Recovery runs inside the Python image to use PostgreSQL 16
 clients. For a real AWS rollout, additionally test Google OAuth, TLS, RDS, node IAM,
 scheduled backups and a second invitation; local fixtures do not validate those services.
+
+`services/pipeline/.venv/bin/python -m pytest -q tests/hosted/test_transfer_library.py`
+runs pure transfer checks (credential rebinding, existing chapter clearance, ownership,
+object tampering/missing prose, storage prefixes and migration-ledger compatibility).
+The recovery integration also covers versioned pipeline translation objects under
+`translated/<novel>/`, not only ingested prose under `novels/<novel>/`.
