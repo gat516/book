@@ -34,6 +34,10 @@ EBS volume. Redis uses AOF with `everysec` and `noeviction`. Two pipeline replic
 one active chapter per account; scraping permits one per account and three globally.
 Ask AI permits one request at a time and ten starts per minute per account.
 
+The initial qireadr.com Free plan requires `instance_type = "m7i-flex.large"`
+(also 2 vCPU / 8 GiB) and `database_backup_retention_days = 1` in the ignored
+`terraform.tfvars`. These resources consume promotional credits.
+
 This is one trusted application node with maintenance outages, not high availability.
 The node role accesses private object storage and runtime Secrets Manager entries;
 pods share that node IAM trust boundary. Application RLS enforces user isolation.
@@ -167,7 +171,8 @@ job handles this serialization with the database advisory lock.
 
 ## Backup, erasure and restore
 
-RDS automated backups retain seven days. At 08:00 UTC, `portable-backup` pauses ingest,
+RDS automated backups default to seven days (one day on the initial Free plan).
+At 08:00 UTC, `portable-backup` pauses ingest,
 scraper and pipeline deployments, waits for them to stop, snapshots the DB and current
 objects, uploads checksums and a deletion journal, and restores the original replicas.
 S3 expires `snapshots/` after thirty days; `deletions/current.json` has no expiry. Cleanup

@@ -5,3 +5,6 @@ monthly_budget_usd = 100
 # Set false if you already configured an account-wide budget in the AWS console.
 create_budget = true
 # The budget is an alert, not a spending cap. Review terraform plan and AWS estimate.
+# Initial qireadr.com Free-plan overrides (consume promotional credits):
+# instance_type                  = "m7i-flex.large"
+# database_backup_retention_days = 1

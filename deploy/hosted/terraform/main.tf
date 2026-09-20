@@ -28,6 +28,11 @@ variable "database_class" {
   type    = string
   default = "db.t4g.small"
 }
+variable "database_backup_retention_days" {
+  description = "RDS retention; AWS Free plans may require one day."
+  type        = number
+  default     = 7
+}
 variable "k3s_version" {
   type    = string
   default = "v1.35.8+k3s1"
@@ -139,7 +144,7 @@ resource "aws_db_instance" "book" {
   db_subnet_group_name        = aws_db_subnet_group.book.name
   vpc_security_group_ids      = [aws_security_group.database.id]
   parameter_group_name        = aws_db_parameter_group.book.name
-  backup_retention_period     = 7
+  backup_retention_period     = var.database_backup_retention_days
   backup_window               = "09:00-10:00"
   maintenance_window          = "sun:10:00-sun:11:00"
   deletion_protection         = true
