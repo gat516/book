@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
-dnf install -y curl jq python3-pip awscli2
+# Amazon Linux 2023 supplies curl-minimal; installing curl conflicts with it.
+command -v curl >/dev/null || dnf install -y curl-minimal
+dnf install -y jq python3-pip awscli2
 # Wait for Terraform to attach the data disk; never format a device with a filesystem.
 redis_device=/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${redis_volume}
 for attempt in $(seq 1 180); do [ -b "$redis_device" ] && break; sleep 2; done

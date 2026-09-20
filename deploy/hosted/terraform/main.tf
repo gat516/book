@@ -36,6 +36,11 @@ variable "monthly_budget_usd" {
   type    = number
   default = 100
 }
+variable "create_budget" {
+  description = "Create the deployment budget; disable when an account budget already covers this stack."
+  type        = bool
+  default     = true
+}
 variable "budget_email" {
   type = string
 }
@@ -297,6 +302,7 @@ resource "aws_eip" "node" {
   instance = aws_instance.node.id
 }
 resource "aws_budgets_budget" "monthly" {
+  count        = var.create_budget ? 1 : 0
   name         = var.name
   budget_type  = "COST"
   limit_amount = tostring(var.monthly_budget_usd)
@@ -309,6 +315,10 @@ resource "aws_budgets_budget" "monthly" {
     notification_type          = "FORECASTED"
     subscriber_email_addresses = [var.budget_email]
   }
+}
+moved {
+  from = aws_budgets_budget.monthly
+  to   = aws_budgets_budget.monthly[0]
 }
 resource "aws_cloudwatch_metric_alarm" "node_health" {
   alarm_name          = "${var.name}-node-health"

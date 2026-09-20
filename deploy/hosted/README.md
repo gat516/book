@@ -54,6 +54,8 @@ and the actual RDS hostname (libpq `hostaddr` can point to the forwarded listene
    redirect URI is `https://DOMAIN/api/auth/callback`. Configure the consent screen/test
    users as required by that Google project. `APP_ORIGIN` is exactly `https://DOMAIN`.
 2. Copy `terraform/example.tfvars` to ignored `terraform.tfvars`; set the budget email.
+   Set `create_budget = false` if an existing account-wide budget already covers the
+   deployment. This does not change or replace that separately managed budget.
    `us-east-1` is the default. Configure an encrypted, access-controlled Terraform state
    backend before applying, or keep initial local state in a private backed-up directory.
    Never commit state. Run `terraform init`, `terraform fmt -check`, `terraform validate`,
