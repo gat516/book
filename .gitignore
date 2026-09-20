@@ -20,3 +20,12 @@ dist/
 
 .env
 .env.bak
+
+.backups/
+deploy/hosted/operator.env
+deploy/hosted/generated/
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform.tfvars

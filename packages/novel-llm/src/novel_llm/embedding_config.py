@@ -42,7 +42,7 @@ class EmbeddingResolver:
 
     async def resolve(self, conn) -> EmbeddingBinding:
         row = await (await conn.execute(
-            "SELECT provider, model FROM embedding_config WHERE singleton"
+            "SELECT provider, model FROM embedding_config WHERE singleton AND account_id=(SELECT current_account())"
         )).fetchone()
         provider, model = row if row else ("auto" if hosted() else "server", "")
         if hosted() and provider == "server":

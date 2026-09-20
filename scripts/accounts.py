@@ -16,6 +16,7 @@ def main():
     disable=commands.add_parser('disable');disable.add_argument('email')
     args=p.parse_args()
     with psycopg.connect(os.environ['DATABASE_URL']) as db:
+        db.execute('SET LOCAL ROLE book_auth')
         if args.command=='invite':
             if not args.origin or not args.origin.startswith('https://'):p.error('--origin must be an HTTPS website origin')
             token=secrets.token_urlsafe(32)

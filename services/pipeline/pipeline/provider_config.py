@@ -78,21 +78,7 @@ async def load_provider_credential(db, provider: str) -> tuple[str | None, str |
     Returns (None, None) when no credential is stored, which is an ordinary state: a novel
     may carry its own key, or the provider may need none at all (Ollama).
     """
-    if hosted():
-        return await load_credential(db, provider)
-    row = await (
-        await db.execute(
-            "SELECT base_url, api_key_cipher, api_key_nonce FROM provider_credential WHERE provider = %s",
-            (provider,),
-        )
-    ).fetchone()
-    if row is None:
-        return None, None
-    base_url, cipher, nonce = row
-    api_key = None
-    if cipher is not None:
-        api_key = AESGCM(_decryption_key()).decrypt(bytes(nonce), bytes(cipher), None).decode("utf-8")
-    return base_url, api_key
+    return await load_credential(db, provider)
 
 
 async def resolve_provider_config(db, novel_id: str, default_provider: str) -> ProviderConfigRow | None:

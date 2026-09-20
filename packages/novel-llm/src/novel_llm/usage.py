@@ -1,5 +1,6 @@
 """Metadata-only usage accounting. Prompt/prose/key material never enters this table."""
 import logging
+from novel_llm.provider import SequentialBatchMixin
 log=logging.getLogger(__name__)
 
 async def record(conn, novel, stage, result):
@@ -11,8 +12,10 @@ async def record(conn, novel, stage, result):
     except Exception as exc:
         log.warning('usage record unavailable: %s',type(exc).__name__)
 
-class UsageProvider:
-    def __init__(self,inner,conn,novel):self.inner,self.conn,self.novel=inner,conn,novel
+class UsageProvider(SequentialBatchMixin):
+    def __init__(self,inner,conn,novel):
+        super().__init__()
+        self.inner,self.conn,self.novel=inner,conn,novel
     def __getattr__(self,name):return getattr(self.inner,name)
     async def complete(self,*args,**kwargs):
         result=await self.inner.complete(*args,**kwargs)

@@ -64,21 +64,7 @@ async def load_provider_config(conn, novel_id: str) -> ProviderConfigRow | None:
 
 async def load_provider_credential(conn, provider: str) -> tuple[str | None, str | None]:
     """Account-wide (base_url, api_key) for one provider (migration 0035)."""
-    if hosted():
-        return await load_credential(conn, provider)
-    row = await (
-        await conn.execute(
-            "SELECT base_url, api_key_cipher, api_key_nonce FROM provider_credential WHERE provider = %s",
-            (provider,),
-        )
-    ).fetchone()
-    if row is None:
-        return None, None
-    base_url, cipher, nonce = row
-    api_key = None
-    if cipher is not None:
-        api_key = AESGCM(_decryption_key()).decrypt(bytes(nonce), bytes(cipher), None).decode("utf-8")
-    return base_url, api_key
+    return await load_credential(conn, provider)
 
 
 async def resolve_provider_config(conn, novel_id: str, default_provider: str) -> ProviderConfigRow | None:

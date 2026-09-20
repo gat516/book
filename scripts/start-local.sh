@@ -24,8 +24,28 @@ done
 echo "Starting Postgres, Redis, MinIO, and textproc..."
 docker compose -f "$compose_file" up -d --wait --wait-timeout 120
 
-echo "Applying forward-only migrations..."
-"$repo/scripts/with-env.sh" "$repo/db/migrate.sh"
+python="$repo/services/pipeline/.venv/bin/python"
+if [[ ! -x "$python" ]]; then
+  echo "error: install the pipeline virtualenv first (services/pipeline/README.md)" >&2
+  exit 1
+fi
+
+# §15: never keep an old process writing across an authorization/schema upgrade.
+# The check is read-only, so repeated starts still leave healthy workers running.
+pending=0
+"$repo/scripts/with-env.sh" "$python" "$repo/db/migrate.py" --check || pending=$?
+marker="$repo/.backups/private-upgrade.pending"
+if [[ "$pending" == 3 || ( "$pending" == 0 && -f "$marker" ) ]]; then
+  echo "Pending schema upgrade: stopping application services for migration..."
+  systemctl --user stop novel-engine.target
+  mkdir -p "$repo/.backups"
+  touch "$marker"
+  "$repo/scripts/with-env.sh" "$python" "$repo/db/migrate.py"
+  "$repo/scripts/with-env.sh" "$python" "$repo/scripts/migrate_private_library.py"
+  rm "$marker"
+elif [[ "$pending" != 0 ]]; then
+  exit "$pending"
+fi
 
 echo "Installing and starting supervised application services..."
 "$repo/deploy/systemd/install.sh" --start-only

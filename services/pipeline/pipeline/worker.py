@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import json
 from novel_llm.accounts import hosted, worker_scope, LEGACY_ACCOUNT
 import signal
@@ -146,9 +147,9 @@ class Worker:
         self.redis = aredis.from_url(cfg.redis_url, decode_responses=True)
         self.minio = Minio(
             cfg.object_endpoint,
-            access_key=None if hosted() else cfg.object_access_key,
-            secret_key=None if hosted() else cfg.object_secret_key,
-            credentials=IamAwsProvider() if hosted() else None,
+            access_key=cfg.object_access_key if not hosted() or os.getenv("OBJECT_STORE_ACCESS_KEY") else None,
+            secret_key=cfg.object_secret_key if not hosted() or os.getenv("OBJECT_STORE_ACCESS_KEY") else None,
+            credentials=IamAwsProvider() if hosted() and not os.getenv("OBJECT_STORE_ACCESS_KEY") else None,
             secure=cfg.object_secure,
         )
         # _default_provider/_default_batch_manager back every novel with no

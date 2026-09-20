@@ -35,6 +35,10 @@ run_psql() {
         exit 1
         ;;
     esac
+    if [ "$url_hostport" != "localhost:5432" ] && [ "$url_hostport" != "127.0.0.1:5432" ]; then
+      echo "error: install psql for this DATABASE_URL; compose fallback only supports localhost:5432" >&2
+      exit 1
+    fi
     docker exec -i deploy-postgres-1 psql -U "$url_user" -d "$url_db" "$@"
   fi
 }
