@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { getWikiEvents, getWikiPage, getWikiPages, retractFact } from "../api";
 import { useKnowledgeRevision } from "../knowledgeUpdates";
 import type { SubjectKind, WikiEventsResponse, WikiPageResponse, WikiPagesResponse } from "../types";
@@ -18,7 +18,8 @@ const SHELVES: { shelf: Shelf; label: string; empty: string }[] = [
  * of the reader's chapter, assembled from the facts learned so far. Nothing here comes
  * from a chapter the reader hasn't reached.
  */
-export function WikiView({ novelId, onClose }: { novelId: string; at: number; onClose: () => void }) {
+export function WikiView({ novelId, at, initialSubject, onClose }: { novelId: string; at: number; initialSubject?: string | null; onClose: () => void }) {
+  const requestedSubject = useRef(initialSubject);
   const revision = useKnowledgeRevision(novelId);
   const [list, setList] = useState<WikiPagesResponse | null>(null);
   const [shelf, setShelf] = useState<Shelf>("character");
@@ -46,12 +47,14 @@ export function WikiView({ novelId, onClose }: { novelId: string; at: number; on
   useEffect(() => {
     let gone = false;
     setList(null); setError(null);
-    getWikiPages(novelId).then((next) => {
+    getWikiPages(novelId, at).then((next) => {
       if (gone) return;
       setList(next);
+      const requested = next.pages.find(page => page.subject === requestedSubject.current);
+      if (requested) { setShelf(requested.kind); setSubject(requested.subject); requestedSubject.current = null; }
     }).catch((reason) => { if (!gone) setError(String(reason)); });
     return () => { gone = true; };
-  }, [novelId, revision, reload]);
+  }, [novelId, at, revision, reload]);
 
   // Keep the open page when it is on this shelf; otherwise open the shelf's first page.
   useEffect(() => {
@@ -63,18 +66,19 @@ export function WikiView({ novelId, onClose }: { novelId: string; at: number; on
   useEffect(() => {
     if (shelf !== "events") return;
     let gone = false;
-    getWikiEvents(novelId).then((next) => { if (!gone) setEvents(next); })
+    getWikiEvents(novelId, at).then((next) => { if (!gone) setEvents(next); })
       .catch((reason) => { if (!gone) setError(String(reason)); });
     return () => { gone = true; };
-  }, [novelId, shelf, revision, reload]);
+  }, [novelId, at, shelf, revision, reload]);
 
   useEffect(() => {
     if (!subject) { setPage(null); return; }
     let gone = false;
-    getWikiPage(novelId, subject).then((next) => { if (!gone) setPage(next); })
+    setPage(null);
+    getWikiPage(novelId, subject, at).then((next) => { if (!gone) setPage(next); })
       .catch((reason) => { if (!gone) { setPage(null); setError(String(reason)); } });
     return () => { gone = true; };
-  }, [novelId, subject, revision, reload]);
+  }, [novelId, at, subject, revision, reload]);
 
   useEffect(() => { setTab("page"); setSelected(null); }, [subject]);
 

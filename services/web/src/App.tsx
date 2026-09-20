@@ -1,19 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError, getChapterPreview, getNovel, getProgress, getScrapeStatus, listChapters, putProgress, startScrape } from "./api";
 import { AddChapterForm } from "./components/AddChapterForm";
-import { AskBox } from "./components/AskBox";
 import { ChapterList } from "./components/ChapterList";
 import { ChapterPending } from "./components/ChapterPending";
 import { GlossaryView } from "./components/GlossaryView";
 import { NovelCreateForm } from "./components/NovelCreateForm";
 import { NovelPicker } from "./components/NovelPicker";
-import { ProgressControls } from "./components/ProgressControls";
-import { ReaderPane } from "./components/ReaderPane";
-import { TranslationNotice } from "./components/TranslationNotice";
+import { ReadingDesk } from "./components/ReadingDesk";
 import { WikiView } from "./components/WikiView";
 import { BookSettingsView } from "./components/BookSettingsView";
 import { SettingsView } from "./components/SettingsView";
-import { ThemePicker } from "./components/ThemePicker";
 import { QueueControls } from "./components/QueueControls";
 import { usePolling } from "./usePolling";
 import type { ChapterListItem, ChapterResponse, NovelSummary } from "./types";
@@ -66,6 +62,8 @@ export default function App() {
   const [pending, setPending] = useState<PendingChapter | null>(null);
   const [showGlossary, setShowGlossary] = useState(false);
   const [showWiki, setShowWiki] = useState(false);
+  const [wikiSubject, setWikiSubject] = useState<string | null>(null);
+  const readerScroll = useRef(0);
   const [showSettings, setShowSettings] = useState(false);
   // Book-level settings (provider/model config, knowledge repair) — separate from the
   // account-level SettingsView above, which every book shares.
@@ -73,6 +71,19 @@ export default function App() {
   const [showChapters, setShowChapters] = useState(true);
   const [clickableEntities, setClickableEntities] = useState(savedClickableEntities);
   const [lookingForMore, setLookingForMore] = useState(false);
+
+  function openWiki(subject?: string) {
+    readerScroll.current = window.scrollY;
+    setWikiSubject(subject ?? null);
+    setShowGlossary(false);
+    setShowWiki(true);
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }
+
+  function closeWiki() {
+    setShowWiki(false);
+    requestAnimationFrame(() => window.scrollTo({ top: readerScroll.current, behavior: "instant" }));
+  }
 
   function changeClickableEntities(enabled: boolean) {
     setClickableEntities(enabled);
@@ -194,6 +205,7 @@ export default function App() {
     setShowChapters(false);
     setShowGlossary(false);
     setShowWiki(false);
+    window.scrollTo({ top: 0, behavior: "instant" });
   }
 
   function chapterAdded(index: number) {
@@ -329,7 +341,7 @@ export default function App() {
   }
 
   return (
-    <main className="app">
+    <main className={`app${!showChapters && !pending && !addingChapter ? " app-reading" : ""}`}>
       <header className="book-header">
         <button className="app-nav-back" onClick={backToNovels}>← Library</button>
         <h1>{novel?.title ?? "Book"}</h1>
@@ -348,14 +360,13 @@ export default function App() {
         <button className="app-toggle-glossary" aria-pressed={showGlossary} onClick={() => { setShowGlossary((v) => !v); setShowWiki(false); }}>
           Glossary
         </button>
-        <button className="app-toggle-glossary" aria-pressed={showWiki} onClick={() => { setShowWiki((v) => !v); setShowGlossary(false); }}>
+        <button className="app-toggle-glossary" aria-pressed={showWiki} onClick={() => showWiki ? closeWiki() : openWiki()}>
           Wiki
         </button>
         {/* Grouped so the pair wraps as one unit. Pushing each button individually to the
             trailing edge let the first claim the row's last slot and stranded the second
             on a line of its own. */}
         <span className="app-nav-settings-group">
-          <ThemePicker />
           <button className="app-nav-settings" onClick={() => setShowBookSettings(true)}>
             Book settings
           </button>
@@ -366,7 +377,7 @@ export default function App() {
       </nav>
       <QueueControls novelId={novelId} />
       {showGlossary && <GlossaryView key={novelId} novelId={novelId} at={chapter?.at} />}
-      {showWiki && <WikiView key={`wiki-${novelId}`} novelId={novelId} at={chapter?.at ?? chapterIndex} onClose={() => setShowWiki(false)} />}
+      {showWiki && <WikiView key={`wiki-${novelId}:${chapterIndex}:${wikiSubject}`} novelId={novelId} at={chapter ? Math.min(chapter.at, chapterIndex) : chapterIndex} initialSubject={wikiSubject} onClose={closeWiki} />}
       <div hidden={showGlossary || showWiki}>
         {navigationError && <p role="alert" className="chapter-list-error">{navigationError}</p>}
         {addingChapter ? (
@@ -386,6 +397,7 @@ export default function App() {
             onOpen={openChapter}
             onClose={chapter || pending ? () => setShowChapters(false) : undefined}
             onAdd={startAddingChapter}
+            onSettings={() => setShowSettings(true)}
           />
         ) : pending ? (
           <ChapterPending
@@ -397,35 +409,11 @@ export default function App() {
             onBack={() => setShowChapters(true)}
           />
         ) : (
-          <>
-            {/* The outer hidden container keeps the reader mounted while editing terms. */}
-            <div>
-              {/* Above the text rather than over it: a caveat about the translation should
-                  be visible before reading, without interrupting it. */}
-              <TranslationNotice novelId={novelId} />
-              <ReaderPane
-                novelId={novelId}
-                chapterIndex={chapterIndex}
-                clickableEntities={clickableEntities}
-                onChapterLoaded={chapterLoaded}
-                onNoChapter={handleNoChapter}
-              />
-            </div>
-            <ProgressControls
-              chapterIndex={chapterIndex}
-              hasNext={chapter?.has_next ?? false}
-              onNavigate={navigateChapter}
-              sourceURL={chapter?.source_url}
-              onFindMore={findMoreChapters}
-            />
-            <button className="app-chapters" onClick={() => setShowChapters(true)}>
-              All chapters
-            </button>
-            <button className="app-add-chapter" onClick={startAddingChapter}>
-              + Add chapter
-            </button>
-            {chapter && !showGlossary && <AskBox novelId={novelId} at={chapter.at} />}
-          </>
+          // Remount at the chapter boundary to discard old answers and open popovers.
+          <ReadingDesk key={`${novelId}:${chapterIndex}`} novelId={novelId} chapterIndex={chapterIndex}
+            chapter={chapter} clickableEntities={clickableEntities} onChapterLoaded={chapterLoaded}
+            onNoChapter={handleNoChapter} onNavigate={navigateChapter} onFindMore={findMoreChapters}
+            onChapters={() => setShowChapters(true)} onAdd={startAddingChapter} onOpenWiki={openWiki} />
         )}
       </div>
     </main>

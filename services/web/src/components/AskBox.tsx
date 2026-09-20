@@ -33,6 +33,7 @@ export function AskBox({ novelId, at }: Props) {
     <div className="ask-box">
       <form onSubmit={submit}>
         <input
+          aria-label="Ask about the story"
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           placeholder="Ask about what you've read so far…"

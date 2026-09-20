@@ -288,9 +288,8 @@ export interface SpanView {
 export interface ChapterResponse {
   novel_id: string;
   chapter_index: number;
-  // The reader's STORED PROGRESS (not chapter_index) — see HoverCard.tsx for why this
-  // exact value, captured once per chapter load, is what every hover/ask on this
-  // chapter view must use as `at`.
+  // Stored progress (not chapter_index). Spelling writes use this authorized boundary;
+  // story wiki and Ask AI narrow it to the open chapter during a reread (§0.3).
   at: number;
   text: string;
   spans: SpanView[];
@@ -396,7 +395,7 @@ export interface SaveProviderCredentialRequest {
 // characters met so far, and one character's tagged facts with names filled in.
 // A wiki subject's kind (migration 0115). Events are a timeline, not a kind of page.
 export type SubjectKind = "character" | "organization" | "place" | "item";
-export interface WikiPageSummary { subject: string; title: string; kind: SubjectKind; facts: number; }
+export interface WikiPageSummary { subject: string; source_term?: string; title: string; kind: SubjectKind; facts: number; }
 export interface WikiPagesResponse { novel_id: string; at: number; pages: WikiPageSummary[]; }
 export interface WikiFact { chapter: number; category: string; kind?: string | null; text: string; subjects: string[]; version: string; ordinal: number; }
 // names/kinds cover every subject the facts name, so a page can link to theirs.

@@ -113,16 +113,16 @@ export function getChapter(novelId: string, n: number): Promise<ChapterResponse>
 export function getChapterFactsStatus(novelId: string, chapter: number): Promise<ChapterFactsStatusResponse> {
   return request(`/novels/${novelId}/chapter/${chapter}/facts/status`);
 }
-export function getWikiPages(novelId: string): Promise<import("./types").WikiPagesResponse> {
-  return request(`/novels/${novelId}/wiki/pages`);
+export function getWikiPages(novelId: string, at?: number): Promise<import("./types").WikiPagesResponse> {
+  return request(`/novels/${novelId}/wiki/pages${at === undefined ? "" : `?at=${at}`}`);
 }
 
-export function getWikiPage(novelId: string, subject: string): Promise<import("./types").WikiPageResponse> {
-  return request(`/novels/${novelId}/wiki/pages/${encodeURIComponent(subject)}`);
+export function getWikiPage(novelId: string, subject: string, at?: number): Promise<import("./types").WikiPageResponse> {
+  return request(`/novels/${novelId}/wiki/pages/${encodeURIComponent(subject)}${at === undefined ? "" : `?at=${at}`}`);
 }
 
-export function getWikiEvents(novelId: string): Promise<import("./types").WikiEventsResponse> {
-  return request(`/novels/${novelId}/wiki/events`);
+export function getWikiEvents(novelId: string, at?: number): Promise<import("./types").WikiEventsResponse> {
+  return request(`/novels/${novelId}/wiki/events${at === undefined ? "" : `?at=${at}`}`);
 }
 
 export function retractFact(novelId: string, fact: { chapter: number; version: string; ordinal: number }): Promise<{ retracted: boolean }> {

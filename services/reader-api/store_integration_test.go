@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"novel-engine/platform/tenant"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,7 +28,14 @@ func integrationDatabase(t *testing.T) (*Store, *pgxpool.Pool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	admin, err := pgxpool.New(ctx, databaseURL)
+	// §15: fixtures also need an explicit account scope after the ownership migration.
+	t.Setenv("BOOK_MODE", "local")
+	adminConfig, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatalf("admin config: %v", err)
+	}
+	tenant.ConfigurePool(adminConfig)
+	admin, err := pgxpool.NewWithConfig(ctx, adminConfig)
 	if err != nil {
 		t.Fatalf("admin pool: %v", err)
 	}
@@ -62,6 +71,9 @@ func integrationDatabase(t *testing.T) (*Store, *pgxpool.Pool) {
 func seedIntegrationFixture(t *testing.T, admin *pgxpool.Pool) integrationFixture {
 	t.Helper()
 	ctx := context.Background()
+	if _, err := admin.Exec(ctx, `INSERT INTO account(id) VALUES ($1) ON CONFLICT DO NOTHING`, tenant.LegacyAccount); err != nil {
+		t.Fatalf("seed account: %v", err)
+	}
 	fixture := integrationFixture{novelID: uuid.NewString(), otherNovelID: uuid.NewString()}
 	for _, novelID := range []string{fixture.novelID, fixture.otherNovelID} {
 		if _, err := admin.Exec(ctx,
@@ -326,8 +338,8 @@ func TestWikiPageIsGatedAtTheReadersChapter(t *testing.T) {
 		t.Fatalf("chapter 2 page = %+v, %v; want only the chapter 1 fact, named", page, err)
 	}
 	pages, err := store.ListWikiPages(ctx, fixture.novelID, 3)
-	if err != nil || len(pages) != 1 || pages[0].Facts != 2 {
-		t.Fatalf("chapter 3 pages = %+v, %v; want one character with two facts", pages, err)
+	if err != nil || len(pages) != 1 || pages[0].Facts != 2 || pages[0].SourceTerm != "hero-source" {
+		t.Fatalf("chapter 3 pages = %+v, %v; want one character with two facts and its saved source key", pages, err)
 	}
 	if _, err := store.GetWikiPage(ctx, fixture.otherNovelID, hero, 99); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("another novel's reader saw the page: %v", err)

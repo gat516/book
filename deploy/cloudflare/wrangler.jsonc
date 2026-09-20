@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "qireadr-web",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-09-20",
+  "workers_dev": false,
+  "preview_urls": false,
+  // A Route preserves the AWS origin in DNS. Do not replace with a Custom Domain:
+  // fetch(request) below must reach that origin, not another copy of this Worker.
+  // HTTP stays with Traefik: it handles ACME challenges before redirecting to HTTPS.
+  "routes": [{ "pattern": "https://qireadr.com/*", "zone_name": "qireadr.com" }],
+  "vars": { "PUBLIC_ORIGIN": "https://qireadr.com" },
+  "assets": {
+    "directory": "../../services/web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api", "/api/*"]
+  },
+  // §15: OAuth codes, invitations, questions and private text must not enter logs.
+  "observability": { "enabled": false }
+}

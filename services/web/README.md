@@ -147,3 +147,36 @@ The chapter table distinguishes Not queued, Queued, Processing, Ready and Failed
 Ready means validated prose can be read; Facts pending/unavailable reports graph work
 separately. The processing timer is total chapter time, not current-stage duration.
 A failed extraction never revokes a saved translation. Unknown facts remain absent.
+
+## Reading experience and onboarding
+
+`/welcome` previews the public landing page even in login-free local development.
+`/demo` is an original three-chapter story with prepared translations, character facts
+and answers; it makes no model or private-library requests. `/privacy` explains stored
+data, provider processing and deletion. Production `/` resolves the real session;
+local Vite `/` continues directly to the library. Invitation links survive public
+sample navigation without storing the invitation in browser storage.
+
+The first-book guide reflects saved provider keys and whether a book exists. The
+library offers title search and book covers with chapter progress. Shared responsive
+surfaces live in `src/design.css`, retaining Light, Warm, Dark and system themes.
+Animate UI Fade/Button primitives are adapted for React 18 with reduced-motion support;
+see `src/components/animate-ui/README.md` and `public/licenses/animate-ui.txt`.
+
+`npm run test:components` checks the setup actions, public invitation navigation and
+sample chapter boundaries. Run alongside `npm test` and `npm run build`. Component
+checks do not replace a connected-browser visual/accessibility review.
+### Chapter reader and wiki shortcuts
+
+The chapter view pairs a paper reading surface with a story companion. Its wiki and
+Ask AI requests use the lesser of the open chapter and the server's stored clearance
+(spec §0.3/§8); moving backward remounts the companion and clears previous answers.
+Wiki links resolve a unique saved `source_term`, never an English display-name match.
+The API keeps ownership and chapter authorization on every wiki request.
+
+Hovercards use Floating UI for viewport placement, pointer transitions, Escape and
+outside-click dismissal. Editing holds the card open. A successful spelling save
+closes it and reports confirmation in the reader; a failed save stays open for retry.
+Opening a wiki page selects the correct shelf and restores the reading position on
+close. `npm run test:components` covers these flows in a DOM test environment, alongside
+the onboarding/demo tests. A real-browser visual pass remains a separate check.

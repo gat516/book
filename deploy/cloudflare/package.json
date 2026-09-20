@@ -1,0 +1,14 @@
+{
+  "name": "qireadr-cloudflare",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm --prefix ../../services/web run build",
+    "test": "node --test worker.test.mjs",
+    "check": "npm run test && npm run build && wrangler deploy --dry-run",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "4.135.0"
+  }
+}

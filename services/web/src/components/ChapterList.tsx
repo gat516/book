@@ -12,13 +12,14 @@ interface Props {
   onOpen: (chapter: ChapterListItem) => void;
   onClose?: () => void;
   onAdd: () => void;
+  onSettings?: () => void;
 }
 
 const PAGE_SIZE = 100;
 
 // Fetch only the selected range. Browsing this metadata never advances reading progress
 // or starts translation; those actions belong to an explicit chapter selection (§0.3).
-export function ChapterList({ novelId, currentChapter, onOpen, onClose, onAdd }: Props) {
+export function ChapterList({ novelId, currentChapter, onOpen, onClose, onAdd, onSettings }: Props) {
   const [page, setPage] = useState<{ offset: number; response: ChapterListResponse } | null>(null);
   const [offset, setOffset] = useState(() => Math.max(0, Math.floor((currentChapter - 1) / PAGE_SIZE) * PAGE_SIZE));
   const [error, setError] = useState<string | null>(null);
@@ -76,7 +77,7 @@ export function ChapterList({ novelId, currentChapter, onOpen, onClose, onAdd }:
 
       {/* Reuse the status poll; refresh rows only when pipeline activity changes. */}
       <PipelineStatus novelId={novelId} onProgress={load} onStatus={receiveStatus} />
-      <FactsControls novelId={novelId} />
+      {total > 0 && <FactsControls novelId={novelId} />}
 
       <div className="chapter-list-summary">
         <span>{page ? `${total} chapter(s)` : "Loading chapters…"}</span>
@@ -126,7 +127,7 @@ export function ChapterList({ novelId, currentChapter, onOpen, onClose, onAdd }:
           Could not load chapters: {error} <button onClick={() => void load()}>Retry</button>
         </p>}
         {!chapters && !error && <p role="status">Loading chapter range…</p>}
-        {chapters && chapters.length === 0 && <p>No chapters yet. Add a chapter to start this book.</p>}
+        {chapters && chapters.length === 0 && <section className="chapter-welcome"><p className="eyebrow">Your book is ready</p><h3>Let’s add its first chapter.</h3><p>Save your AI provider key before processing text, then paste a chapter or import from a supported website. Your translation and story wiki will build as you go.</p><div className="hero-actions">{onSettings && <button onClick={onSettings}>Set up provider key</button>}<button className="btn-primary" onClick={onAdd}>Add first chapter →</button></div></section>}
         {chapters && chapters.length > 0 && (
           <>
             <p className="chapter-list-count">Showing {shownFrom}–{shownTo} of {total}</p>

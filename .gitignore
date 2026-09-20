@@ -29,3 +29,6 @@ deploy/hosted/generated/
 *.tfstate.*
 *.tfplan
 terraform.tfvars
+.wrangler/
+.dev.vars
+.dev.vars.*

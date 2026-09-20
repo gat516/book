@@ -934,7 +934,7 @@ const taggedFactVersion = `f.category IS NOT NULL AND f.prompt_version = (
 // confirmed glossary spelling, then the reader's selection, then the pending choice --
 // and its kind.
 const subjectNames = `SELECT c.id::text,
-	COALESCE(g.target_term, r.selected_target, r.candidates->0->>'target_term', c.source_term), c.kind
+	COALESCE(g.target_term, r.selected_target, r.candidates->0->>'target_term', c.source_term), c.kind, c.source_term
 	  FROM subject c
 	  LEFT JOIN character_name_review r ON r.novel_id=c.novel_id AND r.source_term=c.source_term
 	  LEFT JOIN glossary g ON g.novel_id=c.novel_id AND g.source_term=c.source_term AND NOT g.deleted
@@ -942,21 +942,21 @@ const subjectNames = `SELECT c.id::text,
 
 var subjectMarker = regexp.MustCompile(`⟦([0-9a-f-]{36})⟧`)
 
-type subjectIndex struct{ names, kinds map[string]string }
+type subjectIndex struct{ names, kinds, sources map[string]string }
 
 func loadSubjects(ctx context.Context, tx pgx.Tx, novelID string, at int) (subjectIndex, error) {
-	index := subjectIndex{names: map[string]string{}, kinds: map[string]string{}}
+	index := subjectIndex{names: map[string]string{}, kinds: map[string]string{}, sources: map[string]string{}}
 	rows, err := tx.Query(ctx, subjectNames, novelID, at)
 	if err != nil {
 		return index, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, name, kind string
-		if err := rows.Scan(&id, &name, &kind); err != nil {
+		var id, name, kind, source string
+		if err := rows.Scan(&id, &name, &kind, &source); err != nil {
 			return index, err
 		}
-		index.names[id], index.kinds[id] = name, kind
+		index.names[id], index.kinds[id], index.sources[id] = name, kind, source
 	}
 	return index, rows.Err()
 }
@@ -1010,6 +1010,7 @@ func (s *Store) ListWikiPages(ctx context.Context, novelID string, at int) ([]Wi
 			}
 			if title, ok := index.names[page.Subject]; ok {
 				page.Title, page.Kind = title, index.kinds[page.Subject]
+				page.SourceTerm = index.sources[page.Subject]
 				pages = append(pages, page)
 			}
 		}

@@ -84,11 +84,12 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
 
   return (
     <form className="novel-create-form" onSubmit={submit}>
-      <h1>New book</h1>
+      <header className="create-book-heading"><button type="button" className="text-button" onClick={onCancel} disabled={pending}>← Library</button><p className="eyebrow">Build your bookshelf</p><h1>A new story starts here.</h1><p>Create your book now. Add your provider key and first chapter next.</p></header>
       <label>
         Book title
-        <input value={title} onChange={(e) => setTitle(e.target.value)} required />
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What are you reading?" required />
       </label>
+      <div className="create-language-grid">
       <label>
         Source language
         <input value={sourceLang} onChange={(e) => setSourceLang(e.target.value)} placeholder="zh" />
@@ -97,10 +98,11 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
         Target language
         <input value={targetLang} onChange={(e) => setTargetLang(e.target.value)} placeholder="en" />
       </label>
+      </div>
 
       <fieldset>
         <legend>Translation and AI features</legend>
-        <p className="novel-create-form-hint">This provider and model handle translation, story knowledge, and Ask AI. You can choose separate translation and AI models in Book settings after creation. Hosted providers need an API key, with no Ollama server required.</p>
+        <p className="novel-create-form-hint">Choose the AI provider for translation and story knowledge. You’ll use your own API key; usage is billed by that provider. You can adjust models in Book settings later.</p>
         <label>
           Provider for this book{" "}
           {!hostedSession() && <span className="novel-create-form-hint">(leave as default to use the server's)</span>}

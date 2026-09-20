@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { deleteNovel, listNovels } from "../api";
+import { deleteNovel, listNovels, listProviderCredentials } from "../api";
+import { ArrowRight, BookOpen, MoreHorizontal, Plus, Search, Settings2, ShieldCheck } from "lucide-react";
+import { Button, Fade } from "./animate-ui/motion";
+import { hostedSession } from "../session";
 import type { NovelSummary } from "../types";
+import { FirstBookGuide } from "./FirstBookGuide";
 
 interface Props {
   onSelect: (novelId: string) => void;
@@ -14,6 +18,9 @@ interface Props {
 export function NovelPicker({ onSelect, onBookSettings, onCreateNew, onSettings, children }: Props) {
   const [novels, setNovels] = useState<NovelSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [hasKey, setHasKey] = useState<boolean | null>(null);
+  const [showGuide, setShowGuide] = useState(false);
   // Two-step delete: the first click arms this novel, the second commits. A confirm()
   // dialog would do the same job, but deleting a novel throws away every chapter and the
   // whole graph built from it, so the confirmation names what is about to go.
@@ -24,6 +31,7 @@ export function NovelPicker({ onSelect, onBookSettings, onCreateNew, onSettings,
     listNovels()
       .then((response) => setNovels(response.novels))
       .catch((err) => setError(String(err)));
+    listProviderCredentials().then(response => setHasKey(response.credentials.some(c => c.api_key_set))).catch(() => setHasKey(null));
   }, []);
 
   async function confirmDelete(novel: NovelSummary) {
@@ -40,38 +48,44 @@ export function NovelPicker({ onSelect, onBookSettings, onCreateNew, onSettings,
     }
   }
 
+  const filtered = novels?.filter(n => n.title.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  const inProgress = novels?.filter(n => n.current_chapter).length ?? 0;
   return (
     <div className="novel-picker">
       <header className="novel-picker-header">
         <div>
-          <h1>Library</h1>
-          <p>Choose a book to continue reading.</p>
+          <p className="eyebrow">A LITTLE CORNER OF YOUR OWN</p>
+          <h1>Your library<span className="heading-period">.</span></h1>
+          <p>{novels?.length === 0 ? "Every good story starts with a first chapter." : "Pick up where your curiosity left off."}</p>
         </div>
         <div className="novel-picker-header-actions">
           {onSettings && (
             <button type="button" onClick={onSettings}>
-              Settings
+              <Settings2 size={16} /> Account settings
             </button>
           )}
-          <button type="button" className="btn-primary" onClick={onCreateNew}>
-            Add book
-          </button>
+          <Button type="button" className="btn-primary" onClick={onCreateNew}><Plus size={17} />Add book</Button>
         </div>
       </header>
-      {children}
-      {error && <p className="novel-picker-error">{error}</p>}
-      {novels === null && !error && <p className="novel-picker-loading">Loading books…</p>}
-      {novels && novels.length === 0 && <p>No books yet.</p>}
+      {novels && novels.length > 0 && <><div className="library-overview"><span><BookOpen size={17} />{novels.length} {novels.length === 1 ? "book" : "books"} on your shelf</span><span>{inProgress} in progress</span><span className="library-private"><ShieldCheck size={15} />Only yours</span></div>{children}</>}
+      {error && <p role="alert" className="novel-picker-error">{error}</p>}
+      {novels === null && !error && <p className="novel-picker-loading" role="status">Opening your bookshelf…</p>}
+      {novels && (novels.length === 0 || showGuide || (hostedSession() && hasKey === false)) && <FirstBookGuide onCreate={onCreateNew} onSettings={onSettings} hasKey={hasKey === true} hasBook={novels.length > 0} onOpen={() => novels[0] && onSelect(novels[0].id)} />}
       {novels && novels.length > 0 && (
+        <><div className="shelf-toolbar"><h2>The bookshelf <span>{novels.length.toString().padStart(2, "0")}</span></h2><label className="library-search"><Search size={16} /><span className="visually-hidden">Search your books</span><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Find a story…" type="search" /></label></div>
+        {filtered?.length === 0 && <p role="status" className="empty-search">No books match “{query}”. <button onClick={() => setQuery("")}>Clear search</button></p>}
         <ul className="novel-picker-books" aria-label="Books">
-          {novels.map((novel) => (
-            <li key={novel.id} className="novel-picker-book-row">
+          {filtered?.map((novel) => (
+            <li key={novel.id} className="novel-picker-book-row" data-cover={novels.indexOf(novel) % 4}>
+              <Fade className="book-card-main">
               <button
                 type="button"
                 className="novel-picker-book"
                 onClick={() => onSelect(novel.id)}
                 aria-label={`Open ${novel.title}`}
               >
+                <span className="library-book-cover" aria-hidden="true"><span className="book-cover-label">YOUR PRIVATE EDITION</span><span className="book-cover-symbol">{novel.title.slice(0, 1).toUpperCase()}</span><span className="book-cover-title">{novel.title}</span><span className="book-cover-foot">{novel.source_lang.toUpperCase()} / {novel.target_lang.toUpperCase()}<BookOpen size={18} /></span></span>
+                <span className="book-card-copy">
                 <span className="novel-picker-book-title" title={novel.title}>{novel.title}</span>
                 <span className="novel-picker-book-meta">
                   <span className="novel-picker-langs">
@@ -82,9 +96,12 @@ export function NovelPicker({ onSelect, onBookSettings, onCreateNew, onSettings,
                 <span className={`novel-picker-progress${novel.current_chapter ? " novel-picker-progress-current" : ""}`}>
                   {novel.current_chapter ? `Chapter ${novel.current_chapter}` : "Not started"}
                 </span>
+                <span className="book-open-label">{novel.current_chapter ? "Return to your story" : "Open your book"}<ArrowRight size={16} /></span>
+                </span>
               </button>
+              </Fade>
               <details className="novel-picker-book-menu">
-                <summary aria-label={`More actions for ${novel.title}`}>More</summary>
+                <summary aria-label={`More actions for ${novel.title}`}><MoreHorizontal size={19} /></summary>
                 <div className="novel-picker-book-menu-panel">
                   {armed === novel.id ? (
                     <div className="novel-picker-confirm" role="group" aria-label={`Confirm deleting ${novel.title}`}>
@@ -116,7 +133,7 @@ export function NovelPicker({ onSelect, onBookSettings, onCreateNew, onSettings,
               </details>
             </li>
           ))}
-        </ul>
+        </ul><div className="library-bottom-note"><span>Your next chapter is right where you left it.</span><button className="text-button" aria-expanded={showGuide} onClick={() => setShowGuide(!showGuide)}>{showGuide ? "Hide getting started" : "Getting started"}</button></div></>
       )}
     </div>
   );

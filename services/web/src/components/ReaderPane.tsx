@@ -1,8 +1,9 @@
 import { useKnowledgeRevision } from "../knowledgeUpdates";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, getChapter, getChapterFactsStatus, putProgress } from "../api";
-import type { ChapterResponse, FactsStatus, TermRenderingView } from "../types";
-import { HoverCard } from "./HoverCard";
+import type { ChapterResponse, FactsStatus, TermRenderingView, WikiPageSummary } from "../types";
+import { MentionPopover } from "./MentionPopover";
+import { wikiPageForTerm } from "../wikiNavigation";
 import { usePolling } from "../usePolling";
 import { applyRenderingChoices, segment } from "../readerSegments";
 import { uniqueChapterRenderings } from "../recordPresentation";
@@ -19,9 +20,13 @@ interface Props {
   // chapter — a brand-new novel) doesn't exist yet, so the caller can offer to add one
   // instead of showing a raw "chapter is missing or not done" string.
   onNoChapter: () => void;
+  wikiPages?: WikiPageSummary[];
+  wikiLoading?: boolean;
+  wikiError?: string | null;
+  onOpenWiki?: (subject: string) => void;
 }
 
-export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapterLoaded, onNoChapter }: Props) {
+export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapterLoaded, onNoChapter, wikiPages = [], wikiLoading, wikiError, onOpenWiki }: Props) {
   const knowledgeRevision = useKnowledgeRevision(novelId);
   const [chapter, setChapter] = useState<ChapterResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -29,12 +34,14 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
   const [facts, setFacts] = useState<FactsStatus | null>(null);
   const [factsError, setFactsError] = useState<string | null>(null);
   const [showNames, setShowNames] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     setHovered(null);
     setFacts(null);
     setFactsError(null);
     setShowNames(false);
+    setNotice(null);
   }, [novelId, chapterIndex, clickableEntities]);
 
   useEffect(() => {
@@ -152,7 +159,7 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
     }),
   } : current);
   return (
-    <div className="reader-pane">
+    <article className="reader-pane" aria-label={`Chapter ${chapterIndex}`}>
       <header className="chapter-head">
         <p className="reader-pane-chapter-label">
           Chapter {chapterIndex}
@@ -179,6 +186,8 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
           </button>
         </div>
       </header>
+      <div className="chapter-reading-title"><p className="eyebrow">ONE CHAPTER AT A TIME</p><h2>Chapter {chapterIndex}{chapter.part > 1 ? ` · Part ${chapter.part}` : ""}</h2><span className="reading-title-rule" /></div>
+      {notice && <p className="reader-spelling-notice" role="status">{notice}<button type="button" className="text-button" onClick={() => setNotice(null)}>Dismiss</button></p>}
       {factsError && <p role="alert" className="reader-records-error">
         Could not load this chapter’s status: {factsError} <button type="button" onClick={() => {
           setFactsError(null);
@@ -190,33 +199,24 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
       {chapter.translation_warning?.code === "locked_terms_missing" && <p role="status" className="reader-translation-warning">
         {chapter.translation_warning.term_count} confirmed name{chapter.translation_warning.term_count === 1 ? " is" : "s are"} not spelled exactly as confirmed in this chapter’s text.
       </p>}
-      {segments.map((piece, index) => {
+      <div className="chapter-prose">{segments.map((piece, index) => {
         if (!piece.mention) return <span key={index}>{piece.text}</span>;
         return (
-          <span className="mention-anchor" key={index}
-            onMouseEnter={() => { if (!clickableEntities) setHovered(index); }}
-            onMouseLeave={() => setHovered((current) => current === index ? null : current)}>
-            <button
-              type="button"
-              className={`mention mention-button mention-unlinked${piece.rendering?.status === "locked" ? " mention-confirmed" : ""}`}
-              aria-haspopup="dialog"
-              aria-label={`Inspect ${piece.text}`}
-              onClick={() => setHovered((current) => current === index ? null : index)}
-            >{piece.text}</button>
-            {hovered === index && (
-              <HoverCard
+              <MentionPopover key={`${chapterIndex}-${index}`}
                 novelId={novelId}
                 rendering={piece.rendering}
                 mention={piece.text}
                 at={chapter.at}
-                onRenderingChanged={(updatedRendering) => applyRendering(updatedRendering, piece.text)}
-                onClose={() => setHovered(null)}
+                wikiAt={Math.min(chapter.at, chapterIndex)}
+                wikiPage={wikiPageForTerm(wikiPages, piece.rendering)} wikiLoading={wikiLoading} wikiError={wikiError}
+                onOpenWiki={onOpenWiki}
+                hoverEnabled={!clickableEntities} open={hovered === index}
+                onOpenChange={open => setHovered(current => open ? index : current === index ? null : current)}
+                onRenderingChanged={(updatedRendering) => { applyRendering(updatedRendering, piece.text); setNotice(`Spelling saved as “${updatedRendering.target_term}”.`); }}
               />
-            )}
-          </span>
         );
-      })}
-    </div>
+      })}</div>
+    </article>
   );
 }
 

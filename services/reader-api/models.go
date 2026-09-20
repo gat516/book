@@ -271,10 +271,11 @@ type ChapterResponse struct {
 
 // WikiPageSummary is a subject a reader at `at` has met that has at least one fact.
 type WikiPageSummary struct {
-	Subject string `json:"subject"` // the subject's ID
-	Title   string `json:"title"`   // the name's current spelling
-	Kind    string `json:"kind"`    // character, organization, place or item (0115)
-	Facts   int    `json:"facts"`
+	Subject    string `json:"subject"`     // the subject's ID
+	SourceTerm string `json:"source_term"` // saved source key for navigation, never translated-name identity inference (§0)
+	Title      string `json:"title"`       // the name's current spelling
+	Kind       string `json:"kind"`        // character, organization, place or item (0115)
+	Facts      int    `json:"facts"`
 }
 
 type WikiPagesResponse struct {
