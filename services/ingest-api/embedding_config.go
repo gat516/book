@@ -47,7 +47,7 @@ func (a *API) putEmbeddingConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, err := a.store.db.Exec(r.Context(), `INSERT INTO embedding_config(singleton,provider,model)
-	 VALUES(true,$1,$2) ON CONFLICT(singleton) DO UPDATE
+	 VALUES(true,$1,$2) ON CONFLICT(account_id) DO UPDATE
 	 SET provider=EXCLUDED.provider, model=EXCLUDED.model, updated_at=now()`, c.Provider, c.Model)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not save semantic search settings")

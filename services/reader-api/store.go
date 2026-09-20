@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"novel-engine/platform/tenant"
 	"regexp"
 	"strconv"
 	"strings"
@@ -109,6 +110,7 @@ func newRolePool(ctx context.Context, databaseURL, role string) (*pgxpool.Pool, 
 	if err != nil {
 		return nil, fmt.Errorf("parse %s database URL: %w", role, err)
 	}
+	tenant.ConfigurePool(config)
 	config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
 		_, err := conn.Exec(ctx, "SET ROLE "+pgx.Identifier{role}.Sanitize())
 		return err
@@ -228,6 +230,7 @@ func (s *Store) ListNovels(ctx context.Context, readerID string) ([]NovelSummary
 		        COALESCE(p.current_chapter, 0)
 		 FROM novel n
 		 LEFT JOIN reader_progress p ON p.novel_id = n.id AND p.reader_id = $1
+         WHERE n.owner_id=(SELECT current_account())
 		 ORDER BY n.created_at DESC`, readerID)
 	if err != nil {
 		return nil, err
@@ -538,7 +541,7 @@ func (s *Store) GetNovel(ctx context.Context, novelID string) (NovelSummary, err
 	var novel NovelSummary
 	err := s.readerDB.QueryRow(ctx,
 		`SELECT id::text, title, source_lang, target_lang, genre, created_at
-		 FROM novel WHERE id = $1`, novelID,
+		 FROM novel WHERE id = $1 AND owner_id=(SELECT current_account())`, novelID,
 	).Scan(&novel.ID, &novel.Title, &novel.SourceLang, &novel.TargetLang, &novel.Genre, &novel.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return NovelSummary{}, ErrNotFound

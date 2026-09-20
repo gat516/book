@@ -1895,3 +1895,7 @@ textarea {
 .scrape-preview-facts li { margin-bottom: 0.2rem; }
 .scrape-ack { display: flex; gap: 0.5rem; align-items: start; color: var(--ink-muted); font-size: 0.86rem; line-height: 1.45; }
 .scrape-ack input { margin-top: 0.25rem; }
+
+.auth-screen { max-width: 40rem; margin: 12vh auto; padding: 2rem; }
+.auth-screen p { line-height: 1.6; }
+.account-bar { display: flex; justify-content: flex-end; align-items: center; gap: 1rem; flex-wrap: wrap; padding: .6rem 1rem; }

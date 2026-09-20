@@ -6,6 +6,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"novel-engine/platform/auth"
+	"novel-engine/platform/tenant"
 	"os"
 	"os/signal"
 	"syscall"
@@ -44,14 +46,20 @@ func main() {
 	}
 	defer store.Close()
 
+	api := &API{store: store, ask: newAskClient(cfg), ingest: newIngestClient(cfg), scraper: newScraperClient(cfg)}
+	var handler http.Handler = auth.LocalMiddleware(api.routes())
+	if tenant.Hosted() {
+		authURL := getenv("AUTH_DATABASE_URL", cfg.ReaderDatabaseURL)
+		authServer, err := auth.NewFromEnv(context.Background(), authURL)
+		if err != nil {
+			log.Fatalf("authentication startup: %v", err)
+		}
+		defer authServer.Close()
+		handler = authServer.Middleware(api.routes())
+	}
 	server := &http.Server{
-		Addr: cfg.ListenAddr,
-		Handler: (&API{
-			store:   store,
-			ask:     newAskClient(cfg),
-			ingest:  newIngestClient(cfg),
-			scraper: newScraperClient(cfg),
-		}).routes(),
+		Addr:              cfg.ListenAddr,
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

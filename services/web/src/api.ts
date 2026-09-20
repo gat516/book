@@ -1,5 +1,5 @@
 import { failureExplanation } from "./factsStatus";
-import { readerId } from "./readerId";
+import { sessionHeaders, sessionExpired } from "./session";
 import type {
   AskResponse,
   BootstrapGlossaryRequest,
@@ -46,7 +46,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     response = await fetch(`/api${path}`, {
       ...init,
       headers: {
-        "X-Reader-ID": readerId(),
+        ...sessionHeaders(),
         ...(init?.body ? { "Content-Type": "application/json" } : {}),
         ...init?.headers,
       },
@@ -56,6 +56,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // "Failed to fetch" TypeError is not a message a reader should have to interpret.
     throw new ApiError(0, "Could not reach the server. Check your connection and try again.");
   }
+  if (response.status === 401) sessionExpired();
   if (!response.ok) {
     const body = await response.text();
     let code = body || response.statusText;
@@ -388,7 +389,7 @@ export function saveProviderCredential(
 export async function deleteProviderCredential(provider: string): Promise<void> {
   const response = await fetch(`/api/provider-credentials/${provider}`, {
     method: "DELETE",
-    headers: { "X-Reader-ID": readerId() },
+    headers: sessionHeaders(),
   });
   if (!response.ok) throw new Error("Could not remove provider key.");
 }

@@ -6,8 +6,10 @@ package main
 
 import (
 	"context"
+	"github.com/jackc/pgx/v5"
 	"log"
 	"net/http"
+	"novel-engine/platform/tenant"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -71,7 +73,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           mux,
+		Handler:           tenant.Internal(cfg.IngestInternalToken, mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("ingest-api listening on %s", cfg.ListenAddr)
@@ -84,7 +86,18 @@ func main() {
 // object-store bucket exists.
 func newStore(ctx context.Context, cfg Config) (*Store, error) {
 	// Postgres
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		return nil, err
+	}
+	tenant.ConfigurePool(poolConfig)
+	if tenant.Hosted() {
+		poolConfig.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
+			_, err := c.Exec(ctx, "SET ROLE ingest_writer")
+			return err
+		}
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, err
 	}

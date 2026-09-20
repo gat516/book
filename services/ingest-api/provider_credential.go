@@ -79,7 +79,7 @@ func (s *Store) UpsertProviderCredential(ctx context.Context, in ProviderCredent
 	_, err = tx.Exec(ctx,
 		`INSERT INTO provider_credential (provider, base_url, api_key_cipher, api_key_nonce, updated_at)
 		 VALUES ($1, $2, $3, $4, now())
-		 ON CONFLICT (provider) DO UPDATE SET
+		 ON CONFLICT (account_id, provider) DO UPDATE SET
 		   base_url = EXCLUDED.base_url,
 		   -- COALESCE for the same reason as novel_provider_config: the key is the one
 		   -- field a client cannot read back, so an edit that omits it means "unchanged",

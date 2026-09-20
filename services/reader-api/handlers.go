@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"novel-engine/platform/tenant"
 	"strconv"
 	"strings"
 
@@ -75,7 +76,24 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("PUT /provider-credentials/{provider}", a.putProviderCredential)
 	mux.HandleFunc("DELETE /provider-credentials/{provider}", a.deleteProviderCredential)
 	mux.HandleFunc("PATCH /novels/{id}/provider-config", a.putProviderConfig)
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if tenant.Account(r.Context()) != "" && len(parts) > 1 && parts[0] == "novels" {
+			if !tenant.ValidID(parts[1]) {
+				writeError(w, 400, "invalid novel id")
+				return
+			}
+			if _, err := a.store.GetNovel(r.Context(), parts[1]); err != nil {
+				if errors.Is(err, ErrNotFound) {
+					writeError(w, 404, "not found")
+				} else {
+					writeError(w, 503, "library unavailable")
+				}
+				return
+			}
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func (a *API) queueControl(w http.ResponseWriter, r *http.Request) {
@@ -204,6 +222,12 @@ func decodeJSON(r *http.Request, destination any) error {
 }
 
 func readerID(r *http.Request) (string, bool) {
+	if id := tenant.Account(r.Context()); id != "" {
+		return id, true
+	}
+	if tenant.Hosted() {
+		return "", false
+	}
 	value := strings.TrimSpace(r.Header.Get("X-Reader-ID"))
 	return value, value != "" && len(value) <= 200
 }
@@ -231,7 +255,7 @@ func requestedAt(r *http.Request) (*int, error) {
 
 func prepareReaderResponse(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "private, no-store")
-	w.Header().Set("Vary", "X-Reader-ID")
+	w.Header().Set("Vary", "Cookie")
 }
 
 func (a *API) gate(w http.ResponseWriter, r *http.Request) (string, string, int, bool) {

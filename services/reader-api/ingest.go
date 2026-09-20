@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"novel-engine/platform/tenant"
 	"strings"
 	"time"
 )
@@ -90,9 +91,7 @@ func (c *ingestHTTPClient) send(ctx context.Context, method, path string, body j
 		return nil, 0, fmt.Errorf("build ingest-api request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if withToken {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
+	tenant.Forward(ctx, req, c.token)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("%w: %v", ErrIngestUnavailable, err)
