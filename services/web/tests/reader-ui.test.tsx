@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import React, { useState } from 'react';
 import { JSDOM } from 'jsdom';
-import type { TermRenderingView, WikiPageSummary } from '../src/types';
+import type { ChapterResponse, TermRenderingView, WikiPageSummary } from '../src/types';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/', pretendToBeVisual: true });
 for (const key of ['window', 'document', 'HTMLElement', 'Element', 'Node', 'ShadowRoot', 'MutationObserver', 'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame']) {
@@ -13,7 +13,7 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.
 const { render, fireEvent, waitFor, cleanup, act } = await import('@testing-library/react');
 const { HoverCard } = await import('../src/components/HoverCard');
 const { MentionPopover } = await import('../src/components/MentionPopover');
-const { StoryCompanion } = await import('../src/components/ReadingDesk');
+const { ReadingDesk, StoryCompanion } = await import('../src/components/ReadingDesk');
 const { WikiView } = await import('../src/components/WikiView');
 const { wikiPageForTerm } = await import('../src/wikiNavigation');
 const originalFetch = globalThis.fetch;
@@ -21,6 +21,50 @@ afterEach(() => { cleanup(); globalThis.fetch = originalFetch; });
 const rendering: TermRenderingView = { source_term: '梅', target_term: 'Mei', status: 'unlocked', term_role: 'chinese_person', candidates: [] };
 const wiki: WikiPageSummary = { subject: 'mei-id', source_term: '梅', title: 'Mei', kind: 'character', facts: 2 };
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+
+for (const state of [
+  { name: 'loading', loading: true, error: null, expected: /Opening your story wiki/ },
+  { name: 'empty', loading: false, error: null, expected: /A world unfolding/ },
+  { name: 'failed', loading: false, error: 'Unavailable', expected: /Could not load the wiki/ },
+]) {
+  test(`companion renders its ${state.name} state before any wiki subject exists`, () => {
+    const view = render(<StoryCompanion novelId="book" at={1} pages={[]} loading={state.loading}
+      error={state.error} revision={0} onRetry={() => {}} onOpenWiki={() => {}} />);
+    assert.match(view.container.textContent!, state.expected);
+  });
+}
+
+test('opening a chapter keeps its prose visible while the wiki loads and when no pages exist', async () => {
+  let finishWiki!: (response: Response) => void;
+  const chapter: ChapterResponse = { novel_id: 'book', chapter_index: 1, at: 8,
+    text: 'Mei walked along the river.', spans: [{ char_start: 0, char_end: 3, rendering }],
+    has_next: true, translation_warning: null, part: 1 };
+  const requests: string[] = [];
+  globalThis.fetch = async url => {
+    requests.push(String(url));
+    if (String(url).endsWith('/chapter/1')) return json(chapter);
+    if (String(url).endsWith('/translation-health')) return json({ warn: false });
+    if (String(url).endsWith('/wiki/pages?at=1')) return new Promise(resolve => { finishWiki = resolve; });
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  function Harness() {
+    const [loaded, setLoaded] = useState<ChapterResponse | null>(null);
+    return <ReadingDesk novelId="book" chapterIndex={1} chapter={loaded} clickableEntities
+      onChapterLoaded={setLoaded} onNoChapter={() => {}} onNavigate={async () => {}}
+      onFindMore={async () => {}} onChapters={() => {}} onAdd={() => {}} onOpenWiki={() => {}} />;
+  }
+  const view = render(<Harness />);
+  await waitFor(() => assert.match(view.getByRole('article', { name: 'Chapter 1' }).textContent!, /Mei walked along the river/));
+  assert.match(view.getByRole('complementary').textContent!, /Opening your story wiki/);
+  await act(async () => finishWiki(json({ novel_id: 'book', at: 1, pages: [] })));
+  assert.match(view.getByRole('article').textContent!, /Mei walked along the river/);
+  assert.match(view.getByRole('complementary').textContent!, /A world unfolding/);
+  assert.ok(requests.includes('/api/novels/book/wiki/pages?at=1'));
+  fireEvent.click(view.getByRole('button', { name: 'Inspect Mei' }));
+  assert.ok(await view.findByRole('dialog'));
+  fireEvent.click(view.getByRole('button', { name: 'Close name card' }));
+  await waitFor(() => assert.equal(view.queryByRole('dialog'), null));
+});
 
 test('wiki navigation uses a unique saved source key, never the translated spelling', () => {
   const different = { ...wiki, subject: 'other-id', source_term: '美' };

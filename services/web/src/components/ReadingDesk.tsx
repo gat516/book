@@ -79,7 +79,9 @@ export function StoryCompanion({ novelId, at, pages, loading, error, revision, o
       .catch(reason => { if (!gone) setPageError(String(reason)); });
     return () => { gone = true; };
   }, [novelId, at, subject, tab, revision, pages]);
-  const current = page?.subject === subject && page.at <= at ? page : null;
+  // Before the index loads, both subject values are undefined. Require an actual
+  // page before comparing them or reading its chapter boundary (§0.3).
+  const current = page !== null && page.subject === subject && page.at <= at ? page : null;
   return <aside className="story-companion" aria-label="Story companion">
     <div className="companion-tabs" aria-label="Companion view">
       <button type="button" aria-pressed={tab === "wiki"} onClick={() => setTab("wiki")}><BookOpen size={15} />Story wiki</button>
