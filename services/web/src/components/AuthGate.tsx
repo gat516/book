@@ -1,5 +1,6 @@
+import { readerId } from "../readerId";
 import { useEffect, useState, type ReactNode } from "react";
-import { setSession, sessionHeaders, type Session } from "../session";
+import { setSession, sessionHeaders, type Session, canUseLegacyLocalSession, legacyLocalSession } from "../session";
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const [account, setAccount] = useState<Session | null>(null);
@@ -10,6 +11,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     const expired = () => { setAccount(null); setError("Your session ended. Sign in again."); };
     window.addEventListener("book-session-expired", expired);
     fetch("/api/auth/session", { credentials: "same-origin" }).then(async response => {
+      if (canUseLegacyLocalSession(import.meta.env.DEV, window.location.hostname, response.status)) return legacyLocalSession(readerId());
       if (response.status === 401) return null;
       if (!response.ok) throw new Error("Sign-in is temporarily unavailable.");
       return response.json() as Promise<Session>;
@@ -30,6 +32,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
     setSession(null); setAccount(null); setError("Account closed. Your library is queued for permanent deletion.");
   }
   if (loading) return <main className="auth-screen"><p>Loading your library…</p></main>;
+  if (!account && error) return <main className="auth-screen"><h1>Could not open your library</h1>
+    <p role="alert">{error}</p><button onClick={() => window.location.reload()}>Try again</button></main>;
   if (!account) {
     const invite = new URLSearchParams(window.location.search).get("invite");
     return <main className="auth-screen"><h1>Your private reading library</h1>
