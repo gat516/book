@@ -10,8 +10,6 @@ type fixtureSite struct {
 	pages map[string]Page
 }
 
-func (fixtureSite) Mode() string { return "translate" }
-
 func (s fixtureSite) FetchPage(
 	_ context.Context, _ *httpClient, pageURL string,
 ) (Page, bool, error) {
@@ -22,11 +20,11 @@ func (s fixtureSite) FetchPage(
 	return page, false, nil
 }
 
-func neverStop(context.Context) (bool, error) { return false, nil }
-func noBackpressure(context.Context) error    { return nil }
+func neverStop(context.Context) (bool, error)                     { return false, nil }
+func noBackpressure(ctx context.Context) (context.Context, error) { return ctx, nil }
 
 func TestSiteForUsesSourceChapterAssemblyForFreshShuhaigeImports(t *testing.T) {
-	site, ok := siteFor("m.shuhaige.net").(shuhaigeSite)
+	site, ok := siteFor("m.shuhaige.net", 200).(shuhaigeSite)
 	if !ok || !site.assembleContinuations {
 		t.Fatalf("unexpected Shuhaige adapter: %#v", site)
 	}

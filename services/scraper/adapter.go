@@ -26,25 +26,25 @@ type Page struct {
 }
 
 // Site is the per-site adapter contract. Simpler than spec §3.2's generic
-// Fetch(idx)/Next(prev) SourceAdapter shape: both sites here are pure next-link walkers
+// Fetch(idx)/Next(prev) SourceAdapter shape: every site here is a next-link walker
 // (the whole page is fetched once and both content and the next link come out of that
 // one request), so a single FetchPage call is the natural unit — there is no second
 // strategy (e.g. catalog-indexed fetch) implemented yet to justify the extra indirection.
+//
+// Whether fetched text is already translated is the JOB's mode, not the adapter's: the
+// same host can serve either, and the reader chooses when starting the scrape.
 type Site interface {
-	// Mode says whether fetched text has a separate original or not — "bootstrap" for an
-	// already-translated site (raw_text and translated_text both get the same string, so
-	// TranslateStage's early-out skips the LLM call), "translate" for a source-language
-	// site the pipeline should machine-translate normally.
-	Mode() string
-
 	// FetchPage fetches and extracts one chapter page. notFound=true means "this chapter
 	// doesn't exist" (e.g. a real HTTP 404) — an expected, clean stop condition, not an
 	// error to log and retry.
 	FetchPage(ctx context.Context, client *httpClient, pageURL string) (page Page, notFound bool, err error)
 }
 
-// siteFor picks the adapter whose host matches pageURL, or nil if none does.
-func siteFor(host string) Site {
+// siteFor picks the adapter for a host: the one written for it, or the generic reader
+// (generic.go) for a host nobody has written code for. A hand-written adapter knows where
+// that site keeps its text; the generic one works it out per page and can be wrong, which
+// is what the preview (preview.go) exists to show before a scrape runs.
+func siteFor(host string, contentLenFloor int) Site {
 	switch host {
 	case "freewebnovel.com", "www.freewebnovel.com":
 		return freewebnovelSite{}
@@ -53,6 +53,13 @@ func siteFor(host string) Site {
 	case "novel543.com", "www.novel543.com":
 		return novel543Site{}
 	default:
-		return nil
+		return genericSite{contentLenFloor: contentLenFloor}
 	}
+}
+
+// builtInSite reports whether the host has an adapter written for it, so a preview can
+// say which reader it used.
+func builtInSite(host string) bool {
+	_, generic := siteFor(host, 0).(genericSite)
+	return !generic
 }

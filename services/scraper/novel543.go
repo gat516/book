@@ -19,8 +19,6 @@ type novel543Site struct{}
 
 var novel543PartSuffix = regexp.MustCompile(`\s*\((\d+)\s*/\s*(\d+)\)\s*$`)
 
-func (novel543Site) Mode() string { return "translate" }
-
 func novel543TitleAndContinuation(title string) (string, bool) {
 	title = strings.TrimSpace(title)
 	match := novel543PartSuffix.FindStringSubmatch(title)

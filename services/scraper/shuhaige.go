@@ -59,8 +59,6 @@ func isShuhaigeBoilerplate(text string) bool {
 	return false
 }
 
-func (shuhaigeSite) Mode() string { return "translate" }
-
 func (s shuhaigeSite) FetchPage(ctx context.Context, client *httpClient, pageURL string) (Page, bool, error) {
 	resp, err := client.Get(ctx, pageURL)
 	if err != nil {

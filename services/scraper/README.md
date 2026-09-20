@@ -39,8 +39,30 @@ go run .
 ```
 
 Config (`config.go`, env-driven with compose-friendly defaults): `DATABASE_URL`,
-`REDIS_URL`, `INGEST_API_URL`, `SCRAPE_RATE_PER_SEC`, `SCRAPE_JITTER_MS`,
-`SCRAPE_USER_AGENT`, `CONTENT_LEN_FLOOR`.
+`REDIS_URL`, `INGEST_API_URL`, `SCRAPE_MIN_DELAY_MS`, `SCRAPE_MAX_DELAY_MS`,
+`SCRAPE_CATCHUP_DELAY_MS`, `SCRAPE_MAX_CONCURRENT_JOBS`, `SCRAPE_USER_AGENT`,
+`CONTENT_LEN_FLOOR`, `SCRAPER_HTTP_ADDR`.
+
+Up to `SCRAPE_MAX_CONCURRENT_JOBS` books are scraped at once (3 by default): a walk ends
+only at the end of a novel, so a serial worker starves every other book for as long as one
+is being read. The paced gap is per host, so parallel jobs on different sites each keep
+their own, and two jobs on one site queue behind each other exactly as one job would.
+
+## Pace
+
+One request per host at a time, separated by a wait drawn fresh from
+`[SCRAPE_MIN_DELAY_MS, SCRAPE_MAX_DELAY_MS]` (15-40s by default) and timed from the END of
+the previous response, so a slow site is asked for less rather than more. `Crawl-delay` in
+a site's `robots.txt` raises that floor. One chapter therefore costs the site its own
+response time plus ~15-40s -- roughly a chapter a minute, still well ahead of translation.
+
+Two exceptions keep a reader from waiting on that pace:
+
+- **Caught up.** When the reader has read everything stored, the next page is the one they
+  are waiting for, so it is fetched on `SCRAPE_CATCHUP_DELAY_MS` (~3s) instead. Once a
+  buffer exists again the normal gap resumes.
+- **Resuming.** A restarted scrape walks from the newest stored chapter's own URL, not the
+  job's start URL, so it costs one page instead of re-fetching the whole prefix to skip it.
 
 Oversized source chapters remain one stored chapter. `TRANSLATION_CHUNK_TOKENS` controls
 the estimated source-token ceiling for each translation request (default `6000`); the

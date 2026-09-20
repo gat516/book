@@ -21,8 +21,6 @@ import (
 // original text available to us at all.
 type freewebnovelSite struct{}
 
-func (freewebnovelSite) Mode() string { return "bootstrap" }
-
 func (freewebnovelSite) FetchPage(ctx context.Context, client *httpClient, pageURL string) (Page, bool, error) {
 	resp, err := client.Get(ctx, pageURL)
 	if err != nil {

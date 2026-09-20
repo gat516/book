@@ -27,7 +27,7 @@ func walk(
 	startURL string,
 	onChapter func(Page) error,
 	shouldStop func(context.Context) (bool, error),
-	waitForCapacity func(context.Context) error,
+	waitForCapacity func(context.Context) (context.Context, error),
 	contentLenFloor int,
 ) (stopReason string, err error) {
 	seenHashes := make(map[string]bool)
@@ -45,12 +45,14 @@ func walk(
 
 		// Block until the pipeline has room before spending a request. Checked here —
 		// before the fetch, not after — so a full queue costs the source site nothing:
-		// pausing after fetching would still hammer it at full rate.
-		if err := waitForCapacity(ctx); err != nil {
+		// pausing after fetching would still hammer it at full rate. It also reports
+		// whether a reader is waiting on this page, which sets the fetch's pace.
+		fetchCtx, err := waitForCapacity(ctx)
+		if err != nil {
 			return "", err
 		}
 
-		page, notFound, err := fetchWithRetry(ctx, client, site, pageURL)
+		page, notFound, err := fetchWithRetry(fetchCtx, client, site, pageURL)
 		if notFound {
 			return "not_found", nil
 		}

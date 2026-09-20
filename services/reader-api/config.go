@@ -15,7 +15,9 @@ type Config struct {
 
 	IngestAPIURL        string
 	IngestInternalToken string
-	RedisURL            string
+	// ScraperURL serves the scrape preview (scraper/preview.go).
+	ScraperURL string
+	RedisURL   string
 
 	// Object store (MinIO locally, S3 in prod) — for GET /chapter, which reads chapter
 	// bodies pipeline already wrote. Same field names/env vars/defaults as ingest-api.
@@ -47,6 +49,7 @@ func loadConfig() Config {
 		AskAIInternalToken:  os.Getenv("ASKAI_INTERNAL_TOKEN"),
 		AskAITimeoutSeconds: timeout,
 
+		ScraperURL:          getenv("SCRAPER_URL", "http://localhost:8083"),
 		IngestAPIURL:        getenv("INGEST_API_URL", "http://localhost:8080"),
 		IngestInternalToken: os.Getenv("INGEST_INTERNAL_TOKEN"),
 		RedisURL:            getenv("REDIS_URL", "redis://localhost:6379"),

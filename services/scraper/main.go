@@ -20,6 +20,8 @@ func main() {
 		log.Printf("recover interrupted scrape jobs: %v", err)
 	}
 
+	serveHTTP(ctx, cfg.HTTPAddr, worker.client, cfg.ContentLenFloor)
+
 	log.Printf("scraper worker draining %s", pendingQueue)
 	if err := worker.Loop(ctx); err != nil {
 		log.Fatalf("worker: %v", err)

@@ -1038,3 +1038,39 @@ func (f *fakeStore) FactVisible(context.Context, string, int, string, int, int) 
 func (f *fakeIngestClient) RetractFact(context.Context, string, json.RawMessage) (json.RawMessage, int, error) {
 	return json.RawMessage(`{"retracted":true}`), http.StatusOK, nil
 }
+
+type fakeScraperClient struct {
+	lastURL string
+	result  json.RawMessage
+	err     error
+}
+
+func (f *fakeScraperClient) Preview(_ context.Context, url string) (json.RawMessage, error) {
+	f.lastURL = url
+	return f.result, f.err
+}
+
+// The preview is what makes an unknown site safe to try, so it must reach the scraper
+// (which owns the adapters and the rate limit) rather than being answered here.
+func TestScrapePreviewProxiesToTheScraper(t *testing.T) {
+	scraper := &fakeScraperClient{result: json.RawMessage(`{"reader":"generic","text_chars":900}`)}
+	api := &API{store: readyFake(), scraper: scraper}
+
+	response := request(t, api, http.MethodPost, "/novels/"+testNovelID+"/scrape/preview",
+		`{"url":"https://example.test/c/1"}`, "reader-a")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"reader":"generic"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if scraper.lastURL != "https://example.test/c/1" {
+		t.Fatalf("scraper asked for %q", scraper.lastURL)
+	}
+
+	if response := request(t, api, http.MethodPost, "/novels/"+testNovelID+"/scrape/preview", `{"url":"  "}`, "reader-a"); response.Code != http.StatusBadRequest {
+		t.Fatalf("empty url status = %d", response.Code)
+	}
+	down := &API{store: readyFake(), scraper: &fakeScraperClient{err: errors.New("dial tcp: refused")}}
+	if response := request(t, down, http.MethodPost, "/novels/"+testNovelID+"/scrape/preview",
+		`{"url":"https://example.test/c/1"}`, "reader-a"); response.Code != http.StatusBadGateway {
+		t.Fatalf("scraper down status = %d", response.Code)
+	}
+}

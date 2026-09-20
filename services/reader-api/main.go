@@ -47,9 +47,10 @@ func main() {
 	server := &http.Server{
 		Addr: cfg.ListenAddr,
 		Handler: (&API{
-			store:  store,
-			ask:    newAskClient(cfg),
-			ingest: newIngestClient(cfg),
+			store:   store,
+			ask:     newAskClient(cfg),
+			ingest:  newIngestClient(cfg),
+			scraper: newScraperClient(cfg),
 		}).routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

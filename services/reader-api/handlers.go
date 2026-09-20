@@ -15,9 +15,10 @@ import (
 )
 
 type API struct {
-	store  ReaderStore
-	ask    AskClient
-	ingest IngestClient
+	store   ReaderStore
+	ask     AskClient
+	ingest  IngestClient
+	scraper ScraperClient
 }
 
 type progressRequest struct {
@@ -55,6 +56,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("DELETE /novels/{id}", a.deleteNovel)
 	mux.HandleFunc("POST /novels/{id}/chapters", a.postChapter)
 	mux.HandleFunc("POST /novels/{id}/scrape", a.postScrape)
+	mux.HandleFunc("POST /novels/{id}/scrape/preview", a.postScrapePreview)
 	mux.HandleFunc("GET /novels/{id}/scrape/status", a.getScrapeStatus)
 	mux.HandleFunc("POST /novels/{id}/scrape/cancel", a.postScrapeCancel)
 	mux.HandleFunc("GET /novels/{id}/glossary", a.getGlossary)

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -36,6 +37,7 @@ type Worker struct {
 	client          *httpClient
 	contentLenFloor int
 	maxQueueDepth   int // service default; a scrape job may override it per novel
+	maxJobs         int // scrapes running at once, across books
 }
 
 func NewWorker(cfg Config) (*Worker, error) {
@@ -51,19 +53,39 @@ func NewWorker(cfg Config) (*Worker, error) {
 		db:              db,
 		redis:           redis.NewClient(opts),
 		ingest:          newIngestClient(cfg.IngestAPIURL),
-		client:          newHTTPClient(cfg.ReqsPerSecond, cfg.JitterMillis, cfg.UserAgentString),
+		client:          newHTTPClient(cfg.MinDelay, cfg.MaxDelay, cfg.CatchUpDelay, cfg.UserAgentString),
 		contentLenFloor: cfg.ContentLenFloor,
 		maxQueueDepth:   cfg.MaxQueueDepth,
+		maxJobs:         cfg.MaxConcurrentJobs,
 	}, nil
 }
 
+// Loop claims scrape jobs and runs up to maxJobs of them at once. Concurrency is what
+// keeps a second book from waiting on the first: a walk ends only at the end of a novel
+// (or a cancel), so a serial worker starves every other book for as long as one is being
+// read. Politeness is per host inside httpClient, so parallel jobs on DIFFERENT sites
+// each keep their own paced gap, and two jobs on the SAME site queue behind each other
+// exactly as one job would.
 func (w *Worker) Loop(ctx context.Context) error {
+	slots := make(chan struct{}, w.maxJobs)
+	var running sync.WaitGroup
+	defer running.Wait() // let in-flight scrapes stop cleanly on shutdown
+
 	for {
-		raw, err := w.redis.BLMove(ctx, pendingQueue, processingQueue, "RIGHT", "LEFT", 5*time.Second).Result()
-		if errors.Is(err, redis.Nil) {
-			continue // empty queue timeout; poll again
+		// Claimed only when a slot is free, so the queue keeps the jobs this worker
+		// cannot start yet instead of holding them in memory.
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			return nil
 		}
+
+		raw, err := w.redis.BLMove(ctx, pendingQueue, processingQueue, "RIGHT", "LEFT", 5*time.Second).Result()
 		if err != nil {
+			<-slots
+			if errors.Is(err, redis.Nil) {
+				continue // empty queue timeout; poll again
+			}
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -76,12 +98,19 @@ func (w *Worker) Loop(ctx context.Context) error {
 		if parseErr != nil {
 			log.Printf("malformed queue message %q: %v", raw, parseErr)
 			w.redis.LRem(ctx, processingQueue, 1, raw)
+			<-slots
 			continue
 		}
-		if err := w.handle(ctx, jobID); err != nil {
-			log.Printf("scrape job %d failed: %v", jobID, err)
-		}
-		w.redis.LRem(ctx, processingQueue, 1, raw)
+
+		running.Add(1)
+		go func() {
+			defer running.Done()
+			defer func() { <-slots }()
+			if err := w.handle(ctx, jobID); err != nil {
+				log.Printf("scrape job %d failed: %v", jobID, err)
+			}
+			w.redis.LRem(context.WithoutCancel(ctx), processingQueue, 1, raw)
+		}()
 	}
 }
 
@@ -156,16 +185,20 @@ func (w *Worker) RecoverProcessing(ctx context.Context) error {
 // that queue. 0 disables either limit independently.
 func (w *Worker) waitForCapacity(
 	jobID int64, novelID string, limit, ingestLookahead int,
-) func(context.Context) error {
-	return func(ctx context.Context) error {
+) func(context.Context) (context.Context, error) {
+	return func(ctx context.Context) (context.Context, error) {
 		if limit <= 0 && ingestLookahead <= 0 {
-			return nil
+			return w.paceFor(ctx, jobID, novelID), nil
 		}
 		logged := false
 		for {
 			ahead, err := w.chaptersAheadOfReader(ctx, novelID)
 			if err != nil {
 				log.Printf("scrape job %d: reader-window check failed, continuing: %v", jobID, err)
+			} else if ahead <= 0 {
+				// The reader has read everything stored: this page is the one they are
+				// waiting for, so it skips the buffer check and is fetched promptly.
+				return withCatchUp(ctx), nil
 			} else if ingestLookahead > 0 && ahead >= ingestLookahead {
 				if !logged {
 					log.Printf("scrape job %d: pausing, %d chapters ahead of the reader (limit %d)",
@@ -173,23 +206,23 @@ func (w *Worker) waitForCapacity(
 					logged = true
 				}
 				if err := w.pauseUntilNextCheck(ctx, jobID); err != nil {
-					return err
+					return nil, err
 				}
 				continue
 			}
 
 			if limit <= 0 {
-				return nil
+				return ctx, nil
 			}
 			depth, err := w.redis.LLen(ctx, pipelinePendingQueue).Result()
 			if err != nil {
 				// Don't strand a scrape on a transient Redis blip: the limit is a
 				// courtesy throttle, not a correctness invariant.
 				log.Printf("scrape job %d: queue depth check failed, continuing: %v", jobID, err)
-				return nil
+				return ctx, nil
 			}
 			if depth < int64(limit) {
-				return nil
+				return ctx, nil
 			}
 			if !logged {
 				log.Printf("scrape job %d: pausing, pipeline queue at %d (limit %d)", jobID, depth, limit)
@@ -199,15 +232,49 @@ func (w *Worker) waitForCapacity(
 			// request would not take effect until the queue drained.
 			cancelled, err := w.cancelRequested(ctx, jobID)
 			if err == nil && cancelled {
-				return nil // let the walk loop's own shouldStop observe it and stop cleanly
+				return ctx, nil // let the walk loop's own shouldStop observe it and stop cleanly
 			}
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return nil, ctx.Err()
 			case <-time.After(5 * time.Second):
 			}
 		}
 	}
+}
+
+// paceFor marks a fetch as catch-up when the reader has reached the end of what is
+// stored, for the case where neither window is set and the loop above returns early.
+func (w *Worker) paceFor(ctx context.Context, jobID int64, novelID string) context.Context {
+	ahead, err := w.chaptersAheadOfReader(ctx, novelID)
+	if err != nil {
+		log.Printf("scrape job %d: reader-window check failed, using the normal pace: %v", jobID, err)
+		return ctx
+	}
+	if ahead <= 0 {
+		return withCatchUp(ctx)
+	}
+	return ctx
+}
+
+// resumeURL is the page the newest stored chapter came from, when that page belongs to
+// the host being scraped. The walk re-fetches it (one request) and follows its next link,
+// so a resumed scrape costs one page instead of the whole prefix. A novel whose newest
+// chapter came from somewhere else (a paste, another site) has no resume point here.
+func (w *Worker) resumeURL(ctx context.Context, novelID, host string) (string, bool) {
+	var sourceURL *string
+	err := w.db.QueryRow(ctx,
+		`SELECT source_meta->>'source_url' FROM chapter
+		  WHERE novel_id = $1 AND source_meta->>'source_url' IS NOT NULL
+		  ORDER BY chapter_index DESC LIMIT 1`, novelID).Scan(&sourceURL)
+	if err != nil || sourceURL == nil {
+		return "", false
+	}
+	parsed, err := url.Parse(*sourceURL)
+	if err != nil || parsed.Host != host {
+		return "", false
+	}
+	return *sourceURL, true
 }
 
 // chaptersAheadOfReader is how many chapters this novel holds beyond the furthest point
@@ -307,10 +374,7 @@ func (w *Worker) handle(ctx context.Context, jobID int64) error {
 	if err != nil {
 		return w.fail(ctx, jobID, fmt.Sprintf("invalid start_url: %v", err))
 	}
-	site := siteFor(parsed.Host)
-	if site == nil {
-		return w.fail(ctx, jobID, fmt.Sprintf("unsupported site host %q", parsed.Host))
-	}
+	site := siteFor(parsed.Host, w.contentLenFloor)
 	legacyPageMode := false
 	if shuhaige, ok := site.(shuhaigeSite); ok {
 		legacyPageMode, err = w.hasLegacyPageChapters(ctx, job.novelID, parsed.Host)
@@ -401,7 +465,20 @@ func (w *Worker) handle(ctx context.Context, jobID int64) error {
 		return w.fail(ctx, jobID, err.Error())
 	}
 
-	stopReason, walkErr := walk(ctx, w.client, site, job.startURL, onChapter, shouldStop,
+	// Resume where this novel actually stopped. Walking from the job's own start URL
+	// re-fetches every chapter already stored just to recognise and skip it -- at one
+	// page per 15-40s that is minutes of requests the site does not owe us, and a reader
+	// sitting at the last chapter waits through all of it. Legacy page-indexed books keep
+	// walking from the start, because their part numbering is rebuilt from that order.
+	startURL := job.startURL
+	if !legacyPageMode {
+		if resume, ok := w.resumeURL(ctx, job.novelID, parsed.Host); ok {
+			startURL = resume
+			log.Printf("scrape job %d: resuming from the newest stored chapter", jobID)
+		}
+	}
+
+	stopReason, walkErr := walk(ctx, w.client, site, startURL, onChapter, shouldStop,
 		w.waitForCapacity(jobID, job.novelID, queueLimit, ingestLookahead), w.contentLenFloor)
 	if walkErr != nil {
 		return w.fail(ctx, jobID, walkErr.Error())
