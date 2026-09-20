@@ -6,6 +6,9 @@ import react from "@vitejs/plugin-react";
 // bearer-token gated and only reachable server-side, via reader-api's own /ask proxy.
 export default defineConfig({
   plugins: [react()],
+  define: {
+    "import.meta.env.VITE_BOOK_MODE": JSON.stringify(process.env.BOOK_MODE || "local"),
+  },
   server: {
     proxy: {
       "/api": {

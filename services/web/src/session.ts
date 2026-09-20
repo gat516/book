@@ -10,10 +10,9 @@ export function sessionExpired() { setSession(null); window.dispatchEvent(new Ev
 
 export function hostedSession() { return current !== null && !current.local; }
 
-// During a local rolling upgrade the old API has no session route. Production builds
-// and actual authentication failures must never take this compatibility path.
-export function canUseLegacyLocalSession(development: boolean, hostname: string, status: number): boolean {
-  return development && ["localhost", "127.0.0.1", "[::1]", "::1"].includes(hostname) && status === 404;
+// This is a compile-time development switch. Production builds always use sessions.
+export function isLocalDevelopment(development: boolean, mode: string | undefined): boolean {
+  return development && mode !== "hosted";
 }
 export function legacyLocalSession(id: string): Session {
   return { id, email: "Local reader", csrf_token: "", local: true, legacy: true };

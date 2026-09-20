@@ -1,17 +1,24 @@
 import { readerId } from "../readerId";
 import { useEffect, useState, type ReactNode } from "react";
-import { setSession, sessionHeaders, type Session, canUseLegacyLocalSession, legacyLocalSession } from "../session";
+import { setSession, sessionHeaders, type Session, isLocalDevelopment, legacyLocalSession } from "../session";
 
 export function AuthGate({ children }: { children: ReactNode }) {
-  const [account, setAccount] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
+  const local = isLocalDevelopment(import.meta.env.DEV, import.meta.env.VITE_BOOK_MODE);
+  if (local) setSession(legacyLocalSession(readerId()));
+  const [account, setAccount] = useState<Session | null>(() => {
+    if (!local) return null;
+    const session = legacyLocalSession(readerId());
+    setSession(session);
+    return session;
+  });
+  const [loading, setLoading] = useState(!local);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
+    if (local) return;
     let alive = true;
     const expired = () => { setAccount(null); setError("Your session ended. Sign in again."); };
     window.addEventListener("book-session-expired", expired);
     fetch("/api/auth/session", { credentials: "same-origin" }).then(async response => {
-      if (canUseLegacyLocalSession(import.meta.env.DEV, window.location.hostname, response.status)) return legacyLocalSession(readerId());
       if (response.status === 401) return null;
       if (!response.ok) throw new Error("Sign-in is temporarily unavailable.");
       return response.json() as Promise<Session>;
@@ -19,7 +26,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       .catch(e => { if (alive) setError(e instanceof Error ? e.message : "Could not connect."); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; window.removeEventListener("book-session-expired", expired); };
-  }, []);
+  }, [local]);
   async function logout(all = false) {
     const response = await fetch(`/api/auth/${all ? "revoke-sessions" : "logout"}`, { method: "POST", headers: sessionHeaders() });
     if (!response.ok) { setError("Could not sign out. Please retry."); return; }
@@ -31,6 +38,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     if (!response.ok) { setError("Could not start deletion. Please retry."); return; }
     setSession(null); setAccount(null); setError("Account closed. Your library is queued for permanent deletion.");
   }
+  if (local) return <>{children}</>;
   if (loading) return <main className="auth-screen"><p>Loading your library…</p></main>;
   if (!account && error) return <main className="auth-screen"><h1>Could not open your library</h1>
     <p role="alert">{error}</p><button onClick={() => window.location.reload()}>Try again</button></main>;
