@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"novel-engine/platform/tenant"
 )
@@ -42,7 +43,12 @@ func TestInvitedLoginAndSessionRevocation(t *testing.T) {
 		t.Skip("PLATFORM_TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	db, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error { _, err := c.Exec(ctx, "SET ROLE book_auth"); return err }
+	db, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

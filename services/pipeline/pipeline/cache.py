@@ -44,16 +44,17 @@ DEFAULT_TTL_S = 14 * 24 * 3600
 class LLMCache:
     """Redis-backed result cache keyed by the §3.5 idempotency key."""
 
-    def __init__(self, redis, *, ttl_s: int = DEFAULT_TTL_S) -> None:
+    def __init__(self, redis, *, ttl_s: int = DEFAULT_TTL_S, namespace: str = "") -> None:
+        self.prefix = KEY_PREFIX + (namespace + ":" if namespace else "")
         self.redis = redis
         self.ttl_s = ttl_s
 
     async def get(self, key: str) -> str | None:
-        return await self.redis.get(KEY_PREFIX + key)
+        return await self.redis.get(self.prefix + key)
 
     async def delete(self, key: str) -> None:
         """Discard an unusable response without touching the durable job ledger."""
-        await self.redis.delete(KEY_PREFIX + key)
+        await self.redis.delete(self.prefix + key)
 
     async def put(
         self,
@@ -85,5 +86,5 @@ class LLMCache:
                 served_model,
             )
             return False
-        await self.redis.set(KEY_PREFIX + key, value, ex=self.ttl_s)
+        await self.redis.set(self.prefix + key, value, ex=self.ttl_s)
         return True

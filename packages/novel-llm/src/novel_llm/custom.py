@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import httpx
+from novel_llm.accounts import hosted
+from novel_llm.netguard import approved_endpoint, PublicTransport
 
 from novel_llm.hosted import HostedProvider
 from novel_llm.provider import Class, Completion
@@ -41,6 +44,8 @@ class CustomProvider(HostedProvider):
                        cls: Class = Class.BATCH, pin_model: bool = False,
                        model: str | None = None, json_schema: dict | None = None,
                        max_output_tokens: int | None = None) -> Completion:
+        if hosted():
+            return await self._private_complete(prompt,system,json_mode,pin_model,model,json_schema,max_output_tokens)
         completion = await super().complete(
             prompt,
             system=system,
@@ -52,3 +57,19 @@ class CustomProvider(HostedProvider):
             max_output_tokens=max_output_tokens,
         )
         return replace(completion, served_provider="custom")
+
+    async def _private_complete(self, prompt, system, json_mode, pin_model, model, json_schema, max_output_tokens):
+        endpoint = approved_endpoint(self._base_url)
+        use_model = model or self._model
+        messages, response_format = self._request_material(prompt, system=system, json_mode=json_mode, json_schema=json_schema)
+        payload = {"model":use_model,"messages":messages,"max_tokens":max_output_tokens or self._max_output_tokens}
+        if response_format is not None: payload["response_format"] = response_format
+        try:
+            async with httpx.AsyncClient(transport=PublicTransport(), timeout=self._timeout, follow_redirects=False, trust_env=False) as client:
+                response = await client.post(endpoint+'/chat/completions', headers={"Authorization":"Bearer "+self._api_key}, json=payload)
+                response.raise_for_status()
+                result = response.json()
+        except Exception as exc:
+            self._raise_normalized(exc,schema=json_schema is not None)
+            raise
+        return replace(self._completion(result, requested_model=use_model, pin_model=pin_model),served_provider="custom")

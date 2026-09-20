@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // ErrProviderConfigKeyNotSet is returned when a request supplies a provider API key but
@@ -53,4 +54,36 @@ func decryptProviderConfig(ciphertext, nonce []byte, key [32]byte) ([]byte, erro
 		return nil, fmt.Errorf("decrypt: %w", err)
 	}
 	return plaintext, nil
+}
+
+// AAD binds ciphertext to the owner and approved endpoint (§15); moving encrypted
+// bytes between accounts or changing the endpoint invalidates authentication.
+func credentialAAD(account, provider, endpoint string) []byte {
+	return []byte("book-key-v1\n" + account + "\n" + provider + "\n" + strings.TrimRight(endpoint, "/"))
+}
+func encryptAccountCredential(plaintext []byte, key [32]byte, aad []byte) ([]byte, []byte, error) {
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, nil, err
+	}
+	return gcm.Seal(nil, nonce, plaintext, aad), nonce, nil
+}
+func decryptAccountCredential(ciphertext, nonce []byte, key [32]byte, aad []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	return gcm.Open(nil, nonce, ciphertext, aad)
 }

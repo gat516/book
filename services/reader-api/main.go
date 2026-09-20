@@ -24,8 +24,12 @@ func main() {
 		log.Fatal("startup: ASKAI_INTERNAL_TOKEN is required")
 	}
 
+	objectCredentials := credentials.NewStaticV4(cfg.ObjectAccessKey, cfg.ObjectSecretKey, "")
+	if tenant.Hosted() && os.Getenv("OBJECT_STORE_ACCESS_KEY") == "" {
+		objectCredentials = credentials.NewIAM("")
+	}
 	objects, err := minio.New(cfg.ObjectEndpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.ObjectAccessKey, cfg.ObjectSecretKey, ""),
+		Creds:  objectCredentials,
 		Secure: cfg.ObjectUseSSL,
 	})
 	if err != nil {
@@ -55,7 +59,7 @@ func main() {
 			log.Fatalf("authentication startup: %v", err)
 		}
 		defer authServer.Close()
-		handler = authServer.Middleware(api.routes())
+		handler = authServer.Middleware(accountLimits(redisClient, api.routes()))
 	}
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,

@@ -2,11 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"novel-engine/platform/netguard"
+	"novel-engine/platform/tenant"
+	"os"
+	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -35,6 +41,7 @@ type ProviderCredentialInput struct {
 	BaseURL      string
 	APIKeyCipher []byte
 	APIKeyNonce  []byte
+	KeyVersion   int
 }
 
 func (s *Store) ListProviderCredentials(ctx context.Context) ([]ProviderCredentialView, error) {
@@ -77,17 +84,18 @@ func (s *Store) UpsertProviderCredential(ctx context.Context, in ProviderCredent
 	}
 	defer tx.Rollback(ctx)
 	_, err = tx.Exec(ctx,
-		`INSERT INTO provider_credential (provider, base_url, api_key_cipher, api_key_nonce, updated_at)
-		 VALUES ($1, $2, $3, $4, now())
+		`INSERT INTO provider_credential (provider, base_url, api_key_cipher, api_key_nonce, key_version, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, now())
 		 ON CONFLICT (account_id, provider) DO UPDATE SET
-		   base_url = EXCLUDED.base_url,
+		   base_url = CASE WHEN EXCLUDED.api_key_cipher IS NULL THEN provider_credential.base_url ELSE EXCLUDED.base_url END,
+           key_version = CASE WHEN EXCLUDED.api_key_cipher IS NULL THEN provider_credential.key_version ELSE EXCLUDED.key_version END,
 		   -- COALESCE for the same reason as novel_provider_config: the key is the one
 		   -- field a client cannot read back, so an edit that omits it means "unchanged",
 		   -- never "erase". Clearing a key is DELETE, which is explicit.
 		   api_key_cipher = COALESCE(EXCLUDED.api_key_cipher, provider_credential.api_key_cipher),
 		   api_key_nonce = COALESCE(EXCLUDED.api_key_nonce, provider_credential.api_key_nonce),
 		   updated_at = now()`,
-		in.Provider, baseURLArg, cipherArg, nonceArg,
+		in.Provider, baseURLArg, cipherArg, nonceArg, in.KeyVersion,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert provider_credential: %w", err)
@@ -131,10 +139,12 @@ func (s *Store) DeleteProviderCredential(ctx context.Context, provider string) e
 func (s *Store) GetProviderCredential(ctx context.Context, provider string, key [32]byte) (baseURL string, apiKey string, err error) {
 	var baseURLPtr *string
 	var cipher, nonce []byte
+	var version int
+	var account string
 	err = s.db.QueryRow(ctx,
-		`SELECT base_url, api_key_cipher, api_key_nonce FROM provider_credential WHERE provider = $1`,
+		`SELECT base_url, api_key_cipher, api_key_nonce, account_id::text, key_version FROM provider_credential WHERE provider = $1 AND account_id=(SELECT current_account())`,
 		provider,
-	).Scan(&baseURLPtr, &cipher, &nonce)
+	).Scan(&baseURLPtr, &cipher, &nonce, &account, &version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", "", ErrProviderCredentialNotFound
 	}
@@ -145,7 +155,20 @@ func (s *Store) GetProviderCredential(ctx context.Context, provider string, key 
 		baseURL = *baseURLPtr
 	}
 	if cipher != nil {
-		plain, err := decryptProviderConfig(cipher, nonce, key)
+		var plain []byte
+		var err error
+		if version == 0 {
+			plain, err = decryptProviderConfig(cipher, nonce, key)
+		} else {
+			if encoded := os.Getenv(fmt.Sprintf("PROVIDER_CONFIG_ENCRYPTION_KEY_V%d", version)); encoded != "" {
+				decoded, e := base64.StdEncoding.DecodeString(encoded)
+				if e != nil || len(decoded) != 32 {
+					return "", "", fmt.Errorf("invalid encryption key version")
+				}
+				copy(key[:], decoded)
+			}
+			plain, err = decryptAccountCredential(cipher, nonce, key, credentialAAD(account, provider, baseURL))
+		}
 		if err != nil {
 			return "", "", fmt.Errorf("decrypt provider_credential: %w", err)
 		}
@@ -179,10 +202,23 @@ func (a *API) putProviderCredential(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if provider != "ollama" {
+	if provider != "ollama" && provider != "custom" {
 		// Hosted provider endpoints are fixed by their adapters. Custom API endpoints are
 		// per-book so two books can target different compatible servers with one account.
 		req.BaseURL = ""
+	}
+	if tenant.Hosted() {
+		if provider == "ollama" {
+			writeErr(w, 400, "local providers are disabled")
+			return
+		}
+		if provider == "custom" {
+			req.BaseURL = strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
+			if err := netguard.AllowedURL(req.BaseURL, os.Getenv("PROVIDER_HEALTH_ALLOWED_HOSTS")); err != nil {
+				writeErr(w, 400, err.Error())
+				return
+			}
+		}
 	}
 	in := ProviderCredentialInput{Provider: provider, BaseURL: req.BaseURL}
 	if req.APIKey != "" {
@@ -190,7 +226,17 @@ func (a *API) putProviderCredential(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusServiceUnavailable, "server is not configured to accept API keys")
 			return
 		}
-		cipher, nonce, err := encryptProviderConfig([]byte(req.APIKey), a.cfg.ProviderConfigKey)
+		var cipher, nonce []byte
+		var err error
+		if tenant.Hosted() {
+			cipher, nonce, err = encryptAccountCredential([]byte(req.APIKey), a.cfg.ProviderConfigKey, credentialAAD(tenant.Account(r.Context()), provider, req.BaseURL))
+			in.KeyVersion = 1
+			if v, e := strconv.Atoi(os.Getenv("PROVIDER_CONFIG_KEY_VERSION")); e == nil && v > 0 {
+				in.KeyVersion = v
+			}
+		} else {
+			cipher, nonce, err = encryptProviderConfig([]byte(req.APIKey), a.cfg.ProviderConfigKey)
+		}
 		if err != nil {
 			log.Printf("putProviderCredential encrypt: %v", err)
 			writeErr(w, http.StatusInternalServerError, "could not encrypt api_key")

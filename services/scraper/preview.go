@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"novel-engine/platform/tenant"
+	"os"
 	"strings"
 	"time"
 )
@@ -108,7 +110,7 @@ func serveHTTP(ctx context.Context, addr string, client *httpClient, contentLenF
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{Addr: addr, Handler: tenant.Internal(os.Getenv("INGEST_INTERNAL_TOKEN"), mux), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)

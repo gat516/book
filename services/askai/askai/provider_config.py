@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import os
+from novel_llm.accounts import hosted, load_credential
 from dataclasses import dataclass
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -63,6 +64,8 @@ async def load_provider_config(conn, novel_id: str) -> ProviderConfigRow | None:
 
 async def load_provider_credential(conn, provider: str) -> tuple[str | None, str | None]:
     """Account-wide (base_url, api_key) for one provider (migration 0035)."""
+    if hosted():
+        return await load_credential(conn, provider)
     row = await (
         await conn.execute(
             "SELECT base_url, api_key_cipher, api_key_nonce FROM provider_credential WHERE provider = %s",
@@ -92,6 +95,13 @@ async def resolve_provider_config(conn, novel_id: str, default_provider: str) ->
     row = await load_provider_config(conn, novel_id)
     provider = row.provider if row is not None else default_provider
     global_base_url, global_api_key = await load_provider_credential(conn, provider)
+    if hosted():
+        if provider in {"ollama", "gateway"}:
+            raise RuntimeError("local providers are disabled on this hosted installation")
+        if row is None or not global_api_key:
+            raise RuntimeError("provider credential is missing")
+        if provider == "custom" and (row.base_url or "").rstrip("/") != (global_base_url or "").rstrip("/"):
+            raise RuntimeError("custom endpoint does not match its credential")
     if row is None and global_api_key is None and global_base_url is None:
         return None
     effective_base_url = None

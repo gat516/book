@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"novel-engine/platform/tenant"
+	"os"
 	"strings"
 	"time"
 )
@@ -49,7 +51,9 @@ func (c *ingestClient) TranslateAhead(ctx context.Context, novelID string) error
 	if err != nil {
 		return err
 	}
+	tenant.Forward(ctx, httpReq, os.Getenv("INGEST_INTERNAL_TOKEN"))
 	httpReq.Header.Set("Content-Type", "application/json")
+	tenant.Forward(ctx, httpReq, os.Getenv("INGEST_INTERNAL_TOKEN"))
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
 		return err
@@ -81,7 +85,9 @@ func (c *ingestClient) PasteChapter(ctx context.Context, novelID string, req pas
 	if err != nil {
 		return false, err
 	}
+	tenant.Forward(ctx, httpReq, os.Getenv("INGEST_INTERNAL_TOKEN"))
 	httpReq.Header.Set("Content-Type", "application/json")
+	tenant.Forward(ctx, httpReq, os.Getenv("INGEST_INTERNAL_TOKEN"))
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
 		return false, err

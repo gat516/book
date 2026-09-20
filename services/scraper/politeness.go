@@ -6,6 +6,8 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"novel-engine/platform/netguard"
+	"novel-engine/platform/tenant"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,8 +65,12 @@ func newHTTPClient(minDelay, maxDelay, catchUp time.Duration, userAgent string) 
 	if catchUp <= 0 || catchUp > minDelay {
 		catchUp = minDelay
 	}
+	inner := &http.Client{Timeout: 30 * time.Second}
+	if tenant.Hosted() {
+		inner = netguard.Client(30 * time.Second)
+	}
 	return &httpClient{
-		inner:     &http.Client{Timeout: 30 * time.Second},
+		inner:     inner,
 		minDelay:  minDelay,
 		maxDelay:  maxDelay,
 		catchUp:   catchUp,

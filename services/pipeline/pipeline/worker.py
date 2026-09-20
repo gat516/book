@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import json
+from novel_llm.accounts import hosted, worker_scope, LEGACY_ACCOUNT
 import signal
 import time
 from contextlib import suppress
@@ -17,6 +19,7 @@ from contextlib import suppress
 import psycopg
 import redis.asyncio as aredis
 from minio import Minio
+from minio.credentials import IamAwsProvider
 
 from pipeline.batch import BatchManager
 from pipeline.cache import LLMCache
@@ -143,8 +146,9 @@ class Worker:
         self.redis = aredis.from_url(cfg.redis_url, decode_responses=True)
         self.minio = Minio(
             cfg.object_endpoint,
-            access_key=cfg.object_access_key,
-            secret_key=cfg.object_secret_key,
+            access_key=None if hosted() else cfg.object_access_key,
+            secret_key=None if hosted() else cfg.object_secret_key,
+            credentials=IamAwsProvider() if hosted() else None,
             secure=cfg.object_secure,
         )
         # _default_provider/_default_batch_manager back every novel with no
@@ -226,6 +230,12 @@ class Worker:
         self.db = await psycopg.AsyncConnection.connect(
             self.cfg.database_url, autocommit=True
         )
+        if hosted():
+            await self.db.execute("SET ROLE book_worker")
+        else:
+            await self.db.execute("SELECT set_config('app.account_id',%s,false)",(LEGACY_ACCOUNT,))
+        self.dispatch_db = await psycopg.AsyncConnection.connect(self.cfg.database_url, autocommit=True) if hosted() else self.db
+        if hosted(): await self.dispatch_db.execute("SET ROLE book_worker")
         log.info("worker connected; draining %s", PENDING_QUEUE)
         try:
             # Process liveness must not depend on the work loop reaching its next
@@ -238,12 +248,18 @@ class Worker:
             await self.embedding_resolver.aclose()
             await self.textproc.aclose()
             await self.db.close()
+            if self.dispatch_db is not self.db: await self.dispatch_db.close()
 
     async def _loop(self) -> None:
         while not self.stopping.is_set():
             await self.redis.set(WORKER_HEARTBEAT, str(time.time()), ex=WORKER_HEARTBEAT_TTL_SECONDS)
             claimed_at = str(time.time())
-            raw = await self.redis.eval(queue.CLAIM, len(queue.KEYS), *queue.KEYS, claimed_at)
+            if hosted():
+                rows=await (await self.dispatch_db.execute("SELECT * FROM worker_catalog()")).fetchall()
+                catalog={str(n): {"account":str(a),"mode":m,"focus":str(f) if f else ""} for n,a,m,f in rows}
+                raw=await self.redis.eval(queue.CLAIM_PRIVATE,len(queue.KEYS),*queue.KEYS,claimed_at,json.dumps(catalog))
+            else:
+                raw = await self.redis.eval(queue.CLAIM, len(queue.KEYS), *queue.KEYS, claimed_at)
             if raw is None:
                 try:
                     await self._run_until_stopping(self._drain_background())
@@ -378,7 +394,10 @@ class Worker:
                 async with await psycopg.AsyncConnection.connect(
                     self.cfg.database_url, autocommit=True, connect_timeout=5
                 ) as monitor:
+                    if hosted():
+                        await monitor.execute("SET ROLE book_worker")
                     while True:
+                        if hosted() and not await worker_scope(monitor,novel_id): raise NovelDeleted(novel_id)
                         async with asyncio.timeout(5):
                             row = await (await monitor.execute(
                                 "SELECT c.enrichment_discarded "
@@ -406,7 +425,7 @@ class Worker:
 
     async def _provider_config_changed(self, conn, novel_id: str) -> bool:
         """True when novel_id's resolved provider differs from the one its claim is using."""
-        if self.cfg.llm_provider == "gateway":
+        if not hosted() and self.cfg.llm_provider == "gateway":
             return False
         seen = getattr(self, "_provider_rows", {}).get(novel_id, _UNRESOLVED)
         if seen is _UNRESOLVED:
@@ -503,6 +522,10 @@ class Worker:
         msg = QueueMessage.model_validate_json(raw)
         assert self.db is not None
 
+        if hosted():
+            account = await worker_scope(self.db,msg.novel_id)
+            if not account: raise NovelDeleted(msg.novel_id)
+            self.cache = LLMCache(self.redis,namespace=f"{account}:{msg.novel_id}")
         chapter = await self._fetch_one(
             "SELECT raw_hash, raw_uri, source_meta, status, translation_ready, translated_uri, enrichment_discarded FROM chapter"
             " WHERE novel_id = %s AND chapter_index = %s",
@@ -547,6 +570,13 @@ class Worker:
         source_lang, target_lang, ontology = novel
         (provider, batch_manager, provider_id, names_provider, resolve_provider,
          model_override) = await self._provider_for_novel(msg.novel_id)
+
+        if hosted():
+            from novel_llm.usage import UsageProvider
+            provider=UsageProvider(provider,self.db,msg.novel_id)
+            batch_manager=BatchManager(provider)
+            if names_provider: names_provider=UsageProvider(names_provider,self.db,msg.novel_id)
+            if resolve_provider: resolve_provider=UsageProvider(resolve_provider,self.db,msg.novel_id)
 
         raw_text = await asyncio.to_thread(self._get_object, raw_uri)
 
@@ -730,27 +760,30 @@ class Worker:
         assert self.db is not None
         # Keep the due timestamp until the work succeeds. Queue insertion is atomic and
         # deduplicated; a crash between database inspection and enqueue cannot strand it.
-        rows = await (await self.db.execute(
-            # A discarded enrichment must not suppress a prose retry. For a chapter
-            # without durable translation, requeue ordinary reader-critical work; only
-            # an already-translated chapter resumes as low-priority enrichment (§0).
-            "SELECT c.novel_id::text, c.chapter_index, c.status, c.translation_ready "
-            "FROM chapter c "
-            # needs_name_review is included because nothing produces it any more: the
-            # character-name gate no longer blocks translation, so a chapter still parked
-            # at that status is stranded exactly the way pre-TRANSLATE failures were before
-            # 0033. It was excluded then precisely because it WAS a live human gate.
-            "WHERE ((NOT c.enrichment_discarded AND enrichment_retry_at <= now() "
-            "AND enrichment_attempts < %s AND provider_retry_at IS NULL "
-            "AND provider_retry_attempts < %s) OR (provider_retry_at <= now() "
-            "AND provider_retry_attempts < %s "
-            "AND (NOT c.translation_ready OR NOT c.enrichment_discarded))) "
-            # No chapter-order gate: FACTS is per chapter, so a due chapter is simply
-            # re-queued.
-            "ORDER BY LEAST(COALESCE(enrichment_retry_at, 'infinity'::timestamptz), "
-            "COALESCE(provider_retry_at, 'infinity'::timestamptz)) LIMIT 20",
-            (MAX_ENRICHMENT_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS),
-        )).fetchall()
+        if hosted():
+            rows=await (await self.dispatch_db.execute("SELECT novel_id::text,chapter_index,status,translation_ready FROM worker_due_retries(%s,%s)",(MAX_ENRICHMENT_ATTEMPTS,MAX_PROVIDER_RETRY_ATTEMPTS))).fetchall()
+        else:
+            rows = await (await self.db.execute(
+                # A discarded enrichment must not suppress a prose retry. For a chapter
+                # without durable translation, requeue ordinary reader-critical work; only
+                # an already-translated chapter resumes as low-priority enrichment (§0).
+                "SELECT c.novel_id::text, c.chapter_index, c.status, c.translation_ready "
+                "FROM chapter c "
+                # needs_name_review is included because nothing produces it any more: the
+                # character-name gate no longer blocks translation, so a chapter still parked
+                # at that status is stranded exactly the way pre-TRANSLATE failures were before
+                # 0033. It was excluded then precisely because it WAS a live human gate.
+                "WHERE ((NOT c.enrichment_discarded AND enrichment_retry_at <= now() "
+                "AND enrichment_attempts < %s AND provider_retry_at IS NULL "
+                "AND provider_retry_attempts < %s) OR (provider_retry_at <= now() "
+                "AND provider_retry_attempts < %s "
+                "AND (NOT c.translation_ready OR NOT c.enrichment_discarded))) "
+                # No chapter-order gate: FACTS is per chapter, so a due chapter is simply
+                # re-queued.
+                "ORDER BY LEAST(COALESCE(enrichment_retry_at, 'infinity'::timestamptz), "
+                "COALESCE(provider_retry_at, 'infinity'::timestamptz)) LIMIT 20",
+                (MAX_ENRICHMENT_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS, MAX_PROVIDER_RETRY_ATTEMPTS),
+            )).fetchall()
         for novel_id, chapter, status, translation_ready in rows:
             msg = QueueMessage(novel_id=novel_id, chapter_index=chapter,
                                enrichment=bool(translation_ready),
@@ -843,7 +876,7 @@ class Worker:
         gets the process-wide default; the cache holds that too, so this is still one
         lookup per novel rather than one per chapter.
         """
-        if self.cfg.llm_provider == "gateway":
+        if not hosted() and self.cfg.llm_provider == "gateway":
             cached = self._provider_cache.get(novel_id)
             if cached is not None:
                 return cached

@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"novel-engine/platform/tenant"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -116,8 +117,12 @@ func newStore(ctx context.Context, cfg Config) (*Store, error) {
 	}
 
 	// Object store (MinIO / S3)
+	objectCredentials := credentials.NewStaticV4(cfg.ObjectAccessKey, cfg.ObjectSecretKey, "")
+	if tenant.Hosted() && os.Getenv("OBJECT_STORE_ACCESS_KEY") == "" {
+		objectCredentials = credentials.NewIAM("")
+	}
 	mc, err := minio.New(cfg.ObjectEndpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.ObjectAccessKey, cfg.ObjectSecretKey, ""),
+		Creds:  objectCredentials,
 		Secure: cfg.ObjectUseSSL,
 	})
 	if err != nil {

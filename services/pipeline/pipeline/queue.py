@@ -120,3 +120,44 @@ end
 redis.call('LPUSH', KEYS[1], ARGV[3])
 return 1
 """
+
+# §15: fairness across accounts is decided before per-account book priority. Routing
+# catalog is supplied by the DB dispatcher projection, never by a client queue pointer.
+CLAIM_PRIVATE = """
+local catalog=cjson.decode(ARGV[2])
+local active={}
+local function decode(raw)
+ local ok,m=pcall(cjson.decode,raw)
+ if ok and type(m)=='table' and m.novel_id and tonumber(m.chapter_index) then return m end
+end
+for _,raw in ipairs(redis.call('LRANGE',KEYS[2],0,-1)) do
+ local m=decode(raw)
+ if m and catalog[m.novel_id] then active[catalog[m.novel_id].account]=true end
+end
+local selected,sm,sa,srank,sseq
+local pending=redis.call('LRANGE',KEYS[1],0,-1)
+for i=#pending,1,-1 do
+ local raw=pending[i];local m=decode(raw);local c=m and catalog[m.novel_id]
+ if c and not active[c.account] and c.mode~='paused' and (c.mode~='focused' or c.focus==m.novel_id) then
+  local seq=tonumber(redis.call('HGET','jobs:account:last-served',c.account) or '0')
+  local rank=(m.novel_id==c.focus and 4 or 0)+(m.priority==true and 2 or 0)+(m.enrichment~=true and 1 or 0)
+  if not selected or seq<sseq or (seq==sseq and c.account==sa and (rank>srank or (rank==srank and m.novel_id==sm.novel_id and tonumber(m.chapter_index)<tonumber(sm.chapter_index)))) then
+   selected,sm,sa,srank,sseq=raw,m,c.account,rank,seq
+  end
+ elseif not c then
+  -- Deleted, disabled, and malformed pointers cannot block active users.
+  redis.call('LREM',KEYS[1],0,raw)
+ end
+end
+if not selected then return nil end
+for _,raw in ipairs(pending) do
+ local m=decode(raw)
+ if raw==selected or (m and m.novel_id==sm.novel_id and m.chapter_index==sm.chapter_index) then redis.call('LREM',KEYS[1],0,raw) end
+end
+redis.call('HSET','jobs:account:last-served',sa,redis.call('INCR','jobs:account:sequence'))
+redis.call('LPUSH',KEYS[2],selected)
+redis.call('HSET',KEYS[3],selected,ARGV[1])
+redis.call('HSET',KEYS[5],selected,ARGV[1])
+redis.call('HDEL',KEYS[7],selected)
+return selected
+"""

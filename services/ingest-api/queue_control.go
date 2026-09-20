@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"novel-engine/platform/tenant"
 )
 
 // Shared local-library controls; selecting a book only schedules already queued work.
@@ -56,6 +57,15 @@ func (p *queueControlPatch) validate() error {
 }
 
 func (s *Store) applyQueueControl(ctx context.Context, key string, p queueControlPatch) error {
+	if tenant.Hosted() {
+		_, err := s.db.Exec(ctx, `INSERT INTO account_queue_control(account_id,mode,focus_novel_id) VALUES(current_account(),COALESCE($1,'all'),NULLIF($2,'')::uuid)
+        ON CONFLICT(account_id) DO UPDATE SET mode=COALESCE($1,account_queue_control.mode), focus_novel_id=CASE WHEN $2::text IS NULL THEN account_queue_control.focus_novel_id ELSE NULLIF($2,'')::uuid END,updated_at=now()`, p.Mode, p.FocusNovelID)
+		if err != nil {
+			return err
+		}
+		key += ":" + tenant.Account(ctx)
+		p.ChangedBy = tenant.Account(ctx)
+	}
 	fields := map[string]interface{}{}
 	if p.Mode != nil {
 		fields["mode"] = *p.Mode
@@ -92,7 +102,11 @@ type queueControlResponse struct {
 
 func (s *Store) queueControl(ctx context.Context) (queueControlResponse, error) {
 	pipe := s.redis.TxPipeline()
-	settings := pipe.HGetAll(ctx, queueControlKey)
+	key := queueControlKey
+	if tenant.Hosted() {
+		key += ":" + tenant.Account(ctx)
+	}
+	settings := pipe.HGetAll(ctx, key)
 	pending := pipe.LRange(ctx, pendingQueue, 0, -1)
 	processing := pipe.LRange(ctx, "jobs:processing", 0, -1)
 	stages := pipe.HGetAll(ctx, "jobs:processing:stage")
@@ -111,6 +125,12 @@ func (s *Store) queueControl(ctx context.Context) (queueControlResponse, error) 
 	}
 	if result.Mode == "" {
 		result.Mode = "all"
+	}
+	if tenant.Hosted() {
+		err := s.db.QueryRow(ctx, `SELECT COALESCE((SELECT mode FROM account_queue_control),'all'),COALESCE((SELECT focus_novel_id::text FROM account_queue_control),'')`).Scan(&result.Mode, &result.FocusNovelID)
+		if err != nil {
+			return result, err
+		}
 	}
 	titles := map[string]string{}
 	rows, err := s.db.Query(ctx, "SELECT id::text, title FROM novel")
@@ -145,12 +165,17 @@ func (s *Store) queueControl(ctx context.Context) (queueControlResponse, error) 
 	for _, raw := range pending.Val() {
 		var msg QueueMessage
 		if json.Unmarshal([]byte(raw), &msg) == nil && msg.NovelID != "" {
-			book(msg.NovelID).Pending++
+			if _, owned := titles[msg.NovelID]; owned {
+				book(msg.NovelID).Pending++
+			}
 		}
 	}
 	for _, raw := range processing.Val() {
 		var msg QueueMessage
 		if json.Unmarshal([]byte(raw), &msg) == nil && msg.NovelID != "" {
+			if _, owned := titles[msg.NovelID]; !owned {
+				continue
+			}
 			b := book(msg.NovelID)
 			b.InFlight = append(b.InFlight, queueChapter{ChapterIndex: msg.ChapterIndex, Stage: stages.Val()[raw]})
 		}

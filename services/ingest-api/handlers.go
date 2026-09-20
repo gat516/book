@@ -9,6 +9,9 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"novel-engine/platform/netguard"
+	"novel-engine/platform/tenant"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -163,6 +166,16 @@ func (a *API) createNovel(w http.ResponseWriter, r *http.Request) {
 // buildProviderConfigInput validates req. It handles no secret: a novel names a provider,
 // and the key for that provider comes from provider_credential (migration 0080).
 func (a *API) buildProviderConfigInput(req providerConfigReq) (ProviderConfigInput, error) {
+	if tenant.Hosted() {
+		if req.Provider == "ollama" || req.Provider == "gateway" {
+			return ProviderConfigInput{}, fmt.Errorf("local providers are disabled")
+		}
+		if req.Provider == "custom" {
+			if err := netguard.AllowedURL(req.BaseURL, os.Getenv("PROVIDER_HEALTH_ALLOWED_HOSTS")); err != nil {
+				return ProviderConfigInput{}, err
+			}
+		}
+	}
 	switch req.Provider {
 	case "anthropic", "custom", "deepseek", "gemini", "groq", "ollama":
 	default:

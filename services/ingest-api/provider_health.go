@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"novel-engine/platform/netguard"
+	"novel-engine/platform/tenant"
 	"os"
 	"regexp"
 	"strconv"
@@ -111,6 +113,9 @@ func (s *Store) providerHealthConfigFor(ctx context.Context, novelID, track stri
 	}
 	// Ollama work follows book URL -> account URL -> process host, matching
 	// resolve_provider_config.
+	if tenant.Hosted() && (chosen == "ollama" || chosen == "gateway") {
+		return providerHealthConfig{}, fmt.Errorf("local provider disabled")
+	}
 	if chosen == "ollama" {
 		if baseURL == "" {
 			accountBase, _, accountErr := s.accountCredential(ctx, chosen, cfg.ProviderConfigKey)
@@ -129,10 +134,13 @@ func (s *Store) providerHealthConfigFor(ctx context.Context, novelID, track stri
 	if accountErr != nil {
 		return providerHealthConfig{provider: chosen, model: model, endpointKind: "hosted"}, accountErr
 	}
+	if tenant.Hosted() && chosen == "custom" && baseURL != "" && strings.TrimRight(baseURL, "/") != strings.TrimRight(accountBase, "/") {
+		return providerHealthConfig{}, fmt.Errorf("endpoint differs from saved credential")
+	}
 	if chosen == "custom" && baseURL == "" {
 		baseURL = accountBase
 	}
-	if accountKey == "" {
+	if accountKey == "" && !tenant.Hosted() {
 		accountKey = processProviderKey(chosen)
 	}
 	if chosen != "custom" || baseURL == "" {
@@ -303,6 +311,9 @@ func providerHealthStatus(status int, body string, retryAfter ...string) string 
 }
 
 func providerHealthClient() *http.Client {
+	if tenant.Hosted() {
+		return netguard.Client(3 * time.Second)
+	}
 	return &http.Client{Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}

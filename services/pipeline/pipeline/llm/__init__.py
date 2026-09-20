@@ -44,6 +44,8 @@ def provider_from_env(cfg: Config, *, tenant: str = "default") -> LLMProvider:
     # Per-book resolution loads saved keys later, after the DB connection opens.
     # A missing env key must not prevent the worker from reaching that path.
     import os
+    if os.environ.get("BOOK_MODE") == "hosted":
+        return UnconfiguredCompletionProvider()
     if cfg.llm_provider in {"deepseek", "gemini", "groq"} and not (
         getattr(cfg, f"{cfg.llm_provider}_api_key", "") or os.getenv(f"{cfg.llm_provider.upper()}_API_KEY")
     ):

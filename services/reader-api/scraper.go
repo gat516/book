@@ -8,6 +8,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"novel-engine/platform/tenant"
+	"os"
 	"strings"
 	"time"
 )
@@ -38,6 +40,7 @@ func (c *scraperHTTPClient) Preview(ctx context.Context, pageURL string) (json.R
 	if err != nil {
 		return nil, fmt.Errorf("build preview request: %w", err)
 	}
+	tenant.Forward(ctx, req, os.Getenv("INGEST_INTERNAL_TOKEN"))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {

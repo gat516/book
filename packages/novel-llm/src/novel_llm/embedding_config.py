@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+from novel_llm.accounts import hosted
 import logging
 
 from novel_llm.gemini import GeminiProvider
@@ -43,7 +44,9 @@ class EmbeddingResolver:
         row = await (await conn.execute(
             "SELECT provider, model FROM embedding_config WHERE singleton"
         )).fetchone()
-        provider, model = row if row else ("server", "")
+        provider, model = row if row else ("auto" if hosted() else "server", "")
+        if hosted() and provider == "server":
+            provider, model = "auto", ""
         server = provider == "server"
         if server:
             provider, model = self.cfg.embed_provider, self.cfg.embed_model
@@ -59,7 +62,7 @@ class EmbeddingResolver:
                 # authorized answers from published knowledge. Never log key material.
                 log.warning("embedding credential unavailable: %s", type(exc).__name__)
                 return self.disabled
-            key = key or getattr(self.cfg, f"{provider}_api_key", "")
+            key = key or ("" if hosted() else getattr(self.cfg, f"{provider}_api_key", ""))
             if not key:
                 return self.disabled
             endpoint = (self.cfg.gemini_embed_base_url if provider == "gemini"

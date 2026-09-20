@@ -23,6 +23,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
     if (!response.ok) { setError("Could not sign out. Please retry."); return; }
     setSession(null); setAccount(null); window.history.replaceState({}, "", "/");
   }
+  async function deleteAccount() {
+    if (window.prompt("This permanently deletes your library and saved keys. Type DELETE to continue.") !== "DELETE") return;
+    const response = await fetch("/api/auth/account", { method: "DELETE", headers: sessionHeaders() });
+    if (!response.ok) { setError("Could not start deletion. Please retry."); return; }
+    setSession(null); setAccount(null); setError("Account closed. Your library is queued for permanent deletion.");
+  }
   if (loading) return <main className="auth-screen"><p>Loading your library…</p></main>;
   if (!account) {
     const invite = new URLSearchParams(window.location.search).get("invite");
@@ -36,6 +42,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   return <>{!account.local && <div className="account-bar"><span>{account.email}</span>
     <button onClick={() => void logout()}>Sign out</button>
     <button onClick={() => void logout(true)}>Sign out everywhere</button>
+    <button onClick={() => void deleteAccount()}>Delete account</button>
     {error && <span role="alert">{error}</span>}
   </div>}{children}</>;
 }

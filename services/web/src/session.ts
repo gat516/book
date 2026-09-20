@@ -6,3 +6,5 @@ export function sessionHeaders(): Record<string, string> {
   return current?.csrf_token ? { "X-CSRF-Token": current.csrf_token } : {};
 }
 export function sessionExpired() { setSession(null); window.dispatchEvent(new Event("book-session-expired")); }
+
+export function hostedSession() { return current !== null && !current.local; }

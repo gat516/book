@@ -180,6 +180,27 @@ func (s *Server) Middleware(next http.Handler) http.Handler {
 		case r.Method == "GET" && r.URL.Path == "/auth/session":
 			write(w, 200, session)
 			return
+		case r.Method == "DELETE" && r.URL.Path == "/auth/account":
+			tx, err := s.DB.Begin(r.Context())
+			if err != nil {
+				fail(w, 503, "deletion unavailable")
+				return
+			}
+			defer tx.Rollback(r.Context())
+			if _, err = tx.Exec(r.Context(), "SELECT request_account_deletion($1)", session.ID); err == nil {
+				_, err = tx.Exec(r.Context(), "DELETE FROM account_session WHERE account_id=$1", session.ID)
+			}
+			if err != nil {
+				fail(w, 503, "deletion unavailable")
+				return
+			}
+			if err = tx.Commit(r.Context()); err != nil {
+				fail(w, 503, "deletion unavailable")
+				return
+			}
+			setCookie(w, cookieName, "", -1)
+			write(w, 202, map[string]bool{"deletion_requested": true})
+			return
 		case r.Method == "POST" && r.URL.Path == "/auth/logout":
 			_, err = s.DB.Exec(r.Context(), "DELETE FROM account_session WHERE token_hash=$1", session.TokenHash)
 			if err != nil {

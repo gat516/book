@@ -3,6 +3,8 @@ from __future__ import annotations
 import hmac
 import asyncio
 import logging
+from uuid import UUID
+from novel_llm.accounts import hosted, LEGACY_ACCOUNT
 import re
 from contextlib import asynccontextmanager
 from typing import Annotated
@@ -159,6 +161,7 @@ def _provider_failure_response(category: str) -> JSONResponse:
 
 
 class AskRequest(BaseModel):
+    account_id: str = ""
     novel_id: str
     question: str = Field(min_length=1, max_length=8_000)
     at: int = Field(ge=0)
@@ -192,6 +195,7 @@ class Service:
 
     async def _configure_connection(self, conn) -> None:
         await conn.execute("SET ROLE rls_reader")
+        if not hosted(): await conn.execute("SELECT set_config('app.account_id',%s,false)",(LEGACY_ACCOUNT,))
         await conn.commit()
 
     async def start(self) -> None:
@@ -243,7 +247,7 @@ class Service:
 
     async def ask(self, request: AskRequest) -> AskResponse:
         gateway_provider: LLMProvider | None = None
-        if self.config.llm_provider == "gateway":
+        if not hosted() and self.config.llm_provider == "gateway":
             gateway_provider = self._provider_cache.get(request.novel_id)
             if gateway_provider is None:
                 gateway_provider = GatewayProvider(address=self.config.gateway_addr, tenant=request.novel_id,
@@ -252,7 +256,12 @@ class Service:
                     max_output_tokens=self.config.gateway_max_output_tokens)
                 self._provider_cache[request.novel_id] = gateway_provider
         async with self.pool.connection() as conn:
-            embedding = await self.embedding_resolver.resolve(conn)
+            async with conn.transaction():
+                if hosted():
+                    await conn.execute("SELECT set_config('app.account_id',%s,true)", (request.account_id,))
+                    owned=await (await conn.execute("SELECT id FROM novel WHERE id=%s AND owner_id=%s", (request.novel_id,request.account_id))).fetchone()
+                    if not owned: raise HTTPException(status_code=404,detail="not found")
+                embedding = await self.embedding_resolver.resolve(conn)
         embedding_provider = embedding.provider
         if embedding_provider is self.embed_provider and self.config.embed_provider == "gateway":
             embedding_provider = self._embed_provider_cache.get(request.novel_id)
@@ -280,6 +289,8 @@ class Service:
         async with self.pool.connection() as conn:
             async with conn.transaction():
                 await conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                if hosted():
+                    await conn.execute("SELECT set_config('app.account_id',%s,true)", (request.account_id,))
                 await conn.execute("SELECT set_config('app.novel_id', %s, true)", (request.novel_id,))
                 await conn.execute("SELECT set_config('app.current_chapter', %s, true)", (str(request.at),))
                 provider = gateway_provider or await self._provider_for_novel(conn, request.novel_id)
@@ -292,6 +303,12 @@ class Service:
         if not used:
             return AskResponse(answer=INSUFFICIENT, at=request.at, retrieved_sources=[], served_by=None)
         completion = await provider.complete(f"Question:\n{request.question}\n\nRetrieved context:\n{context}", system=SYSTEM, cls=Class.INTERACTIVE)
+        if hosted():
+            from novel_llm.usage import record
+            async with self.pool.connection() as conn:
+                async with conn.transaction():
+                    await conn.execute("SELECT set_config('app.account_id',%s,true)",(request.account_id,))
+                    await record(conn,request.novel_id,'ask',completion)
         log.info("ask completed novel=%s at=%s sources=%s", request.novel_id, request.at, used)
         return AskResponse(answer=completion.text, at=request.at, retrieved_sources=used, served_by={"provider": completion.served_provider, "model": completion.served_model})
 
@@ -308,10 +325,13 @@ def create_app(service: Service) -> FastAPI:
     app = FastAPI(lifespan=lifespan)
 
     @app.post("/ask", response_model=AskResponse)
-    async def ask(request: AskRequest, authorization: Annotated[str | None, Header()] = None) -> AskResponse:
+    async def ask(request: AskRequest, authorization: Annotated[str | None, Header()] = None, x_account_id: Annotated[str | None, Header()] = None) -> AskResponse:
         expected = f"Bearer {service.config.internal_token}"
         if authorization is None or not hmac.compare_digest(authorization, expected):
             raise HTTPException(status_code=401, detail="invalid internal authorization")
+        if hosted():
+            try: request.account_id=str(UUID(x_account_id or ""))
+            except ValueError: raise HTTPException(status_code=401,detail="account required")
         try:
             return await service.ask(request)
         except EmbeddingUnavailable as exc:
@@ -363,6 +383,8 @@ def app_from_env() -> FastAPI:
     cfg = load_config()
     from novel_llm.provider import UnconfiguredCompletionProvider
     import os
+    if hosted():
+        return create_app(Service(cfg, UnconfiguredCompletionProvider(), UnavailableEmbeddingProvider()))
     if cfg.llm_provider in {"deepseek", "gemini", "groq"} and not (
         getattr(cfg, f"{cfg.llm_provider}_api_key", "") or os.getenv(f"{cfg.llm_provider.upper()}_API_KEY")
     ):

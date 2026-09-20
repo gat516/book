@@ -1,3 +1,4 @@
+import { hostedSession } from "../session";
 import { useEffect, useState } from "react";
 import { createNovel, listProviderCredentials } from "../api";
 import type { ProviderName } from "../types";
@@ -102,14 +103,14 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
         <p className="novel-create-form-hint">This provider and model handle translation, story knowledge, and Ask AI. You can choose separate translation and AI models in Book settings after creation. Hosted providers need an API key, with no Ollama server required.</p>
         <label>
           Provider for this book{" "}
-          <span className="novel-create-form-hint">(leave as default to use the server's)</span>
+          {!hostedSession() && <span className="novel-create-form-hint">(leave as default to use the server's)</span>}
           <select value={provider} onChange={(e) => chooseProvider(e.target.value as ProviderName | "")}>
-            <option value="">Server default</option>
+            <option value="" disabled={hostedSession()}>{hostedSession() ? "Choose a provider" : "Server default"}</option>
             <option value="deepseek">DeepSeek</option>
             <option value="anthropic">Anthropic</option>
             <option value="gemini">Gemini</option>
             <option value="groq">Groq</option>
-            <option value="ollama">Ollama (local)</option>
+            {!hostedSession() && <option value="ollama">Ollama (local)</option>}
             <option value="custom">Custom API (OpenAI-compatible)</option>
           </select>
         </label>

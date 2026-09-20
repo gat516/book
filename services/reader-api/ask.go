@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"novel-engine/platform/tenant"
 	"strings"
 	"time"
 )
@@ -56,7 +57,7 @@ func (c *askHTTPClient) Ask(ctx context.Context, novelID, question string, at in
 		return nil, fmt.Errorf("build ask request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	tenant.Forward(ctx, req, c.token)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrAskUnavailable, err)

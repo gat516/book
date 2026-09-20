@@ -22,7 +22,7 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, { apiKey: string }>>({});
+  const [drafts, setDrafts] = useState<Record<string, { apiKey: string; baseURL?: string }>>({});
   const [pending, setPending] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -46,7 +46,7 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
     return drafts[provider] ?? { apiKey: "" };
   }
 
-  function setDraft(provider: string, patch: Partial<{ apiKey: string }>) {
+  function setDraft(provider: string, patch: Partial<{ apiKey: string; baseURL?: string }>) {
     setDrafts((d) => ({ ...d, [provider]: { ...draft(provider), ...patch } }));
   }
 
@@ -58,6 +58,7 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
       const current = draft(provider);
       const response = await saveProviderCredential(provider, {
         api_key: current.apiKey.trim() || undefined,
+        base_url: current.baseURL?.trim() || undefined,
       });
       setCredentials(response.credentials);
       setDraft(provider, { apiKey: "" });
@@ -152,6 +153,7 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
                         placeholder={current?.api_key_set ? "Leave blank to keep the saved key" : "Paste a key"}
                       />
                     </label>
+                    {provider === "custom" && (<><label>Approved API endpoint<input type="url" value={draft(provider).baseURL ?? ""} onChange={e => setDraft(provider, {baseURL: e.target.value})} placeholder="https://models.example.com/v1" /></label></>)}
                     {provider === "custom" && (
                       <p className="settings-help">Set the OpenAI-compatible endpoint separately in each book's settings.</p>
                     )}

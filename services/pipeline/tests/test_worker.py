@@ -373,7 +373,7 @@ async def test_worker_start_does_not_require_embeddings(monkeypatch):
     worker.cfg = SimpleNamespace(database_url="postgres://test")
     worker.stopping = asyncio.Event()
     worker.textproc = SimpleNamespace(aclose=AsyncMock())
-    connection = SimpleNamespace(close=AsyncMock())
+    connection = SimpleNamespace(close=AsyncMock(), execute=AsyncMock())
 
     async def run_loop():
         worker.request_stop()

@@ -1,3 +1,4 @@
+import { hostedSession } from "../session";
 import { useCallback, useEffect, useState } from "react";
 import { getProviderConfig, listOllamaModels, listProviderCredentials, saveProviderConfig } from "../api";
 import {
@@ -236,7 +237,7 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
           <label>
             Provider for this book{" "}
             <select value={provider} onChange={(e) => chooseProvider(e.target.value as ProviderName)}>
-              {PROVIDERS.map((name) => (
+              {PROVIDERS.filter(p => !hostedSession() || p !== "ollama").map((name) => (
                 <option key={name} value={name}>
                   {PROVIDER_LABELS[name]}
                 </option>

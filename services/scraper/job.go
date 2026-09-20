@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/url"
+	"novel-engine/platform/tenant"
 	"strconv"
 	"sync"
 	"time"
@@ -41,7 +43,18 @@ type Worker struct {
 }
 
 func NewWorker(cfg Config) (*Worker, error) {
-	db, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
+	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		return nil, err
+	}
+	tenant.ConfigurePool(poolConfig)
+	if tenant.Hosted() {
+		poolConfig.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
+			_, err := c.Exec(ctx, "SET ROLE book_worker")
+			return err
+		}
+	}
+	db, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("connect postgres: %w", err)
 	}
@@ -80,7 +93,7 @@ func (w *Worker) Loop(ctx context.Context) error {
 			return nil
 		}
 
-		raw, err := w.redis.BLMove(ctx, pendingQueue, processingQueue, "RIGHT", "LEFT", 5*time.Second).Result()
+		raw, err := w.claim(ctx)
 		if err != nil {
 			<-slots
 			if errors.Is(err, redis.Nil) {
@@ -133,6 +146,13 @@ type jobRow struct {
 }
 
 func (w *Worker) loadJob(ctx context.Context, jobID int64) (jobRow, error) {
+	if tenant.Hosted() && tenant.Account(ctx) == "" {
+		var err error
+		ctx, err = w.jobContext(ctx, jobID)
+		if err != nil {
+			return jobRow{}, err
+		}
+	}
 	var row jobRow
 	err := w.db.QueryRow(ctx,
 		`SELECT novel_id::text, start_url, mode, status, max_queue_depth FROM scrape_job WHERE id = $1`, jobID,
@@ -190,8 +210,11 @@ func (w *Worker) recoverOrphans(ctx context.Context) error {
 			queued[raw] = true
 		}
 	}
-	rows, err := w.db.Query(ctx,
-		`SELECT id FROM scrape_job WHERE status IN ('pending', 'running') ORDER BY id`)
+	query := `SELECT id FROM scrape_job WHERE status IN ('pending', 'running') ORDER BY id`
+	if tenant.Hosted() {
+		query = "SELECT job_id FROM worker_scrape_catalog()"
+	}
+	rows, err := w.db.Query(ctx, query)
 	if err != nil {
 		return err
 	}
@@ -372,6 +395,9 @@ func (w *Worker) setStatus(ctx context.Context, jobID int64, status, lastError s
 func (w *Worker) cancelRequested(ctx context.Context, jobID int64) (bool, error) {
 	var cancelled bool
 	err := w.db.QueryRow(ctx, `SELECT cancel_requested FROM scrape_job WHERE id = $1`, jobID).Scan(&cancelled)
+	if tenant.Hosted() && errors.Is(err, pgx.ErrNoRows) {
+		return true, nil
+	}
 	return cancelled, err
 }
 
@@ -403,6 +429,13 @@ func (w *Worker) hasLegacyPageChapters(ctx context.Context, novelID, host string
 }
 
 func (w *Worker) handle(ctx context.Context, jobID int64) error {
+	if tenant.Hosted() {
+		var err error
+		ctx, err = w.jobContext(ctx, jobID)
+		if err != nil {
+			return err
+		}
+	}
 	job, err := w.loadJob(ctx, jobID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("job %d not found", jobID)
@@ -542,3 +575,62 @@ func (w *Worker) fail(ctx context.Context, jobID int64, message string) error {
 	}
 	return fmt.Errorf("%s", message)
 }
+
+// §15: the catalogue exposes routing only. All subsequent SQL runs as the owner.
+func (w *Worker) jobContext(ctx context.Context, id int64) (context.Context, error) {
+	var account string
+	err := w.db.QueryRow(ctx, "SELECT account_id::text FROM worker_scrape_catalog() WHERE job_id=$1", id).Scan(&account)
+	return tenant.WithAccount(ctx, account), err
+}
+func (w *Worker) claim(ctx context.Context) (string, error) {
+	if !tenant.Hosted() {
+		return w.redis.BLMove(ctx, pendingQueue, processingQueue, "RIGHT", "LEFT", 5*time.Second).Result()
+	}
+	rows, err := w.db.Query(ctx, "SELECT job_id,account_id::text FROM worker_scrape_catalog()")
+	if err != nil {
+		return "", err
+	}
+	catalog := map[string]string{}
+	for rows.Next() {
+		var id int64
+		var account string
+		if err := rows.Scan(&id, &account); err != nil {
+			rows.Close()
+			return "", err
+		}
+		catalog[strconv.FormatInt(id, 10)] = account
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return "", err
+	}
+	data, _ := json.Marshal(catalog)
+	raw, err := w.redis.Eval(ctx, privateScrapeClaim, []string{pendingQueue, processingQueue}, string(data)).Text()
+	if errors.Is(err, redis.Nil) {
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Second):
+		}
+	}
+	return raw, err
+}
+
+const privateScrapeClaim = `
+local catalog=cjson.decode(ARGV[1]);local active={}
+local processing=redis.call('LRANGE',KEYS[2],0,-1)
+if #processing>=3 then return nil end
+for _,id in ipairs(processing) do if catalog[id] then active[catalog[id]]=true end end
+local selected=nil;local lowest=nil
+for _,id in ipairs(redis.call('LRANGE',KEYS[1],0,-1)) do
+ local account=catalog[id]
+ if not account then redis.call('LREM',KEYS[1],0,id)
+ elseif not active[account] then
+  local last=tonumber(redis.call('HGET','scrape:account:last-served',account) or '0')
+  if not lowest or last<lowest then selected=id;lowest=last end
+ end
+end
+if not selected then return nil end
+redis.call('LREM',KEYS[1],0,selected);redis.call('LPUSH',KEYS[2],selected)
+redis.call('HSET','scrape:account:last-served',catalog[selected],redis.call('INCR','scrape:sequence'))
+return selected`
