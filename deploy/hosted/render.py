@@ -44,7 +44,8 @@ def render(domain,registry,tag,bucket,region,email,ca):
         if name=='reader-api':container['envFrom'].append({'secretRef':{'name':'book-auth'}})
         if name=='web':security_override={**security,'runAsUser':101,'runAsGroup':101,'fsGroup':101}
         else:security_override=security
-        return {'automountServiceAccountToken':False,'imagePullSecrets':[{'name':'ecr-pull'}],
+        # §15: explicit service DNS/config only; Kubernetes' ASKAI_PORT is a tcp:// URL.
+        return {'enableServiceLinks':False,'automountServiceAccountToken':False,'imagePullSecrets':[{'name':'ecr-pull'}],
             'terminationGracePeriodSeconds':90,'securityContext':security_override,
             'containers':[container],'volumes':[{'name':'tmp','emptyDir':{}},{'name':'rds-ca','configMap':{'name':'rds-ca'}}]}
     for name,image,secret,command,port,replicas,memory in [
@@ -66,7 +67,7 @@ def render(domain,registry,tag,bucket,region,email,ca):
         'nodeAffinity':{'required':{'nodeSelectorTerms':[{'matchExpressions':[{'key':'kubernetes.io/hostname','operator':'In','values':['book-node']}]}]}}}})
     add('PersistentVolumeClaim','redis-data',{'accessModes':['ReadWriteOnce'],'storageClassName':'','volumeName':'book-redis','resources':{'requests':{'storage':'8Gi'}}})
     add('Deployment','redis',{'replicas':1,'strategy':{'type':'Recreate'},'selector':{'matchLabels':{'app':'redis'}},'template':{'metadata':{'labels':{'app':'redis'}},'spec':{
-        'automountServiceAccountToken':False,'securityContext':{'runAsUser':999,'runAsGroup':999,'fsGroup':999,'runAsNonRoot':True},
+        'enableServiceLinks':False,'automountServiceAccountToken':False,'securityContext':{'runAsUser':999,'runAsGroup':999,'fsGroup':999,'runAsNonRoot':True},
         'containers':[{'name':'redis','image':'redis:7.4-alpine','command':['redis-server'],'args':['--appendonly','yes','--appendfsync','everysec','--maxmemory','1gb','--maxmemory-policy','noeviction','--requirepass','$(REDIS_PASSWORD)'],
             'envFrom':[{'secretRef':{'name':'book-redis'}}],'env':[{'name':'REDISCLI_AUTH','valueFrom':{'secretKeyRef':{'name':'book-redis','key':'REDIS_PASSWORD'}}}],
             'ports':[{'containerPort':6379}],'readinessProbe':{'exec':{'command':['redis-cli','ping']},'periodSeconds':10},
