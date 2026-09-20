@@ -38,7 +38,7 @@ Use `rg` within the relevant paths below before searching the whole repository.
 | Translation vs AI provider selection | `services/ingest-api/provider_config.go`; pipeline worker `_provider_for_novel`; `services/askai/askai/app.py` |
 | Optional hosted embeddings | `services/ingest-api/embedding_config.go`, `packages/novel-llm/src/novel_llm/embedding_config.py` |
 | Running local services | `deploy/systemd/`, `scripts/with-env.sh`; Go units rebuild on restart |
-| Localhost login/library regression | `services/web/src/AuthGate.tsx`, `session.ts`, `vite.config.ts`; `packages/novel-platform/auth/` |
+| Localhost login/library regression | `services/web/src/components/AuthGate.tsx`, `session.ts`, `vite.config.ts`; `packages/novel-platform/auth/` |
 | Private hosting / release checklist | `deploy/hosted/README.md`, `docs/HOSTED_IMPLEMENTATION.md`, spec §15 |
 | Login, invitations, account ownership | `packages/novel-platform/{auth,tenant}/`, `scripts/accounts.py`, migrations 0117–0125 |
 | Account credentials / custom endpoint safety | `packages/novel-llm/src/novel_llm/{accounts,netguard,custom}.py`, `packages/novel-platform/netguard/` |

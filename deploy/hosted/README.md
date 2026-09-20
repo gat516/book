@@ -35,7 +35,8 @@ one active chapter per account; scraping permits one per account and three globa
 Ask AI permits one request at a time and ten starts per minute per account.
 
 The initial qireadr.com Free plan requires `instance_type = "m7i-flex.large"`
-(also 2 vCPU / 8 GiB) and `database_backup_retention_days = 1` in the ignored
+(also 2 vCPU / 8 GiB), `database_class = "db.t4g.micro"`, and
+`database_backup_retention_days = 1` in the ignored
 `terraform.tfvars`. These resources consume promotional credits.
 
 This is one trusted application node with maintenance outages, not high availability.

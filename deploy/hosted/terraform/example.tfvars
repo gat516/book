@@ -7,4 +7,5 @@ create_budget = true
 # The budget is an alert, not a spending cap. Review terraform plan and AWS estimate.
 # Initial qireadr.com Free-plan overrides (consume promotional credits):
 # instance_type                  = "m7i-flex.large"
+# database_class                 = "db.t4g.micro"
 # database_backup_retention_days = 1
