@@ -5,6 +5,19 @@ Per chapter: CHUNK → TRANSLATE → DISPLAY_SCAN → FACTS → CHUNK_INDEX
 validates it; the rest of the chapter is re-queued as low-priority enrichment behind
 untranslated chapters.
 
+## Local and private hosted operation
+
+Local mode (`BOOK_MODE=local`, the default) uses the fixed local library owner and keeps
+optional local providers/gateway support. Hosted workers use `book_worker`, route through
+the minimal dispatcher projection, and set account scope before loading book content.
+Two replicas admit one active chapter per account. Queue controls, caches, credentials
+and embedding configuration are account-scoped; no hosted path borrows server model keys.
+
+Use `make start` for a local schema upgrade; it quiesces old services before migrating.
+Do not start new worker code against an old account schema. See the
+[hosted runbook](../../deploy/hosted/README.md) for containers, migration and recovery,
+and [implementation status](../../docs/HOSTED_IMPLEMENTATION.md) for validation.
+
 ## Facts
 
 FACTS (`stages/facts.py`, `.claude/plans/facts-stage.md`) makes one model call per chapter

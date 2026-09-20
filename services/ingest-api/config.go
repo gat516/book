@@ -23,9 +23,8 @@ type Config struct {
 	ObjectBucket    string // bucket that holds raw chapter bodies
 	ObjectUseSSL    bool
 
-	// IngestInternalToken gates POST /novels — the one route reader-api proxies for the
-	// browser (novel creation). Not general auth: ingest-api otherwise stays the "no
-	// auth/gate here" writer service its own doc comment describes.
+	// IngestInternalToken gates every non-health route. Hosted requests also carry the
+	// account resolved by reader-api; browser-supplied actor headers are never trusted.
 	IngestInternalToken string
 
 	// ProviderConfigKey encrypts/decrypts provider_credential.api_key_cipher (migrations

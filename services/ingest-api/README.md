@@ -2,8 +2,10 @@
 
 Paste-ingest entrypoint for the novel engine (see `instructions.md` §7.1). Accepts a
 pasted chapter, stores the body in the object store, records a `chapter` row in Postgres,
-and signals the offline pipeline via Redis. It is a **writer** service — no auth or
-spoiler gate here (that lives in `reader-api`, §8).
+and signals the offline pipeline via Redis. It is an internal **writer** service:
+bearer authentication protects every non-health route, and hosted requests carry the
+verified account from reader-api/scraper. Account RLS applies to all writes. The reader
+API owns reader chapter clearance (§8); workers still need later chapters for ingestion.
 
 ## What it does per paste
 
@@ -34,10 +36,11 @@ Config is read from the environment with localhost defaults matching the compose
 
 ## Endpoints
 
-`POST /novels` and `DELETE /novels/{id}` are the routes with any auth: they require
-`Authorization: Bearer $INGEST_INTERNAL_TOKEN`, since `reader-api` is the only intended
-caller (it proxies the novel lifecycle for the browser — see `services/reader-api/ingest.go`).
-Every other route is unauthenticated, per this service's "no auth/gate here" design.
+Every route except `/healthz` requires `Authorization: Bearer $INGEST_INTERNAL_TOKEN`.
+Hosted requests also require `X-Account-ID` from a trusted internal caller; browsers go
+through reader-api and never hold this token. Local mode assigns the fixed local owner.
+The examples below assume local mode. See [hosted setup](../../deploy/hosted/README.md)
+for isolated database roles and account-bound encryption keys.
 
 ```bash
 # register a novel (genre selects a preset ontology, §4.1; unknown/empty → generic)
@@ -48,6 +51,7 @@ curl -sX POST localhost:8080/novels \
 
 # paste a chapter
 curl -sX POST localhost:8080/novels/<uuid>/chapters \
+  -H "Authorization: Bearer $INGEST_INTERNAL_TOKEN" \
   -d '{"chapter_index":1,"raw_text":"Once upon a time..."}'
 # → 202 {"novel_id":...,"chapter_index":1,"raw_hash":"sha256:...","status":"ingested"}
 
@@ -62,6 +66,7 @@ curl -s localhost:8080/healthz    # → {"status":"ok"} (pings pg + redis)
 # correct a glossary term a human believes is wrong (PLAN.md Phase N2). Forward-only:
 # chapters already translated with the old term are unaffected — see glossary.go.
 curl -sX PATCH localhost:8080/novels/<uuid>/glossary/<url-encoded-source-term> \
+  -H "Authorization: Bearer $INGEST_INTERNAL_TOKEN" \
   -d '{"target_term":"Corrected Term","at_chapter":42}'
 # → {"novel_id":...,"source_term":...,"target_term":"Corrected Term","version":<N>}
 ```

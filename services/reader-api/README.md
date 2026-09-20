@@ -19,7 +19,10 @@ tables, while `reader_progress_writer` can only inspect chapters and update prog
 Production login principals must be members of the corresponding role. No database
 credentials are embedded in migrations.
 
-`X-Reader-ID` is temporary development authentication. Responses are marked
+Hosted requests use invited Google sessions. The server discards browser-supplied
+`X-Reader-ID`/`X-Account-ID`, checks ownership before any proxy/cache/object read, and sets
+`app.account_id` on each pool checkout. Ownership RLS composes with the chapter gates.
+`BOOK_MODE=local` assigns the fixed local owner with no login. Responses are marked
 `Cache-Control: private, no-store` so an intermediary cannot share one reader's gated
 view with another.
 
@@ -47,33 +50,31 @@ The default address is `:8081`. Configuration:
 - `INGEST_API_URL` (defaults to `http://localhost:8080`), `INGEST_INTERNAL_TOKEN`
   (shared secret reader-api sends to ingest-api's `POST /novels` — see ingest-api's README)
 
-The compose owner can switch to both restricted roles for local development. Production
-should use two distinct login credentials with only the required role membership.
+The compose owner can switch to both restricted roles for local development. The hosted
+reader login can switch to the two data roles; its separate auth login can switch only
+to `book_auth`. See [hosted setup](../../deploy/hosted/README.md).
 
 ## API
+
+These examples use local mode. Hosted calls use the session cookie and, for mutations,
+the server's CSRF token plus the configured Origin; the web client attaches them.
 
 ```bash
 # Advance clearance. The chapter must exist and have status=done.
 curl -X PUT localhost:8081/novels/<novel-id>/progress \
-  -H 'X-Reader-ID: local-reader' \
   -d '{"chapter":5}'
 
-curl localhost:8081/novels/<novel-id>/chapter/1 \
-  -H 'X-Reader-ID: local-reader'
+curl localhost:8081/novels/<novel-id>/chapter/1
 
 # Wiki: characters the reader has met, and one character's page, from tagged facts.
-curl localhost:8081/novels/<novel-id>/wiki/pages \
-  -H 'X-Reader-ID: local-reader'
-curl localhost:8081/novels/<novel-id>/wiki/pages/<character-id> \
-  -H 'X-Reader-ID: local-reader'
+curl localhost:8081/novels/<novel-id>/wiki/pages
+curl localhost:8081/novels/<novel-id>/wiki/pages/<character-id>
 
 curl -X POST localhost:8081/novels/<novel-id>/ask \
-  -H 'X-Reader-ID: local-reader' \
   -d '{"question":"What did the protagonist learn?","at":3}'
 
-# Novel list/detail are ungated — novel metadata has no source_chapter to gate on.
-# Supplying X-Reader-ID on the list adds that reader's saved current_chapter per book.
-curl localhost:8081/novels -H 'X-Reader-ID: local-reader'
+# Novel list/detail have no chapter gate, but always enforce account ownership.
+curl localhost:8081/novels
 curl localhost:8081/novels/<novel-id>
 
 # Creation proxies to ingest-api (see ingest-api's README for the auth it requires there —
@@ -81,12 +82,9 @@ curl localhost:8081/novels/<novel-id>
 curl -X POST localhost:8081/novels -d '{"title":"Test Novel"}'
 
 # Glossary: read is gated like every other view; correction proxies to ingest-api and
-# requires X-Reader-ID (a correction is a specific reader's action, unlike novel/chapter
-# creation, which have no reader-identity concept at all).
-curl localhost:8081/novels/<novel-id>/glossary?at=3 \
-  -H 'X-Reader-ID: local-reader'
+# uses the server-resolved account for authorization and audit.
+curl localhost:8081/novels/<novel-id>/glossary?at=3
 curl -X PATCH localhost:8081/novels/<novel-id>/glossary/<url-encoded-source-term> \
-  -H 'X-Reader-ID: local-reader' \
   -d '{"target_term":"Corrected Term","at_chapter":3}'
 ```
 
@@ -104,7 +102,7 @@ FACTS writes a chapter's tagged facts in one call (see `services/pipeline/README
 
 ```bash
 # One chapter's facts status: gated like every reader view (404 past stored progress).
-curl "localhost:8081/novels/<novel-id>/chapter/3/facts/status" -H 'X-Reader-ID: local-reader'
+curl "localhost:8081/novels/<novel-id>/chapter/3/facts/status"
 ```
 
 `status.state` is `pending`, `processing` (a retry is scheduled), `failed` (retries
@@ -142,7 +140,7 @@ Without `READER_TEST_DATABASE_URL`, database-backed tests skip cleanly.
 
 The web glossary is available from the reader, chapter list, and pending view.
 It supports create (bootstrap), read, edit, and confirmed deletion. DELETE is
-proxied to ingest-api with the same `X-Reader-ID` requirement as corrections.
+proxied to ingest-api with the same trusted account context as corrections.
 Before a reader has progress, GET glossary returns only chapter-zero seed terms;
 otherwise the existing `locked_at_chapter <= min(progress, at)` gate remains.
 Deleted terms are hidden. Changes affect future translation work, not stored prose.

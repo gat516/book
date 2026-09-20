@@ -38,14 +38,20 @@ Use `rg` within the relevant paths below before searching the whole repository.
 | Translation vs AI provider selection | `services/ingest-api/provider_config.go`; pipeline worker `_provider_for_novel`; `services/askai/askai/app.py` |
 | Optional hosted embeddings | `services/ingest-api/embedding_config.go`, `packages/novel-llm/src/novel_llm/embedding_config.py` |
 | Running local services | `deploy/systemd/`, `scripts/with-env.sh`; Go units rebuild on restart |
+| Localhost login/library regression | `services/web/src/AuthGate.tsx`, `session.ts`, `vite.config.ts`; `packages/novel-platform/auth/` |
+| Private hosting / release checklist | `deploy/hosted/README.md`, `docs/HOSTED_IMPLEMENTATION.md`, spec §15 |
+| Login, invitations, account ownership | `packages/novel-platform/{auth,tenant}/`, `scripts/accounts.py`, migrations 0117–0125 |
+| Account credentials / custom endpoint safety | `packages/novel-llm/src/novel_llm/{accounts,netguard,custom}.py`, `packages/novel-platform/netguard/` |
+| Backup, restore, deletion, key rotation | `scripts/{backup_private,cleanup_accounts,snapshot_job,rotate_credentials}.py`, `tests/hosted/` |
+| Portable schema / runtime DB roles | `db/migrate.py`, `db/hosted/`, `scripts/provision_db_logins.py`, `db/test-account-isolation.sql` |
 
 For provider incidents, read **`packages/novel-llm/TROUBLESHOOTING.md`** for the diagnostic
 sequence, retry semantics, privacy boundaries, and focused checks. Diagnose the named
 chapter first; avoid broad logs, unrelated service exploration, and repeated full suites.
 
-Current additions (September 17, 2026): hosted setup without Ollama and optional semantic
-search shipped in `96cd91f` (migration 0108). Groq structured-output recovery and clearer
-reader errors use existing DB permissions; **no 0109 migration is required**. The reader
+Hosted provider setup without Ollama and optional semantic search shipped in `96cd91f`
+(migration 0108). Groq structured-output recovery itself needed no migration; later
+FACTS/account work adds migrations through 0125. The reader
 has one top feature-status/control panel. “Build reader features” resumes unfinished
 work across the book in chapter order; do not reintroduce a separate chapter build button.
 
@@ -56,6 +62,32 @@ Hovercards approve/correct it; future translations reuse earlier choices. Saved 
 approved glossary entries are preserved. See `services/pipeline/README.md`.
 
 ## Current state (update as milestones land)
+
+Private hosting (§15) now has account RLS, invited Google sessions, BYOK isolation,
+fair scheduling, durable deletion, portable recovery, and AWS/k3s deployment files.
+This is an implementation, **not an already provisioned public website**. Follow
+`docs/HOSTED_IMPLEMENTATION.md` for validation and remaining rollout inputs.
+
+**Keep localhost usable.** `BOOK_MODE=local` (default) assigns the fixed local account
+without Google login. Vite development opens the library directly; production builds
+always resolve the server session. `BOOK_MODE=hosted npm run dev` opts into hosted auth
+testing. The temporary legacy browser header exists only for compatibility with an older
+local API; never use it as hosted identity. Account ownership and chapter clearance are
+independent. Do not remove either RLS boundary to fix a local setup problem.
+
+`make start` checks migrations first. If pending, it stops application services, applies
+SQL plus the idempotent private-library data migration, then starts the updated services.
+A failed upgrade leaves a retry marker and services stopped. An ordinary start with no
+pending upgrade preserves healthy workers. Do not apply authorization migrations while
+old workers are writing. Take a backup and preserve the provider encryption key before
+an upgrade. Use disposable databases/buckets for isolation and recovery tests.
+
+Hosted app logins are never operators. `book_backup` is read-only across accounts;
+`book_maintenance` is an explicit offline data-maintenance role. Neither belongs to an
+API or worker login. New RLS tables need corresponding backup/maintenance policies and
+restore grants. Never edit an applied SQL migration or its baseline checksum.
+
+The following paragraphs describe the earlier vertical slice and feature history:
 
 The Milestone-1 vertical slice is complete end-to-end (docs/PLAN.md Phases 1–5): local infra
 (compose), migrations through 0008, the Go `ingest-api` paste path, the Python

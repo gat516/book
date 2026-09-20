@@ -63,8 +63,7 @@ func main() {
 	mux.HandleFunc("PATCH /novels/{id}/provider-config", api.putProviderConfig)
 	mux.HandleFunc("GET /novels/{id}/provider-config/ollama-models", api.listOllamaModels)
 	mux.HandleFunc("GET /novels/{id}/provider-health", api.providerHealth)
-	// Global provider credentials (migration 0035): shared by every novel, so a key is
-	// entered once rather than re-pasted per book. A novel may still override with its own.
+	// Account provider credentials (§15): shared only by this owner's books.
 	mux.Handle("GET /embedding-config", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.getEmbeddingConfig)))
 	mux.Handle("PUT /embedding-config", requireInternalToken(cfg.IngestInternalToken, http.HandlerFunc(api.putEmbeddingConfig)))
 	mux.HandleFunc("GET /provider-credentials", api.listProviderCredentials)

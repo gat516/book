@@ -1555,3 +1555,51 @@ windows are acceptable. No SQS or gateway dependency is introduced. Application
 interfaces remain portable to ordinary PostgreSQL, Redis and S3-compatible storage.
 Google identity uses issuer/subject, not email as a permanent identity. Sessions and
 invitations are revocable; deleting an account stops work and durably cleans objects.
+
+### 15.1 Identity and local operation
+
+`BOOK_MODE=local` is the developer default and assigns the explicit legacy owner without
+login. Hosted mode validates Google issuer/subject and verified email against a seven-day
+invitation; initial-library ownership is bound by an operator invitation, never by the
+first signup. Thirty-day opaque sessions use hashed tokens, Secure/HttpOnly cookies,
+PKCE/state/nonce during login, and same-origin CSRF tokens for mutations. Browser actor
+headers are discarded. Internal bearer-authenticated calls carry the resolved account.
+
+Every pool checkout resets account scope and chapter scope. Novel ownership is checked
+before proxying, reading objects or returning cached content. Restrictive ownership RLS
+composes with existing knowledge-time gates; metadata may omit a chapter gate but never
+an owner gate. Runtime logins have no superuser/BYPASSRLS privileges.
+
+### 15.2 Credentials and work
+
+Credentials are per account/provider. Versioned AES-GCM binds ciphertext to account,
+provider and endpoint; old key versions remain available for retained backups. No hosted
+provider or embedding path falls back to server keys. Custom endpoints require an operator
+allowlist, public HTTPS, and DNS/IP validation at the actual connection; redirects and
+environment proxies cannot bypass this boundary.
+
+Two pipeline replicas admit one active chapter per account. Scraping admits one job per
+account and three globally. Account queue controls cannot pause other users. Ask AI admits
+one concurrent request and ten starts per minute per account. Usage records contain only
+provider/model/token metadata; missing counts remain unknown, not a fabricated price.
+
+### 15.3 Operations and portability
+
+Migrations are forward-only and checksum-ledgered. The portable baseline is a schema-only
+snapshot with historical checksums; existing databases apply only pending migrations.
+The local upgrade stops old application processes before account/schema changes, retains
+prose and IDs, consolidates progress, and upgrades legacy encrypted keys transactionally.
+
+Deletion revokes authorization immediately and records durable cleanup intent. A sweeper
+removes every object version and repeats after one hour to catch cancelled writes. A
+separate deletion journal survives removal of the account itself and must be replayed
+before a restored system serves requests. RDS keeps seven days of automated backups;
+portable DB/object snapshots expire after thirty days. Snapshot and deletion workers
+serialize journal publication. Restores verify hashes, reapply minimal runtime grants,
+revoke sessions, and exclude objects for deleted owners.
+
+`book_backup` has explicit read-only cross-account policies. `book_maintenance` permits
+offline operator data migrations without a superuser; neither is an application role.
+Future RLS tables must include these operational policies and restore permissions.
+Test backup/restore, two-account HTTP isolation and source-chapter gates using disposable
+infrastructure. The deployment runbook is `deploy/hosted/README.md`.

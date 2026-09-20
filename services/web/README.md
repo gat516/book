@@ -16,10 +16,14 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173/?novel=<novel-id>` (or set `VITE_NOVEL_ID` in `.env.local`
-as a default — there's no novel picker in Milestone 1). There's no login: a random
-reader id is generated once and kept in `localStorage` (the accepted Phase-2 "fake
-principal" tradeoff).
+Open `http://localhost:5173/` for the library, or `?novel=<novel-id>` for a book.
+Local development opens directly without login. Vite reads `BOOK_MODE` at startup;
+restart it after changing modes. `BOOK_MODE=hosted npm run dev` enables hosted auth
+testing. Production builds always resolve `/api/auth/session` through `AuthGate`.
+
+`session.ts` attaches the server CSRF token to mutations. The legacy local reader header
+is only a compatibility bridge for an older local API; hosted identity never comes from
+localStorage or browser actor headers. See [deployment/auth setup](../../deploy/hosted/README.md).
 
 ## Contract
 
