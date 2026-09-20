@@ -43,7 +43,8 @@ as one word; never translate a personal name's meaning, even when its characters
 one. Foreign names transcribed into Chinese use the name's usual English spelling, not
 Pinyin. Don't list a title that contains a person's name; list the name on its own.
 Other names are translated by meaning, in plain everyday English words rather than
-formal or unusual ones."""
+formal or unusual ones.
+Exclude generic honorifics and forms of address, whether standalone or attached to a name; return only the bare personal name, leaving its honorific for the translator."""
 
 _CJK = re.compile(r"[㐀-鿿豈-﫿]")
 
