@@ -180,3 +180,16 @@ closes it and reports confirmation in the reader; a failed save stays open for r
 Opening a wiki page selects the correct shelf and restores the reading position on
 close. `npm run test:components` covers these flows in a DOM test environment, alongside
 the onboarding/demo tests. A real-browser visual pass remains a separate check.
+
+### Ask AI answers
+
+Responses render as Markdown with paragraphs, lists, emphasis and tables. Raw HTML
+and remote images are disabled. Source labels are matched against the server's
+retrieved sources and shown as chapter badges; unmatched labels are marked unavailable.
+Formatting does not fetch chapters or change authorization (§0.3/§8).
+
+The answer has its own keyboard-focusable scroll area and an expanded reading dialog
+with Escape/outside-click dismissal. The submitted question stays with its answer;
+submitting a new question clears the previous answer. Markdown code loads only when
+the first answer arrives. DOM tests cover formatting, citation provenance, untrusted
+content, dialog focus/dismissal, and request state; they do not exercise a paid provider.

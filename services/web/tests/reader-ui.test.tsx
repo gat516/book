@@ -16,6 +16,9 @@ const { MentionPopover } = await import('../src/components/MentionPopover');
 const { ReadingDesk, StoryCompanion } = await import('../src/components/ReadingDesk');
 const { WikiView } = await import('../src/components/WikiView');
 const { wikiPageForTerm } = await import('../src/wikiNavigation');
+const { AnswerMarkdown } = await import('../src/components/AnswerMarkdown');
+const { AskBox } = await import('../src/components/AskBox');
+const { AskAnswer } = await import('../src/components/AskAnswer');
 const originalFetch = globalThis.fetch;
 afterEach(() => { cleanup(); globalThis.fetch = originalFetch; });
 const rendering: TermRenderingView = { source_term: '梅', target_term: 'Mei', status: 'unlocked', term_role: 'chinese_person', candidates: [] };
@@ -175,4 +178,71 @@ test('companion discards a late page response when the reader moves back a chapt
   await act(async () => late(json(page(3, 'Secret lantern keeper'))));
   assert.doesNotMatch(view.container.textContent!, /Secret lantern keeper/);
   assert.deepEqual(requests, ['/api/novels/book/wiki/pages/mei-id?at=3', '/api/novels/book/wiki/pages/mei-id?at=1']);
+});
+
+test('AI answers render paragraphs, lists, emphasis, tables, and chapter citations', () => {
+  const answer = 'Here is what we know.\n\n- **Identity:** Ling Feng is his name. [chunk:2108 ch:5]\n- **Relationships:** He has a disciple. [chunk:2134 ch:4][chunk:2136 ch:4]\n\n## Details\n\n| Name | Role |\n| --- | --- |\n| Ling Feng | Teacher |';
+  const view = render(<AnswerMarkdown answer={answer} at={39} sources={[
+    { kind: 'chunk', id: 2108, chapter: 5 }, { kind: 'chunk', id: 2134, chapter: 4 }, { kind: 'chunk', id: 2136, chapter: 4 },
+  ]} />);
+  assert.equal(view.getAllByRole('listitem').length, 2);
+  assert.equal(view.container.querySelector('strong')?.textContent, 'Identity:');
+  assert.ok(view.getByRole('heading', { name: 'Details' }));
+  assert.ok(view.getByRole('table'));
+  assert.equal(view.getByTitle('Source: chapter 5').textContent, 'Ch. 5');
+  assert.equal(view.getByTitle('Source: chapter 4').textContent, 'Ch. 4');
+  assert.doesNotMatch(view.container.textContent!, /chunk:|\*\*Identity/);
+});
+
+test('answer rendering rejects HTML and remote images and does not invent source provenance', () => {
+  const answer = '<script>alert("bad")</script>\n\n<img src="https://example.test/leak" onerror="alert(1)">\n\n![tracking](https://example.test/pixel)\n\n[unsafe](javascript:alert%281%29) [external](https://example.test)\n\nKnown [chunk:1 ch:2]. Fabricated [chunk:999 ch:2]. Future [chunk:3 ch:8]. Literal `[chunk:1 ch:2]`.';
+  const view = render(<AnswerMarkdown answer={answer} at={2} sources={[
+    { kind: 'chunk', id: 1, chapter: 2 }, { kind: 'chunk', id: 3, chapter: 8 },
+  ]} />);
+  assert.equal(view.container.querySelector('script, img, iframe, a'), null);
+  assert.equal(view.getAllByText('Source unavailable').length, 2);
+  assert.equal(view.getByTitle('Source: chapter 2').textContent, 'Ch. 2');
+  assert.equal(view.container.querySelector('code')?.textContent, '[chunk:1 ch:2]');
+});
+
+test('formatted answers expand without another request and close with Escape or outside click', async () => {
+  const view = render(<AskAnswer question="Who is Ling Feng?" response={{ at: 5, answer: '**Ling Feng** is a teacher.',
+    retrieved_sources: [{ kind: 'chunk', id: 1, chapter: 4 }, { kind: 'chunk', id: 2, chapter: 4 }, { kind: 'chunk', id: 3, chapter: 5 }], served_by: null }} />);
+  assert.equal(view.getByRole('region', { name: 'AI answer' }).tabIndex, 0);
+  assert.ok(view.getByText('Sources: chapters 4, 5'));
+  const expand = view.getByRole('button', { name: 'Expand answer' });
+  fireEvent.click(expand);
+  const dialog = await view.findByRole('dialog', { name: 'Ask the story' });
+  assert.equal(dialog.querySelector('strong')?.textContent, 'Ling Feng');
+  assert.match(dialog.textContent!, /Who is Ling Feng/);
+  fireEvent.keyDown(view.getByRole('button', { name: 'Close expanded answer' }), { key: 'Escape' });
+  await waitFor(() => assert.equal(view.queryByRole('dialog'), null));
+  await waitFor(() => assert.equal(document.activeElement, expand));
+  fireEvent.click(expand);
+  assert.ok(await view.findByRole('dialog'));
+  fireEvent.pointerDown(document.querySelector('.ask-answer-overlay')!);
+  await waitFor(() => assert.equal(view.queryByRole('dialog'), null));
+});
+
+test('Ask AI keeps the submitted question with its answer and clears it for a new request', async () => {
+  const requests: any[] = [];
+  let finish!: (response: Response) => void;
+  globalThis.fetch = async (_url, init) => { requests.push(JSON.parse(init!.body as string)); return new Promise(resolve => { finish = resolve; }); };
+  const view = render(<AskBox novelId="book" at={5} />);
+  const input = view.getByRole('textbox', { name: 'Ask about the story' });
+  assert.equal(view.getByRole('button', { name: 'Ask' }).hasAttribute('disabled'), true);
+  fireEvent.change(input, { target: { value: 'Who is Ling Feng?' } });
+  fireEvent.submit(input.closest('form')!);
+  assert.ok(view.getByRole('status'));
+  fireEvent.submit(input.closest('form')!);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].at, 5);
+  fireEvent.change(input, { target: { value: 'What does he own?' } });
+  await act(async () => finish(json({ at: 5, answer: '**Ling Feng** is a teacher.', retrieved_sources: [], served_by: null })));
+  assert.match(view.getByRole('region', { name: 'AI answer' }).textContent!, /Who is Ling Feng/);
+  assert.doesNotMatch(view.getByRole('region', { name: 'AI answer' }).textContent!, /What does he own/);
+  fireEvent.submit(input.closest('form')!);
+  assert.equal(view.queryByRole('region', { name: 'AI answer' }), null);
+  await act(async () => finish(json({ error: 'Try again shortly' }, 503)));
+  assert.match(view.getByRole('alert').textContent!, /Try again shortly/);
 });

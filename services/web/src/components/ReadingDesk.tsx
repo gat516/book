@@ -88,7 +88,7 @@ export function StoryCompanion({ novelId, at, pages, loading, error, revision, o
       <button type="button" aria-pressed={tab === "ask"} onClick={() => setTab("ask")}><MessageCircle size={15} />Ask AI</button>
     </div>
     <p className="companion-boundary"><ShieldCheck size={13} />Knowledge through chapter {at}</p>
-    {tab === "ask" ? <div className="companion-content"><p className="eyebrow">A LITTLE CONTEXT</p><h2>Ask the story.</h2><p className="companion-note">People, places, and the details you want to remember.</p><AskBox key={`${novelId}:${at}`} novelId={novelId} at={at} /></div>
+    {tab === "ask" ? <div className="companion-content companion-content-ask"><h2>Ask the story.</h2><p className="companion-note">A little context for what you’re reading.</p><AskBox key={`${novelId}:${at}`} novelId={novelId} at={at} /></div>
       : <div className="companion-content">
         {loading ? <p className="companion-note" role="status">Opening your story wiki…</p>
           : error ? <p className="companion-note" role="alert">Could not load the wiki. <button className="text-button" onClick={onRetry}>Retry</button></p>
