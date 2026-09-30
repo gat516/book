@@ -1,0 +1,11 @@
+{
+  "account": "964862484671",
+  "region": "us-east-1",
+  "instance": "i-0d907def09bd3092f",
+  "repository": "gat516/book",
+  "registry": "964862484671.dkr.ecr.us-east-1.amazonaws.com/private-books",
+  "document": "qireadr-release",
+  "role": "qireadr-github-release",
+  "approved_db_tree": "ea0cecafe8477346e1b13e1ac50ef89b6f19b8ae",
+  "health_url": "https://qireadr.com/api/healthz"
+}

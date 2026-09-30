@@ -36,6 +36,7 @@ jobs:
       - run: pytest -q -m 'not db' tests/test_worker.py tests/test_batch.py tests/test_provider_from_env.py tests/test_job_scope.py tests/test_inference_runtime.py
         working-directory: services/pipeline
       - run: pytest -q deploy/hosted/test_gateway_trial.py eval/inference-contention/test_*.py
+      - run: python -m unittest discover -s deploy/hosted/cd -p 'test_*.py'
   web:
     runs-on: ubuntu-latest
     steps:

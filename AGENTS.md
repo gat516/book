@@ -82,6 +82,14 @@ testing. The temporary legacy browser header exists only for compatibility with 
 local API; never use it as hosted identity. Account ownership and chapter clearance are
 independent. Do not remove either RLS boundary to fix a local setup problem.
 
+Whole-app CD lives in `.github/workflows/release.yml` and `deploy/hosted/cd/`.
+Successful push checks on `main` trigger serialized AWS/Cloudflare releases;
+database-file changes require a manual migration release. The AWS role trusts only
+`gat516/book:main` and can invoke only the fixed SSM document. After editing
+`cd/node.py` or `cd/config.json`, update that document with `configure.py --apply`.
+See `cd/README.md` for credential setup and recovery; do not claim live deployment
+or recovery until the corresponding workflow has actually passed.
+
 `make start` checks migrations first. If pending, it stops application services, applies
 SQL plus the idempotent private-library data migration, then starts the updated services.
 A failed upgrade leaves a retry marker and services stopped. An ordinary start with no

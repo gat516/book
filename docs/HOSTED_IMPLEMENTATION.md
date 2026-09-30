@@ -87,6 +87,19 @@ Committed release (September 29, 2026):
   `40b257c7-f805-4b35-a387-e6d2fc0d7813`. No browser is connected, so a complete real
   Google login and visual-browser review remain unverified.
 
+Automatic release setup (September 30, 2026):
+
+- `.github/workflows/release.yml` follows successful `checks` push runs on `main`.
+  It publishes six immutable images, updates all seven AWS application deployments
+  and both maintenance images, publishes Cloudflare, and verifies the public release.
+- GitHub OIDC role `qireadr-github-release` and SSM document `qireadr-release` are
+  installed. AWS role and Cloudflare account variables are configured in GitHub.
+  `CLOUDFLARE_API_TOKEN` is required before the first automatic release can run.
+- Rollback restores recorded AWS images and the previous Cloudflare version.
+  Database changes fail before deployment and require a manual migration release.
+  Local tests simulate recovery; no live failed-release drill is claimed.
+- Operations: [automatic releases](../deploy/hosted/cd/README.md).
+
 Latest frontend release (September 29, 2026):
 
 - Published the current `services/web` build to the existing `qireadr-web` route at

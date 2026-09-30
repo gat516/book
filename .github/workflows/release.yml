@@ -1,0 +1,149 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: [checks]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  contents: read
+
+# Never cancel a deployment or its recovery when another commit arrives.
+concurrency:
+  group: qireadr-production
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      current: ${{ steps.main.outputs.current }}
+      sha: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Check main is still at this commit
+        id: main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          head=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [ "$head" = "$RELEASE_SHA" ]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'current=false' >> "$GITHUB_OUTPUT"
+            echo 'A newer commit is on main; this release is skipped.'
+          fi
+
+  build:
+    needs: checks
+    if: needs.checks.outputs.current == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_SHA: ${{ needs.checks.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.checks.outputs.sha }}
+          persist-credentials: false
+      - name: Check deployment configuration
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          test -n "$AWS_DEPLOY_ROLE_ARN" || { echo 'Missing AWS_DEPLOY_ROLE_ARN variable'; exit 1; }
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo 'Missing CLOUDFLARE_API_TOKEN secret'; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo 'Missing CLOUDFLARE_ACCOUNT_ID variable'; exit 1; }
+          python3 - <<'PY'
+          import json, subprocess
+          from pathlib import Path
+          config = json.loads(Path('deploy/hosted/cd/config.json').read_text())
+          actual = subprocess.check_output(['git', 'rev-parse', 'HEAD:db'], text=True).strip()
+          if actual != config['approved_db_tree']:
+              raise SystemExit('Database files changed; a manual migration release is required.')
+          PY
+      - uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c # v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: book-build-${{ github.run_id }}
+      - name: Build and publish application images
+        run: python3 deploy/hosted/cd/publish.py
+
+  deploy:
+    needs: [checks, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_SHA: ${{ needs.checks.outputs.sha }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.checks.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            services/web/package-lock.json
+            deploy/cloudflare/package-lock.json
+      - name: Prepare frontend
+        run: |
+          npm --prefix services/web ci
+          npm --prefix deploy/cloudflare ci
+          npm --prefix deploy/cloudflare run check
+      - uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c # v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: book-deploy-${{ github.run_id }}
+      - name: Capture previous release
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$RELEASE_SHA" || { echo 'A newer commit is on main; refusing stale deployment.'; exit 1; }
+          echo "BOOK_DB_TREE=$(git rev-parse HEAD:db)" >> "$GITHUB_ENV"
+          python3 deploy/hosted/cd/frontend.py capture
+      - name: Deploy to cluster
+        id: backend
+        run: python3 deploy/hosted/cd/ssm.py deploy --commit "$RELEASE_SHA" --db-tree "$BOOK_DB_TREE"
+      - name: Deploy frontend
+        id: frontend
+        working-directory: deploy/cloudflare
+        run: npx wrangler deploy --tag "$RELEASE_SHA"
+      - name: Verify release
+        id: verify
+        run: |
+          python3 deploy/hosted/cd/ssm.py verify --commit "$RELEASE_SHA" --db-tree "$BOOK_DB_TREE"
+          python3 deploy/hosted/cd/frontend.py verify
+      - name: Restore previous frontend
+        if: ${{ failure() && steps.frontend.outcome != 'skipped' && steps.previous.outcome == 'success' }}
+        run: python3 deploy/hosted/cd/frontend.py rollback
+      - name: Restore and verify previous release
+        if: ${{ failure() && steps.backend.outcome != 'skipped' && steps.previous.outcome == 'success' }}
+        run: python3 deploy/hosted/cd/ssm.py rollback --commit "$RELEASE_SHA" --db-tree "$BOOK_DB_TREE"
+      - name: Save release record
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ needs.checks.outputs.sha }}
+          path: /tmp/qireadr-frontend-release.json
+          if-no-files-found: ignore
+          retention-days: 30
