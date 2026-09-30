@@ -1077,7 +1077,7 @@ func (a *API) healthz(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version})
 }
 
 func (a *API) embeddingConfig(w http.ResponseWriter, r *http.Request) {

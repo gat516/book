@@ -138,3 +138,164 @@ class Gateway:
             timeout,
             metadata,
             _registered_method=True)
+
+
+class AdmissionStub:
+    """Admission contract pinned to sibling revision 4ee2d0a; metadata only.
+    """
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.Reserve = channel.unary_unary(
+                '/llmgw.v1.Admission/Reserve',
+                request_serializer=gateway__pb2.ReserveRequest.SerializeToString,
+                response_deserializer=gateway__pb2.ReserveReply.FromString,
+                _registered_method=True)
+        self.Settle = channel.unary_unary(
+                '/llmgw.v1.Admission/Settle',
+                request_serializer=gateway__pb2.SettleRequest.SerializeToString,
+                response_deserializer=gateway__pb2.SettleReply.FromString,
+                _registered_method=True)
+        self.GetStatus = channel.unary_unary(
+                '/llmgw.v1.Admission/GetStatus',
+                request_serializer=gateway__pb2.StatusRequest.SerializeToString,
+                response_deserializer=gateway__pb2.StatusReply.FromString,
+                _registered_method=True)
+
+
+class AdmissionServicer:
+    """Admission contract pinned to sibling revision 4ee2d0a; metadata only.
+    """
+
+    def Reserve(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def Settle(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetStatus(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_AdmissionServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'Reserve': grpc.unary_unary_rpc_method_handler(
+                    servicer.Reserve,
+                    request_deserializer=gateway__pb2.ReserveRequest.FromString,
+                    response_serializer=gateway__pb2.ReserveReply.SerializeToString,
+            ),
+            'Settle': grpc.unary_unary_rpc_method_handler(
+                    servicer.Settle,
+                    request_deserializer=gateway__pb2.SettleRequest.FromString,
+                    response_serializer=gateway__pb2.SettleReply.SerializeToString,
+            ),
+            'GetStatus': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetStatus,
+                    request_deserializer=gateway__pb2.StatusRequest.FromString,
+                    response_serializer=gateway__pb2.StatusReply.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'llmgw.v1.Admission', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('llmgw.v1.Admission', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class Admission:
+    """Admission contract pinned to sibling revision 4ee2d0a; metadata only.
+    """
+
+    @staticmethod
+    def Reserve(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/llmgw.v1.Admission/Reserve',
+            gateway__pb2.ReserveRequest.SerializeToString,
+            gateway__pb2.ReserveReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Settle(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/llmgw.v1.Admission/Settle',
+            gateway__pb2.SettleRequest.SerializeToString,
+            gateway__pb2.SettleReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetStatus(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/llmgw.v1.Admission/GetStatus',
+            gateway__pb2.StatusRequest.SerializeToString,
+            gateway__pb2.StatusReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)

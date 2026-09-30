@@ -1,5 +1,6 @@
+import { ExternalLink, Users } from "lucide-react";
 import { useKnowledgeRevision } from "../knowledgeUpdates";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ApiError, getChapter, getChapterFactsStatus, putProgress } from "../api";
 import type { ChapterResponse, FactsStatus, TermRenderingView, WikiPageSummary } from "../types";
 import { MentionPopover } from "./MentionPopover";
@@ -35,6 +36,16 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
   const [factsError, setFactsError] = useState<string | null>(null);
   const [showNames, setShowNames] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const loadedChapterIndex = chapter?.chapter_index;
+
+  useLayoutEffect(() => {
+    // Match the mobile reader layout. Reset after the new prose is in the DOM;
+    // scrolling only in the navigation handler can be undone during loading.
+    // Key on the chapter so facts/name refreshes preserve the reading position.
+    if (loadedChapterIndex === undefined || window.innerWidth > 760) return;
+    const frame = requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "instant" }));
+    return () => cancelAnimationFrame(frame);
+  }, [novelId, loadedChapterIndex]);
 
   useEffect(() => {
     setHovered(null);
@@ -175,18 +186,18 @@ export function ReaderPane({ novelId, chapterIndex, clickableEntities, onChapter
           )}
           {chapter.source_url && (
             <>
-              {" "}— <a href={chapter.source_url} target="_blank" rel="noreferrer">Open source chapter ↗</a>
+              {" "}— <a href={chapter.source_url} target="_blank" rel="noreferrer" className="reader-source-link">Source<ExternalLink size={12} /></a>
             </>
           )}
         </p>
         <div className="chapter-head-tools">
           <ChapterStatus novelId={novelId} chapter={chapterIndex} status={facts} />
           <button type="button" className="chapter-names-toggle" aria-expanded={showNames} onClick={() => setShowNames((open) => !open)}>
-            Names{toReview > 0 ? <span className="chapter-names-count">{toReview} to review</span> : null}
+            <Users size={14} />Names{toReview > 0 ? <span className="chapter-names-count">{toReview} to review</span> : null}
           </button>
         </div>
       </header>
-      <div className="chapter-reading-title"><p className="eyebrow">ONE CHAPTER AT A TIME</p><h2>Chapter {chapterIndex}{chapter.part > 1 ? ` · Part ${chapter.part}` : ""}</h2><span className="reading-title-rule" /></div>
+      <div className="chapter-reading-title"><h2>Chapter {chapterIndex}{chapter.part > 1 ? ` · Part ${chapter.part}` : ""}</h2><span className="reading-title-rule" /></div>
       {notice && <p className="reader-spelling-notice" role="status">{notice}<button type="button" className="text-button" onClick={() => setNotice(null)}>Dismiss</button></p>}
       {factsError && <p role="alert" className="reader-records-error">
         Could not load this chapter’s status: {factsError} <button type="button" onClick={() => {

@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import React from 'react';
+import { JSDOM } from 'jsdom';
 import TestRenderer, { act } from 'react-test-renderer';
 import { FirstBookGuide } from '../src/components/FirstBookGuide';
 import { SampleReader } from '../src/components/SampleReader';
 import { LandingPage } from '../src/components/LandingPage';
 import { setSession } from '../src/session';
 
+// Shared-layout motion measures the document even with test-renderer refs.
+const dom = new JSDOM('<!doctype html><html><body></body></html>');
+(globalThis as any).document = dom.window.document;
 const store = new Map<string,string>();
 (globalThis as any).localStorage = { getItem: (k:string) => store.get(k) ?? null, setItem: (k:string,v:string) => store.set(k,v) };
 (globalThis as any).window = { location: { search: '' }, addEventListener() {}, removeEventListener() {} };
@@ -21,15 +25,15 @@ test('setup uses saved account state and routes each action', () => {
   let settings = 0, created = 0, opened = 0;
   let view!: TestRenderer.ReactTestRenderer;
   act(() => { view = TestRenderer.create(<FirstBookGuide onCreate={() => created++} onSettings={() => settings++} />); });
-  assert.match(text(view), /Bring the AI/);
+  assert.match(text(view), /Connect a provider/);
   act(() => button(view,'Connect your provider').props.onClick());
   assert.equal(settings,1);
   act(() => view.update(<FirstBookGuide hasKey onCreate={() => created++} onSettings={() => settings++} />));
-  assert.match(text(view), /Give your next story a home/);
+  assert.match(text(view), /Add a book/);
   act(() => button(view,'Create your first book').props.onClick());
   assert.equal(created,1);
   act(() => view.update(<FirstBookGuide hasKey hasBook onCreate={() => created++} onOpen={() => opened++} />));
-  assert.match(text(view), /One chapter opens a whole world/);
+  assert.match(text(view), /Add a chapter/);
   act(() => button(view,'Open your book').props.onClick());
   assert.equal(opened,1);
   act(() => view.unmount());
@@ -51,14 +55,14 @@ test('sample knowledge and answers follow the selected chapter in both direction
   act(() => view.unmount());
 });
 
-test('invitation is retained on Google login links and private beta is explained', () => {
+test('invitation is retained on Google login links and the signup limit is shown', () => {
   (globalThis as any).window.location.search = '?invite=sample%2Btoken';
   let view!: TestRenderer.ReactTestRenderer;
   act(() => { view = TestRenderer.create(<LandingPage />); });
   const links = view.root.findAllByType('a').filter(a => a.props.href.startsWith('/api/auth/login'));
   assert.ok(links.length > 0);
   assert.ok(links.every(a => a.props.href === '/api/auth/login?invite=sample%2Btoken'));
-  assert.match(text(view), /New accounts need an invitation/);
+  assert.match(text(view), /Open to the first 100 users/);
   act(() => view.unmount());
   (globalThis as any).window.location.search = '';
 });

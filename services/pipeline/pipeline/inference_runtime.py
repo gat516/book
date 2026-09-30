@@ -233,7 +233,7 @@ class CooldownProvider:
             return await self._provider.complete(*args, **kwargs)
         except Exception as exc:
             from pipeline.llm.provider import AdmissionRejected
-            if isinstance(exc, AdmissionRejected):
+            if isinstance(exc, AdmissionRejected) and not getattr(exc, "admission_wait", False):
                 await self._cooldown.note(exc.retry_after_s, getattr(exc, "category", None))
             raise
 
@@ -243,7 +243,7 @@ class CooldownProvider:
             return await self._provider.batch_submit(requests)
         except Exception as exc:
             from pipeline.llm.provider import AdmissionRejected
-            if isinstance(exc, AdmissionRejected):
+            if isinstance(exc, AdmissionRejected) and not getattr(exc, "admission_wait", False):
                 await self._cooldown.note(exc.retry_after_s, getattr(exc, "category", None))
             raise
 

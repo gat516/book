@@ -21,6 +21,7 @@ from novel_llm import AdmissionRejected, Class, GatewayProvider, LLMProvider
 from askai.config import Config, load_config
 from askai.provider_config import build_provider, resolve_provider_config, load_provider_credential
 from novel_llm.embedding_config import EmbeddingResolver
+from novel_llm.gateway_admission import admission_settings, configure_admission_logging, with_gateway_admission
 from askai.retrieval import build_context, retrieve
 
 log = logging.getLogger(__name__)
@@ -199,6 +200,8 @@ class Service:
         await conn.commit()
 
     async def start(self) -> None:
+        if admission_settings()[0]:
+            configure_admission_logging()
         if not self.config.internal_token or not self.config.model:
             raise RuntimeError("ASKAI_INTERNAL_TOKEN and LLM_MODEL_ASK (or LLM_MODEL_EXTRACT) are required")
         # Resolve optional embeddings per request, after the database is available.
@@ -233,6 +236,7 @@ class Service:
                     default_model=self.config.model,
                     ollama_host=self.config.ollama_host,
                 )
+                provider = await with_gateway_admission(provider, conn, provider_id=row.provider)
             except Exception as exc:  # provider SDKs use several exception classes here
                 category = _provider_failure_category(exc)
                 if category == "credential_missing":

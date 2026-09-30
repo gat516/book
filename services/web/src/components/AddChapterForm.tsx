@@ -1,3 +1,4 @@
+import { ClipboardPaste, FileCheck, Globe, Plus } from "lucide-react";
 import { useState } from "react";
 import { pasteChapter } from "../api";
 import { BootstrapChapterForm } from "./BootstrapChapterForm";
@@ -47,7 +48,7 @@ export function AddChapterForm({ novelId, nextChapterIndex, onAdded, onCancel }:
     <div className="add-chapter-form">
       <h2>Add a chapter</h2>
       <fieldset className="add-chapter-method-selector">
-        <legend>How would you like to add this chapter?</legend>
+        <legend>Source</legend>
         <label className="add-chapter-method-option" htmlFor="add-chapter-method-paste">
           <input
             id="add-chapter-method-paste"
@@ -57,8 +58,7 @@ export function AddChapterForm({ novelId, nextChapterIndex, onAdded, onCancel }:
             onChange={() => setMethod("paste")}
           />
           <span>
-            <strong>Paste original text</strong>
-            <span className="add-chapter-method-description">Add the chapter text yourself for machine translation.</span>
+            <strong><ClipboardPaste size={17} />Paste original text</strong>
           </span>
         </label>
         <label className="add-chapter-method-option" htmlFor="add-chapter-method-scrape">
@@ -70,8 +70,7 @@ export function AddChapterForm({ novelId, nextChapterIndex, onAdded, onCancel }:
             onChange={() => setMethod("scrape")}
           />
           <span>
-            <strong>Import from webpage</strong>
-            <span className="add-chapter-method-description">Fetch chapters from a supported novel site.</span>
+            <strong><Globe size={17} />Import from webpage</strong>
           </span>
         </label>
         <label className="add-chapter-method-option" htmlFor="add-chapter-method-bootstrap">
@@ -83,8 +82,7 @@ export function AddChapterForm({ novelId, nextChapterIndex, onAdded, onCancel }:
             onChange={() => setMethod("bootstrap")}
           />
           <span>
-            <strong>Paste original + existing translation</strong>
-            <span className="add-chapter-method-description">Use a translation you already have and optionally lock its terms.</span>
+            <strong><FileCheck size={17} />Paste original + existing translation</strong>
           </span>
         </label>
       </fieldset>
@@ -128,7 +126,7 @@ export function AddChapterForm({ novelId, nextChapterIndex, onAdded, onCancel }:
               Cancel
             </button>
             <button type="submit" className="btn-primary" disabled={pending || !rawText.trim()}>
-              {pending ? "Adding…" : "Add chapter"}
+              <Plus size={16} />{pending ? "Adding…" : "Add chapter"}
             </button>
           </div>
           {error && <p className="add-chapter-form-error">{error}</p>}

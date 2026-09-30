@@ -1,4 +1,5 @@
 import { hostedSession } from "../session";
+import { ArrowLeft, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createNovel, listProviderCredentials } from "../api";
 import type { ProviderName } from "../types";
@@ -84,7 +85,7 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
 
   return (
     <form className="novel-create-form" onSubmit={submit}>
-      <header className="create-book-heading"><button type="button" className="text-button" onClick={onCancel} disabled={pending}>← Library</button><p className="eyebrow">Build your bookshelf</p><h1>A new story starts here.</h1><p>Create your book now. Add your provider key and first chapter next.</p></header>
+      <header className="create-book-heading"><button type="button" className="text-button" onClick={onCancel} disabled={pending}><ArrowLeft size={16} />Library</button><h1>Add book</h1></header>
       <label>
         Book title
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What are you reading?" required />
@@ -102,10 +103,9 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
 
       <fieldset>
         <legend>Translation and AI features</legend>
-        <p className="novel-create-form-hint">Choose the AI provider for translation and story knowledge. You’ll use your own API key; usage is billed by that provider. You can adjust models in Book settings later.</p>
+        <p className="novel-create-form-hint">Uses your API key. Usage is billed by your provider.</p>
         <label>
           Provider for this book{" "}
-          {!hostedSession() && <span className="novel-create-form-hint">(leave as default to use the server's)</span>}
           <select value={provider} required={hostedSession()} onChange={(e) => chooseProvider(e.target.value as ProviderName | "")}>
             <option value="" disabled={hostedSession()}>{hostedSession() ? "Choose a provider" : "Server default"}</option>
             <option value="deepseek">DeepSeek</option>
@@ -180,7 +180,7 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
         <summary>Advanced settings</summary>
         <div className="novel-create-form-advanced-content">
           <label>
-            Genre <span className="novel-create-form-hint">(optional — selects a preset ontology)</span>
+            Genre <span className="novel-create-form-hint">(optional)</span>
             <input value={genre} onChange={(e) => setGenre(e.target.value)} placeholder="xianxia" />
           </label>
 
@@ -222,7 +222,7 @@ export function NovelCreateForm({ onCreated, onCancel }: Props) {
           className="btn-primary"
           disabled={pending || !title.trim() || (hostedSession() && !provider) || (provider === "custom" && (!model.trim() || !baseURL.trim()))}
         >
-          {pending ? "Creating…" : "Create book"}
+          <Plus size={16} />{pending ? "Creating…" : "Create book"}
         </button>
       </div>
       {error && <p className="novel-create-form-error">{error}</p>}

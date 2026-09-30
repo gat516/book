@@ -1,0 +1,81 @@
+{
+  "date": "2026-09-22",
+  "ssm_command_id": "a7a9c583-e204-44ba-bcb3-88c581ba1b26",
+  "verification_command_id": "ca2bf02c-2a83-44fe-aa62-9725bdd90c88",
+  "app_python_image_tag": "ebd1d43",
+  "reader_api_image_tag": "d9f74ce",
+  "provider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "worker_replicas": 2,
+  "per_account_active_chapters": 1,
+  "resource_snapshots": {
+    "before": {
+      "node_cpu_percent": 2,
+      "node_memory_percent": 32
+    },
+    "during": {
+      "node_cpu_percent": 6,
+      "node_memory_percent": 34
+    },
+    "after": {
+      "node_cpu_percent": 4,
+      "node_memory_percent": 34
+    }
+  },
+  "verification": [
+    {
+      "app": "askai",
+      "since": "2026-09-22T22:26:29Z",
+      "ask_http_statuses": {
+        "200": 17
+      },
+      "provider_deferrals": 0,
+      "provider_limit_deferrals": 0,
+      "semantic_retrieval_failures": 0
+    },
+    {
+      "app": "pipeline",
+      "since": "2026-09-22T22:26:29Z",
+      "ask_http_statuses": {},
+      "provider_deferrals": 0,
+      "provider_limit_deferrals": 0,
+      "semantic_retrieval_failures": 0
+    },
+    {
+      "chapters": [
+        [
+          176,
+          "done",
+          true
+        ],
+        [
+          177,
+          "ingested",
+          false
+        ],
+        [
+          178,
+          "ingested",
+          false
+        ],
+        [
+          179,
+          "ingested",
+          false
+        ],
+        [
+          180,
+          "ingested",
+          false
+        ]
+      ],
+      "progress": 170
+    },
+    {
+      "queue_pending": 0,
+      "queue_processing": 0
+    }
+  ],
+  "public_api_health": "ok",
+  "privacy": "No prompts, model responses, keys, or chapter bodies. Catalog focus ID pseudonymized in JSONL."
+}

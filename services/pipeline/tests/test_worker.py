@@ -28,6 +28,7 @@ from pipeline.worker import (
 def worker_stub():
     """A worker without external clients; individual tests supply the paths they use."""
     worker = Worker.__new__(Worker)
+    worker._provider_cache = {}
     worker.embedding_resolver = SimpleNamespace(
         aclose=AsyncMock(),
         resolve=AsyncMock(return_value=SimpleNamespace(provider=None, space=None)),
@@ -370,7 +371,7 @@ async def test_worker_start_does_not_require_embeddings(monkeypatch):
     import pipeline.worker as module
 
     worker = worker_stub()
-    worker.cfg = SimpleNamespace(database_url="postgres://test")
+    worker.cfg = SimpleNamespace(database_url="postgres://test", visibility_timeout=300)
     worker.stopping = asyncio.Event()
     worker.textproc = SimpleNamespace(aclose=AsyncMock())
     connection = SimpleNamespace(close=AsyncMock(), execute=AsyncMock())
@@ -569,13 +570,14 @@ async def test_completed_pointer_does_not_repeat_any_model_work():
     worker._fetch_one.assert_awaited_once()
 
 
-async def test_runtime_reservation_requeues_without_losing_chapter(scheduled):
+@pytest.mark.parametrize("gateway_wait", [False, True])
+async def test_runtime_reservation_requeues_without_losing_chapter(scheduled, gateway_wait):
     from novel_llm import AdmissionRejected
     client,keys=scheduled
 
     class Cursor:
         async def fetchone(self):
-            return (0, False)
+            return (0, False, False)
 
     class DB:
         def __init__(self):
@@ -599,6 +601,9 @@ async def test_runtime_reservation_requeues_without_losing_chapter(scheduled):
     worker._deferrals=0
     async def handle(raw):
         worker.request_stop()
+        if gateway_wait:
+            from novel_llm.gateway_admission import _deferred
+            raise _deferred(retry_after_s=5)
         raise AdmissionRejected(retry_after_s=0)
     worker._handle=handle
     await client.lpush(keys[0],message(2),message(3))
@@ -609,7 +614,8 @@ async def test_runtime_reservation_requeues_without_losing_chapter(scheduled):
     assert await client.llen(keys[1])==0
     assert await client.hlen(keys[4])==0
     update = next(params for sql, params in worker.db.calls if "provider_retry_at=now()" in sql)
-    assert update[1] == 60.0
+    assert update[0] == (0 if gateway_wait else 1)
+    assert update[1] == (5 if gateway_wait else 60.0)
 
 
 async def test_embed_unavailable_does_not_block_chapter_claim(scheduled, monkeypatch):
@@ -962,7 +968,8 @@ async def test_enrichment_retries_are_deduplicated_and_yield_to_reading(schedule
 
 
 @pytest.mark.asyncio
-async def test_shared_cooldown_deferral_does_not_spend_a_provider_attempt():
+@pytest.mark.parametrize("flag", ["shared_cooldown", "admission_wait"])
+async def test_shared_cooldown_deferral_does_not_spend_a_provider_attempt(flag):
     from novel_llm import AdmissionRejected
 
     class Cursor:
@@ -983,7 +990,7 @@ async def test_shared_cooldown_deferral_does_not_spend_a_provider_attempt():
     worker.db = DB()
     msg = type("Message", (), {"novel_id": "novel", "chapter_index": 1})()
     exc = AdmissionRejected(retry_after_s=1092, category="quota_exhausted")
-    exc.shared_cooldown = True
+    setattr(exc, flag, True)
     await worker._record_provider_rejection(msg, exc)
     update = next(params for sql, params in worker.db.calls if "provider_retry_at=now()" in sql)
     assert update[0] == 2  # unchanged streak

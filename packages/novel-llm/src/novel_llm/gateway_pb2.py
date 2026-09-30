@@ -24,33 +24,47 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rgateway.proto\x12\x08llmgw.v1\"\xb7\x01\n\x0c\x45mbedRequest\x12\x0e\n\x06tenant\x18\x01 \x01(\t\x12\x10\n\x08provider\x18\x02 \x01(\t\x12\r\n\x05model\x18\x03 \x01(\t\x12&\n\x07\x62\x61\x63kend\x18\x04 \x01(\x0e\x32\x15.llmgw.v1.BackendType\x12)\n\x08priority\x18\x05 \x01(\x0e\x32\x17.llmgw.v1.PriorityClass\x12\x0e\n\x06inputs\x18\x06 \x03(\t\x12\x13\n\x0bno_fallback\x18\x07 \x01(\x08\"\xa2\x01\n\nEmbedReply\x12/\n\nembeddings\x18\x01 \x03(\x0b\x32\x1b.llmgw.v1.EmbedReply.Vector\x12\x17\n\x0fserved_provider\x18\x02 \x01(\t\x12\x14\n\x0cserved_model\x18\x03 \x01(\t\x12\x1a\n\x12total_input_tokens\x18\x04 \x01(\r\x1a\x18\n\x06Vector\x12\x0e\n\x06values\x18\x01 \x03(\x02\"I\n\x11\x43ompletionMessage\x12#\n\x04role\x18\x01 \x01(\x0e\x32\x15.llmgw.v1.MessageRole\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\"\x99\x02\n\x11\x43ompletionRequest\x12\x0e\n\x06tenant\x18\x01 \x01(\t\x12\x10\n\x08provider\x18\x02 \x01(\t\x12\r\n\x05model\x18\x03 \x01(\t\x12&\n\x07\x62\x61\x63kend\x18\x04 \x01(\x0e\x32\x15.llmgw.v1.BackendType\x12)\n\x08priority\x18\x05 \x01(\x0e\x32\x17.llmgw.v1.PriorityClass\x12\x0e\n\x06system\x18\x06 \x01(\t\x12-\n\x08messages\x18\x07 \x03(\x0b\x32\x1b.llmgw.v1.CompletionMessage\x12\x19\n\x11max_output_tokens\x18\x08 \x01(\r\x12\x13\n\x0bno_fallback\x18\t \x01(\x08\x12\x11\n\tjson_mode\x18\n \x01(\x08\"\xb1\x02\n\x0f\x43ompletionChunk\x12+\n\x04kind\x18\x01 \x01(\x0e\x32\x1d.llmgw.v1.CompletionChunkKind\x12\n\n\x02id\x18\x02 \x01(\t\x12\x12\n\nrequest_id\x18\x03 \x01(\t\x12\x17\n\x0fserved_provider\x18\x04 \x01(\t\x12\x14\n\x0cserved_model\x18\x05 \x01(\t\x12\x0c\n\x04text\x18\x06 \x01(\t\x12\x15\n\rfinish_reason\x18\x07 \x01(\t\x12\x19\n\x11raw_finish_reason\x18\x08 \x01(\t\x12\x14\n\x0cinput_tokens\x18\t \x01(\r\x12\x1a\n\x12\x63\x61\x63he_write_tokens\x18\n \x01(\r\x12\x19\n\x11\x63\x61\x63he_read_tokens\x18\x0b \x01(\r\x12\x15\n\routput_tokens\x18\x0c \x01(\r*+\n\rPriorityClass\x12\x0f\n\x0bINTERACTIVE\x10\x00\x12\t\n\x05\x42\x41TCH\x10\x01*:\n\x0b\x42\x61\x63kendType\x12\n\n\x06HOSTED\x10\x00\x12\x10\n\x0cHOSTED_BATCH\x10\x01\x12\r\n\tLOCAL_GPU\x10\x02*&\n\x0bMessageRole\x12\x08\n\x04USER\x10\x00\x12\r\n\tASSISTANT\x10\x01*C\n\x13\x43ompletionChunkKind\x12\x08\n\x04TEXT\x10\x00\x12\x0b\n\x07REFUSAL\x10\x01\x12\n\n\x06\x46INISH\x10\x02\x12\t\n\x05USAGE\x10\x03\x32\x86\x01\n\x07Gateway\x12\x44\n\x08\x43omplete\x12\x1b.llmgw.v1.CompletionRequest\x1a\x19.llmgw.v1.CompletionChunk0\x01\x12\x35\n\x05\x45mbed\x12\x16.llmgw.v1.EmbedRequest\x1a\x14.llmgw.v1.EmbedReplyb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rgateway.proto\x12\x08llmgw.v1\"\xe4\x02\n\x0eReserveRequest\x12\x0e\n\x06tenant\x18\x01 \x01(\t\x12\x10\n\x08provider\x18\x02 \x01(\t\x12\r\n\x05model\x18\x03 \x01(\t\x12&\n\x07\x62\x61\x63kend\x18\x04 \x01(\x0e\x32\x15.llmgw.v1.BackendType\x12)\n\x08priority\x18\x05 \x01(\x0e\x32\x17.llmgw.v1.PriorityClass\x12\x19\n\x11max_output_tokens\x18\x07 \x01(\r\x12\x17\n\x0fidempotency_key\x18\x08 \x01(\t\x12!\n\x19\x65st_uncached_input_tokens\x18\t \x01(\r\x12\x1e\n\x16\x65st_cache_write_tokens\x18\n \x01(\r\x12\x1f\n\x17\x65st_cached_input_tokens\x18\x0b \x01(\r\x12\x13\n\x0bno_fallback\x18\x0c \x01(\x08\x12\x1b\n\x13\x62\x61tch_request_count\x18\r \x01(\rJ\x04\x08\x06\x10\x07\"\x95\x01\n\x0cReserveReply\x12\x0f\n\x07\x61llowed\x18\x01 \x01(\x08\x12\x16\n\x0ereservation_id\x18\x02 \x01(\t\x12\x16\n\x0eretry_after_ms\x18\x03 \x01(\x03\x12\x15\n\rreject_reason\x18\x04 \x01(\t\x12\x17\n\x0fserved_provider\x18\x05 \x01(\t\x12\x14\n\x0cserved_model\x18\x06 \x01(\t\"\xe6\x01\n\rSettleRequest\x12\x16\n\x0ereservation_id\x18\x01 \x01(\t\x12\x1b\n\x13\x61\x63tual_input_tokens\x18\x02 \x01(\r\x12\x1c\n\x14\x61\x63tual_output_tokens\x18\x03 \x01(\r\x12\x0e\n\x06\x66\x61iled\x18\x04 \x01(\x08\x12!\n\x19\x61\x63tual_cache_write_tokens\x18\x05 \x01(\r\x12 \n\x18\x61\x63tual_cache_read_tokens\x18\x06 \x01(\r\x12\x17\n\x0fserved_provider\x18\x07 \x01(\t\x12\x14\n\x0cserved_model\x18\x08 \x01(\t\"0\n\x0bSettleReply\x12\x0f\n\x07settled\x18\x01 \x01(\x08\x12\x10\n\x08was_late\x18\x02 \x01(\x08\"@\n\rStatusRequest\x12\x0e\n\x06tenant\x18\x01 \x01(\t\x12\x10\n\x08provider\x18\x02 \x01(\t\x12\r\n\x05model\x18\x03 \x01(\t\"\xa1\x01\n\x0bStatusReply\x12\x15\n\rrpm_remaining\x18\x01 \x01(\x01\x12\x16\n\x0eitpm_remaining\x18\x02 \x01(\x01\x12\x16\n\x0eotpm_remaining\x18\x03 \x01(\x01\x12\x10\n\x08tpd_used\x18\x04 \x01(\x04\x12\x1c\n\x14pending_reservations\x18\x05 \x01(\x03\x12\x1b\n\x13observed_at_unix_ms\x18\x06 \x01(\x03\"\xb7\x01\n\x0c\x45mbedRequest\x12\x0e\n\x06tenant\x18\x01 \x01(\t\x12\x10\n\x08provider\x18\x02 \x01(\t\x12\r\n\x05model\x18\x03 \x01(\t\x12&\n\x07\x62\x61\x63kend\x18\x04 \x01(\x0e\x32\x15.llmgw.v1.BackendType\x12)\n\x08priority\x18\x05 \x01(\x0e\x32\x17.llmgw.v1.PriorityClass\x12\x0e\n\x06inputs\x18\x06 \x03(\t\x12\x13\n\x0bno_fallback\x18\x07 \x01(\x08\"\xa2\x01\n\nEmbedReply\x12/\n\nembeddings\x18\x01 \x03(\x0b\x32\x1b.llmgw.v1.EmbedReply.Vector\x12\x17\n\x0fserved_provider\x18\x02 \x01(\t\x12\x14\n\x0cserved_model\x18\x03 \x01(\t\x12\x1a\n\x12total_input_tokens\x18\x04 \x01(\r\x1a\x18\n\x06Vector\x12\x0e\n\x06values\x18\x01 \x03(\x02\"I\n\x11\x43ompletionMessage\x12#\n\x04role\x18\x01 \x01(\x0e\x32\x15.llmgw.v1.MessageRole\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\"\x99\x02\n\x11\x43ompletionRequest\x12\x0e\n\x06tenant\x18\x01 \x01(\t\x12\x10\n\x08provider\x18\x02 \x01(\t\x12\r\n\x05model\x18\x03 \x01(\t\x12&\n\x07\x62\x61\x63kend\x18\x04 \x01(\x0e\x32\x15.llmgw.v1.BackendType\x12)\n\x08priority\x18\x05 \x01(\x0e\x32\x17.llmgw.v1.PriorityClass\x12\x0e\n\x06system\x18\x06 \x01(\t\x12-\n\x08messages\x18\x07 \x03(\x0b\x32\x1b.llmgw.v1.CompletionMessage\x12\x19\n\x11max_output_tokens\x18\x08 \x01(\r\x12\x13\n\x0bno_fallback\x18\t \x01(\x08\x12\x11\n\tjson_mode\x18\n \x01(\x08\"\xb1\x02\n\x0f\x43ompletionChunk\x12+\n\x04kind\x18\x01 \x01(\x0e\x32\x1d.llmgw.v1.CompletionChunkKind\x12\n\n\x02id\x18\x02 \x01(\t\x12\x12\n\nrequest_id\x18\x03 \x01(\t\x12\x17\n\x0fserved_provider\x18\x04 \x01(\t\x12\x14\n\x0cserved_model\x18\x05 \x01(\t\x12\x0c\n\x04text\x18\x06 \x01(\t\x12\x15\n\rfinish_reason\x18\x07 \x01(\t\x12\x19\n\x11raw_finish_reason\x18\x08 \x01(\t\x12\x14\n\x0cinput_tokens\x18\t \x01(\r\x12\x1a\n\x12\x63\x61\x63he_write_tokens\x18\n \x01(\r\x12\x19\n\x11\x63\x61\x63he_read_tokens\x18\x0b \x01(\r\x12\x15\n\routput_tokens\x18\x0c \x01(\r*+\n\rPriorityClass\x12\x0f\n\x0bINTERACTIVE\x10\x00\x12\t\n\x05\x42\x41TCH\x10\x01*:\n\x0b\x42\x61\x63kendType\x12\n\n\x06HOSTED\x10\x00\x12\x10\n\x0cHOSTED_BATCH\x10\x01\x12\r\n\tLOCAL_GPU\x10\x02*&\n\x0bMessageRole\x12\x08\n\x04USER\x10\x00\x12\r\n\tASSISTANT\x10\x01*C\n\x13\x43ompletionChunkKind\x12\x08\n\x04TEXT\x10\x00\x12\x0b\n\x07REFUSAL\x10\x01\x12\n\n\x06\x46INISH\x10\x02\x12\t\n\x05USAGE\x10\x03\x32\x86\x01\n\x07Gateway\x12\x44\n\x08\x43omplete\x12\x1b.llmgw.v1.CompletionRequest\x1a\x19.llmgw.v1.CompletionChunk0\x01\x12\x35\n\x05\x45mbed\x12\x16.llmgw.v1.EmbedRequest\x1a\x14.llmgw.v1.EmbedReply2\xbf\x01\n\tAdmission\x12;\n\x07Reserve\x12\x18.llmgw.v1.ReserveRequest\x1a\x16.llmgw.v1.ReserveReply\x12\x38\n\x06Settle\x12\x17.llmgw.v1.SettleRequest\x1a\x15.llmgw.v1.SettleReply\x12;\n\tGetStatus\x12\x17.llmgw.v1.StatusRequest\x1a\x15.llmgw.v1.StatusReplyb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'gateway_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_PRIORITYCLASS']._serialized_start=1045
-  _globals['_PRIORITYCLASS']._serialized_end=1088
-  _globals['_BACKENDTYPE']._serialized_start=1090
-  _globals['_BACKENDTYPE']._serialized_end=1148
-  _globals['_MESSAGEROLE']._serialized_start=1150
-  _globals['_MESSAGEROLE']._serialized_end=1188
-  _globals['_COMPLETIONCHUNKKIND']._serialized_start=1190
-  _globals['_COMPLETIONCHUNKKIND']._serialized_end=1257
-  _globals['_EMBEDREQUEST']._serialized_start=28
-  _globals['_EMBEDREQUEST']._serialized_end=211
-  _globals['_EMBEDREPLY']._serialized_start=214
-  _globals['_EMBEDREPLY']._serialized_end=376
-  _globals['_EMBEDREPLY_VECTOR']._serialized_start=352
-  _globals['_EMBEDREPLY_VECTOR']._serialized_end=376
-  _globals['_COMPLETIONMESSAGE']._serialized_start=378
-  _globals['_COMPLETIONMESSAGE']._serialized_end=451
-  _globals['_COMPLETIONREQUEST']._serialized_start=454
-  _globals['_COMPLETIONREQUEST']._serialized_end=735
-  _globals['_COMPLETIONCHUNK']._serialized_start=738
-  _globals['_COMPLETIONCHUNK']._serialized_end=1043
-  _globals['_GATEWAY']._serialized_start=1260
-  _globals['_GATEWAY']._serialized_end=1394
+  _globals['_PRIORITYCLASS']._serialized_start=2069
+  _globals['_PRIORITYCLASS']._serialized_end=2112
+  _globals['_BACKENDTYPE']._serialized_start=2114
+  _globals['_BACKENDTYPE']._serialized_end=2172
+  _globals['_MESSAGEROLE']._serialized_start=2174
+  _globals['_MESSAGEROLE']._serialized_end=2212
+  _globals['_COMPLETIONCHUNKKIND']._serialized_start=2214
+  _globals['_COMPLETIONCHUNKKIND']._serialized_end=2281
+  _globals['_RESERVEREQUEST']._serialized_start=28
+  _globals['_RESERVEREQUEST']._serialized_end=384
+  _globals['_RESERVEREPLY']._serialized_start=387
+  _globals['_RESERVEREPLY']._serialized_end=536
+  _globals['_SETTLEREQUEST']._serialized_start=539
+  _globals['_SETTLEREQUEST']._serialized_end=769
+  _globals['_SETTLEREPLY']._serialized_start=771
+  _globals['_SETTLEREPLY']._serialized_end=819
+  _globals['_STATUSREQUEST']._serialized_start=821
+  _globals['_STATUSREQUEST']._serialized_end=885
+  _globals['_STATUSREPLY']._serialized_start=888
+  _globals['_STATUSREPLY']._serialized_end=1049
+  _globals['_EMBEDREQUEST']._serialized_start=1052
+  _globals['_EMBEDREQUEST']._serialized_end=1235
+  _globals['_EMBEDREPLY']._serialized_start=1238
+  _globals['_EMBEDREPLY']._serialized_end=1400
+  _globals['_EMBEDREPLY_VECTOR']._serialized_start=1376
+  _globals['_EMBEDREPLY_VECTOR']._serialized_end=1400
+  _globals['_COMPLETIONMESSAGE']._serialized_start=1402
+  _globals['_COMPLETIONMESSAGE']._serialized_end=1475
+  _globals['_COMPLETIONREQUEST']._serialized_start=1478
+  _globals['_COMPLETIONREQUEST']._serialized_end=1759
+  _globals['_COMPLETIONCHUNK']._serialized_start=1762
+  _globals['_COMPLETIONCHUNK']._serialized_end=2067
+  _globals['_GATEWAY']._serialized_start=2284
+  _globals['_GATEWAY']._serialized_end=2418
+  _globals['_ADMISSION']._serialized_start=2421
+  _globals['_ADMISSION']._serialized_end=2612
 # @@protoc_insertion_point(module_scope)

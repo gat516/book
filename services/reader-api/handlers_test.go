@@ -914,6 +914,10 @@ func TestHealthChecksBothPoolsThroughStore(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("healthy status = %d", response.Code)
 	}
+	var health map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &health); err != nil || health["version"] != version || health["status"] != "ok" {
+		t.Fatalf("health must identify the running release: %s", response.Body.String())
+	}
 	store.healthErr = errors.New("down")
 	response = request(t, &API{store: store}, http.MethodGet, "/healthz", "", "")
 	if response.Code != http.StatusServiceUnavailable {

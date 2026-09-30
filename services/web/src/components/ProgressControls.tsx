@@ -1,3 +1,5 @@
+import { ArrowLeft, ArrowRight } from "lucide-react";
+import { Button } from "./animate-ui/motion";
 import { useState } from "react";
 
 interface Props {
@@ -39,16 +41,16 @@ export function ProgressControls({ chapterIndex, hasNext, onNavigate, sourceURL,
 
   return (
     <div className="progress-controls">
-      <button disabled={chapterIndex <= 1 || pending} onClick={() => navigate(chapterIndex - 1)}>
-        Prev
-      </button>
+      <Button disabled={chapterIndex <= 1 || pending} onClick={() => navigate(chapterIndex - 1)}>
+        <ArrowLeft size={16} />Prev
+      </Button>
       <span>Chapter {chapterIndex}</span>
-      <button
+      <Button
         disabled={pending || (!hasNext && (!sourceURL || !onFindMore))}
         onClick={() => hasNext ? navigate(chapterIndex + 1) : void findMore()}
       >
-        {pending ? "…" : hasNext ? "Next" : "Find next chapters"}
-      </button>
+        {pending ? "…" : hasNext ? "Next" : "Find next chapters"}<ArrowRight size={16} />
+      </Button>
       {error && <p className="progress-controls-error">{error}</p>}
     </div>
   );

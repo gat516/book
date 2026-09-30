@@ -1,0 +1,101 @@
+{
+  "answer_attempts": 13,
+  "judge_results": 6,
+  "arms": {
+    "current": {
+      "attempts": 7,
+      "successes": 6,
+      "errors": 1,
+      "unknown_usage_calls": 0,
+      "median_seconds": 10.286945553001715,
+      "input_tokens": 12142,
+      "output_tokens": 18616,
+      "cache_read_tokens": 0,
+      "median_output_tokens": 1954.0,
+      "invalid_citations": 0,
+      "mean_quality_16": 16,
+      "unsupported_claims": 0
+    },
+    "low": {
+      "attempts": 6,
+      "successes": 6,
+      "errors": 0,
+      "unknown_usage_calls": 0,
+      "median_seconds": 11.033949176009628,
+      "input_tokens": 9649,
+      "output_tokens": 11941,
+      "cache_read_tokens": 0,
+      "median_output_tokens": 2245.0,
+      "invalid_citations": 0,
+      "mean_quality_16": 15.666666666666666,
+      "unsupported_claims": 1
+    }
+  },
+  "pairs": [
+    {
+      "pair": 0,
+      "question_id": "obstacles",
+      "latency_ratio": 1.1165257195214013,
+      "output_token_ratio": 1.073555166374781
+    },
+    {
+      "pair": 1,
+      "question_id": "causality",
+      "latency_ratio": 1.2861033706740916,
+      "output_token_ratio": 1.3835740072202165
+    },
+    {
+      "pair": 2,
+      "question_id": "relationship",
+      "latency_ratio": 0.87618160184857,
+      "output_token_ratio": 1.0055648302726767
+    },
+    {
+      "pair": 3,
+      "question_id": "unsupported",
+      "latency_ratio": 1.0979253013670511,
+      "output_token_ratio": 0.8484848484848485
+    },
+    {
+      "pair": 4,
+      "question_id": "setting",
+      "latency_ratio": 0.9457605267040233,
+      "output_token_ratio": 0.7997179125528914
+    },
+    {
+      "pair": 5,
+      "question_id": "chronology",
+      "latency_ratio": 1.2836364724028047,
+      "output_token_ratio": 1.2709616295594506
+    }
+  ],
+  "matched_answer_totals": {
+    "current": {
+      "answers": 6,
+      "input_tokens": 9649,
+      "output_tokens": 10424
+    },
+    "low": {
+      "answers": 6,
+      "input_tokens": 9649,
+      "output_tokens": 11941
+    }
+  },
+  "paired_latency": {
+    "geometric_mean": 1.0899898669199357,
+    "bootstrap_95_percent": [
+      0.9704383435732946,
+      1.2214840198822763
+    ]
+  },
+  "complete": false,
+  "promising_candidate": false,
+  "scope": "exploratory generation-phase pilot; not end-to-end, throughput or tail-latency evidence",
+  "defaults_changed": false,
+  "all_completion_attempts": 19,
+  "embedding_attempts": 7,
+  "resumed": true,
+  "limitations": [
+    "Pilot resumed after background work interrupted its idle-window guard; first segment may overlap pipeline work."
+  ]
+}

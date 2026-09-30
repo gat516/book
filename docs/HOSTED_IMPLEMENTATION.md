@@ -59,7 +59,24 @@ The owner has claimed the hosted account. Its initially empty library now contai
 September 20 local-library snapshot described below. Local books and services remain
 in place and usable without Google login.
 
-Deployment details (September 20, 2026):
+Latest frontend release (September 29, 2026):
+
+- Published the current `services/web` build to the existing `qireadr-web` route at
+  `https://qireadr.com/*`, version `40b257c7-f805-4b35-a387-e6d2fc0d7813`.
+  This is a frontend-only release; the AWS services and schema were not redeployed.
+- Removed repeated taglines and explanatory copy from the library, reader, demo,
+  onboarding and settings. Added Lucide navigation/action icons and Motion card
+  entrances, button feedback and companion-tab indicators. Reduced motion is
+  respected; outgoing chapter facts and answers are removed immediately (§0.3).
+- Production build, eight web unit-test files, twenty component tests, Cloudflare
+  proxy tests and deployment dry run pass. Live HTML and all three JS/CSS assets
+  match the build hashes. API health, private/no-store responses, unauthenticated
+  and forged-identity rejection, Google redirect and secure login cookies pass.
+- A browser was not connected, so this release has no new visual-browser sign-off
+  or completed authenticated Google login check. Wrangler's OAuth session was
+  renewed under `/tmp/qireadr-cloudflare-auth`; reuse that configuration for releases.
+
+AWS deployment details (September 20, 2026):
 
 - Elastic IP: `3.221.223.180`; the Cloudflare apex record retains this AWS origin.
 - EC2: `i-0d907def09bd3092f`, k3s `v1.35.8+k3s1`.

@@ -30,6 +30,19 @@ class Redis:
         return int(left * 1000)
 
 
+async def test_gateway_capacity_wait_does_not_publish_provider_cooldown():
+    from novel_llm.gateway_admission import _deferred
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    cooldown = HostedCooldown(Redis(), provider="deepseek", credential="key")
+    direct = SimpleNamespace(complete=AsyncMock(side_effect=_deferred()))
+    provider = CooldownProvider(direct, cooldown)
+    with pytest.raises(Exception) as error:
+        await provider.complete("prompt")
+    assert error.value.admission_wait
+    assert await cooldown.remaining() == (0, "rate_limited")
+
+
 def test_runtime_identity_changes_with_output_and_schema_transport():
     assert runtime_identity(output_tokens=100, schema_transport="native") != runtime_identity(
         output_tokens=200, schema_transport="native")

@@ -33,8 +33,9 @@ jobs:
       - run: pytest -q packages/novel-llm/tests
       - run: pytest -q tests
         working-directory: services/askai
-      - run: pytest -q -m 'not db' tests/test_worker.py tests/test_batch.py tests/test_provider_from_env.py tests/test_job_scope.py
+      - run: pytest -q -m 'not db' tests/test_worker.py tests/test_batch.py tests/test_provider_from_env.py tests/test_job_scope.py tests/test_inference_runtime.py
         working-directory: services/pipeline
+      - run: pytest -q deploy/hosted/test_gateway_trial.py eval/inference-contention/test_*.py
   web:
     runs-on: ubuntu-latest
     steps:
@@ -44,7 +45,7 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: services/web/package-lock.json
-      - run: npm ci && npm test && npm run build
+      - run: npm ci && npm test && npm run test:components && npm run build
         working-directory: services/web
   hosted:
     runs-on: ubuntu-latest
@@ -67,7 +68,7 @@ jobs:
             image="$service"
             if [ "$service" = reader-api ]; then image=reader; fi
             if [ "$service" = ingest-api ]; then image=ingest; fi
-            docker build -f deploy/hosted/Dockerfile.go --build-arg SERVICE="$service" -t "book-$image-hosted:test" .
+            docker build -f deploy/hosted/Dockerfile.go --build-arg SERVICE="$service" --build-arg VERSION="$GITHUB_SHA" -t "book-$image-hosted:test" .
           done
           docker build -f deploy/hosted/Dockerfile.python -t book-python-hosted:test .
           docker build -f deploy/hosted/Dockerfile.web -t book-web-hosted:test .

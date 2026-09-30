@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowUpRight, BookOpen, List, MessageCircle, ShieldCheck } from "lucide-react";
+import { ArrowUpRight, BookOpen, List, MessageCircle, Plus, ShieldCheck } from "lucide-react";
+import { ChoiceTabs, Fade } from "./animate-ui/motion";
 import { getWikiPage, getWikiPages } from "../api";
 import { useKnowledgeRevision } from "../knowledgeUpdates";
 import type { ChapterResponse, WikiPageResponse, WikiPageSummary } from "../types";
@@ -55,7 +56,7 @@ export function ReadingDesk(props: Props) {
         <ProgressControls chapterIndex={chapterIndex} hasNext={chapter?.has_next ?? false}
           onNavigate={props.onNavigate} sourceURL={chapter?.source_url} onFindMore={props.onFindMore} />
       </div>
-      <div className="reading-bottom-actions"><button className="text-button" onClick={props.onChapters}><List size={15} />All chapters</button><button className="text-button" onClick={props.onAdd}>+ Add chapter</button></div>
+      <div className="reading-bottom-actions"><button className="text-button" onClick={props.onChapters}><List size={15} />All chapters</button><button className="text-button" onClick={props.onAdd}><Plus size={15} />Add chapter</button></div>
     </div>
     {at !== null && <StoryCompanion key={`${novelId}:${at}`} novelId={novelId} at={at} pages={ordered}
       loading={loading} error={error} revision={revision} onRetry={() => setRetry(n => n + 1)} onOpenWiki={onOpenWiki} />}
@@ -83,18 +84,16 @@ export function StoryCompanion({ novelId, at, pages, loading, error, revision, o
   // page before comparing them or reading its chapter boundary (§0.3).
   const current = page !== null && page.subject === subject && page.at <= at ? page : null;
   return <aside className="story-companion" aria-label="Story companion">
-    <div className="companion-tabs" aria-label="Companion view">
-      <button type="button" aria-pressed={tab === "wiki"} onClick={() => setTab("wiki")}><BookOpen size={15} />Story wiki</button>
-      <button type="button" aria-pressed={tab === "ask"} onClick={() => setTab("ask")}><MessageCircle size={15} />Ask AI</button>
-    </div>
+    <ChoiceTabs className="companion-tabs" label="Companion view" value={tab} onChange={setTab}
+      choices={[{ value: "wiki", label: "Story wiki", icon: <BookOpen size={15} /> }, { value: "ask", label: "Ask AI", icon: <MessageCircle size={15} /> }]} />
     <p className="companion-boundary"><ShieldCheck size={13} />Knowledge through chapter {at}</p>
-    {tab === "ask" ? <div className="companion-content companion-content-ask"><h2>Ask the story.</h2><p className="companion-note">A little context for what you’re reading.</p><AskBox key={`${novelId}:${at}`} novelId={novelId} at={at} /></div>
-      : <div className="companion-content">
-        {loading ? <p className="companion-note" role="status">Opening your story wiki…</p>
+    {tab === "ask" ? <Fade key="ask" className="companion-content companion-content-ask"><AskBox key={`${novelId}:${at}`} novelId={novelId} at={at} /></Fade>
+      : <Fade key="wiki" className="companion-content">
+        {loading ? <p className="companion-note" role="status">Loading wiki…</p>
           : error ? <p className="companion-note" role="alert">Could not load the wiki. <button className="text-button" onClick={onRetry}>Retry</button></p>
-          : !pages.length ? <><span className="character-monogram" aria-hidden="true"><BookOpen /></span><h2>A world unfolding.</h2><p className="companion-note">As reader features are built, the people and places you meet will appear here.</p></>
+          : !pages.length ? <><span className="character-monogram" aria-hidden="true"><BookOpen /></span><h2>No wiki pages yet</h2><p className="companion-note">Build reader features to add people and places.</p></>
           : <>
-            <label className="companion-select">Explore your story<select value={subject} onChange={event => setSelected(event.target.value)}>{pages.map(item => <option key={item.subject} value={item.subject}>{item.title} · {item.kind}</option>)}</select></label>
+            <label className="companion-select"><span className="visually-hidden">Wiki page</span><select value={subject} onChange={event => setSelected(event.target.value)}>{pages.map(item => <option key={item.subject} value={item.subject}>{item.title} · {item.kind}</option>)}</select></label>
             {pageError ? <p role="alert" className="companion-note">Could not open this page. <button className="text-button" onClick={onRetry}>Retry</button></p>
               : !current ? <p role="status" className="companion-note">Loading page…</p>
               : <><div className="character-monogram" aria-hidden="true">{current.title.slice(0, 1)}</div><p className="companion-kind">{current.kind}</p><h2>{current.title}</h2>
@@ -102,7 +101,6 @@ export function StoryCompanion({ novelId, at, pages, loading, error, revision, o
                 <button className="companion-open" onClick={() => onOpenWiki(current.subject)}>Open full wiki<ArrowUpRight size={15} /></button>
               </>}
           </>}
-        <p className="companion-note companion-hint">Select a name in the chapter to check its spelling or visit its wiki page.</p>
-      </div>}
+      </Fade>}
   </aside>;
 }

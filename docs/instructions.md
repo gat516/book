@@ -1489,6 +1489,49 @@ The slice never blocks on the gateway; the gateway is never designed against a
 hypothetical client.
 
 
+### 14.7 Hosted admission-only trial
+
+Hosted DeepSeek may opt into `Admission.Reserve` / `Settle` using
+`LLM_GATEWAY_ADMISSION_ADDR` plus an explicit `LLM_GATEWAY_ADMISSION_ACCOUNTS`
+allowlist. Both unset means the existing direct-provider path. Do not select the
+legacy `LLM_PROVIDER=gateway` proxy in hosted mode. Other providers and embeddings
+remain unchanged. No new database schema or provider credential is introduced.
+
+The gateway sees only account/provider/model/priority, reservation IDs and token
+usage. Prompts, schemas, prose, keys and provider calls stay inside the existing
+QiReadr adapter. Structured-output options, reasoning settings, output budgets,
+and actual served identity survive the wrapper unchanged. Every DeepSeek call,
+including sequential batch calls, reserves before calling and settles on success,
+failure or cancellation. `no_fallback=true` applies to every advisory reservation:
+the wrapper cannot execute an alternative provider using a different BYOK key.
+
+For this hosted path, **tenant = account UUID**, resolved from `current_account()`
+on the credential's RLS connection. This supersedes §14.5's per-novel mapping only
+for account-scoped BYOK admission: all books using that account's provider share
+capacity. It is an account/model guardrail, not a global provider quota guarantee
+when different accounts share an external key or external applications use it.
+
+The trial config admits at most two concurrent `deepseek-v4-flash` completions per
+allowlisted account. Two is an operator safety cap, not a claimed provider limit.
+The semaphore carries priority metadata but does not queue/preempt or reserve
+capacity for interactive calls. Do not claim a priority or latency optimization
+from this integration alone.
+
+Hard request timeout 120s + bounded 2s RPCs < semaphore lease 180s < pipeline
+visibility timeout (normally 300s); validate the latter at startup. The deployed
+gateway policy must retain that 180s lease. Gateways without a successful Reserve
+fail closed. Admission deferrals do not spend the durable provider retry budget or
+publish a provider cooldown. Failed settlement does not discard a paid completion;
+log it and rely on lease expiry to recover the permit. An ambiguous/lost Reserve
+response likewise recovers by lease expiry, never by unguarded provider fallback.
+
+Deploy the keyless gateway in `server.mode=admission` on the private cluster only,
+with a separate Redis process/PVC and no provider egress. Logical Redis DB numbers
+alone do **not** isolate memory eviction. No public ingress or provider secrets;
+only pipeline/askai pods can reach admission, only the gateway can reach its Redis.
+Clearing the two admission env vars and restarting clients restores direct calls.
+See `deploy/hosted/GATEWAY_TRIAL.md` for rollout, measurement and rollback.
+
 ### Glossary deletion (local management extension, migration 0019)
 
 Human deletion sets `glossary.deleted`, increments the novel-wide glossary version,
@@ -1543,7 +1586,7 @@ warning, and warning chapters remain Ready rather than Failed.
 
 ## 15. Private hosted accounts (September 2026)
 
-The hosted release is invite-only with Google authentication. Each novel has exactly one
+The hosted release accepts public Google signup for up to 100 registered users. Each novel has exactly one
 account owner; no sharing exists. Ownership authorization and §0.3 chapter clearance
 are independent, mandatory constraints. API keys, embedding choices, progress, caches,
 and queue controls are account-scoped. Hosted code must not fall back to server model
@@ -1559,9 +1602,12 @@ invitations are revocable; deleting an account stops work and durably cleans obj
 ### 15.1 Identity and local operation
 
 `BOOK_MODE=local` is the developer default and assigns the explicit legacy owner without
-login. Hosted mode validates Google issuer/subject and verified email against a seven-day
-invitation; initial-library ownership is bound by an operator invitation, never by the
-first signup. Thirty-day opaque sessions use hashed tokens, Secure/HttpOnly cookies,
+login. Hosted mode validates Google issuer/subject and verified email. New registrations
+are serialized and capped at 100 accounts with a Google subject (including invited and
+pending-deletion accounts; unclaimed/local accounts do not occupy a seat). Existing users
+can sign in at capacity. Public signup creates a new private library; only a seven-day,
+email-bound operator invitation may claim a pre-existing library, never the first signup.
+Thirty-day opaque sessions use hashed tokens, Secure/HttpOnly cookies,
 PKCE/state/nonce during login, and same-origin CSRF tokens for mutations. Browser actor
 headers are discarded. Internal bearer-authenticated calls carry the resolved account.
 

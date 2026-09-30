@@ -1,3 +1,5 @@
+import { ArrowLeft, BookOpen, KeyRound, Save, Trash2 } from "lucide-react";
+import { Button } from "./animate-ui/motion";
 import { SemanticSearchSettings } from "./SemanticSearchSettings";
 import { useCallback, useEffect, useState } from "react";
 import { deleteProviderCredential, listProviderCredentials, saveProviderCredential } from "../api";
@@ -90,24 +92,17 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
   return (
     <section className="settings-view">
       <header className="settings-page-header">
-        <button className="app-back" onClick={onClose}>← Back</button>
+        <button className="app-back" onClick={onClose}><ArrowLeft size={16} />Back</button>
         <h1>Account settings</h1>
-        <p>Preferences and provider credentials shared by every book.</p>
       </header>
       {error && <p role="alert" className="chapter-list-error">{error}</p>}
       {notice && <p role="status" className="settings-notice">{notice}</p>}
 
-      <div className="settings-role-guide" aria-label="What each setting does">
-        <div><strong>Translation</strong><p>Writes chapter text in your chosen language. Choose its provider and model in Book settings.</p></div>
-        <div><strong>AI features</strong><p>Builds character knowledge and answers Ask AI questions. Uses the book’s provider with its AI features model.</p></div>
-        <div><strong>Semantic search · optional</strong><p>Helps Ask AI find relevant chapter passages. Configured below for all books; needs an embedding model.</p></div>
-      </div>
       <section className="settings-section">
-        <h2>Reading</h2>
+        <h2><BookOpen size={19} />Reading</h2>
         <label className="settings-toggle">
           <span>
             <strong>Show hover previews</strong>
-            <small>Preview linked names when the pointer rests over them.</small>
           </span>
           <input
             type="checkbox"
@@ -116,15 +111,15 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
           />
         </label>
         <p className="settings-help">
-          Highlighted names remain clickable either way. This preference is saved only in this browser.
+          Names are always clickable. Saved in this browser.
         </p>
       </section>
 
       <section className="settings-section">
         <div className="settings-section-heading">
           <div>
-            <h2>Provider keys</h2>
-            <p>Add a hosted provider key to use Book without an Ollama server. Then choose that provider in each book’s settings.</p>
+            <h2><KeyRound size={19} />Provider keys</h2>
+            <p>Shared across your books. Usage is billed by your provider.</p>
           </div>
         </div>
         {loading ? (
@@ -160,12 +155,12 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
                     <div className="settings-actions">
                       {current?.api_key_set && (
                         <button className="btn-danger" onClick={() => remove(provider)} disabled={busy}>
-                          Remove key
+                          <Trash2 size={15} />Remove key
                         </button>
                       )}
-                      <button className="btn-primary" onClick={() => save(provider)} disabled={busy}>
-                        {busy ? "Saving…" : "Save provider"}
-                      </button>
+                      <Button className="btn-primary" onClick={() => save(provider)} disabled={busy}>
+                        <Save size={15} />{busy ? "Saving…" : "Save provider"}
+                      </Button>
                     </div>
                   </div>
                 </details>
@@ -174,7 +169,7 @@ export function SettingsView({ clickableEntities, onChangeClickableEntities, onC
           </div>
         )}
         <p className="settings-help">
-          Keys are encrypted before storage and never sent back to this page; it only learns whether one exists.
+          Keys are encrypted and cannot be viewed after saving.
         </p>
       </section>
       <SemanticSearchSettings credentials={credentials} credentialsLoading={loading} />

@@ -26,8 +26,8 @@ const wiki: WikiPageSummary = { subject: 'mei-id', source_term: '梅', title: 'M
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 
 for (const state of [
-  { name: 'loading', loading: true, error: null, expected: /Opening your story wiki/ },
-  { name: 'empty', loading: false, error: null, expected: /A world unfolding/ },
+  { name: 'loading', loading: true, error: null, expected: /Loading wiki/ },
+  { name: 'empty', loading: false, error: null, expected: /No wiki pages yet/ },
   { name: 'failed', loading: false, error: 'Unavailable', expected: /Could not load the wiki/ },
 ]) {
   test(`companion renders its ${state.name} state before any wiki subject exists`, () => {
@@ -58,10 +58,10 @@ test('opening a chapter keeps its prose visible while the wiki loads and when no
   }
   const view = render(<Harness />);
   await waitFor(() => assert.match(view.getByRole('article', { name: 'Chapter 1' }).textContent!, /Mei walked along the river/));
-  assert.match(view.getByRole('complementary').textContent!, /Opening your story wiki/);
+  assert.match(view.getByRole('complementary').textContent!, /Loading wiki/);
   await act(async () => finishWiki(json({ novel_id: 'book', at: 1, pages: [] })));
   assert.match(view.getByRole('article').textContent!, /Mei walked along the river/);
-  assert.match(view.getByRole('complementary').textContent!, /A world unfolding/);
+  assert.match(view.getByRole('complementary').textContent!, /No wiki pages yet/);
   assert.ok(requests.includes('/api/novels/book/wiki/pages?at=1'));
   fireEvent.click(view.getByRole('button', { name: 'Inspect Mei' }));
   assert.ok(await view.findByRole('dialog'));

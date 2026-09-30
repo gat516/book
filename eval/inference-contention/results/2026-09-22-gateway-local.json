@@ -1,0 +1,14 @@
+{
+  "test": "local-synthetic-admission",
+  "environment": "developer machine, real Go gateway and disposable Redis, synthetic provider",
+  "paid_requests": 0,
+  "capacity": 2,
+  "peak_provider_concurrency": 2,
+  "over_capacity_calls_blocked": 1,
+  "outage_calls_blocked": 1,
+  "pending_after_settlement": 0,
+  "overhead_samples": 40,
+  "reserve_plus_settle_median_ms": 0.977,
+  "reserve_plus_settle_max_ms": 4.201,
+  "production_speedup_demonstrated": false
+}

@@ -7,6 +7,57 @@ service Gateway {
   rpc Embed(EmbedRequest) returns (EmbedReply);
 }
 
+// Admission contract pinned to sibling revision 4ee2d0a; metadata only.
+service Admission {
+  rpc Reserve(ReserveRequest) returns (ReserveReply);
+  rpc Settle(SettleRequest) returns (SettleReply);
+  rpc GetStatus(StatusRequest) returns (StatusReply);
+}
+
+message ReserveRequest {
+  string tenant = 1;
+  string provider = 2;
+  string model = 3;
+  BackendType backend = 4;
+  PriorityClass priority = 5;
+  reserved 6;
+  uint32 max_output_tokens = 7;
+  string idempotency_key = 8;
+  uint32 est_uncached_input_tokens = 9;
+  uint32 est_cache_write_tokens = 10;
+  uint32 est_cached_input_tokens = 11;
+  bool no_fallback = 12;
+  uint32 batch_request_count = 13;
+}
+message ReserveReply {
+  bool allowed = 1;
+  string reservation_id = 2;
+  int64 retry_after_ms = 3;
+  string reject_reason = 4;
+  string served_provider = 5;
+  string served_model = 6;
+}
+message SettleRequest {
+  string reservation_id = 1;
+  uint32 actual_input_tokens = 2;
+  uint32 actual_output_tokens = 3;
+  bool failed = 4;
+  uint32 actual_cache_write_tokens = 5;
+  uint32 actual_cache_read_tokens = 6;
+  string served_provider = 7;
+  string served_model = 8;
+}
+message SettleReply { bool settled = 1; bool was_late = 2; }
+message StatusRequest { string tenant = 1; string provider = 2; string model = 3; }
+message StatusReply {
+  double rpm_remaining = 1;
+  double itpm_remaining = 2;
+  double otpm_remaining = 3;
+  uint64 tpd_used = 4;
+  int64 pending_reservations = 5;
+  int64 observed_at_unix_ms = 6;
+}
+
 enum PriorityClass { INTERACTIVE = 0; BATCH = 1; }
 enum BackendType { HOSTED = 0; HOSTED_BATCH = 1; LOCAL_GPU = 2; }
 enum MessageRole { USER = 0; ASSISTANT = 1; }

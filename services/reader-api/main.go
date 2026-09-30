@@ -18,6 +18,8 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+var version = "dev"
+
 func main() {
 	cfg := loadConfig()
 	if cfg.AskAIInternalToken == "" {

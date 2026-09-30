@@ -1,4 +1,4 @@
-// Package auth implements the invite-only account boundary (§15), independent of chapters.
+// Package auth implements the private account boundary (§15), independent of chapters.
 package auth
 
 import (
@@ -25,6 +25,7 @@ import (
 
 const cookieName = "__Host-book-session"
 const stateCookie = "__Host-book-login"
+const signupLimit = 100
 
 type Config struct{ Origin, ClientID, ClientSecret string }
 type Identity struct {
@@ -270,22 +271,43 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(context.Background())
+	// §15.1: concurrent first logins for one Google subject must resolve to one account.
+	// This transaction lock also keeps invitation redemption and public signup atomic.
+	if _, err = tx.Exec(r.Context(), "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", identity.Subject); err != nil {
+		fail(w, 503, "sign in unavailable")
+		return
+	}
 	var id, status string
 	err = tx.QueryRow(r.Context(), "SELECT id::text,status FROM account WHERE google_subject=$1 FOR UPDATE", identity.Subject).Scan(&id, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
-		if invitation == nil {
-			fail(w, 403, "an invitation is required")
+		// §15.1: serialize new registrations across subjects before counting seats.
+		// Existing users bypass this lock and can still sign in at capacity.
+		if _, err = tx.Exec(r.Context(), "SELECT pg_advisory_xact_lock(1397311310, 100)"); err != nil {
+			fail(w, 503, "sign in unavailable")
+			return
+		}
+		var registered int
+		if err = tx.QueryRow(r.Context(), "SELECT count(*) FROM account WHERE google_subject IS NOT NULL").Scan(&registered); err != nil {
+			fail(w, 503, "sign in unavailable")
+			return
+		}
+		if registered >= signupLimit {
+			fail(w, http.StatusForbidden, "signups are full (100 users); existing users can still sign in")
 			return
 		}
 		var target *string
-		err = tx.QueryRow(r.Context(), `UPDATE account_invitation SET consumed_at=now() WHERE token_hash=$1 AND lower(email)=$2 AND expires_at>now() AND consumed_at IS NULL RETURNING account_id::text`, *invitation, identity.Email).Scan(&target)
-		if err != nil {
-			fail(w, 403, "invitation is invalid or expired")
-			return
+		if invitation != nil {
+			err = tx.QueryRow(r.Context(), `UPDATE account_invitation SET consumed_at=now() WHERE token_hash=$1 AND lower(email)=$2 AND expires_at>now() AND consumed_at IS NULL RETURNING account_id::text`, *invitation, identity.Email).Scan(&target)
+			if err != nil {
+				fail(w, 403, "invitation is invalid or expired")
+				return
+			}
 		}
 		if target != nil {
 			err = tx.QueryRow(r.Context(), "UPDATE account SET email=$2,google_subject=$3 WHERE id=$1 AND google_subject IS NULL AND status='active' RETURNING id::text", *target, identity.Email, identity.Subject).Scan(&id)
 		} else {
+			// Public registration always creates a fresh private library (§15.1).
+			// Only an explicit, email-bound invitation can claim a pre-existing owner.
 			err = tx.QueryRow(r.Context(), "INSERT INTO account(email,google_subject) VALUES($1,$2) RETURNING id::text", identity.Email, identity.Subject).Scan(&id)
 		}
 		if err != nil {

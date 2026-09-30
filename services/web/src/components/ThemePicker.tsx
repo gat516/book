@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Monitor, Moon, Sun, Sunset } from "lucide-react";
 import { saveTheme, storedTheme, THEMES, type ThemeChoice } from "../theme";
 
 const LABELS: Record<ThemeChoice, string> = {
@@ -14,9 +15,11 @@ const LABELS: Record<ThemeChoice, string> = {
  */
 export function ThemePicker() {
   const [choice, setChoice] = useState<ThemeChoice>(storedTheme);
+  const Icon = { system: Monitor, light: Sun, warm: Sunset, dark: Moon }[choice];
   return (
     <label className="theme-picker">
       <span className="visually-hidden">Theme</span>
+      <Icon size={16} aria-hidden="true" />
       <select value={choice} onChange={(event) => {
         const next = event.target.value as ThemeChoice;
         setChoice(next);

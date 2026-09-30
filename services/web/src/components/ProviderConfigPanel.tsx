@@ -245,9 +245,8 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
             </select>
           </label>
 
-          <p className="settings-help">This provider handles both translation and AI features. You can choose a different model for each role below. Save its API key once in Account settings.</p>
+          <p className="settings-help">API keys are saved in Account settings.</p>
           <fieldset className="provider-role"><legend>Translation</legend>
-          <p className="settings-help">Produces the chapter text you read in the target language.</p>
           {provider !== "custom" && (
             <label>
               Translation model
@@ -268,7 +267,7 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
           {!custom && selectedNote && <p className="novel-create-form-hint">{selectedNote}</p>}
           </fieldset>
           <fieldset className="provider-role"><legend>AI features</legend>
-          <p className="settings-help">Extracts characters and story knowledge, and answers Ask AI questions using chapters you have read.</p>
+          <p className="settings-help">Used for the wiki and Ask AI.</p>
           {provider !== "custom" && (
             <label>
               AI features model
@@ -291,9 +290,8 @@ export function ProviderConfigPanel({ novelId, defaultOpen = false }: Props) {
             <input value={factsModel} onChange={(e) => setFactsModel(e.target.value)}
               placeholder="Same as the AI features model" />
           </label>
-          <p className="settings-help">Writes each chapter's hidden story facts that wiki pages are built from.</p>
+          <p className="settings-help">Optional override for wiki extraction.</p>
           </fieldset>
-          <p className="settings-help">Optional semantic search helps Ask AI find chapter passages. Configure it separately in Account settings → Semantic search.</p>
           {MODEL_LIST_IS_ADVISORY[provider] && (
             <p className="novel-create-form-hint">
               Ollama serves whatever is pulled on the host, so this list is a hint — a model

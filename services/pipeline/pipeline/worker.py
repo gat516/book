@@ -224,6 +224,9 @@ class Worker:
             await asyncio.gather(work, stop, return_exceptions=True)
 
     async def start(self) -> None:
+        from novel_llm.gateway_admission import admission_settings, configure_admission_logging
+        if admission_settings(visibility_timeout=self.cfg.visibility_timeout)[0]:
+            configure_admission_logging()
         if self.stopping.is_set():
             return
         # autocommit for chapter-status updates outside graph-write; graph-write itself
@@ -246,6 +249,11 @@ class Worker:
                 self._loop(), self._reap_forever(), self._heartbeat_forever()
             )
         finally:
+            # Cached admission wrappers own gRPC channels as well as SDK clients.
+            for provider in {id(value[0]): value[0] for value in self._provider_cache.values()}.values():
+                close = getattr(provider, "aclose", None)
+                if close is not None:
+                    await close()
             await self.embedding_resolver.aclose()
             await self.textproc.aclose()
             await self.db.close()
@@ -811,7 +819,7 @@ class Worker:
                 return
             # A shared cooldown rejection never reached the provider: it only relays a
             # deadline another call already earned, so it does not spend an attempt.
-            shared = bool(getattr(exc, "shared_cooldown", False))
+            shared = bool(getattr(exc, "shared_cooldown", False) or getattr(exc, "admission_wait", False))
             attempt = int(row[0]) + (0 if shared else 1)
             if not shared and attempt >= MAX_PROVIDER_RETRY_ATTEMPTS:
                 await self.db.execute(
@@ -898,7 +906,6 @@ class Worker:
             return cached
         if cached is not None:
             log.info("provider config changed for novel %s; rebuilding its provider", novel_id)
-        self._provider_rows[novel_id] = row
         if row is None:
             result = (
                 self._default_provider,
@@ -909,8 +916,12 @@ class Worker:
                 None,
             )
         else:
+            from novel_llm.gateway_admission import with_gateway_admission
+            direct = await with_gateway_admission(
+                build_provider(row, self.cfg), self.db, provider_id=row.provider,
+                visibility_timeout=self.cfg.visibility_timeout)
             provider = coordinated_provider(
-                build_provider(row, self.cfg), self.redis, provider_id=row.provider,
+                direct, self.redis, provider_id=row.provider,
                 base_url=row.base_url or '')
             result = (
                 provider,
@@ -923,6 +934,13 @@ class Worker:
                  "facts": (row.facts_model or self.cfg.llm_model_facts or row.extract_model
                            or row.model or self.cfg.llm_model_extract)},
             )
+        # Publish the config only after construction succeeds. A failed rebuild
+        # must not associate the old client with the new credential/model row.
+        if cached is not None and cached[0] is not getattr(self, "_default_provider", None):
+            close = getattr(cached[0], "aclose", None)
+            if close is not None:
+                await close()
+        self._provider_rows[novel_id] = row
         self._provider_cache[novel_id] = result
         return result
 

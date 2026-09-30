@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ArrowLeft, BookOpen, List, NotebookText, Settings2, SlidersHorizontal } from "lucide-react";
 import { ApiError, getChapterPreview, getNovel, getProgress, getScrapeStatus, listChapters, putProgress, startScrape } from "./api";
 import { AddChapterForm } from "./components/AddChapterForm";
 import { ChapterList } from "./components/ChapterList";
@@ -343,35 +344,28 @@ export default function App() {
   return (
     <main className={`app${!showChapters && !pending && !addingChapter ? " app-reading" : ""}`}>
       <header className="book-header">
-        <button className="app-nav-back" onClick={backToNovels}>← Library</button>
+        <button className="app-nav-back" onClick={backToNovels}><ArrowLeft size={16} />Library</button>
         <h1>{novel?.title ?? "Book"}</h1>
-        <p>{showGlossary
-          ? "Review and correct the names used in this translation."
-          : showWiki
-              ? "Browse people and places you have encountered so far."
-              : showChapters
-                ? "Browse chapters and processing status."
-                : `Reading from chapter ${chapterIndex}.`}</p>
       </header>
       <nav className="app-nav" aria-label="Book navigation">
         <button className="app-toggle-glossary" aria-pressed={showChapters && !showGlossary && !showWiki} onClick={backToChapters}>
-          Chapters
+          <List size={16} />Chapters
         </button>
         <button className="app-toggle-glossary" aria-pressed={showGlossary} onClick={() => { setShowGlossary((v) => !v); setShowWiki(false); }}>
-          Glossary
+          <NotebookText size={16} />Glossary
         </button>
         <button className="app-toggle-glossary" aria-pressed={showWiki} onClick={() => showWiki ? closeWiki() : openWiki()}>
-          Wiki
+          <BookOpen size={16} />Wiki
         </button>
         {/* Grouped so the pair wraps as one unit. Pushing each button individually to the
             trailing edge let the first claim the row's last slot and stranded the second
             on a line of its own. */}
         <span className="app-nav-settings-group">
           <button className="app-nav-settings" onClick={() => setShowBookSettings(true)}>
-            Book settings
+            <SlidersHorizontal size={16} />Book settings
           </button>
           <button className="app-nav-settings" onClick={() => setShowSettings(true)}>
-            Account settings
+            <Settings2 size={16} />Account settings
           </button>
         </span>
       </nav>

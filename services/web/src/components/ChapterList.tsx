@@ -1,3 +1,4 @@
+import { ArrowRight, KeyRound, Plus } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { listChapters } from "../api";
 import type { ChapterListItem, ChapterListResponse, PipelineStatusResponse } from "../types";
@@ -127,7 +128,7 @@ export function ChapterList({ novelId, currentChapter, onOpen, onClose, onAdd, o
           Could not load chapters: {error} <button onClick={() => void load()}>Retry</button>
         </p>}
         {!chapters && !error && <p role="status">Loading chapter range…</p>}
-        {chapters && chapters.length === 0 && <section className="chapter-welcome"><p className="eyebrow">Your book is ready</p><h3>Let’s add its first chapter.</h3><p>Save your AI provider key before processing text, then paste a chapter or import from a supported website. Your translation and story wiki will build as you go.</p><div className="hero-actions">{onSettings && <button onClick={onSettings}>Set up provider key</button>}<button className="btn-primary" onClick={onAdd}>Add first chapter →</button></div></section>}
+        {chapters && chapters.length === 0 && <section className="chapter-welcome"><h3>No chapters yet</h3><div className="hero-actions">{onSettings && <button onClick={onSettings}><KeyRound size={16} />Set up provider key</button>}<button className="btn-primary" onClick={onAdd}><Plus size={16} />Add first chapter<ArrowRight size={16} /></button></div></section>}
         {chapters && chapters.length > 0 && (
           <>
             <p className="chapter-list-count">Showing {shownFrom}–{shownTo} of {total}</p>

@@ -1,3 +1,5 @@
+import { Send } from "lucide-react";
+import { Button } from "./animate-ui/motion";
 import { lazy, Suspense, useState } from "react";
 import { ask } from "../api";
 import type { AskResponse } from "../types";
@@ -45,9 +47,9 @@ export function AskBox({ novelId, at }: Props) {
           onChange={(e) => setQuestion(e.target.value)}
           placeholder="Ask about what you've read so far…"
         />
-        <button type="submit" disabled={pending || !question.trim()}>
-          {pending ? "Asking…" : "Ask"}
-        </button>
+        <Button type="submit" disabled={pending || !question.trim()}>
+          <Send size={15} />{pending ? "Asking…" : "Ask"}
+        </Button>
       </form>
       {pending && <p className="ask-box-pending" role="status">Looking through your chapters…</p>}
       {error && <p className="ask-box-error" role="alert">{error}</p>}

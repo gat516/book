@@ -63,7 +63,8 @@ approved glossary entries are preserved. See `services/pipeline/README.md`.
 
 ## Current state (update as milestones land)
 
-Private hosting (§15) now has account RLS, invited Google sessions, BYOK isolation,
+Private hosting (§15) now has account RLS, public Google signup capped at 100 registered
+users (existing logins remain available at capacity), BYOK isolation,
 fair scheduling, durable deletion, portable recovery, and AWS/k3s deployment files.
 AWS resources and the initial hosted app are provisioned for **qireadr.com** in
 `us-east-1` (Elastic IP `3.221.223.180`). Follow `docs/HOSTED_IMPLEMENTATION.md` for

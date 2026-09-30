@@ -1,0 +1,376 @@
+{
+  "study": "20260922-low-effort-pilot-01",
+  "status": "incomplete_stopped_on_output_limit",
+  "authorized_completions_total": 30,
+  "attempted_completions": 19,
+  "unused_completion_allowance": 11,
+  "authorized_embeddings_total": 10,
+  "attempted_embeddings": 7,
+  "clearance": 170,
+  "original_ssm_command": "f8cb6c70-6951-49fa-9d52-a646afeb9e0a",
+  "continuation_ssm_command": "5b7d18f7-e942-4e3c-9e8e-1490dba80676",
+  "continuation_times": {
+    "Status": "Success",
+    "Start": "2026-09-22T23:55:38.330Z",
+    "End": "2026-09-22T23:58:19.330Z",
+    "Elapsed": "PT2M41.49S"
+  },
+  "original_stop": {
+    "reason": "idle_queue_guard",
+    "paid_attempts": 9,
+    "complete_pairs": 3
+  },
+  "continuation_stop": {
+    "reason": "output_limit",
+    "pair": 6,
+    "arm": "current",
+    "seconds": 38.274138765991665,
+    "output_tokens": 8192,
+    "reasoning_tokens": 7594
+  },
+  "original_postcheck": {
+    "state": {
+      "progress": 176,
+      "chapters": [
+        [
+          171,
+          "done",
+          true
+        ],
+        [
+          172,
+          "done",
+          true
+        ],
+        [
+          173,
+          "done",
+          true
+        ],
+        [
+          174,
+          "done",
+          true
+        ],
+        [
+          175,
+          "done",
+          true
+        ],
+        [
+          176,
+          "done",
+          true
+        ],
+        [
+          177,
+          "done",
+          true
+        ],
+        [
+          178,
+          "done",
+          true
+        ],
+        [
+          179,
+          "done",
+          true
+        ],
+        [
+          180,
+          "done",
+          true
+        ],
+        [
+          181,
+          "done",
+          true
+        ],
+        [
+          182,
+          "ingested",
+          false
+        ],
+        [
+          183,
+          "ingested",
+          false
+        ],
+        [
+          184,
+          "ingested",
+          false
+        ],
+        [
+          185,
+          "ingested",
+          false
+        ],
+        [
+          186,
+          "ingested",
+          false
+        ]
+      ],
+      "pending": 0,
+      "processing": 0,
+      "usage": [
+        [
+          1790120940.62705,
+          "pipeline",
+          "deepseek",
+          "deepseek-v4-flash",
+          3537,
+          837
+        ],
+        [
+          1790120960.555156,
+          "pipeline",
+          "deepseek",
+          "deepseek-v4-flash",
+          19931,
+          3323
+        ],
+        [
+          1790120971.660705,
+          "pipeline",
+          "deepseek",
+          "deepseek-v4-flash",
+          20297,
+          2131
+        ],
+        [
+          1790120972.757087,
+          "pipeline",
+          "deepseek",
+          "deepseek-v4-flash",
+          16812,
+          82
+        ],
+        [
+          1790120980.241291,
+          "pipeline",
+          "deepseek",
+          "deepseek-v4-flash",
+          18645,
+          1323
+        ],
+        [
+          1790120981.816228,
+          "pipeline",
+          "deepseek",
+          "deepseek-v4-flash",
+          3570,
+          148
+        ],
+        [
+          1790120982.600569,
+          "pipeline",
+          "deepseek",
+          "deepseek-v4-flash",
+          644,
+          37
+        ],
+        [
+          1790121015.389696,
+          "pipeline",
+          "deepseek",
+          "deepseek-v4-flash",
+          4221,
+          7110
+        ]
+      ],
+      "failures": []
+    },
+    "gateway": {
+      "pending": 0,
+      "remaining_capacity": 2
+    }
+  },
+  "final_postcheck": {
+    "state": {
+      "progress": 177,
+      "chapters": [
+        [
+          171,
+          "done",
+          true
+        ],
+        [
+          172,
+          "done",
+          true
+        ],
+        [
+          173,
+          "done",
+          true
+        ],
+        [
+          174,
+          "done",
+          true
+        ],
+        [
+          175,
+          "done",
+          true
+        ],
+        [
+          176,
+          "done",
+          true
+        ],
+        [
+          177,
+          "done",
+          true
+        ],
+        [
+          178,
+          "done",
+          true
+        ],
+        [
+          179,
+          "done",
+          true
+        ],
+        [
+          180,
+          "done",
+          true
+        ],
+        [
+          181,
+          "done",
+          true
+        ],
+        [
+          182,
+          "done",
+          true
+        ],
+        [
+          183,
+          "ingested",
+          false
+        ],
+        [
+          184,
+          "ingested",
+          false
+        ],
+        [
+          185,
+          "ingested",
+          false
+        ],
+        [
+          186,
+          "ingested",
+          false
+        ],
+        [
+          187,
+          "ingested",
+          false
+        ]
+      ],
+      "pending": 0,
+      "processing": 0,
+      "usage": [
+        [
+          1790121519.205882,
+          "pipeline",
+          "deepseek",
+          "deepseek-v4-flash",
+          3614,
+          430
+        ],
+        [
+          1790121537.508227,
+          "pipeline",
+          "deepseek",
+          "deepseek-v4-flash",
+          19900,
+          3121
+        ],
+        [
+          1790121554.895611,
+          "pipeline",
+          "deepseek",
+          "deepseek-v4-flash",
+          20765,
+          3889
+        ],
+        [
+          1790121556.247308,
+          "pipeline",
+          "deepseek",
+          "deepseek-v4-flash",
+          3368,
+          56
+        ],
+        [
+          1790121590.837443,
+          "pipeline",
+          "deepseek",
+          "deepseek-v4-flash",
+          4019,
+          7216
+        ]
+      ],
+      "failures": []
+    },
+    "gateway": {
+      "pending": 0,
+      "remaining_capacity": 2
+    }
+  },
+  "verification_ssm_command": "c09d02a8-3f2c-4445-99e1-fc2182cad7d0",
+  "statistics": {
+    "arms": {
+      "current": {
+        "answers": 6,
+        "input_tokens": 9649,
+        "output_tokens": 10424,
+        "reasoning_tokens": 8890,
+        "median_seconds": 10.286945553001715
+      },
+      "low": {
+        "answers": 6,
+        "input_tokens": 9649,
+        "output_tokens": 11941,
+        "reasoning_tokens": 10431,
+        "median_seconds": 11.033949176009628
+      }
+    },
+    "gateway_successful_calls": 18,
+    "gateway_median_ms": 3.422916997806169,
+    "gateway_max_ms": 3.6962380108889192,
+    "total_input": 36876,
+    "total_output": 43554,
+    "judge_tokens": {
+      "input": 15085,
+      "output": 12997
+    },
+    "retrieval_median_seconds": 0.45987690598121844,
+    "started": [
+      "2026-09-22T23:46:22.943Z",
+      "2026-09-22T23:55:38.410Z"
+    ]
+  },
+  "public_health": "ok",
+  "production_defaults_changed": false,
+  "chapter_jobs_enqueued_by_study": 0,
+  "caveats": [
+    "Original segment interrupted by ordinary chapter processing; exact provider overlap unknown.",
+    "Final postcheck includes later ordinary pipeline usage, first recorded after continuation controller ended.",
+    "Generation-phase timings only; not end-to-end or gateway-vs-direct comparison.",
+    "Only six completed pairs; early failure leaves arms with unequal attempt counts.",
+    "Same-model automated judge is not independent human validation.",
+    "No source, answer, credential, or reasoning text exported."
+  ]
+}
