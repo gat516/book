@@ -29,7 +29,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
-      - run: pip install -c deploy/hosted/python-constraints.txt -e 'packages/novel-llm[dev]' -e 'services/pipeline[dev]' -e 'services/askai[dev]'
+      - run: pip install -c deploy/hosted/python-constraints.txt -e 'packages/novel-llm[dev]' -e 'services/pipeline[dev]' -e 'services/askai[dev]' PyYAML
       - run: pytest -q packages/novel-llm/tests
       - run: pytest -q tests
         working-directory: services/askai
@@ -48,6 +48,7 @@ jobs:
       - run: npm ci && npm test && npm run test:components && npm run build
         working-directory: services/web
   hosted:
+    name: build
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
