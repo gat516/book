@@ -33,3 +33,8 @@ runs pure transfer checks (credential rebinding, existing chapter clearance, own
 object tampering/missing prose, storage prefixes and migration-ledger compatibility).
 The recovery integration also covers versioned pipeline translation objects under
 `translated/<novel>/`, not only ingested prose under `novels/<novel>/`.
+
+The disposable MinIO fixture builds release `RELEASE.2025-09-07T16-13-09Z` from
+its official source archive, pinned by SHA-256 in `Dockerfile.minio`. Its former
+registry tag no longer allows public pulls. This image is only for hosted tests;
+production continues to use S3. The first test run needs time to build it.

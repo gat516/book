@@ -1,0 +1,14 @@
+# Disposable S3 fixture. Build the same release from its published source because
+# the corresponding prebuilt registry tag is no longer publicly pullable.
+FROM golang:1.26.6-bookworm AS build
+ADD --checksum=sha256:c9598dcce3440977e79f787f2ba0e7e4d92c8d556bd51e7cef3785bafd6635f3 https://github.com/minio/minio/archive/refs/tags/RELEASE.2025-09-07T16-13-09Z.tar.gz /tmp/minio.tar.gz
+WORKDIR /src
+RUN tar -xzf /tmp/minio.tar.gz --strip-components=1 && \
+    CGO_ENABLED=0 go build -trimpath -o /minio .
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/* && mkdir /data && chown 10001:10001 /data
+COPY --from=build /minio /minio
+USER 10001:10001
+ENTRYPOINT ["/minio"]

@@ -238,7 +238,7 @@ the three landing zones (Postgres row, MinIO object, Redis queue pointer).
 
 ## Sibling project: `llm-inference-gateway`
 
-`../llm-inference-gateway` is a rate-limiting / priority-scheduling gateway for LLM
+`../archive/llm-inference-gateway` is a rate-limiting / priority-scheduling gateway for LLM
 traffic; this repo is its reference client. **It is an optional `LLMProvider` backend, not
 a dependency** — everything here must run, demo, and test with it switched off.
 

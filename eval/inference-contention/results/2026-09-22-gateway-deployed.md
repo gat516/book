@@ -41,7 +41,9 @@ shared admission at approximately 4 ms overhead, with all tested permits release
 
 Machine-readable samples, deployment digests, usage and timing events are in
 `2026-09-22-gateway-deployed.json`. Branches are `feat/hosted-gateway-trial` and
-the sibling's `feat/admission-only-service`; changes are not committed yet.
+the sibling's `feat/admission-only-service`; changes were uncommitted at the time
+of this measurement. They were preserved on `main` on September 29 as book
+`61cc88c` and gateway `65e97d8`.
 The Python release contains only six integration files over deployed `ebd1d43`;
 unrelated working-tree changes and private experiments were excluded.
 

@@ -59,6 +59,34 @@ The owner has claimed the hosted account. Its initially empty library now contai
 September 20 local-library snapshot described below. Local books and services remain
 in place and usable without Google login.
 
+Committed release (September 29, 2026):
+
+- Promoted the reviewed reader/UI and optional gateway integration to `main`.
+  Application source is `61cc88c`; the gateway's admission-only implementation is
+  `65e97d8` on its own `main`. Local extraction experiments were preserved outside
+  the release checkout rather than published.
+- Reader API `61cc88c` is deployed in the existing `book` namespace. Public Google
+  registration creates a private library and is capped at 100 Google-linked
+  accounts, including invited and pending-deletion users. Unclaimed/local accounts
+  do not occupy a seat; existing users can still sign in at capacity. Registration
+  uses transaction locks so concurrent requests cannot exceed the cap (§15.1).
+- `/api/healthz` now reports the running **reader API** version. It does not claim
+  that every application service uses that revision. Ask AI/pipeline and gateway
+  retain their verified September 22 trial images; no schema changes were applied.
+- Cloudflare Worker version `e2fa116d-d92d-4039-92da-360274bab35d` serves the matching
+  reader assets and the 100-user signup copy. Backend rollout and exact-version
+  HTTP verification passed. Auth tests used disposable PostgreSQL and exercised
+  concurrent first login, the last available seat, invitation handling and login
+  at capacity. No new paid inference requests were made.
+- `status.qireadr.com` now tracks actual push runs from `book/main`, including its
+  build stage. GitHub Actions runs checks/builds; application deployment is still
+  performed explicitly through SSM and Cloudflare. CI success is not a deployment
+  record. The dashboard reports the API version independently.
+- Rollback metadata is retained at `/root/qireadr/releases/61cc88c/` on the existing
+  node. Previous reader image: `reader-api:d9f74ce`; previous Cloudflare version:
+  `40b257c7-f805-4b35-a387-e6d2fc0d7813`. No browser is connected, so a complete real
+  Google login and visual-browser review remain unverified.
+
 Latest frontend release (September 29, 2026):
 
 - Published the current `services/web` build to the existing `qireadr-web` route at

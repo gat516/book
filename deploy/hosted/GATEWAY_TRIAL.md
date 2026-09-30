@@ -1,7 +1,8 @@
 # Optional hosted gateway trial
 
-Implemented on `feat/hosted-gateway-trial`; requires the sibling gateway branch
-`feat/admission-only-service`. The approved trial was deployed on 2026-09-22 and
+Committed to `book/main` in `61cc88c`; the sibling gateway implementation is
+`65e97d8` on `llm-inference-gateway/main`. The original development branches are
+`feat/hosted-gateway-trial` and `feat/admission-only-service`. The approved trial was deployed on 2026-09-22 and
 passed all six paid smoke requests; see the [deployed report](../../eval/inference-contention/results/2026-09-22-gateway-deployed.md).
 The procedure below is for reproducibility. No migrations are needed. Spec §14.7 is the
 client contract; §15 ownership, BYOK and chapter gates remain mandatory.
