@@ -139,6 +139,16 @@ class ReleaseTests(unittest.TestCase):
 
 
 class FrontendTests(unittest.TestCase):
+    def test_html_check_ignores_only_cloudflare_analytics_injection(self):
+        local = b'<body><script src="/assets/app.js"></script>  </body>'
+        beacon = b'''<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v123" data-cf-beacon='{"token":"public-id"}'></script>\n'''
+        public = local.replace(b'</body>', beacon + b'</body>')
+        self.assertEqual(frontend.index_digest(local), frontend.index_digest(public))
+        for changed in (public.replace(b'app.js', b'old.js'),
+                        public.replace(b'static.cloudflareinsights.com', b'other.example'),
+                        public.replace(b'></script>\n', b'>unexpectedCode()</script>\n')):
+            self.assertNotEqual(frontend.index_digest(local), frontend.index_digest(changed))
+
     def test_publish_uses_uploaded_version_without_changing_routes(self):
         for tag in (COMMIT, "unrelated"):
             with self.subTest(tag=tag), tempfile.TemporaryDirectory() as directory:

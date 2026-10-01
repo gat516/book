@@ -51,10 +51,17 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def index_digest(data):
+    # Cloudflare Web Analytics injects this external beacon after serving assets.
+    # Strip only that empty script tag; application markup and bundles stay exact.
+    beacon = rb'''<script\b(?=[^>]*\bsrc=["']https://static\.cloudflareinsights\.com/beacon\.min\.js(?:/[A-Za-z0-9]+)?["'])(?=[^>]*\bdata-cf-beacon=)[^>]*>\s*</script>\s*'''
+    return digest(re.sub(beacon, b"", data))
+
+
 def wait_for_index(expected):
     for attempt in range(12):
         try:
-            if digest(fetch("/")) == expected:
+            if index_digest(fetch("/")) == expected:
                 return
         except OSError:
             pass
@@ -64,7 +71,7 @@ def wait_for_index(expected):
 
 
 def capture():
-    state = {"previous_version": active_version(), "previous_index_sha256": digest(fetch("/")),
+    state = {"previous_version": active_version(), "previous_index_sha256": index_digest(fetch("/")),
              "commit": os.environ["RELEASE_SHA"]}
     STATE.write_text(json.dumps(state, indent=2) + "\n")
 
@@ -103,7 +110,7 @@ def verify():
     state["deployed_version"] = current
     STATE.write_text(json.dumps(state, indent=2) + "\n")
     build = ROOT / "services/web/dist"
-    wait_for_index(digest((build / "index.html").read_bytes()))
+    wait_for_index(index_digest((build / "index.html").read_bytes()))
     for asset in (build / "assets").iterdir():
         if asset.is_file() and digest(fetch("/assets/" + asset.name)) != digest(asset.read_bytes()):
             raise RuntimeError("Frontend asset mismatch: " + asset.name)
