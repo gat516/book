@@ -62,7 +62,7 @@ def replace_image(kind, name, image, allowed):
 
 
 def health():
-    request = urllib.request.Request(CONFIG["health_url"], headers={"Cache-Control": "no-cache"})
+    request = urllib.request.Request(CONFIG["health_url"], headers={"Cache-Control": "no-cache", "User-Agent": "qireadr-release-verifier/1.0"})
     with urllib.request.urlopen(request, timeout=15) as response:
         data = json.load(response)
     if data.get("status") != "ok" or not re.fullmatch(r"[a-zA-Z0-9._-]{1,80}", data.get("version", "")):

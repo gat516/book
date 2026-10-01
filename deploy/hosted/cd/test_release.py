@@ -139,6 +139,14 @@ class ReleaseTests(unittest.TestCase):
 
 
 class FrontendTests(unittest.TestCase):
+    def test_public_probes_identify_the_release_client(self):
+        with patch.object(frontend.urllib.request, "urlopen") as request:
+            request.return_value.__enter__.return_value.read.return_value = b"page"
+            self.assertEqual(frontend.fetch("/"), b"page")
+            sent = request.call_args.args[0]
+            self.assertEqual(sent.get_header("User-agent"), "qireadr-release-verifier/1.0")
+            self.assertEqual(sent.get_header("Cache-control"), "no-cache")
+
     def test_split_traffic_is_not_treated_as_a_single_rollback_target(self):
         with patch.object(frontend, "api", return_value={"deployments": [{"versions": [{"version_id": "one", "percentage": 50}]}]}):
             with self.assertRaisesRegex(RuntimeError, "one frontend version"):

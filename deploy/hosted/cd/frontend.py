@@ -12,6 +12,7 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[3]
 STATE = Path("/tmp/qireadr-frontend-release.json")
 ORIGIN = "https://qireadr.com"
+USER_AGENT = "qireadr-release-verifier/1.0"
 
 
 def api(path, body=None):
@@ -20,7 +21,7 @@ def api(path, body=None):
         raise ValueError("Invalid Cloudflare account ID")
     url = f"https://api.cloudflare.com/client/v4/accounts/{account}/workers/scripts/qireadr-web/" + path
     request = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None,
-        headers={"Authorization": "Bearer " + os.environ["CLOUDFLARE_API_TOKEN"], "Content-Type": "application/json"})
+        headers={"Authorization": "Bearer " + os.environ["CLOUDFLARE_API_TOKEN"], "Content-Type": "application/json", "User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=30) as response:
         result = json.load(response)
     if not result.get("success"):
@@ -39,7 +40,7 @@ def active_version():
 
 
 def fetch(path):
-    request = urllib.request.Request(ORIGIN + path, headers={"Cache-Control": "no-cache"})
+    request = urllib.request.Request(ORIGIN + path, headers={"Cache-Control": "no-cache", "User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=20) as response:
         return response.read()
 
@@ -80,7 +81,7 @@ def verify():
         if asset.is_file() and digest(fetch("/assets/" + asset.name)) != digest(asset.read_bytes()):
             raise RuntimeError("Frontend asset mismatch: " + asset.name)
     for path in ("/api/auth/session", "/api/novels"):
-        request = urllib.request.Request(ORIGIN + path, headers={"X-Account-ID": "forged", "X-Reader-ID": "forged"})
+        request = urllib.request.Request(ORIGIN + path, headers={"X-Account-ID": "forged", "X-Reader-ID": "forged", "User-Agent": USER_AGENT})
         try:
             urllib.request.urlopen(request, timeout=15)
         except urllib.error.HTTPError as error:
