@@ -126,8 +126,7 @@ jobs:
         run: python3 deploy/hosted/cd/ssm.py deploy --commit "$RELEASE_SHA" --db-tree "$BOOK_DB_TREE"
       - name: Deploy frontend
         id: frontend
-        working-directory: deploy/cloudflare
-        run: npx wrangler deploy --tag "$RELEASE_SHA"
+        run: python3 deploy/hosted/cd/frontend.py deploy
       - name: Verify release
         id: verify
         run: |

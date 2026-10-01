@@ -4,6 +4,8 @@ Push to `book/main` → `checks` passes → `Release` builds six immutable ECR
 images → SSM updates AWS → Cloudflare publishes the frontend → live verification.
 A newer main commit supersedes an older release before deployment. Releases run
 one at a time and are not cancelled by subsequent pushes.
+Cloudflare releases upload a tagged version and activate it through the existing
+route. Route and trigger changes are separate infrastructure operations.
 
 AWS releases update reader-api, ingest-api, scraper, pipeline, askai, textproc,
 the origin web server, and both maintenance CronJob images. Redis, the optional

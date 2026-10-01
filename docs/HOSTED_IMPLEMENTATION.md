@@ -94,10 +94,16 @@ Automatic release setup (September 30, 2026):
   and both maintenance images, publishes Cloudflare, and verifies the public release.
 - GitHub OIDC role `qireadr-github-release` and SSM document `qireadr-release` are
   installed. AWS role and Cloudflare account variables are configured in GitHub.
-  `CLOUDFLARE_API_TOKEN` is required before the first automatic release can run.
+  `CLOUDFLARE_API_TOKEN` is configured and successfully authenticated.
 - Rollback restores recorded AWS images and the previous Cloudflare version.
   Database changes fail before deployment and require a manual migration release.
-  Local tests simulate recovery; no live failed-release drill is claimed.
+  Release run `36795485336` deployed AWS successfully, then hit a Cloudflare route
+  permission error. Both frontend and backend recovery passed and restored the
+  preceding release. Publishing now uploads and activates a Worker version through
+  the existing route, without editing triggers.
+- The private k8s-platform API watches `release.yml` workflow runs, including
+  combined frontend/backend recovery status. Public Grafana probes check website
+  and API health independently.
 - Operations: [automatic releases](../deploy/hosted/cd/README.md).
 
 Latest frontend release (September 29, 2026):

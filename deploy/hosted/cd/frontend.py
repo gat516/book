@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -67,6 +69,31 @@ def capture():
     STATE.write_text(json.dumps(state, indent=2) + "\n")
 
 
+def deploy():
+    state = json.loads(STATE.read_text())
+    # Routes are provisioned separately. Publishing a version must not rewrite them.
+    with tempfile.TemporaryDirectory() as directory:
+        output = Path(directory) / "wrangler.jsonl"
+        subprocess.run(["npx", "wrangler", "versions", "upload", "--tag", state["commit"]],
+            cwd=ROOT / "deploy/cloudflare", check=True,
+            env={**os.environ, "WRANGLER_OUTPUT_FILE_PATH": str(output)})
+        uploaded = [json.loads(line) for line in output.read_text().splitlines() if line.strip()]
+    versions = [entry["version_id"] for entry in uploaded if entry.get("type") == "version-upload"]
+    if len(versions) != 1:
+        raise RuntimeError("Expected exactly one uploaded frontend version")
+    version = versions[0]
+    metadata = api("versions/" + version)
+    if metadata.get("annotations", {}).get("workers/tag") != state["commit"]:
+        raise RuntimeError("Uploaded frontend version has the wrong release tag")
+    if active_version() != state["previous_version"]:
+        raise RuntimeError("Frontend changed outside this release; refusing to overwrite it")
+    state["uploaded_version"] = version
+    STATE.write_text(json.dumps(state, indent=2) + "\n")
+    api("deployments", {"strategy": "percentage", "versions": [
+        {"version_id": version, "percentage": 100}]})
+    print("Frontend version published through the existing route")
+
+
 def verify():
     state = json.loads(STATE.read_text())
     current = active_version()
@@ -108,6 +135,6 @@ def rollback():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("capture", "verify", "rollback"))
+    parser.add_argument("action", choices=("capture", "deploy", "verify", "rollback"))
     args = parser.parse_args()
-    {"capture": capture, "verify": verify, "rollback": rollback}[args.action]()
+    {"capture": capture, "deploy": deploy, "verify": verify, "rollback": rollback}[args.action]()

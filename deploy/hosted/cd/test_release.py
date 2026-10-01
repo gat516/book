@@ -139,6 +139,30 @@ class ReleaseTests(unittest.TestCase):
 
 
 class FrontendTests(unittest.TestCase):
+    def test_publish_uses_uploaded_version_without_changing_routes(self):
+        for tag in (COMMIT, "unrelated"):
+            with self.subTest(tag=tag), tempfile.TemporaryDirectory() as directory:
+                state = Path(directory) / "state.json"
+                state.write_text(json.dumps({"previous_version": "old", "commit": COMMIT}))
+
+                def upload(args, **kwargs):
+                    self.assertEqual(args, ["npx", "wrangler", "versions", "upload", "--tag", COMMIT])
+                    Path(kwargs["env"]["WRANGLER_OUTPUT_FILE_PATH"]).write_text(
+                        json.dumps({"type": "version-upload", "version_id": "uploaded"}) + "\n")
+
+                with patch.object(frontend, "STATE", state), patch.object(frontend.subprocess, "run", side_effect=upload), \
+                     patch.object(frontend, "active_version", return_value="old"), \
+                     patch.object(frontend, "api", return_value={"annotations": {"workers/tag": tag}}) as api:
+                    if tag != COMMIT:
+                        with self.assertRaisesRegex(RuntimeError, "wrong release tag"):
+                            frontend.deploy()
+                        self.assertEqual(api.call_count, 1)
+                    else:
+                        frontend.deploy()
+                        api.assert_any_call("deployments", {"strategy": "percentage", "versions": [
+                            {"version_id": "uploaded", "percentage": 100}]})
+                        self.assertEqual(api.call_count, 2)
+
     def test_public_probes_identify_the_release_client(self):
         with patch.object(frontend.urllib.request, "urlopen") as request:
             request.return_value.__enter__.return_value.read.return_value = b"page"
